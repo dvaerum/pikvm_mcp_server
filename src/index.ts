@@ -273,6 +273,48 @@ const tools: Tool[] = [
       required: ['deltaY'],
     },
   },
+  {
+    name: 'pikvm_calibrate',
+    description: 'Start mouse coordinate calibration. Moves cursor to screen center and returns expected position. Take a screenshot after calling this to visually verify actual cursor position, then call pikvm_set_calibration with calculated factors.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'pikvm_set_calibration',
+    description: 'Set mouse coordinate calibration factors. Calculate factors as: factorX = expected_x / actual_x, factorY = expected_y / actual_y. For example, if calibration moved cursor to expected (960, 540) but it landed at (720, 405), factors would be 960/720=1.33 and 540/405=1.33.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        factorX: {
+          type: 'number',
+          description: 'X-axis calibration factor (typically 1.0-1.5)',
+        },
+        factorY: {
+          type: 'number',
+          description: 'Y-axis calibration factor (typically 1.0-1.5)',
+        },
+      },
+      required: ['factorX', 'factorY'],
+    },
+  },
+  {
+    name: 'pikvm_get_calibration',
+    description: 'Get current mouse calibration state. Returns null if not calibrated.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'pikvm_clear_calibration',
+    description: 'Clear mouse calibration, reverting to uncalibrated mode.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
 ];
 
 // Create MCP server
@@ -300,16 +342,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case 'pikvm_screenshot': {
-        const buffer = await pikvm.screenshot({
+        const result = await pikvm.screenshot({
           maxWidth: validateNumber(args.maxWidth, 1, 10000),
           maxHeight: validateNumber(args.maxHeight, 1, 10000),
           quality: validateNumber(args.quality, 1, 100),
         });
+
+        // Build informative message about the screenshot
+        let infoText = `Screenshot captured (${result.screenshotWidth}x${result.screenshotHeight}`;
+        if (result.scaleX !== 1 || result.scaleY !== 1) {
+          infoText += `, scaled from ${result.actualWidth}x${result.actualHeight}`;
+          infoText += `, scale factor: ${result.scaleX.toFixed(2)}x${result.scaleY.toFixed(2)}`;
+        }
+        infoText += '). Mouse coordinates from this image will be auto-scaled.';
+
         return {
           content: [
             {
+              type: 'text',
+              text: infoText,
+            },
+            {
               type: 'image',
-              data: buffer.toString('base64'),
+              data: result.buffer.toString('base64'),
               mimeType: 'image/jpeg',
             },
           ],
@@ -393,6 +448,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const x = requireNumber(args.x, 'x');
         const y = requireNumber(args.y, 'y');
         const relative = validateBoolean(args.relative) ?? false;
+        let calibrationWarning = '';
         if (relative) {
           // Relative moves are clamped to -127 to 127 in the client
           await pikvm.mouseMoveRelative(x, y);
@@ -400,15 +456,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // Absolute moves should be positive pixel coordinates
           const clampedX = Math.max(0, Math.round(x));
           const clampedY = Math.max(0, Math.round(y));
-          await pikvm.mouseMove(clampedX, clampedY);
+          const result = await pikvm.mouseMove(clampedX, clampedY);
+          if (result.calibrationInvalidated) {
+            calibrationWarning = '\n⚠️ Resolution changed - calibration has been cleared. Consider recalibrating with pikvm_calibrate.';
+          }
         }
         return {
           content: [
             {
               type: 'text',
-              text: relative
+              text: (relative
                 ? `Moved mouse by (${x}, ${y})`
-                : `Moved mouse to pixel (${Math.max(0, Math.round(x))}, ${Math.max(0, Math.round(y))})`,
+                : `Moved mouse to pixel (${Math.max(0, Math.round(x))}, ${Math.max(0, Math.round(y))})`) + calibrationWarning,
             },
           ],
         };
@@ -447,6 +506,77 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: `Scrolled (${deltaX}, ${deltaY})`,
+            },
+          ],
+        };
+      }
+
+      case 'pikvm_calibrate': {
+        const result = await pikvm.calibrate();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Calibration started.\n` +
+                `Resolution: ${result.resolution.width}x${result.resolution.height}\n` +
+                `Expected cursor position: (${result.expectedPosition.x}, ${result.expectedPosition.y})\n` +
+                `Normalized coordinates sent: (${result.requestedNormalized.x}, ${result.requestedNormalized.y})\n\n` +
+                `${result.message}`,
+            },
+          ],
+        };
+      }
+
+      case 'pikvm_set_calibration': {
+        const factorX = requireNumber(args.factorX, 'factorX');
+        const factorY = requireNumber(args.factorY, 'factorY');
+        pikvm.setCalibrationFactors(factorX, factorY);
+        const calibration = pikvm.getCalibration();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Calibration set: factorX=${factorX.toFixed(4)}, factorY=${factorY.toFixed(4)}\n` +
+                `Resolution at calibration: ${calibration?.resolution.width}x${calibration?.resolution.height}\n` +
+                `Note: Calibration will be automatically cleared if resolution changes.`,
+            },
+          ],
+        };
+      }
+
+      case 'pikvm_get_calibration': {
+        const calibration = pikvm.getCalibration();
+        if (calibration) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Current calibration:\n` +
+                  `  factorX: ${calibration.factorX.toFixed(4)}\n` +
+                  `  factorY: ${calibration.factorY.toFixed(4)}\n` +
+                  `  Resolution at calibration: ${calibration.resolution.width}x${calibration.resolution.height}`,
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Not calibrated. Mouse coordinates use default 1.0 factor (no correction).',
+              },
+            ],
+          };
+        }
+      }
+
+      case 'pikvm_clear_calibration': {
+        pikvm.clearCalibration();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Calibration cleared. Mouse coordinates now use default 1.0 factor (no correction).',
             },
           ],
         };

@@ -30,3 +30,8 @@ coverage/
 test-screenshot.jpg
 *.jpg
 *.png
+
+# Code Assistants
+.mcp.json
+.claude
+CLAUDE.md

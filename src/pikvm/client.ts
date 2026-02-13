@@ -6,6 +6,7 @@
  */
 
 import { Agent, fetch } from 'undici';
+import imageSize from 'image-size';
 
 export interface PiKVMConfig {
   host: string;
@@ -32,6 +33,16 @@ export interface ScreenResolution {
 
 export type MouseButton = 'left' | 'right' | 'middle' | 'up' | 'down';
 
+export interface ScreenshotResult {
+  buffer: Buffer;
+  screenshotWidth: number;
+  screenshotHeight: number;
+  actualWidth: number;
+  actualHeight: number;
+  scaleX: number;
+  scaleY: number;
+}
+
 // PiKVM uses signed 16-bit integers for absolute mouse coordinates
 const MOUSE_COORD_MIN = -32768;
 const MOUSE_COORD_MAX = 32767;
@@ -54,10 +65,28 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+export interface CalibrationState {
+  factorX: number;
+  factorY: number;
+  resolution: ScreenResolution;
+}
+
+export interface CalibrationResult {
+  expectedPosition: { x: number; y: number };
+  requestedNormalized: { x: number; y: number };
+  resolution: ScreenResolution;
+  message: string;
+}
+
 export class PiKVMClient {
   private config: Required<PiKVMConfig>;
   private dispatcher: Agent;
   private cachedResolution: ScreenResolution | null = null;
+  private screenshotScale: {
+    scaleX: number;
+    scaleY: number;
+  } | null = null;
+  private calibration: CalibrationState | null = null;
 
   constructor(config: PiKVMConfig) {
     this.config = {
@@ -149,13 +178,13 @@ export class PiKVMClient {
   }
 
   /**
-   * Take a screenshot
+   * Take a screenshot and calculate coordinate scaling factors
    */
   async screenshot(options?: {
     maxWidth?: number;
     maxHeight?: number;
     quality?: number;
-  }): Promise<Buffer> {
+  }): Promise<ScreenshotResult> {
     const params = new URLSearchParams();
     if (options?.maxWidth || options?.maxHeight) {
       params.set('preview', '1');
@@ -166,7 +195,31 @@ export class PiKVMClient {
 
     const path = `/streamer/snapshot${params.toString() ? '?' + params : ''}`;
     const arrayBuffer = await this.request<ArrayBuffer>('GET', path);
-    return Buffer.from(arrayBuffer);
+    const buffer = Buffer.from(arrayBuffer);
+
+    // Get actual screen resolution (force refresh to ensure accuracy)
+    const actualResolution = await this.getResolution(true);
+
+    // Get screenshot dimensions using image-size
+    const dimensions = imageSize(buffer);
+    if (!dimensions.width || !dimensions.height) {
+      throw new Error('Failed to read screenshot dimensions');
+    }
+
+    // Calculate and store scale factors
+    const scaleX = actualResolution.width / dimensions.width;
+    const scaleY = actualResolution.height / dimensions.height;
+    this.screenshotScale = { scaleX, scaleY };
+
+    return {
+      buffer,
+      screenshotWidth: dimensions.width,
+      screenshotHeight: dimensions.height,
+      actualWidth: actualResolution.width,
+      actualHeight: actualResolution.height,
+      scaleX,
+      scaleY,
+    };
   }
 
   /**
@@ -209,11 +262,119 @@ export class PiKVMClient {
   /**
    * Convert pixel coordinates to PiKVM's normalized coordinate system
    * PiKVM uses range -32768 to 32767 for absolute positioning
+   *
+   * Calibration factors are applied to compensate for resolution-dependent
+   * coordinate scaling issues. Without calibration, factors default to 1.0.
    */
   private pixelToNormalized(pixelX: number, pixelY: number, resolution: ScreenResolution): { x: number; y: number } {
+    // Calculate base normalized coordinates
+    const baseX = remap(pixelX, 0, resolution.width - 1, MOUSE_COORD_MIN, MOUSE_COORD_MAX);
+    const baseY = remap(pixelY, 0, resolution.height - 1, MOUSE_COORD_MIN, MOUSE_COORD_MAX);
+
+    // Apply calibration factors if available, otherwise use 1.0 (no correction)
+    const factorX = this.calibration?.factorX ?? 1.0;
+    const factorY = this.calibration?.factorY ?? 1.0;
+
+    // Convert to unsigned (0-65535), apply calibration, convert back to signed
+    const correctedX = Math.round((baseX + 32768) * factorX) - 32768;
+    const correctedY = Math.round((baseY + 32768) * factorY) - 32768;
+
+    // Clamp to valid range
     return {
-      x: remap(pixelX, 0, resolution.width - 1, MOUSE_COORD_MIN, MOUSE_COORD_MAX),
-      y: remap(pixelY, 0, resolution.height - 1, MOUSE_COORD_MIN, MOUSE_COORD_MAX),
+      x: clamp(correctedX, MOUSE_COORD_MIN, MOUSE_COORD_MAX),
+      y: clamp(correctedY, MOUSE_COORD_MIN, MOUSE_COORD_MAX),
+    };
+  }
+
+  /**
+   * Perform calibration by moving cursor to center of screen.
+   * Returns information needed for the agent to calculate calibration factors.
+   */
+  async calibrate(): Promise<CalibrationResult> {
+    // Force refresh resolution to ensure accuracy
+    const resolution = await this.getResolution(true);
+
+    // Calculate center position
+    const centerX = Math.round(resolution.width / 2);
+    const centerY = Math.round(resolution.height / 2);
+
+    // Temporarily clear calibration to get raw coordinates
+    const savedCalibration = this.calibration;
+    this.calibration = null;
+
+    // Calculate the normalized coordinates we'll send (without calibration)
+    const normalized = this.pixelToNormalized(centerX, centerY, resolution);
+
+    // Move cursor to center using raw coordinates
+    const params = new URLSearchParams();
+    params.set('to_x', normalized.x.toString());
+    params.set('to_y', normalized.y.toString());
+    await this.request('POST', `/hid/events/send_mouse_move?${params}`);
+
+    // Restore previous calibration (if any)
+    this.calibration = savedCalibration;
+
+    return {
+      expectedPosition: { x: centerX, y: centerY },
+      requestedNormalized: normalized,
+      resolution,
+      message: `Cursor moved to expected center position (${centerX}, ${centerY}). ` +
+        `Please take a screenshot and visually verify the actual cursor position. ` +
+        `Then call pikvm_set_calibration with the calculated factors: ` +
+        `factorX = ${centerX} / actual_x, factorY = ${centerY} / actual_y`,
+    };
+  }
+
+  /**
+   * Set calibration factors for coordinate correction
+   */
+  setCalibrationFactors(factorX: number, factorY: number): void {
+    // Sanity check: factors should be reasonable (0.5 to 2.0)
+    if (factorX < 0.5 || factorX > 2.0 || factorY < 0.5 || factorY > 2.0) {
+      throw new Error(`Calibration factors out of reasonable range (0.5-2.0): factorX=${factorX}, factorY=${factorY}`);
+    }
+
+    this.calibration = {
+      factorX,
+      factorY,
+      resolution: this.cachedResolution || { width: 0, height: 0 },
+    };
+  }
+
+  /**
+   * Get current calibration state
+   */
+  getCalibration(): CalibrationState | null {
+    return this.calibration;
+  }
+
+  /**
+   * Clear calibration (revert to uncalibrated mode)
+   */
+  clearCalibration(): void {
+    this.calibration = null;
+  }
+
+  /**
+   * Check if resolution has changed since calibration
+   */
+  private hasResolutionChanged(currentResolution: ScreenResolution): boolean {
+    if (!this.calibration) return false;
+    return this.calibration.resolution.width !== currentResolution.width ||
+           this.calibration.resolution.height !== currentResolution.height;
+  }
+
+  /**
+   * Scale coordinates from screenshot space to actual screen space
+   * If no screenshot has been taken, coordinates pass through unchanged
+   */
+  private scaleCoordinates(x: number, y: number): { x: number; y: number } {
+    if (!this.screenshotScale) {
+      return { x, y };
+    }
+    return {
+      x: Math.round(x * this.screenshotScale.scaleX),
+      y: Math.round(y * this.screenshotScale.scaleY),
     };
   }
 
@@ -251,20 +412,36 @@ export class PiKVMClient {
 
   /**
    * Move mouse to absolute pixel position (via REST API)
-   * Coordinates are automatically converted to PiKVM's normalized range
-   * @param x - X coordinate in pixels (0 = left edge)
-   * @param y - Y coordinate in pixels (0 = top edge)
+   * Coordinates are automatically scaled from screenshot space to screen space
+   * if a scaled screenshot was previously taken.
+   * @param x - X coordinate in pixels (0 = left edge), in screenshot space
+   * @param y - Y coordinate in pixels (0 = top edge), in screenshot space
+   * @returns Object with calibrationInvalidated flag if resolution changed
    */
-  async mouseMove(x: number, y: number): Promise<void> {
-    // Get screen resolution for coordinate conversion
-    const resolution = await this.getResolution();
-    const normalized = this.pixelToNormalized(x, y, resolution);
+  async mouseMove(x: number, y: number): Promise<{ calibrationInvalidated: boolean }> {
+    // Scale coordinates from screenshot space to screen space
+    const scaled = this.scaleCoordinates(x, y);
+
+    // Get screen resolution for coordinate conversion (force refresh to detect changes)
+    const resolution = await this.getResolution(true);
+
+    // Check if resolution changed since calibration
+    let calibrationInvalidated = false;
+    if (this.hasResolutionChanged(resolution)) {
+      // Clear calibration since it's no longer valid
+      this.calibration = null;
+      calibrationInvalidated = true;
+    }
+
+    const normalized = this.pixelToNormalized(scaled.x, scaled.y, resolution);
 
     const params = new URLSearchParams();
     params.set('to_x', normalized.x.toString());
     params.set('to_y', normalized.y.toString());
 
     await this.request('POST', `/hid/events/send_mouse_move?${params}`);
+
+    return { calibrationInvalidated };
   }
 
   /**

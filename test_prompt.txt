@@ -1,0 +1,4 @@
+Using the PiKVM MCP server, please take a screenshot and determine what operating system the system is running. Now open a text editor and add the word 'Hello World'. Now click the window close icon. If it asks you if you want to save the document, click the button that says you don't want to save it.
+
+  3. Reference the plan file: /home/raoul/.claude/plans/deep-shimmying-pumpkin.md
+  4. Tell me: "Continue with the mouse coordinate validation plan"
