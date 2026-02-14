@@ -44,9 +44,9 @@ PiKVM supports multiple keyboard layouts (keymaps) for the paste-as-keys feature
 - en-us (default)
 - Various international layouts
 
-## Proposed MCP Server Design
+## MCP Server Design
 
-### Tools to Implement
+### Implemented Tools
 
 1. **`pikvm_screenshot`**
    - Capture current screen from video stream
@@ -82,16 +82,14 @@ PiKVM supports multiple keyboard layouts (keymaps) for the paste-as-keys feature
 ### Configuration
 
 The MCP server will need:
-- PiKVM host URL (e.g., `https://192.168.1.71`)
+- PiKVM host URL (e.g., `https://<your-pikvm-ip>`)
 - Authentication credentials (username/password or API token)
 - Default keymap setting
 - SSL certificate verification settings (PiKVM often uses self-signed certs)
 
-### Technology Stack Options
+### Technology Stack
 
-1. **Python** - Good MCP SDK support, easy HTTP requests
-2. **TypeScript/Node.js** - Official MCP SDK available
-3. **Go** - If performance is critical
+TypeScript/Node.js was chosen for the implementation, using the official MCP SDK (`@modelcontextprotocol/sdk`), `undici` for HTTP requests, and `image-size` for screenshot dimension detection.
 
 ## Research Sources
 
@@ -101,12 +99,13 @@ The MCP server will need:
 - [DeepWiki - PiKVM HID](https://deepwiki.com/pikvm/kvmd/4.1-hid-(human-interface-devices))
 - [DeepWiki - Web UI](https://deepwiki.com/pikvm/kvmd/6-web-user-interface)
 
-## Next Steps
+## Implementation Status
 
-1. Research full PiKVM API documentation (may need to read kvmd source code)
-2. Choose implementation language
-3. Set up MCP server boilerplate
-4. Implement screenshot tool first (simplest)
-5. Implement type tool (most useful)
-6. Implement keyboard/mouse tools
-7. Test with actual PiKVM device
+All planned tools have been implemented and tested:
+
+1. Screenshot capture with automatic coordinate scaling
+2. Text typing via paste-as-keys API with keymap support
+3. Individual key events and keyboard shortcuts
+4. Mouse movement (absolute and relative), clicking, and scrolling
+5. Mouse coordinate calibration system for resolution-dependent correction
+6. Tested successfully across multiple resolutions (640x480, 800x600, 1280x1024, 1920x1080)

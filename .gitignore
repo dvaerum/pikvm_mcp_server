@@ -31,6 +31,10 @@ test-screenshot.jpg
 *.jpg
 *.png
 
+# Test/dev files
+test-client.ts
+test_prompt.txt
+
 # Code Assistants
 .mcp.json
 .claude

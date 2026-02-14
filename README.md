@@ -26,7 +26,7 @@ cp .env.example .env
 
 Edit `.env`:
 ```
-PIKVM_HOST=https://192.168.1.71
+PIKVM_HOST=https://<your-pikvm-ip>
 PIKVM_USERNAME=admin
 PIKVM_PASSWORD=your_password
 PIKVM_VERIFY_SSL=false
@@ -44,7 +44,7 @@ Add to your Claude Code MCP settings (`~/.config/claude-code/settings.json` or v
       "command": "node",
       "args": ["/path/to/pikvm_mcp_server/dist/index.js"],
       "env": {
-        "PIKVM_HOST": "https://192.168.1.71",
+        "PIKVM_HOST": "https://<your-pikvm-ip>",
         "PIKVM_USERNAME": "admin",
         "PIKVM_PASSWORD": "your_password"
       }
