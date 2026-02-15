@@ -28,8 +28,7 @@ coverage/
 
 # Test artifacts
 test-screenshot.jpg
-*.jpg
-*.png
+*.m4v
 
 # Test/dev files
 test-client.ts
