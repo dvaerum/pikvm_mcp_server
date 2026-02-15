@@ -1,13 +1,27 @@
 # PiKVM MCP Server
 
-An MCP (Model Context Protocol) server that provides direct API access to PiKVM devices, enabling Claude Code and other MCP clients to control remote machines via keyboard, mouse, and screenshots.
+Give AI agents hands. This MCP server connects Claude Code (or any MCP client) directly to a [PiKVM](https://pikvm.org/) device, giving AI full keyboard, mouse, and screen access to a physical machine -- no browser automation, no virtual desktops, no emulators.
+
+Point it at real hardware. Let the AI see the screen, type commands, click buttons, and navigate GUIs on a machine it could never otherwise touch.
+
+<p align="center">
+  <img src="assets/simple_setup.jpg" alt="Raspberry Pi 5 connected to a PiKVM V4 Plus" width="600">
+  <br>
+  <em>A Raspberry Pi 5 controlled via PiKVM V4 Plus -- the AI's physical interface to the real world.</em>
+</p>
+
+### See it in action
+
+The video below shows Claude Code using this MCP server to autonomously interact with a Raspberry Pi desktop: taking a screenshot to identify the OS, opening a text editor from the menu, typing text, and closing the application -- all through the PiKVM hardware interface.
+
+[Watch the demo video](assets/example_prompt.mp4)
 
 ## Features
 
 - **Screenshot capture** - Get current screen as JPEG image
 - **Text typing** - Type text with proper special character handling via keymaps
 - **Keyboard control** - Send individual keys or key combinations (e.g., Ctrl+Alt+Delete)
-- **Mouse control** - Move, click, and scroll
+- **Mouse control** - Move, click, and scroll with automatic coordinate calibration
 
 ## Installation
 
@@ -68,83 +82,25 @@ Or if using the .env file:
 
 ## Available Tools
 
-### pikvm_screenshot
-Capture a screenshot from the remote machine.
+### Display
+- **`pikvm_screenshot`** - Capture current screen as JPEG (optional: maxWidth, maxHeight, quality)
+- **`pikvm_get_resolution`** - Get screen resolution and valid coordinate ranges
 
-```
-Parameters:
-- maxWidth (optional): Maximum width in pixels (1-10000)
-- maxHeight (optional): Maximum height in pixels (1-10000)
-- quality (optional): JPEG quality 1-100
-```
+### Keyboard
+- **`pikvm_type`** - Type text with keymap-aware special character handling (required: text; optional: keymap, slow, delay)
+- **`pikvm_key`** - Send a key or key combo, e.g. Ctrl+Alt+Del (required: key; optional: modifiers, state)
+- **`pikvm_shortcut`** - Send multiple keys pressed simultaneously (required: keys array)
 
-### pikvm_get_resolution
-Get the current screen resolution of the remote machine. Useful for knowing valid coordinate ranges for mouse operations.
+### Mouse
+- **`pikvm_mouse_move`** - Move cursor to absolute pixel position or relative delta (required: x, y; optional: relative)
+- **`pikvm_mouse_click`** - Click a mouse button, optionally at a position (optional: button, x, y, state)
+- **`pikvm_mouse_scroll`** - Scroll the mouse wheel (required: deltaY; optional: deltaX)
 
-```
-Parameters: none
-Returns: Screen resolution (width x height) and valid coordinate ranges
-```
-
-### pikvm_type
-Type text on the remote machine. Handles special characters correctly.
-
-```
-Parameters:
-- text (required): The text to type
-- keymap (optional): Keyboard layout (default: en-us)
-- slow (optional): Use slow typing mode
-- delay (optional): Delay between keystrokes in ms (0-200)
-```
-
-### pikvm_key
-Send a key or key combination.
-
-```
-Parameters:
-- key (required): Key code (e.g., "Enter", "KeyA", "F1")
-- modifiers (optional): Array of modifier keys ["ControlLeft", "AltLeft"]
-- state (optional): "press", "release", or "click" (default)
-```
-
-### pikvm_shortcut
-Send a keyboard shortcut (multiple keys simultaneously).
-
-```
-Parameters:
-- keys (required): Array of key codes ["ControlLeft", "AltLeft", "Delete"]
-```
-
-### pikvm_mouse_move
-Move the mouse cursor.
-
-```
-Parameters:
-- x (required): X coordinate or delta
-- y (required): Y coordinate or delta
-- relative (optional): If true, move relative to current position
-```
-
-### pikvm_mouse_click
-Click a mouse button.
-
-```
-Parameters:
-- button (optional): "left", "right", "middle", "up", or "down" (default: "left")
-  Note: "up" and "down" are scroll wheel buttons
-- x (optional): X coordinate to move to first
-- y (optional): Y coordinate to move to first
-- state (optional): "press", "release", or "click" (default)
-```
-
-### pikvm_mouse_scroll
-Scroll the mouse wheel.
-
-```
-Parameters:
-- deltaX (optional): Horizontal scroll amount
-- deltaY (required): Vertical scroll amount
-```
+### Calibration
+- **`pikvm_calibrate`** - Start calibration by moving cursor to screen center for visual verification
+- **`pikvm_set_calibration`** - Apply correction factors calculated from calibration (required: factorX, factorY)
+- **`pikvm_get_calibration`** - Get current calibration state
+- **`pikvm_clear_calibration`** - Reset to uncalibrated mode
 
 ## Key Codes Reference
 
@@ -156,14 +112,6 @@ Common key codes for `pikvm_key` and `pikvm_shortcut`:
 - Modifiers: `ShiftLeft`, `ShiftRight`, `ControlLeft`, `ControlRight`, `AltLeft`, `AltRight`, `MetaLeft`, `MetaRight`
 - Special: `Enter`, `Escape`, `Backspace`, `Tab`, `Space`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`
 - Arrows: `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`
-
-## Testing
-
-Quick test of the PiKVM connection:
-
-```bash
-npx tsx test-client.ts
-```
 
 ## License
 
