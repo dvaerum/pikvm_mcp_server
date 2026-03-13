@@ -16,6 +16,7 @@ Individual tool usage guides:
 | `move-mouse` | [move-mouse.md](move-mouse.md) | Move the mouse with pikvm_mouse_move |
 | `click-element` | [click-element.md](click-element.md) | Click with pikvm_mouse_click |
 | `scroll-page` | [scroll-page.md](scroll-page.md) | Scroll with pikvm_mouse_scroll |
+| `auto-calibrate` | [auto-calibrate.md](auto-calibrate.md) | Automatic mouse calibration with pikvm_auto_calibrate |
 
 ## Workflow Guides
 
@@ -28,3 +29,4 @@ Multi-step workflow recipes:
 | `click-ui-element-workflow` | [click-ui-element-workflow.md](click-ui-element-workflow.md) | `element_description` (required) | Find and click a UI element |
 | `fill-form-workflow` | [fill-form-workflow.md](fill-form-workflow.md) | `form_description` (optional) | Fill in a form on screen |
 | `navigate-desktop-workflow` | [navigate-desktop-workflow.md](navigate-desktop-workflow.md) | `goal` (required) | Navigate a desktop environment |
+| `auto-calibrate-mouse-workflow` | [auto-calibrate-mouse-workflow.md](auto-calibrate-mouse-workflow.md) | None | Automatic mouse calibration |

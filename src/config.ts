@@ -24,6 +24,11 @@ export interface Config {
     verifySsl: boolean;
     defaultKeymap: string;
   };
+  calibration: {
+    rounds: number;
+    verifyRounds: number;
+    moveDelayMs: number;
+  };
 }
 
 export function loadConfig(): Config {
@@ -44,6 +49,11 @@ export function loadConfig(): Config {
       password,
       verifySsl: process.env.PIKVM_VERIFY_SSL === 'true',
       defaultKeymap: process.env.PIKVM_DEFAULT_KEYMAP || 'en-us',
+    },
+    calibration: {
+      rounds: parseInt(process.env.PIKVM_CALIBRATION_ROUNDS || '5', 10),
+      verifyRounds: parseInt(process.env.PIKVM_CALIBRATION_VERIFY_ROUNDS || '5', 10),
+      moveDelayMs: parseInt(process.env.PIKVM_CALIBRATION_MOVE_DELAY || '300', 10),
     },
   };
 }

@@ -32,15 +32,19 @@ Call \`pikvm_get_resolution\` to determine the screen size and confirm the conne
 ## Step 2 — Take Initial Screenshot
 Call \`pikvm_screenshot\` to see the current state of the remote machine. This confirms video capture is working and shows you what's on screen.
 
-## Step 3 — Calibrate Mouse (if needed)
-If you will be using mouse operations:
-1. Call \`pikvm_calibrate\` — this moves the cursor to the screen center.
-2. Call \`pikvm_screenshot\` — visually locate the actual cursor position.
-3. If the cursor is **not** at the center, calculate correction factors:
-   - factorX = expected_x / actual_x
-   - factorY = expected_y / actual_y
-4. Call \`pikvm_set_calibration\` with the calculated factors.
-5. Call \`pikvm_screenshot\` again to verify the calibration looks correct.
+## Step 3 — Calibrate Mouse
+Run auto-calibration to ensure accurate mouse positioning.
+
+1. Call \`pikvm_auto_calibrate\` — it automatically detects the cursor and computes calibration factors.
+2. If it succeeds, calibration is applied automatically. Proceed to Step 4.
+3. If it fails, fall back to manual calibration:
+   1. Call \`pikvm_calibrate\` — this moves the cursor to the screen center.
+   2. Call \`pikvm_screenshot\` — visually locate the actual cursor position.
+   3. If the cursor is **not** at the center, calculate correction factors:
+      - factorX = expected_x / actual_x
+      - factorY = expected_y / actual_y
+   4. Call \`pikvm_set_calibration\` with the calculated factors.
+   5. Call \`pikvm_screenshot\` again to verify the calibration looks correct.
 
 ## Step 4 — Verify Keyboard (optional)
 If you will be typing:
@@ -84,16 +88,23 @@ The session is now ready for use.`,
 
 Mouse calibration corrects the offset between where you tell the cursor to go and where it actually lands. Run this whenever you start a session or after a resolution change.
 
-## Step 1 — Get Resolution
+## Preferred: Auto-Calibration
+Call \`pikvm_auto_calibrate\`. This automatically detects the cursor via screenshot diffing and computes calibration factors. If it succeeds, calibration is applied immediately — no further steps needed.
+
+If auto-calibration fails (e.g., cursor is hidden, heavy screen animations), use the manual procedure below.
+
+## Manual Calibration (Fallback)
+
+### Step 1 — Get Resolution
 Call \`pikvm_get_resolution\` and note the width and height. The expected center is (width/2, height/2).
 
-## Step 2 — Start Calibration
+### Step 2 — Start Calibration
 Call \`pikvm_calibrate\`. The server moves the cursor to what it believes is the screen center and returns the expected position.
 
-## Step 3 — Screenshot and Locate Cursor
+### Step 3 — Screenshot and Locate Cursor
 Call \`pikvm_screenshot\`. Find the actual cursor position in the image. The cursor is typically an arrow or crosshair.
 
-## Step 4 — Calculate Factors
+### Step 4 — Calculate Factors
 Compute:
 - **factorX** = expected_x / actual_x
 - **factorY** = expected_y / actual_y
@@ -104,16 +115,70 @@ Example: If expected is (960, 540) but the cursor landed at (720, 405):
 
 If the cursor is exactly at center, factors are 1.0 (no correction needed).
 
-## Step 5 — Apply Calibration
+### Step 5 — Apply Calibration
 Call \`pikvm_set_calibration\` with the computed factorX and factorY.
 
-## Step 6 — Verify
+### Step 6 — Verify
 Move the mouse to a known corner or UI element using \`pikvm_mouse_move\`, then take a screenshot to confirm the cursor landed where expected. If it's still off, repeat from Step 2.
 
 ## Notes
 - Calibration is automatically cleared when screen resolution changes.
 - Factors are typically between 1.0 and 1.5. Values outside this range may indicate a measurement error.
 - You can check current calibration at any time with \`pikvm_get_calibration\`.`,
+          },
+        },
+      ];
+    },
+  },
+
+  // ---------- auto-calibrate-mouse-workflow ----------
+  {
+    name: 'auto-calibrate-mouse-workflow',
+    description: 'Step-by-step procedure for automatic mouse calibration',
+    getMessages() {
+      return [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: 'I need to automatically calibrate the mouse for accurate clicking.',
+          },
+        },
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: `# Auto-Calibrate Mouse Workflow
+
+Automatic calibration detects the cursor by diffing screenshots and computes calibration factors without any manual coordinate estimation.
+
+## Step 1 — Run Auto-Calibration
+Call \`pikvm_auto_calibrate\`. The tool will:
+1. Move the mouse to various positions across the screen
+2. Take pairs of screenshots and diff them to detect cursor movement
+3. Compute calibration factors from detected vs expected positions
+4. Verify accuracy by checking the cursor lands within 20px of targets
+
+This takes ~30-60 seconds depending on the number of rounds and connection speed.
+
+## Step 2 — Check Result
+The tool returns success/failure, calibration factors, and a confidence score.
+
+- **Success**: Calibration is applied automatically. You can proceed to use mouse tools.
+- **Failure**: The tool will suggest next steps. Common fixes:
+  - Increase \`moveDelayMs\` (e.g., 500 or 800) for slow PiKVM connections
+  - Ensure the cursor is visible (not hidden by the OS)
+  - Ensure the desktop is static (close videos, stop animations)
+  - Fall back to manual calibration with the \`calibrate-mouse-workflow\`
+
+## Step 3 — Verify (Optional)
+Move the mouse to a known UI element with \`pikvm_mouse_click\` and take a screenshot to confirm the click landed correctly.
+
+## Tips
+- Auto-calibration is the **preferred** method. Only use manual calibration as a fallback.
+- Other PiKVM tools are blocked while calibration is running.
+- If the remote screen resolution changes, you'll need to recalibrate.
+- Calibration factors are typically between 1.0 and 1.5. A factor of 1.0 means no correction is needed on that axis.`,
           },
         },
       ];
