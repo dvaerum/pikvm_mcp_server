@@ -6,7 +6,7 @@
  */
 
 import { Agent, fetch } from 'undici';
-import imageSize from 'image-size';
+import sharp from 'sharp';
 
 export interface PiKVMConfig {
   host: string;
@@ -200,11 +200,12 @@ export class PiKVMClient {
     // Get actual screen resolution (force refresh to ensure accuracy)
     const actualResolution = await this.getResolution(true);
 
-    // Get screenshot dimensions using image-size
-    const dimensions = imageSize(buffer);
-    if (!dimensions.width || !dimensions.height) {
+    // Get screenshot dimensions using sharp
+    const metadata = await sharp(buffer).metadata();
+    if (!metadata.width || !metadata.height) {
       throw new Error('Failed to read screenshot dimensions');
     }
+    const dimensions = { width: metadata.width, height: metadata.height };
 
     // Calculate and store scale factors
     const scaleX = actualResolution.width / dimensions.width;
@@ -353,6 +354,28 @@ export class PiKVMClient {
    */
   clearCalibration(): void {
     this.calibration = null;
+  }
+
+  /**
+   * Move mouse to absolute pixel position WITHOUT calibration or screenshot scaling.
+   * Used during auto-calibration to send known uncalibrated positions.
+   */
+  async mouseMoveRaw(x: number, y: number): Promise<void> {
+    const resolution = await this.getResolution();
+
+    // Temporarily clear calibration to get raw coordinates
+    const savedCalibration = this.calibration;
+    this.calibration = null;
+
+    const normalized = this.pixelToNormalized(x, y, resolution);
+
+    // Restore calibration
+    this.calibration = savedCalibration;
+
+    const params = new URLSearchParams();
+    params.set('to_x', normalized.x.toString());
+    params.set('to_y', normalized.y.toString());
+    await this.request('POST', `/hid/events/send_mouse_move?${params}`);
   }
 
   /**

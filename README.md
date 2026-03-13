@@ -19,6 +19,21 @@ Point it at real hardware. Let the AI see the screen, type commands, click butto
   <em>A Raspberry Pi 5 controlled via PiKVM V4 Plus -- the AI's physical interface to the real world.</em>
 </p>
 
+### Automatic Mouse Calibration
+
+IP-KVM devices translate mouse coordinates through multiple layers — USB HID emulation, host-side input drivers, display scaling — each introducing positional error. Existing KVM products either ignore this (requiring manual correction) or offer limited auto-sync that only detects cursor acceleration in a fixed corner region.
+
+This MCP server takes a different approach. The `pikvm_auto_calibrate` tool uses a vision-based algorithm that:
+
+1. **Moves the cursor** a known distance across multiple randomized screen positions
+2. **Diffs screenshot pairs** to isolate the cursor via connected-component analysis
+3. **Computes correction factors** from detected vs commanded movement using median aggregation
+4. **Self-verifies** by moving to target positions and confirming the cursor lands within 20px
+
+The entire process runs in ~30-60 seconds with no human intervention. Noisy screens (tooltips, animations, dynamic content) are handled through multi-round sampling, ratio divergence filtering, and outlier-resistant statistics — the algorithm discards bad data and still converges on accurate factors.
+
+This is the first IP-KVM tooling — commercial or open source — to implement fully automated mouse coordinate calibration via computer vision. It is what makes precise AI-driven mouse control over a network KVM practical.
+
 ### See it in action
 
 The video below shows Claude Code using this MCP server to autonomously interact with a Raspberry Pi desktop: taking a screenshot to identify the OS, opening a text editor from the menu, typing text, and closing the application -- all through the PiKVM hardware interface.
@@ -27,10 +42,11 @@ The video below shows Claude Code using this MCP server to autonomously interact
 
 ## Features
 
-- **Screenshot capture** - Get current screen as JPEG image
-- **Text typing** - Type text with proper special character handling via keymaps
-- **Keyboard control** - Send individual keys or key combinations (e.g., Ctrl+Alt+Delete)
-- **Mouse control** - Move, click, and scroll with automatic coordinate calibration
+- **Automatic mouse calibration** — Vision-based cursor detection computes coordinate correction factors with no manual measurement. The first fully automated calibration for IP-KVM.
+- **Screenshot capture** — Get current screen as JPEG image
+- **Text typing** — Type text with proper special character handling via keymaps
+- **Keyboard control** — Send individual keys or key combinations (e.g., Ctrl+Alt+Delete)
+- **Mouse control** — Move, click, and scroll with calibrated coordinate correction
 
 ## Installation
 
@@ -108,14 +124,15 @@ Or if using the .env file:
 - **`pikvm_mouse_scroll`** - Scroll the mouse wheel (required: deltaY; optional: deltaX)
 
 ### Calibration
-- **`pikvm_calibrate`** - Start calibration by moving cursor to screen center for visual verification
+- **`pikvm_auto_calibrate`** - Automatically detect cursor and compute calibration factors *(preferred)*
+- **`pikvm_calibrate`** - Start manual calibration by moving cursor to screen center for visual verification
 - **`pikvm_set_calibration`** - Apply correction factors calculated from calibration (required: factorX, factorY)
 - **`pikvm_get_calibration`** - Get current calibration state
 - **`pikvm_clear_calibration`** - Reset to uncalibrated mode
 
 ## Skills (Prompts & Skill Tools)
 
-The server exposes 13 skills that provide structured guidance for agents. Each skill is available via **two discovery paths**:
+The server exposes 15 skills that provide structured guidance for agents. Each skill is available via **two discovery paths**:
 
 - **MCP Prompts** — `prompts/list` / `prompts/get` for clients that support the Prompts capability.
 - **Skill Tools** — `tools/list` / `tools/call` as `skill_*` read-only tools, ensuring visibility in marketplaces (e.g. LobeHub) that index tools only.
@@ -132,6 +149,7 @@ The server exposes 13 skills that provide structured guidance for agents. Each s
 | `move-mouse` | `skill_move_mouse` | Moving the mouse with pikvm_mouse_move |
 | `click-element` | `skill_click_element` | Clicking with pikvm_mouse_click |
 | `scroll-page` | `skill_scroll_page` | Scrolling with pikvm_mouse_scroll |
+| `auto-calibrate` | `skill_auto_calibrate` | Automatic mouse calibration with pikvm_auto_calibrate |
 
 ### Workflow Recipes
 
@@ -142,6 +160,7 @@ The server exposes 13 skills that provide structured guidance for agents. Each s
 | `click-ui-element-workflow` | `skill_click_ui_element_workflow` | `element_description` (required) | Find and click a UI element |
 | `fill-form-workflow` | `skill_fill_form_workflow` | `form_description` (optional) | Fill in a form on screen |
 | `navigate-desktop-workflow` | `skill_navigate_desktop_workflow` | `goal` (required) | Navigate a desktop environment |
+| `auto-calibrate-mouse-workflow` | `skill_auto_calibrate_mouse_workflow` | — | Automatic mouse calibration |
 
 See [`docs/skills/`](docs/skills/) for detailed human-readable guides.
 
