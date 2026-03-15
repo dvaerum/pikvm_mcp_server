@@ -12,6 +12,8 @@ None.
 
 Mouse calibration corrects the offset between where you tell the cursor to go and where it actually lands. Run this whenever you start a session or after a resolution change.
 
+> **Tip:** Try `pikvm_auto_calibrate` first — it detects the cursor automatically via screenshot diffing and is more accurate. Use the manual procedure below only if auto-calibration fails.
+
 ### Step 1 — Get Resolution
 
 Call `pikvm_get_resolution` and note the width and height. The expected center is (width/2, height/2).

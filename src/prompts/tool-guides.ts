@@ -302,6 +302,54 @@ Click a mouse button, optionally moving to a position first. Supports left, righ
     },
   },
 
+  // ---------- auto-calibrate ----------
+  {
+    name: 'auto-calibrate',
+    description: 'Guide for automatic mouse calibration with pikvm_auto_calibrate',
+    getMessages() {
+      return [
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: `# pikvm_auto_calibrate — Automatic Mouse Calibration
+
+## Purpose
+Automatically calibrate mouse coordinates by detecting the cursor position via screenshot diffing. More accurate than manual calibration because it detects the actual cursor position programmatically instead of relying on visual estimation.
+
+## How It Works
+1. Moves the mouse a known distance across multiple rounds
+2. Diffs pairs of screenshots to find cursor-sized changes (connected pixel clusters)
+3. Compares detected movement to commanded movement to compute calibration factors
+4. Verifies accuracy by moving to random positions and checking detected vs expected positions
+5. Retries with increased delays if verification fails
+
+## Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| rounds | number | 5 | Number of sampling rounds to compute calibration factors |
+| verifyRounds | number | 5 | Number of verification rounds after calibration is computed |
+| moveDelayMs | number | 300 | Delay in ms after each mouse move (increase for slow PiKVM connections) |
+
+## Example Call
+\`\`\`json
+{ "name": "pikvm_auto_calibrate" }
+
+{ "name": "pikvm_auto_calibrate", "arguments": { "moveDelayMs": 500 } }
+\`\`\`
+
+## Tips
+- This is the **preferred calibration method** — try it before manual calibration.
+- Other tools are blocked while auto-calibration is running.
+- If it fails, try increasing \`moveDelayMs\` (slow video capture is the most common cause).
+- If it repeatedly fails, fall back to manual calibration with \`pikvm_calibrate\`.
+- Works best when the desktop is static (no animations, videos, or blinking elements near the cursor).`,
+          },
+        },
+      ];
+    },
+  },
+
   // ---------- scroll-page ----------
   {
     name: 'scroll-page',

@@ -18,17 +18,20 @@ Call `pikvm_get_resolution` to determine the screen size and confirm the connect
 
 Call `pikvm_screenshot` to see the current state of the remote machine. This confirms video capture is working and shows you what's on screen.
 
-### Step 3 — Calibrate Mouse (if needed)
+### Step 3 — Calibrate Mouse
 
-If you will be using mouse operations:
+Run auto-calibration to ensure accurate mouse positioning.
 
-1. Call `pikvm_calibrate` — this moves the cursor to the screen center.
-2. Call `pikvm_screenshot` — visually locate the actual cursor position.
-3. If the cursor is **not** at the center, calculate correction factors:
-   - factorX = expected_x / actual_x
-   - factorY = expected_y / actual_y
-4. Call `pikvm_set_calibration` with the calculated factors.
-5. Call `pikvm_screenshot` again to verify the calibration looks correct.
+1. Call `pikvm_auto_calibrate` — it automatically detects the cursor and computes calibration factors.
+2. If it succeeds, calibration is applied automatically. Proceed to Step 4.
+3. If it fails, fall back to manual calibration:
+   1. Call `pikvm_calibrate` — this moves the cursor to the screen center.
+   2. Call `pikvm_screenshot` — visually locate the actual cursor position.
+   3. If the cursor is **not** at the center, calculate correction factors:
+      - factorX = expected_x / actual_x
+      - factorY = expected_y / actual_y
+   4. Call `pikvm_set_calibration` with the calculated factors.
+   5. Call `pikvm_screenshot` again to verify the calibration looks correct.
 
 ### Step 4 — Verify Keyboard (optional)
 
