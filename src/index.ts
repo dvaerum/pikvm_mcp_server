@@ -18,9 +18,13 @@ import { PiKVMClient } from './pikvm/client.js';
 import { loadConfig } from './config.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
+import { BusyLock } from './pikvm/lock.js';
+import { autoCalibrateWithRetries } from './pikvm/auto-calibrate.js';
 
 // Defer initialization to main() for proper error handling
 let pikvm: PiKVMClient;
+let calibrationConfig: { rounds: number; verifyRounds: number; moveDelayMs: number };
+const lock = new BusyLock();
 
 // ============================================================================
 // Input Validation Helpers
@@ -319,6 +323,43 @@ const tools: Tool[] = [
       properties: {},
     },
   },
+  {
+    name: 'pikvm_auto_calibrate',
+    description: 'Automatically calibrate mouse coordinates by detecting the cursor position via screenshot diffing. This is more accurate than manual calibration. Moves the mouse multiple times, compares screenshots to find the cursor, and computes calibration factors. Other tools are blocked during calibration.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rounds: {
+          type: 'number',
+          description: 'Number of sampling rounds (default: 5)',
+        },
+        verifyRounds: {
+          type: 'number',
+          description: 'Number of verification rounds (default: 5)',
+        },
+        moveDelayMs: {
+          type: 'number',
+          description: 'Delay in ms after each mouse move for capture to settle (default: 300). Increase if calibration fails on slow connections.',
+        },
+        mergeRadius: {
+          type: 'number',
+          description: 'Radius in pixels for merging nearby clusters (e.g., cursor + drop shadow). Default: 30.',
+        },
+        minSamples: {
+          type: 'number',
+          description: 'Minimum valid samples required for calibration to succeed. Default: 3.',
+        },
+        maxRatioDivergence: {
+          type: 'number',
+          description: 'Maximum allowed divergence between X and Y ratios within a single round. Rejects noisy rounds where ratios are incoherent. Default: 0.5.',
+        },
+        verbose: {
+          type: 'boolean',
+          description: 'Log per-round debug data (centroid positions, accept/reject reasons). Default: false.',
+        },
+      },
+    },
+  },
   ...skillTools,
 ];
 
@@ -372,6 +413,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
+
+  // Block other tools while auto-calibration is in progress
+  if (lock.isBusy && name !== 'pikvm_auto_calibrate') {
+    return {
+      content: [{ type: 'text', text: `Error: ${lock.holder} in progress, please wait.` }],
+      isError: true,
+    };
+  }
 
   try {
     if (isSkillTool(name)) {
@@ -496,7 +545,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const clampedY = Math.max(0, Math.round(y));
           const result = await pikvm.mouseMove(clampedX, clampedY);
           if (result.calibrationInvalidated) {
-            calibrationWarning = '\n⚠️ Resolution changed - calibration has been cleared. Consider recalibrating with pikvm_calibrate.';
+            calibrationWarning = '\n⚠️ Resolution changed - calibration has been cleared. Recalibrate with pikvm_auto_calibrate (preferred) or pikvm_calibrate.';
           }
         }
         return {
@@ -620,6 +669,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'pikvm_auto_calibrate': {
+        if (lock.isBusy) {
+          return {
+            content: [{ type: 'text', text: 'Auto-calibration is already in progress.' }],
+            isError: true,
+          };
+        }
+
+        lock.acquire('Auto-calibration');
+        try {
+          const result = await autoCalibrateWithRetries(pikvm, {
+            rounds: validateNumber(args.rounds, 2, 20) ?? calibrationConfig.rounds,
+            verifyRounds: validateNumber(args.verifyRounds, 1, 20) ?? calibrationConfig.verifyRounds,
+            moveDelayMs: validateNumber(args.moveDelayMs, 50, 2000) ?? calibrationConfig.moveDelayMs,
+            mergeRadius: validateNumber(args.mergeRadius, 0, 200),
+            minSamples: validateNumber(args.minSamples, 1, 20),
+            maxRatioDivergence: validateNumber(args.maxRatioDivergence, 0, 1),
+            verbose: validateBoolean(args.verbose),
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Auto-calibration ${result.success ? 'succeeded' : 'failed'}.\n` +
+                  `Resolution: ${result.resolution.width}x${result.resolution.height}\n` +
+                  `Factors: X=${result.factorX.toFixed(4)}, Y=${result.factorY.toFixed(4)}\n` +
+                  `Confidence: ${(result.confidence * 100).toFixed(0)}%\n` +
+                  `Verification score: ${result.verificationScore}\n` +
+                  `Valid samples: ${result.validSamples}/${result.totalRounds}\n\n` +
+                  result.message,
+              },
+            ],
+          };
+        } finally {
+          lock.release();
+        }
+      }
+
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -646,6 +734,7 @@ async function main() {
   // Load configuration (deferred to here for proper error handling)
   const config = loadConfig();
   pikvm = new PiKVMClient(config.pikvm);
+  calibrationConfig = config.calibration;
 
   // Verify connection on startup
   const authOk = await pikvm.checkAuth();
