@@ -1,5 +1,8 @@
 # pikvm_mouse_move_to — Approximate Move to a Screen Pixel (Relative Mode)
 
+> **iPad users:** read [ipad-setup.md](ipad-setup.md) first. Pointer Animations
+> MUST be disabled for reliable operation.
+
 ## Purpose
 Move the pointer to an approximate target pixel on a PiKVM target in relative mouse mode (iPad, etc.). The tool slams the pointer to the top-left corner to establish a known origin, emits a calculated delta sequence using a ballistics profile (if any) or a default `1.0` px/mickey, then returns a post-move screenshot.
 

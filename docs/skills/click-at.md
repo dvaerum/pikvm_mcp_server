@@ -1,5 +1,8 @@
 # pikvm_mouse_click_at — Click at an Approximate Screen Pixel (Relative Mode)
 
+> **iPad users:** read [ipad-setup.md](ipad-setup.md) first. Pointer Animations
+> MUST be disabled for reliable operation.
+
 ## Purpose
 On a PiKVM target in relative mouse mode (iPad), move the pointer to an approximate target pixel and click. Internally: `pikvm_mouse_move_to` → brief settle → `mouseClick`. Returns a post-click screenshot.
 

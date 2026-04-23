@@ -128,6 +128,14 @@ Or if using the .env file:
 - **`pikvm_mouse_scroll`** - Scroll the mouse wheel (required: deltaY; optional: deltaX)
 
 ### Relative-Mouse Targets (iPad, etc. — `mouse.absolute=false`)
+
+> **iPad preconditions:** before using the relative-mode tools, disable
+> **Settings → Accessibility → Pointer Control → Pointer Animations** on
+> the iPad. See [docs/skills/ipad-setup.md](docs/skills/ipad-setup.md) for
+> the full checklist. Without this setting, diff-based cursor detection
+> mis-identifies icon pointer-effect highlights as the cursor and click-at
+> will not land on target.
+
 - **`pikvm_ipad_unlock`** - Unlock an iPad from lock screen via a USB HID swipe-up gesture (optional: slamFirst, startX, startY, dragPx, chunkMickeys). Verified on iPad-in-1920x1080 portrait: 800 px swipe unlocks.
 - **`pikvm_mouse_move_to`** - Approximate move-to-pixel on a relative-mouse target: slams to origin, emits calculated delta sequence, returns post-move screenshot for visual verification (required: x, y).
 - **`pikvm_mouse_click_at`** - Approximate move + click on a relative-mouse target (required: x, y; optional: button).
