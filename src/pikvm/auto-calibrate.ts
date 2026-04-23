@@ -5,8 +5,12 @@
  * and computes calibration factors from detected vs expected positions.
  */
 
-import sharp from 'sharp';
 import { PiKVMClient, ScreenResolution } from './client.js';
+import {
+  Cluster,
+  DetectionConfig,
+  diffScreenshots as detectDiffScreenshots,
+} from './cursor-detect.js';
 
 // ============================================================================
 // Types
@@ -43,12 +47,6 @@ interface Point {
   y: number;
 }
 
-interface Cluster {
-  pixels: number;
-  centroidX: number;
-  centroidY: number;
-}
-
 interface CalibrationSample {
   detectedDelta: Point;
   commandedDelta: Point;
@@ -71,187 +69,27 @@ const DEFAULT_CONFIG: AutoCalibrationConfig = {
 };
 
 // ============================================================================
-// Image diffing
+// Image diffing — delegated to cursor-detect.ts
 // ============================================================================
 
-/**
- * Decode a JPEG buffer to raw RGB pixels via sharp.
- */
-async function decodeToRgb(buffer: Buffer): Promise<{ data: Buffer; width: number; height: number }> {
-  const image = sharp(buffer).removeAlpha().raw();
-  const { data, info } = await image.toBuffer({ resolveWithObject: true });
-  return { data, width: info.width, height: info.height };
+function detectionConfigFrom(config: AutoCalibrationConfig): DetectionConfig {
+  return {
+    diffThreshold: config.diffThreshold,
+    minClusterSize: config.minClusterSize,
+    maxClusterSize: config.maxClusterSize,
+    mergeRadius: config.mergeRadius,
+    // Absolute-mouse auto-calibrate works on whatever target the PiKVM is
+    // attached to (not iPad-specific); don't filter by brightness there.
+    brightnessFloor: 0,
+  };
 }
 
-/**
- * Diff two same-size raw RGB buffers.
- * Returns a boolean mask where changed pixels are true.
- */
-function diffPixels(
-  a: Buffer,
-  b: Buffer,
-  width: number,
-  height: number,
-  threshold: number,
-): boolean[] {
-  const total = width * height;
-  const mask = new Array<boolean>(total);
-  for (let i = 0; i < total; i++) {
-    const offset = i * 3;
-    const dr = Math.abs(a[offset] - b[offset]);
-    const dg = Math.abs(a[offset + 1] - b[offset + 1]);
-    const db = Math.abs(a[offset + 2] - b[offset + 2]);
-    mask[i] = (dr + dg + db) >= threshold;
-  }
-  return mask;
-}
-
-/**
- * Connected-component labeling via 8-connectivity flood fill.
- * Returns clusters of changed pixels with centroid and size.
- */
-function findClusters(
-  mask: boolean[],
-  width: number,
-  height: number,
-  minSize: number,
-  maxSize: number,
-): Cluster[] {
-  const visited = new Uint8Array(width * height);
-  const clusters: Cluster[] = [];
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
-      if (!mask[idx] || visited[idx]) continue;
-
-      // Flood fill via BFS
-      const queue: number[] = [idx];
-      visited[idx] = 1;
-      let sumX = 0;
-      let sumY = 0;
-      let count = 0;
-
-      while (queue.length > 0) {
-        const ci = queue.pop()!;
-        const cx = ci % width;
-        const cy = (ci - cx) / width;
-        sumX += cx;
-        sumY += cy;
-        count++;
-
-        // 8-connectivity neighbors
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            const nx = cx + dx;
-            const ny = cy + dy;
-            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-            const ni = ny * width + nx;
-            if (!mask[ni] || visited[ni]) continue;
-            visited[ni] = 1;
-            queue.push(ni);
-          }
-        }
-      }
-
-      if (count >= minSize && count <= maxSize) {
-        clusters.push({
-          pixels: count,
-          centroidX: Math.round(sumX / count),
-          centroidY: Math.round(sumY / count),
-        });
-      }
-    }
-  }
-
-  return clusters;
-}
-
-/**
- * Merge nearby clusters into logical groups (single-linkage union-find).
- * Handles cursor drop shadows that appear as separate clusters near the cursor body.
- */
-function mergeClusters(clusters: Cluster[], mergeRadius: number): Cluster[] {
-  if (clusters.length <= 1) return clusters;
-
-  // Union-Find
-  const parent = clusters.map((_, i) => i);
-
-  function find(i: number): number {
-    while (parent[i] !== i) {
-      parent[i] = parent[parent[i]]; // path compression
-      i = parent[i];
-    }
-    return i;
-  }
-
-  function union(a: number, b: number): void {
-    const ra = find(a);
-    const rb = find(b);
-    if (ra !== rb) parent[ra] = rb;
-  }
-
-  // Merge pairs within mergeRadius (centroid distance)
-  for (let i = 0; i < clusters.length; i++) {
-    for (let j = i + 1; j < clusters.length; j++) {
-      const dx = clusters[i].centroidX - clusters[j].centroidX;
-      const dy = clusters[i].centroidY - clusters[j].centroidY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist <= mergeRadius) {
-        union(i, j);
-      }
-    }
-  }
-
-  // Group by root
-  const groups = new Map<number, number[]>();
-  for (let i = 0; i < clusters.length; i++) {
-    const root = find(i);
-    if (!groups.has(root)) groups.set(root, []);
-    groups.get(root)!.push(i);
-  }
-
-  // Merge each group: pixel-weighted average centroid
-  const merged: Cluster[] = [];
-  for (const members of groups.values()) {
-    let totalPixels = 0;
-    let weightedX = 0;
-    let weightedY = 0;
-    for (const idx of members) {
-      const c = clusters[idx];
-      totalPixels += c.pixels;
-      weightedX += c.centroidX * c.pixels;
-      weightedY += c.centroidY * c.pixels;
-    }
-    merged.push({
-      pixels: totalPixels,
-      centroidX: Math.round(weightedX / totalPixels),
-      centroidY: Math.round(weightedY / totalPixels),
-    });
-  }
-
-  return merged;
-}
-
-/**
- * Diff two JPEG screenshots and return cursor-sized clusters.
- */
 async function diffScreenshots(
   bufA: Buffer,
   bufB: Buffer,
   config: AutoCalibrationConfig,
 ): Promise<Cluster[]> {
-  const imgA = await decodeToRgb(bufA);
-  const imgB = await decodeToRgb(bufB);
-
-  if (imgA.width !== imgB.width || imgA.height !== imgB.height) {
-    throw new Error('Screenshot dimensions changed between captures');
-  }
-
-  const mask = diffPixels(imgA.data, imgB.data, imgA.width, imgA.height, config.diffThreshold);
-  const raw = findClusters(mask, imgA.width, imgA.height, config.minClusterSize, config.maxClusterSize);
-  return mergeClusters(raw, config.mergeRadius);
+  return detectDiffScreenshots(bufA, bufB, detectionConfigFrom(config));
 }
 
 // ============================================================================
