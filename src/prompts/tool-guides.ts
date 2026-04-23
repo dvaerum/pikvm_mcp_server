@@ -388,4 +388,200 @@ Scroll the mouse wheel vertically or horizontally.
       ];
     },
   },
+
+  // ---------- ipad-unlock ----------
+  {
+    name: 'ipad-unlock',
+    description: 'Guide for unlocking an iPad via pikvm_ipad_unlock',
+    getMessages() {
+      return [
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: `# pikvm_ipad_unlock — Unlock the iPad from Lock Screen
+
+## Purpose
+iPadOS requires a swipe-up-from-bottom gesture to dismiss the lock screen. With a USB HID mouse, this is emitted as: position cursor → press → rapid upward drag → release. This tool packages the verified gesture parameters so agents don't have to reinvent them.
+
+## Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| slamFirst | boolean | true | Slam to top-left first for a known origin |
+| startX | number | 955 | HDMI X of swipe start (iPad portrait center) |
+| startY | number | 1035 | HDMI Y of swipe start (just above home indicator) |
+| dragPx | number | 800 | Total upward drag distance |
+| chunkMickeys | number | 30 | Per-call mickey size (smaller = faster motion) |
+
+## Example Call
+\`\`\`json
+{ "name": "pikvm_ipad_unlock", "arguments": {} }
+\`\`\`
+
+## When to Use
+- Before any click/move operation if a fresh screenshot shows the lock screen.
+- After a long period of inactivity (iPadOS auto-locks after 30 s – 2 min by default).
+
+## Side Effects on Already-Unlocked iPads
+This tool emits the iPadOS swipe-up-from-home-indicator gesture. iPadOS interprets it differently depending on state:
+
+| State | Result |
+|---|---|
+| Lock screen | Unlocks → home screen (intended use) |
+| Home screen | No-op ("go home" is idempotent when already home) |
+| **Inside an app** | **Closes the app** and returns to home screen |
+
+**Check with \`pikvm_screenshot\` first** if there's a risk the iPad is inside an app you don't want to dismiss.
+
+## Tips
+- **Check the returned screenshot.** If the iPad is still on the lock screen, call again with \`dragPx: 1000\` or \`1200\`.
+- If the swipe consistently fails, the iPad's letterbox offset may differ on your device. Measure where the home indicator actually is in your screenshots and override \`startX\`/\`startY\`.
+- Empirically verified: 400 px drag does NOT unlock; 800 px does. Speed matters less than total distance.`,
+          },
+        },
+      ];
+    },
+  },
+
+  // ---------- measure-ballistics ----------
+  {
+    name: 'measure-ballistics',
+    description: 'Guide for characterizing relative-mouse ballistics with pikvm_measure_ballistics',
+    getMessages() {
+      return [
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: `# pikvm_measure_ballistics — Characterize iPad/Relative-Mouse Ballistics
+
+## Purpose
+When the PiKVM target uses \`mouse.absolute=false\` (e.g. iPad), deltas have a non-trivial, non-linear pixel/mickey ratio because of OS-side pointer acceleration. This tool slams the cursor to a known corner, sweeps (axis × magnitude × pace × rep), and writes a JSON profile to \`./data/ballistics.json\`. The profile is consulted by \`pikvm_mouse_move_to\` and \`pikvm_mouse_click_at\`.
+
+## When to Run
+- Once per device + orientation + resolution.
+- When your observed move-to accuracy degrades (e.g. after iPadOS updates that change pointer acceleration).
+
+## Caveats (read before running)
+- **Needs a quiet screen.** On the iPad home screen, animated widgets (clock second hand, weather ticker) produce so many pixel diffs that cursor detection mis-locks on them. Navigate to a static screen first — iPad Settings, a blank Safari page, or the lock screen.
+- **Results have variance.** Even on quiet screens, per-cell medians can vary 2-3x between runs because iPad auto-hides the cursor and pointer-effect rendering perturbs the diff. Treat the profile as a *hint*, not ground truth.
+- **Takes ~1-5 minutes** depending on rep count.
+
+## Example Calls
+\`\`\`json
+{ "name": "pikvm_measure_ballistics", "arguments": {} }
+
+{ "name": "pikvm_measure_ballistics", "arguments": { "magnitudes": [127], "paces": ["slow"], "reps": 5, "verbose": true } }
+\`\`\`
+
+## Tips
+- If \`samplesAccepted\` is much less than the total sweep size, the screen was too noisy — navigate to a quieter view and retry.
+- A reasonable default empirical value on iPad is **~1.0 px/mickey at mag=127, pace=slow** — if your profile's medians are far from that, re-check the target screen.
+- You can skip this tool entirely. \`pikvm_mouse_move_to\` falls back to 1.0 px/mickey when no profile exists, and its output screenshot lets the caller close the loop visually.`,
+          },
+        },
+      ];
+    },
+  },
+
+  // ---------- move-to ----------
+  {
+    name: 'move-to',
+    description: 'Guide for approximate move-to-pixel with pikvm_mouse_move_to',
+    getMessages() {
+      return [
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: `# pikvm_mouse_move_to — Approximate Move to a Screen Pixel (Relative Mode)
+
+## Purpose
+Move the pointer to an approximate target pixel on a PiKVM target in relative mouse mode (iPad, etc.). The tool slams the pointer to the top-left corner to establish a known origin, emits a calculated delta sequence using a ballistics profile (if any) or a default \`1.0\` px/mickey, then returns a post-move screenshot.
+
+## Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| x | number | *(required)* | Target X in HDMI screenshot pixels |
+| y | number | *(required)* | Target Y in HDMI screenshot pixels |
+| slamFirst | boolean | true | Slam to top-left before moving (establishes origin) |
+| slamOriginX | number | 625 | HDMI X of post-slam origin (iPad portrait letterbox) |
+| slamOriginY | number | 65 | HDMI Y of post-slam origin |
+| fallbackPxPerMickey | number | 1.0 | px/mickey used when no profile |
+| chunkMagnitude | number | 127 | Per-call delta size |
+| chunkPaceMs | number | 20 | Pace between chunked calls (ms) |
+| deadZoneMickeys | number | 0 | Extra mickeys to compensate for edge absorption |
+
+## Expected Accuracy
+Open-loop: within **~20-100 pixels** of target on this iPad. That's close enough for icon targeting if the icon is ~100px+ across. **For sub-50px precision, close the loop visually:**
+
+1. Call \`pikvm_mouse_move_to\` to get near the target.
+2. In the returned screenshot, locate the cursor (small arrow, usually on wallpaper).
+3. Compute pixel error (actual - target).
+4. Issue a correction with \`pikvm_mouse_move\` in relative mode: delta ≈ -(error_x, error_y) mickeys (1 mickey ≈ 1 pixel at mag=127 pace=20ms).
+5. Screenshot again; repeat if needed.
+
+## Example Calls
+\`\`\`json
+{ "name": "pikvm_mouse_move_to", "arguments": { "x": 960, "y": 540 } }
+
+{ "name": "pikvm_mouse_move_to", "arguments": { "x": 1200, "y": 800, "slamOriginX": 500, "slamOriginY": 60 } }
+\`\`\`
+
+## Tips
+- The default slam origin (625, 65) is tuned for an iPad displayed portrait in a 1920×1080 HDMI frame. If your letterbox is different, measure once by calling \`pikvm_mouse_move_to\` with some known target and correcting the offset.
+- Prefer \`pikvm_mouse_click_at\` when you want "move + click in one step".`,
+          },
+        },
+      ];
+    },
+  },
+
+  // ---------- click-at ----------
+  {
+    name: 'click-at',
+    description: 'Guide for click-at-coordinate with pikvm_mouse_click_at',
+    getMessages() {
+      return [
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: `# pikvm_mouse_click_at — Click at an Approximate Screen Pixel (Relative Mode)
+
+## Purpose
+On a PiKVM target in relative mouse mode (iPad), move the pointer to an approximate target pixel and click. Internally: \`pikvm_mouse_move_to\` → brief settle → \`mouseClick\`. Returns a post-click screenshot.
+
+## Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| x | number | *(required)* | Target X in HDMI screenshot pixels |
+| y | number | *(required)* | Target Y in HDMI screenshot pixels |
+| button | string | left | left / right / middle / up / down |
+| slamFirst | boolean | true | Slam to top-left before moving |
+| slamOriginX | number | 625 | HDMI X of post-slam origin |
+| slamOriginY | number | 65 | HDMI Y of post-slam origin |
+
+## When to Use
+- Tapping an iPad app icon whose bounding box is ≥100×100 px — the ~50 px accuracy is inside the hit target.
+- Any coarse click where an error of tens of pixels is acceptable.
+
+## When NOT to Use
+- Sub-50 px precision (e.g. tapping a single character in a text field). Use the closed-loop pattern from the \`move-to\` guide instead.
+
+## Example Calls
+\`\`\`json
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700 } }
+
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 400, "y": 400, "button": "right" } }
+\`\`\`
+
+## Tips
+- Take a \`pikvm_screenshot\` first to confirm the target pixel is where the UI element actually is — icon positions change between app rearrangements and iOS versions.
+- After the click, examine the returned screenshot: did the expected app open / dialog appear? If not, the click missed — retry with the closed-loop correction from \`move-to\`.`,
+          },
+        },
+      ];
+    },
+  },
 ];

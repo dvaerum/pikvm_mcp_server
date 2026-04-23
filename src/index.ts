@@ -20,11 +20,25 @@ import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
 import { BusyLock } from './pikvm/lock.js';
 import { autoCalibrateWithRetries } from './pikvm/auto-calibrate.js';
+import {
+  measureBallistics,
+  loadProfile,
+  Axis,
+  Pace,
+  BallisticsProfile,
+} from './pikvm/ballistics.js';
+import { moveToPixel } from './pikvm/move-to.js';
+import { unlockIpad } from './pikvm/ipad-unlock.js';
 
 // Defer initialization to main() for proper error handling
 let pikvm: PiKVMClient;
 let calibrationConfig: { rounds: number; verifyRounds: number; moveDelayMs: number };
+let cachedProfile: BallisticsProfile | null = null;
 const lock = new BusyLock();
+
+async function refreshProfile(path?: string): Promise<void> {
+  cachedProfile = await loadProfile(path ?? './data/ballistics.json').catch(() => null);
+}
 
 // ============================================================================
 // Input Validation Helpers
@@ -324,6 +338,117 @@ const tools: Tool[] = [
     },
   },
   {
+    name: 'pikvm_ipad_unlock',
+    description: 'Unlock an iPad from its lock screen by emitting a USB HID swipe-up gesture at the home indicator bar. Moves the cursor to the bottom-center of the iPad display, presses the left button, rapid-fires upward relative deltas covering 800 px (default), then releases. Verified on an iPad displayed portrait in a 1920x1080 HDMI frame — a 400 px drag does NOT unlock; 800 px does. Returns a post-unlock screenshot so the caller can confirm the iPad is now on the home screen. SIDE EFFECTS: on an already-unlocked home screen this is a no-op (the swipe is interpreted as "go home" which is idempotent). On an already-unlocked iPad that is INSIDE AN APP, the same swipe will close the app and return to home — check with pikvm_screenshot before calling if app state matters.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slamFirst: { type: 'boolean', description: 'Slam to top-left corner first to establish a known cursor position. Default true.' },
+        startX: { type: 'number', description: 'HDMI X of the unlock-swipe start. Default 955 (iPad portrait center).' },
+        startY: { type: 'number', description: 'HDMI Y of the unlock-swipe start. Default 1035 (just above the home indicator bar).' },
+        dragPx: { type: 'number', description: 'Total pixel distance dragged upward. Default 800. If the swipe does not unlock, try 1000 or 1200.' },
+        chunkMickeys: { type: 'number', description: 'Per-call mickey size for the drag. Smaller = faster apparent motion. Default 30.' },
+      },
+    },
+  },
+  {
+    name: 'pikvm_mouse_move_to',
+    description: 'Move the mouse pointer to an approximate target pixel on a PiKVM target in RELATIVE mouse mode (e.g. iPad). Default strategy ("detect-then-move") probes+diffs to locate the cursor without moving it much, then emits a chunked delta sequence to the target. Runs up to 2 correction passes (probe-driven) and a ground-truth detection pass so the returned message reports the actual cursor landing position. Returns a post-move screenshot. Use pikvm_mouse_click_at for "move then click".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Target X coordinate in HDMI-screenshot pixels' },
+        y: { type: 'number', description: 'Target Y coordinate in HDMI-screenshot pixels' },
+        strategy: {
+          type: 'string',
+          enum: ['detect-then-move', 'slam-then-move', 'assume-at'],
+          description: 'Origin discovery. "detect-then-move" (default) probes+diffs to find the cursor (safe — no slam). "slam-then-move" pins cursor to top-left (risky on iPad: hot-corner re-lock). "assume-at" requires assumeCursorAtX/Y.',
+        },
+        assumeCursorAtX: { type: 'number', description: 'With strategy="assume-at", HDMI X where cursor currently is.' },
+        assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
+        slamOriginX: { type: 'number', description: 'HDMI X of post-slam origin. Default 625.' },
+        slamOriginY: { type: 'number', description: 'HDMI Y of post-slam origin. Default 65.' },
+        fallbackPxPerMickey: { type: 'number', description: 'px/mickey used when no profile. Default 1.3 (empirical iPad with mag=60 chunks).' },
+        chunkMagnitude: { type: 'number', description: 'Per-call delta magnitude for chunking. Default 60.' },
+        chunkPaceMs: { type: 'number', description: 'Milliseconds between chunked calls. Default 20.' },
+        correct: { type: 'boolean', description: 'Run closed-loop correction after open-loop move. Default true.' },
+        maxCorrectionPasses: { type: 'number', description: 'Max correction passes. Default 2.' },
+        minResidualPx: { type: 'number', description: 'Early-exit threshold for correction loop. Default 15.' },
+        probeDelta: { type: 'number', description: 'Mickeys for the probe move during correction/detection. Default 100.' },
+        searchWindow: { type: 'number', description: 'Cursor-search box around predicted position (px). Default 400.' },
+      },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'pikvm_mouse_click_at',
+    description: 'Move the mouse to an approximate target pixel (via pikvm_mouse_move_to) and then click. Returns a post-click screenshot. Inherits pikvm_mouse_move_to\'s detection/correction pipeline.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Target X coordinate in HDMI-screenshot pixels' },
+        y: { type: 'number', description: 'Target Y coordinate in HDMI-screenshot pixels' },
+        button: { type: 'string', enum: ['left', 'right', 'middle', 'up', 'down'], description: 'Mouse button. Default left.' },
+        strategy: {
+          type: 'string',
+          enum: ['detect-then-move', 'slam-then-move', 'assume-at'],
+          description: 'Origin discovery. Default "detect-then-move".',
+        },
+        assumeCursorAtX: { type: 'number', description: 'With strategy="assume-at", HDMI X where cursor currently is.' },
+        assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
+      },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'pikvm_measure_ballistics',
+    description: 'Characterise the relative-mouse acceleration curve of a PiKVM target in RELATIVE mouse mode (mouse.absolute=false, e.g. iPad). Slams the pointer to the top-left corner, then sweeps (axis × delta magnitude × pace) and measures the resulting pixel displacement per emitted mickey. Writes a ballistics profile JSON used by pikvm_mouse_move_to and pikvm_mouse_click_at. One-off per device; re-run if resolution or orientation changes. Takes a few minutes. Other tools are blocked during measurement.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        magnitudes: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Per-call delta magnitudes to sample (mickeys). Default: [5,10,20,40,80,127].',
+        },
+        paces: {
+          type: 'array',
+          items: { type: 'string', enum: ['fast', 'slow'] },
+          description: 'Paces to sample. "fast" = back-to-back calls (exercises acceleration), "slow" = 30ms between calls (steady-state). Default: both.',
+        },
+        axes: {
+          type: 'array',
+          items: { type: 'string', enum: ['x', 'y'] },
+          description: 'Axes to measure. Default: ["x","y"]. Negative directions assumed symmetric.',
+        },
+        reps: {
+          type: 'number',
+          description: 'Repetitions per (axis, magnitude, pace) cell, median-aggregated. Default: 2.',
+        },
+        callsPerCell: {
+          type: 'number',
+          description: 'Number of delta calls emitted per measurement cell. Default: 5.',
+        },
+        slowPaceMs: {
+          type: 'number',
+          description: 'Milliseconds between calls in "slow" pace. Default: 30.',
+        },
+        settleMs: {
+          type: 'number',
+          description: 'Milliseconds to wait after moving, before capturing. Default: 400.',
+        },
+        profilePath: {
+          type: 'string',
+          description: 'Where to write the JSON profile. Default: ./data/ballistics.json.',
+        },
+        verbose: {
+          type: 'boolean',
+          description: 'Log per-cell diagnostics to stderr. Default: false.',
+        },
+      },
+    },
+  },
+  {
     name: 'pikvm_auto_calibrate',
     description: 'Automatically calibrate mouse coordinates by detecting the cursor position via screenshot diffing. This is more accurate than manual calibration. Moves the mouse multiple times, compares screenshots to find the cursor, and computes calibration factors. Other tools are blocked during calibration.',
     inputSchema: {
@@ -414,8 +539,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
 
-  // Block other tools while auto-calibration is in progress
-  if (lock.isBusy && name !== 'pikvm_auto_calibrate') {
+  // Block other tools while a long-running op (auto-calibration or
+  // ballistics measurement) is in progress. The excluded tools are allowed
+  // through so their own handlers can return a more specific error.
+  if (lock.isBusy && name !== 'pikvm_auto_calibrate' && name !== 'pikvm_measure_ballistics') {
     return {
       content: [{ type: 'text', text: `Error: ${lock.holder} in progress, please wait.` }],
       isError: true,
@@ -669,6 +796,162 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'pikvm_ipad_unlock': {
+        const result = await unlockIpad(pikvm, {
+          slamFirst: validateBoolean(args.slamFirst) ?? true,
+          startX: validateNumber(args.startX, 0, 4000),
+          startY: validateNumber(args.startY, 0, 4000),
+          dragPx: validateNumber(args.dragPx, 100, 3000),
+          chunkMickeys: validateNumber(args.chunkMickeys, 1, 127),
+        });
+        return {
+          content: [
+            { type: 'text', text: result.message },
+            { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+          ],
+        };
+      }
+
+      case 'pikvm_mouse_move_to': {
+        const tx = requireNumber(args.x, 'x');
+        const ty = requireNumber(args.y, 'y');
+        const strategyStr = validateEnum(
+          args.strategy,
+          ['detect-then-move', 'slam-then-move', 'assume-at'] as const,
+          'detect-then-move',
+        );
+        const assumeX = validateNumber(args.assumeCursorAtX);
+        const assumeY = validateNumber(args.assumeCursorAtY);
+        const assumeCursorAt =
+          assumeX !== undefined && assumeY !== undefined
+            ? { x: assumeX, y: assumeY }
+            : undefined;
+        const result = await moveToPixel(
+          pikvm,
+          { x: tx, y: ty },
+          {
+            strategy: strategyStr,
+            assumeCursorAt,
+            slamOriginPx: {
+              x: validateNumber(args.slamOriginX) ?? 625,
+              y: validateNumber(args.slamOriginY) ?? 65,
+            },
+            fallbackPxPerMickey: validateNumber(args.fallbackPxPerMickey, 0.01, 10),
+            chunkMagnitude: validateNumber(args.chunkMagnitude, 1, 127),
+            chunkPaceMs: validateNumber(args.chunkPaceMs, 0, 500),
+            correct: validateBoolean(args.correct),
+            maxCorrectionPasses: validateNumber(args.maxCorrectionPasses, 0, 5),
+            minResidualPx: validateNumber(args.minResidualPx, 1, 200),
+            probeDelta: validateNumber(args.probeDelta, 10, 500),
+            searchWindow: validateNumber(args.searchWindow, 50, 2000),
+            profile: cachedProfile,
+          },
+        );
+        return {
+          content: [
+            { type: 'text', text: result.message },
+            { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+          ],
+        };
+      }
+
+      case 'pikvm_mouse_click_at': {
+        const tx = requireNumber(args.x, 'x');
+        const ty = requireNumber(args.y, 'y');
+        const button = validateEnum(args.button, VALID_BUTTONS, 'left');
+        const strategyStr = validateEnum(
+          args.strategy,
+          ['detect-then-move', 'slam-then-move', 'assume-at'] as const,
+          'detect-then-move',
+        );
+        const assumeX = validateNumber(args.assumeCursorAtX);
+        const assumeY = validateNumber(args.assumeCursorAtY);
+        const assumeCursorAt =
+          assumeX !== undefined && assumeY !== undefined
+            ? { x: assumeX, y: assumeY }
+            : undefined;
+        const result = await moveToPixel(
+          pikvm,
+          { x: tx, y: ty },
+          {
+            strategy: strategyStr,
+            assumeCursorAt,
+            profile: cachedProfile,
+            // Don't run the cursor-perturbing final-detect; we're about to
+            // click and the probe would move the cursor off target.
+            runFinalDetect: false,
+          },
+        );
+        // Brief pause so iPadOS registers the cursor as stationary before click
+        await new Promise((r) => setTimeout(r, 80));
+        await pikvm.mouseClick(button);
+        // Post-click screenshot
+        const shot = await pikvm.screenshot();
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                result.message +
+                `\nClicked ${button} at approximate position. Post-click screenshot attached.`,
+            },
+            { type: 'image', data: shot.buffer.toString('base64'), mimeType: 'image/jpeg' },
+          ],
+        };
+      }
+
+      case 'pikvm_measure_ballistics': {
+        if (lock.isBusy) {
+          return {
+            content: [{ type: 'text', text: 'Ballistics measurement is already in progress.' }],
+            isError: true,
+          };
+        }
+
+        lock.acquire('Ballistics measurement');
+        try {
+          const magnitudes = Array.isArray(args.magnitudes)
+            ? args.magnitudes.filter((m): m is number => typeof m === 'number' && m > 0 && m <= 127)
+            : undefined;
+          const paces = Array.isArray(args.paces)
+            ? args.paces.filter((p): p is Pace => p === 'fast' || p === 'slow')
+            : undefined;
+          const axes = Array.isArray(args.axes)
+            ? args.axes.filter((a): a is Axis => a === 'x' || a === 'y')
+            : undefined;
+
+          const result = await measureBallistics(pikvm, {
+            magnitudes: magnitudes && magnitudes.length > 0 ? magnitudes : undefined,
+            paces: paces && paces.length > 0 ? paces : undefined,
+            axes: axes && axes.length > 0 ? axes : undefined,
+            reps: validateNumber(args.reps, 1, 10),
+            callsPerCell: validateNumber(args.callsPerCell, 1, 50),
+            slowPaceMs: validateNumber(args.slowPaceMs, 0, 1000),
+            settleMs: validateNumber(args.settleMs, 50, 3000),
+            profilePath: validateString(args.profilePath),
+            verbose: validateBoolean(args.verbose),
+          });
+
+          let summary = result.message + '\n';
+          if (result.profile) {
+            const mKeys = Object.keys(result.profile.medians).sort();
+            summary += '\nMedian px/mickey by cell:\n';
+            for (const k of mKeys) {
+              summary += `  ${k} → ${result.profile.medians[k].toFixed(4)}\n`;
+            }
+            // Refresh the in-memory profile so subsequent move-to calls use it
+            cachedProfile = result.profile;
+          }
+
+          return {
+            content: [{ type: 'text', text: summary }],
+            isError: !result.success,
+          };
+        } finally {
+          lock.release();
+        }
+      }
+
       case 'pikvm_auto_calibrate': {
         if (lock.isBusy) {
           return {
@@ -740,6 +1023,12 @@ async function main() {
   const authOk = await pikvm.checkAuth();
   if (!authOk) {
     console.error('Warning: Could not authenticate with PiKVM. Check credentials.');
+  }
+
+  // Load ballistics profile if present (used by pikvm_mouse_move_to)
+  await refreshProfile();
+  if (cachedProfile) {
+    console.error(`Loaded ballistics profile (${cachedProfile.samples.length} samples).`);
   }
 
   const transport = new StdioServerTransport();

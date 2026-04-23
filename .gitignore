@@ -34,6 +34,9 @@ test-screenshot.jpg
 test-client.ts
 test_prompt.txt
 
+# Device-specific calibration data
+data/
+
 # Code Assistants
 .mcp.json
 .claude

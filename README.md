@@ -127,7 +127,13 @@ Or if using the .env file:
 - **`pikvm_mouse_click`** - Click a mouse button, optionally at a position (optional: button, x, y, state)
 - **`pikvm_mouse_scroll`** - Scroll the mouse wheel (required: deltaY; optional: deltaX)
 
-### Calibration
+### Relative-Mouse Targets (iPad, etc. — `mouse.absolute=false`)
+- **`pikvm_ipad_unlock`** - Unlock an iPad from lock screen via a USB HID swipe-up gesture (optional: slamFirst, startX, startY, dragPx, chunkMickeys). Verified on iPad-in-1920x1080 portrait: 800 px swipe unlocks.
+- **`pikvm_mouse_move_to`** - Approximate move-to-pixel on a relative-mouse target: slams to origin, emits calculated delta sequence, returns post-move screenshot for visual verification (required: x, y).
+- **`pikvm_mouse_click_at`** - Approximate move + click on a relative-mouse target (required: x, y; optional: button).
+- **`pikvm_measure_ballistics`** - Characterise the relative-mouse acceleration curve by slamming to a corner and sweeping (axis × magnitude × pace). Writes a JSON profile used by the move-to tools. *Best-effort on iPad home screen — use a quiet screen (Settings, lock screen) for cleaner data.*
+
+### Absolute-Mouse Calibration (not applicable to iPad/relative-mouse targets)
 - **`pikvm_auto_calibrate`** - Automatically detect cursor and compute calibration factors *(preferred)*
 - **`pikvm_calibrate`** - Start manual calibration by moving cursor to screen center for visual verification
 - **`pikvm_set_calibration`** - Apply correction factors calculated from calibration (required: factorX, factorY)
@@ -154,6 +160,10 @@ The server exposes 15 skills that provide structured guidance for agents. Each s
 | `click-element` | `skill_click_element` | Clicking with pikvm_mouse_click |
 | `scroll-page` | `skill_scroll_page` | Scrolling with pikvm_mouse_scroll |
 | `auto-calibrate` | `skill_auto_calibrate` | Automatic mouse calibration with pikvm_auto_calibrate |
+| `ipad-unlock` | `skill_ipad_unlock` | Unlocking iPad lock screen with pikvm_ipad_unlock |
+| `measure-ballistics` | `skill_measure_ballistics` | Characterising relative-mouse ballistics with pikvm_measure_ballistics |
+| `move-to` | `skill_move_to` | Approximate move-to-pixel with pikvm_mouse_move_to |
+| `click-at` | `skill_click_at` | Approximate click-at-pixel with pikvm_mouse_click_at |
 
 ### Workflow Recipes
 

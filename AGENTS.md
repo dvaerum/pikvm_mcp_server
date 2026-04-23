@@ -18,8 +18,14 @@ pikvm_mcp_server/
 ├── src/                # Source code
 │   ├── index.ts        # Main MCP server entry point (tool + prompt handlers)
 │   ├── config.ts       # Configuration handling
-│   ├── pikvm/          # PiKVM API client
-│   │   └── client.ts
+│   ├── pikvm/          # PiKVM API client and control modules
+│   │   ├── client.ts           # REST API wrapper
+│   │   ├── cursor-detect.ts    # Screenshot-diff cursor detection
+│   │   ├── auto-calibrate.ts   # Absolute-mouse calibration
+│   │   ├── ballistics.ts       # Relative-mouse ballistics measurement
+│   │   ├── move-to.ts          # Corner-anchored move-to-pixel
+│   │   ├── ipad-unlock.ts      # iPad lock-screen swipe gesture
+│   │   └── lock.ts             # BusyLock for long-running ops
 │   └── prompts/        # MCP prompt definitions
 │       ├── types.ts    # PromptDefinition interface
 │       ├── tool-guides.ts  # 8 individual tool guide prompts
@@ -73,17 +79,26 @@ The server is configured via environment variables or a config file:
 7. **`pikvm_mouse_click`** - Click mouse button
 8. **`pikvm_mouse_scroll`** - Scroll wheel
 
-### Calibration
+### Calibration (absolute-mouse targets)
 9. **`pikvm_calibrate`** - Start mouse coordinate calibration (moves cursor to screen center)
 10. **`pikvm_set_calibration`** - Set calibration correction factors after visual verification
 11. **`pikvm_get_calibration`** - Get current calibration state
 12. **`pikvm_clear_calibration`** - Clear calibration, revert to uncalibrated mode
+13. **`pikvm_auto_calibrate`** - Vision-based auto-calibration (preferred)
+
+### Relative-Mouse Targets (iPad, etc. — `mouse.absolute=false`)
+14. **`pikvm_ipad_unlock`** - Unlock iPad via USB HID swipe-up gesture (800 px default). Verified on iPad portrait in 1920x1080 HDMI frame.
+15. **`pikvm_mouse_move_to`** - Approximate move-to-pixel via slam-to-corner + delta emission. Returns screenshot for visual verification.
+16. **`pikvm_mouse_click_at`** - `pikvm_mouse_move_to` + `mouseClick`.
+17. **`pikvm_measure_ballistics`** - Characterise relative-mouse px/mickey via screenshot-diff sampling. Writes profile to `./data/ballistics.json`. Best-effort on iPad — fragile on the home screen due to animated widgets.
+
+**Important on relative-mouse targets**: the absolute-mouse tools (`pikvm_mouse_move`, `pikvm_mouse_click` with x/y, all `pikvm_calibrate*`, `pikvm_auto_calibrate`) do NOT move the iPad pointer because iPadOS only accepts USB boot-mouse descriptor (relative deltas). Agents targeting an iPad should use the relative-mouse tools above.
 
 ## MCP Prompts & Skill Tools
 
 The server exposes 13 skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 25** (12 `pikvm_*` hardware tools + 13 `skill_*` guidance tools)
+**Total tools: 34** (17 `pikvm_*` hardware tools + 17 `skill_*` guidance tools)
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
