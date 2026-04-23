@@ -371,11 +371,10 @@ const tools: Tool[] = [
         fallbackPxPerMickey: { type: 'number', description: 'px/mickey used when no profile. Default 1.3 (empirical iPad with mag=60 chunks).' },
         chunkMagnitude: { type: 'number', description: 'Per-call delta magnitude for chunking. Default 60.' },
         chunkPaceMs: { type: 'number', description: 'Milliseconds between chunked calls. Default 20.' },
-        correct: { type: 'boolean', description: 'Run closed-loop correction after open-loop move. Default true.' },
+        correct: { type: 'boolean', description: 'Enable motion-diff detection + correction. Default true.' },
         maxCorrectionPasses: { type: 'number', description: 'Max correction passes. Default 2.' },
-        minResidualPx: { type: 'number', description: 'Early-exit threshold for correction loop. Default 15.' },
-        probeDelta: { type: 'number', description: 'Mickeys for the probe move during correction/detection. Default 100.' },
-        searchWindow: { type: 'number', description: 'Cursor-search box around predicted position (px). Default 400.' },
+        minResidualPx: { type: 'number', description: 'Early-exit threshold (px) for correction loop. Default 25.' },
+        warmupMickeys: { type: 'number', description: 'Tiny move emitted before screenshot A so cursor renders. Default 8 mickeys.' },
       },
       required: ['x', 'y'],
     },
@@ -842,8 +841,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             correct: validateBoolean(args.correct),
             maxCorrectionPasses: validateNumber(args.maxCorrectionPasses, 0, 5),
             minResidualPx: validateNumber(args.minResidualPx, 1, 200),
-            probeDelta: validateNumber(args.probeDelta, 10, 500),
-            searchWindow: validateNumber(args.searchWindow, 50, 2000),
+            warmupMickeys: validateNumber(args.warmupMickeys, 0, 50),
             profile: cachedProfile,
           },
         );
@@ -877,9 +875,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             strategy: strategyStr,
             assumeCursorAt,
             profile: cachedProfile,
-            // Don't run the cursor-perturbing final-detect; we're about to
-            // click and the probe would move the cursor off target.
-            runFinalDetect: false,
           },
         );
         // Brief pause so iPadOS registers the cursor as stationary before click

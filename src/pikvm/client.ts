@@ -487,7 +487,10 @@ export class PiKVMClient {
   /**
    * Click mouse button (via REST API)
    */
-  async mouseClick(button: MouseButton = 'left', options?: KeyOptions): Promise<void> {
+  async mouseClick(
+    button: MouseButton = 'left',
+    options?: KeyOptions & { downMs?: number },
+  ): Promise<void> {
     const params = new URLSearchParams();
     params.set('button', button);
 
@@ -495,9 +498,16 @@ export class PiKVMClient {
       params.set('state', options.state.toString());
       await this.request('POST', `/hid/events/send_mouse_button?${params}`);
     } else {
-      // Full click: press then release
+      // Full click: press, hold briefly, release. iPadOS requires a
+      // non-zero press duration (~50 ms) to register the click as a tap;
+      // back-to-back press/release (as sent with no delay) is sometimes
+      // ignored as a flutter.
+      const downMs = options?.downMs ?? 80;
       params.set('state', 'true');
       await this.request('POST', `/hid/events/send_mouse_button?${params}`);
+      if (downMs > 0) {
+        await new Promise((r) => setTimeout(r, downMs));
+      }
       params.set('state', 'false');
       await this.request('POST', `/hid/events/send_mouse_button?${params}`);
     }
