@@ -142,6 +142,7 @@ export interface MoveToOptions {
    *  this true when the target reports `mouse.absolute=false`. Default
    *  false (preserves existing behaviour for non-iPad targets). */
   forbidSlamFallback?: boolean;
+
 }
 
 export interface CorrectionPass {
