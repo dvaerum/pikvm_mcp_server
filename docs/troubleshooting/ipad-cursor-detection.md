@@ -105,6 +105,72 @@ and post-cluster (where cursor is now).
 | 11 | `595d84f` | Locality-aware ranking in `findCursorByTemplateSet` — prefer per-template matches near a hint over far high-scoring FPs | Catches the (781, 713) 0.944 FP that would otherwise beat the (1057, 837) 0.909 real-cursor match. 5-trial worst-case 275 → 207 px. |
 | 12 | (helper only, not wired) | `isRatioUpdatePlausible` — reject ratio updates that drift > 2× from prior or fall outside [0.5, 4.0] | Wired at 2× threshold made *every* trial regress to 178-207 px because legitimate context-switch adaptations from default (3.04, 5.28) to true iPad (~1.5–2.5) were being blocked. Helper kept for future wiring at a looser threshold (3× or 4×) once we have data on how often legitimate updates exceed 2×. |
 
+## CRITICAL FINDING (2026-04-26): the algorithm has been clicking on phantom cursors
+
+After actually saving and looking at every intermediate screenshot
+in `moveToPixel`'s pipeline, the truth came out:
+
+- **Frame 00 (origin-shot-postWakeup)**: no cursor visible anywhere.
+  Algorithm claimed cursor at (1056, 836) with template-match
+  score **0.958**. The score is a false positive on the iPad's
+  blue/teal wallpaper texture — there is no cursor in the frame.
+- **Frame 02 (shotA-postCalib)**: still no cursor visible. The
+  -40 X calibration probe did emit, and `detectMotion` reported
+  "calibration probe diff failed: no pair passed direction/sanity
+  filters". That failure was honest — there was no cursor pair
+  to find because the cursor was not rendered.
+- **Frame 03 (shotB-postOpenLoop)**: still no cursor visible.
+  Algorithm continued to use FP template-match positions.
+- **Frame 04 (after several correction passes)**: cursor finally
+  visible — at **(832, 90)**, top-center of the screen, just to
+  the right of the "01.13" time display. This is approximately
+  730 px LEFT and 740 px UP from where the algorithm thought it
+  was.
+
+So every "residual = 32 px" success and "residual = 178 px"
+near-miss reported in this troubleshooting log so far is wrong.
+The algorithm has been driving a cursor it cannot see, while
+template-match against the cached templates has been finding 0.9+
+score peaks on wallpaper-texture regions and reporting those as
+the cursor's location.
+
+### What this means for the patch series
+
+Phases 1–12 were all reasoning from a self-reported cursor position
+that was a phantom. Some of them helped detection IN CASES where the
+cursor really was visible (e.g. immediately after a successful
+probe), but none addressed the root cause: the algorithm trusts
+template-match origin even when the cursor is not actually rendered.
+
+### Why template-match scores 0.958 on no-cursor wallpaper
+
+Cached cursor templates are 24×24 RGB crops captured against varied
+backdrops. The iPad's home-screen wallpaper has high-contrast curves
+between blue and teal regions. Some 24×24 windows in that wallpaper
+correlate strongly with the templates' overall mean-and-variance
+structure even though no cursor pixels are present. NCC normalises
+out absolute brightness and gain, so a "shape" match at the right
+scale wins regardless of content.
+
+Ways forward (need design, not patches):
+1. **Verify origin by emitted-motion confirmation, not score.**
+   Emit a probe move; the cursor pre/post pair must appear in the
+   diff with displacement matching the commanded direction. If the
+   diff produces no plausible pair, the cursor is not visible and
+   the algorithm must refuse to proceed (or do an extended wake
+   sequence) instead of trusting a high-score template hit.
+2. **Treat template-match score below 0.99 as untrusted for origin
+   discovery.** A 0.83 default (or even the 0.89 of failed Phase 7)
+   is far below the gap that separates real-cursor matches (live:
+   0.91–0.97 over varied backdrops) from wallpaper-FP matches
+   (live: 0.83–0.96). The score alone cannot distinguish them.
+3. **Always run the cursor detection algorithm against a recently-
+   moved cursor.** A "wake nudge" is necessary but not sufficient
+   if the cursor takes longer than the settle time to render.
+   Increase the settle, and require the post-wake screenshot to
+   show *some* recent change relative to a pre-wake screenshot —
+   if the diff is empty, cursor is not rendering, abort.
+
 ## End-to-end click verification (the bottom line)
 
 Manual `click(1027, 825)` targeting the iPad Settings icon, post-Phase-12:

@@ -515,6 +515,20 @@ async function discoverOrigin(
   const requested = options.strategy
     ?? (options.slamFirst === false ? 'assume-at' : 'detect-then-move');
 
+  // Debug capture: when debugDir is set, save every screenshot used in
+  // origin discovery and label it with what was claimed/found. This is
+  // the raw evidence for "did template-match really see the cursor?"
+  // questions — without these frames we're guessing.
+  const debugDir = options.debugDir ?? null;
+  let debugCounter = 0;
+  const saveDebug = async (label: string, buf: Buffer): Promise<void> => {
+    if (!debugDir) return;
+    const fs = await import('fs');
+    await fs.promises.mkdir(debugDir, { recursive: true });
+    const tag = String(debugCounter++).padStart(2, '0');
+    await fs.promises.writeFile(`${debugDir}/${tag}-${label}.jpg`, buf);
+  };
+
   if (requested === 'assume-at') {
     if (!options.assumeCursorAt) {
       throw new Error("strategy='assume-at' requires assumeCursorAt");
@@ -540,6 +554,7 @@ async function discoverOrigin(
       // this nudge).
       await wakeupCursor(client);
       const shot = await decodeScreenshot((await client.screenshot()).buffer);
+      await saveDebug('origin-shot-postWakeup', shot.buffer);
       const found = findCursorByTemplateSet(shot, tmplSet, {
         verbose: options.verbose,
       });
@@ -1141,16 +1156,36 @@ export async function moveToPixel(
   let openLoopMode: 'motion' | 'template' | 'predicted' = 'predicted';
   let openLoopReason: string | null = null;
 
-  // Debug: when verbose, dump the frame pair so failures can be inspected.
+  // Debug: when debugDir is set, dump every captured frame so failures
+  // can be inspected. discoverOrigin already saved 00-origin-shot;
+  // here we save the calibration pair + open-loop pair, and per-pass
+  // correction shots are saved below.
   const debugDir = options.debugDir ?? null;
   if (debugDir) {
-    await import('fs').then((fs) => fs.promises.mkdir(debugDir, { recursive: true }));
-    await import('fs').then((fs) =>
-      fs.promises.writeFile(`${debugDir}/00-shotA.jpg`, shotA.buffer)
-    );
-    await import('fs').then((fs) =>
-      fs.promises.writeFile(`${debugDir}/01-shotB.jpg`, shotB.buffer)
-    );
+    const fs = await import('fs');
+    await fs.promises.mkdir(debugDir, { recursive: true });
+    await fs.promises.writeFile(`${debugDir}/01-shotAPre-preCalib.jpg`, shotAPre.buffer);
+    await fs.promises.writeFile(`${debugDir}/02-shotA-postCalib.jpg`, shotA.buffer);
+    await fs.promises.writeFile(`${debugDir}/03-shotB-postOpenLoop.jpg`, shotB.buffer);
+    // Also dump a metadata file describing each frame's context so
+    // someone reviewing the screenshots later knows what to look for.
+    const meta = [
+      `Target: (${targetX},${targetY})`,
+      `Origin (claimed): (${Math.round(origin.x)},${Math.round(origin.y)}) via ${actualStrategy}`,
+      `Calibration probe: ${calibX} X, ${calibY} Y mickeys`,
+      `Calibration result: ${calibrationReason}`,
+      `Open-loop emit: ${openMickeysX} X, ${openMickeysY} Y mickeys`,
+      `Plan ratio: (${planRatioX.toFixed(3)}, ${planRatioY.toFixed(3)})`,
+      `Predicted post-open-loop: (${Math.round(predictedPostOpen.x)},${Math.round(predictedPostOpen.y)})`,
+      ``,
+      `LOOK FOR:`,
+      `  00-origin-shot: cursor at claimed origin (${Math.round(origin.x)},${Math.round(origin.y)})`,
+      `  01-shotAPre: cursor pre-calibration-probe`,
+      `  02-shotA: cursor post-calibration-probe (after ${calibX}X,${calibY}Y mickeys)`,
+      `  03-shotB: cursor post-open-loop (should be near predicted)`,
+      `  04+ pass-shotC: cursor post-correction (look at residual)`,
+    ].join('\n');
+    await fs.promises.writeFile(`${debugDir}/META.txt`, meta);
   }
 
   const motionResult = doCorrect
