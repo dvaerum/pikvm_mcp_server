@@ -335,8 +335,26 @@ async function maybePersistTemplate(
 }
 
 // ============================================================================
-// Origin discovery (unchanged from Phase 2)
+// Origin discovery (Phase 5: wakeup nudge before template-match)
 // ============================================================================
+
+/** Nudge the cursor a few mickeys to wake it from iPadOS's faded
+ *  state before any detection runs. iPadOS hides the pointer after
+ *  ~1s of inactivity; a screenshot taken during that fade window
+ *  shows no cursor pixels and template-match returns garbage scores
+ *  against UI elements. The +30/-30 round-trip is small enough not
+ *  to disturb the cursor's position significantly (some asymmetric
+ *  acceleration drift is OK — `discoverOrigin` is about to read the
+ *  cursor's actual position next anyway). */
+export async function wakeupCursor(
+  client: PiKVMClient,
+  settleMs = 150,
+): Promise<void> {
+  await client.mouseMoveRelative(30, 0);
+  await sleep(80);
+  await client.mouseMoveRelative(-30, 0);
+  await sleep(settleMs);
+}
 
 async function discoverOrigin(
   client: PiKVMClient,
@@ -361,6 +379,12 @@ async function discoverOrigin(
     // motion-diff cluster pairs.
     const tmplSet = await getCachedTemplates();
     if (tmplSet.length > 0) {
+      // Phase 5: wake the cursor so template-match has a fresh
+      // visible cursor to score against. Without this, faded-cursor
+      // screenshots produced false-positive matches at iPad UI
+      // elements (live-bench: 9/10 trials were undetected without
+      // this nudge).
+      await wakeupCursor(client);
       const shot = await decodeScreenshot((await client.screenshot()).buffer);
       const found = findCursorByTemplateSet(shot, tmplSet, {
         verbose: options.verbose,
