@@ -969,8 +969,16 @@ export async function moveToPixel(
   // - cluster filter 10-60 → 8-90 (handles motion blur on fast bursts)
   // - ratio clamp [0.5, 3] → [0.3, 5] (don't reject real bursts)
   const fallback = options.fallbackPxPerMickey ?? 1.0;
-  const chunkMag = options.chunkMagnitude ?? 60;
-  const chunkPaceMs = options.chunkPaceMs ?? 20;
+  // Phase 16: open-loop chunk pace must match the calibration-probe
+  // pace, or iPadOS pointer acceleration applies a different
+  // multiplier and the measured ratio doesn't apply. Live: a 40-
+  // mickey Y probe at 30 ms pace measured ratio 0.811. The open-
+  // loop emitted 161 Y mickeys at the previous fast 20 ms pace
+  // and the cursor moved 600 px (real ratio 3.73 = 4.6× higher).
+  // Slowing both chunkMag and pace to the linear-phase values
+  // keeps the velocity regime consistent with calibration.
+  const chunkMag = options.chunkMagnitude ?? 20;
+  const chunkPaceMs = options.chunkPaceMs ?? 30;
   // postSettleMs must exceed PiKVM streamer + iPadOS render latency
   // (~235 ms, see latency-probe research in docs/troubleshooting/
   // ipad-cursor-detection.md). The previous 30 ms default guaranteed
@@ -1063,11 +1071,19 @@ export async function moveToPixel(
   let calibratedRatioY = pxPerMickeyY;
   let calibrationReason: string = `using fallback ratio ${fallback}`;
 
-  // Phase 14: when discoverOrigin used the locateCursor probe, it
-  // already measured the px/mickey ratio for free. Use that as the
-  // initial calibrated ratio and skip the separate calibration
-  // probe — saves ~1.5 s and avoids the noise problem where
-  // clusterMin=4 admits widget animations into the calib pair pool.
+  // Phase 14: when discoverOrigin used the locateCursor X-axis probe,
+  // it already measured the X px/mickey ratio for free. Use that as
+  // the calibrated X ratio. When the move is X-dominant (warmupAxis
+  // === 'x'), this also lets us skip the redundant separate
+  // calibration probe.
+  //
+  // Phase 15: when the move is Y-dominant, KEEP the calibration
+  // probe — extrapolating Y ratio from X (iPad acceleration is
+  // per-axis, sometimes asymmetric by 25× as observed live) is the
+  // bigger error source than the redundant probe's cost. This is
+  // the lesson from a Phase 14b live trial that residual'd 265 px
+  // with X probe ratio 0.85 used for both axes when actual Y ratio
+  // was ~2.0.
   let skipCalibrationProbe = false;
   if (discovered.probeMeasurement) {
     const m = discovered.probeMeasurement;
@@ -1075,12 +1091,22 @@ export async function moveToPixel(
       const r = Math.abs(m.offsetPx.x) / Math.abs(m.mickeys.x);
       if (r >= ratioLo && r <= ratioHi) {
         calibratedRatioX = r;
-        calibratedRatioY = r; // assume symmetric — typical iPad behaviour
-        calibrationReason = `from locateCursor probe: ${Math.abs(m.offsetPx.x)}px/${Math.abs(m.mickeys.x)}mickeys = ${r.toFixed(3)}`;
-        skipCalibrationProbe = true;
+        calibrationReason = `X ratio from locateCursor probe: ${Math.abs(m.offsetPx.x)}px/${Math.abs(m.mickeys.x)}mickeys = ${r.toFixed(3)}`;
+        // Skip the redundant calibration probe ONLY when the move's
+        // dominant axis matches what locateCursor measured (X).
+        // Otherwise, the calibration probe is the only chance to
+        // measure Y ratio fresh in this context.
+        if (warmupAxis === 'x') {
+          calibratedRatioY = r; // symmetric guess for the small Y leg
+          skipCalibrationProbe = true;
+        }
+        // For Y-dominant moves, leave calibratedRatioY at the
+        // profile fallback (will be overwritten by the calibration
+        // probe if it succeeds).
         if (verbose) {
           console.error(
-            `[move-to] CALIBRATION (from locateCursor probe): ratio=${r.toFixed(3)} (skip redundant calibration probe)`,
+            `[move-to] CALIBRATION X ratio from probe: ${r.toFixed(3)}; ` +
+            `${warmupAxis === 'x' ? 'skip redundant calibration probe' : 'still need Y probe (move is Y-dominant)'}`,
           );
         }
       }
