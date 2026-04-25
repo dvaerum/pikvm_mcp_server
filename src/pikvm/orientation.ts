@@ -6,17 +6,20 @@
  * bars on either side. In landscape, the iPad fills (or nearly fills) the
  * frame. The slam-target corner, unlock-swipe centre X, and home-indicator Y
  * all depend on knowing where the actual iPad content lives — without this,
- * unlock and move-to defaults are hardcoded to the reference iPad's portrait
- * letterbox at HDMI x=625.
+ * the unlock and move-to defaults have to be hardcoded to one specific iPad's
+ * portrait letterbox.
  *
- * Detection: scan the screenshot for non-black pixels and take the bounding
- * box. iPad content has a deep-black wallpaper border? No — iPadOS lock
- * and home screens always have visible UI elements (status bar, dock,
- * widgets) that are clearly above the black-letterbox brightness floor.
- * A simple pixel sum threshold is sufficient.
+ * Detection: walk inward from each HDMI edge looking for the first
+ * column/row that contains any pixel above a brightness threshold. iPadOS
+ * lock and home screens always have visible UI (status bar, home indicator,
+ * widgets) brighter than the letterbox bars, so the first non-uniform
+ * column/row marks the iPad edge.
  *
- * The detection is sampled (every 4th row/column) for speed, then refined
- * along each edge to pixel accuracy.
+ * Dark-mode foreground apps with mostly black canvas can swallow one or
+ * more edges, producing an aspect ratio that doesn't match an iPad. We
+ * sanity-check the result and fall back to the most recent good detection
+ * (cached in module state) when the current frame doesn't yield reliable
+ * bounds.
  */
 
 import { PiKVMClient } from './client.js';
@@ -58,9 +61,6 @@ export interface DetectOptions {
    *  rather than letterbox black. Default 60 — well above JPEG noise on
    *  near-black bars (~5–15) and below the dimmest visible UI elements. */
   brightnessSum?: number;
-  /** Sampling step for the coarse pass. Default 4. Smaller = slower but
-   *  more accurate before the refinement pass. */
-  step?: number;
   verbose?: boolean;
 }
 

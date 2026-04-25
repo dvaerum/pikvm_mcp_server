@@ -138,8 +138,12 @@ Or if using the .env file:
 > UI elements with no keyboard equivalent. iPad-side settings checklist:
 > [docs/skills/ipad-setup.md](docs/skills/ipad-setup.md).
 
-- **`pikvm_ipad_unlock`** - Unlock an iPad from lock screen via a USB HID swipe-up gesture (optional: slamFirst, startX, startY, dragPx, chunkMickeys). Verified on iPad-in-1920x1080 portrait: 800 px swipe unlocks.
-- **`pikvm_mouse_move_to`** - Approximate move-to-pixel on a relative-mouse target: slams to origin, emits calculated delta sequence, returns post-move screenshot for visual verification (required: x, y).
+- **`pikvm_ipad_unlock`** - Unlock an iPad from lock screen via a USB HID swipe-up gesture. Swipe origin auto-detected from the iPad letterbox bounds (works for portrait and landscape). Optional overrides: slamFirst, startX, startY, dragPx, chunkMickeys.
+- **`pikvm_ipad_launch_app`** - Launch any iPad app via the verified keyboard pipeline: unlock (if locked) → Spotlight (Cmd+Space) → type the app name → Enter. Far more reliable than clicking an app icon (required: appName). Verified on iPadOS 26 for Files, Settings, App Store.
+- **`pikvm_ipad_home`** - Return the iPad to the home screen from any foreground app via Cmd+H. Idempotent on the home screen.
+- **`pikvm_ipad_app_switcher`** - Open the iPad App Switcher (Cmd+Tab) and capture a screenshot showing the available apps.
+- **`pikvm_detect_orientation`** - Detect the iPad's content rectangle and orientation within the HDMI capture frame. Used internally by unlock and move-to; usually no need to call directly.
+- **`pikvm_mouse_move_to`** - Approximate move-to-pixel on a relative-mouse target. Combines slam-to-origin (auto-detected per orientation), open-loop chunked deltas, motion-as-probe diff for live px/mickey, multi-pass closed-loop correction, and template-match fallback when motion-diff fails (required: x, y).
 - **`pikvm_mouse_click_at`** - Approximate move + click on a relative-mouse target (required: x, y; optional: button).
 - **`pikvm_measure_ballistics`** - Characterise the relative-mouse acceleration curve by slamming to a corner and sweeping (axis × magnitude × pace). Writes a JSON profile used by the move-to tools. *Best-effort on iPad home screen — use a quiet screen (Settings, lock screen) for cleaner data.*
 
@@ -152,7 +156,7 @@ Or if using the .env file:
 
 ## Skills (Prompts & Skill Tools)
 
-The server exposes 15 skills that provide structured guidance for agents. Each skill is available via **two discovery paths**:
+The server exposes structured guidance for agents via skills. Each skill is available via **two discovery paths**:
 
 - **MCP Prompts** — `prompts/list` / `prompts/get` for clients that support the Prompts capability.
 - **Skill Tools** — `tools/list` / `tools/call` as `skill_*` read-only tools, ensuring visibility in marketplaces (e.g. LobeHub) that index tools only.
@@ -171,6 +175,7 @@ The server exposes 15 skills that provide structured guidance for agents. Each s
 | `scroll-page` | `skill_scroll_page` | Scrolling with pikvm_mouse_scroll |
 | `auto-calibrate` | `skill_auto_calibrate` | Automatic mouse calibration with pikvm_auto_calibrate |
 | `ipad-unlock` | `skill_ipad_unlock` | Unlocking iPad lock screen with pikvm_ipad_unlock |
+| `detect-orientation` | `skill_detect_orientation` | Detecting iPad bounds and orientation with pikvm_detect_orientation |
 | `measure-ballistics` | `skill_measure_ballistics` | Characterising relative-mouse ballistics with pikvm_measure_ballistics |
 | `move-to` | `skill_move_to` | Approximate move-to-pixel with pikvm_mouse_move_to |
 | `click-at` | `skill_click_at` | Approximate click-at-pixel with pikvm_mouse_click_at |
