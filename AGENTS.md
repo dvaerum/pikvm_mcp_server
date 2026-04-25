@@ -94,6 +94,8 @@ The server is configured via environment variables or a config file:
 
 **Important on relative-mouse targets**: the absolute-mouse tools (`pikvm_mouse_move`, `pikvm_mouse_click` with x/y, all `pikvm_calibrate*`, `pikvm_auto_calibrate`) do NOT move the iPad pointer because iPadOS only accepts USB boot-mouse descriptor (relative deltas). Agents targeting an iPad should use the relative-mouse tools above.
 
+**Strong recommendation for iPad targets: prefer keyboard workflows over cursor clicks.** USB HID keyboard input is reliable; cursor positioning is fragile because iPadOS pointer acceleration is non-disableable and varies run-to-run. Use `pikvm_shortcut(["MetaLeft","Space"])` + `pikvm_type(<app>)` + `pikvm_key("Enter")` to launch apps via Spotlight; `pikvm_shortcut(["MetaLeft","KeyF"])` to focus in-app search bars. Reserve `pikvm_mouse_click_at` for UI elements with no keyboard equivalent. See `docs/skills/ipad-keyboard-workflow.md` for the recommended pattern and `docs/skills/ipad-setup.md` for iPadOS-version-aware setup.
+
 ## MCP Prompts & Skill Tools
 
 The server exposes 13 skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).

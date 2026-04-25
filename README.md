@@ -129,12 +129,14 @@ Or if using the .env file:
 
 ### Relative-Mouse Targets (iPad, etc. — `mouse.absolute=false`)
 
-> **iPad preconditions:** before using the relative-mode tools, disable
-> **Settings → Accessibility → Pointer Control → Pointer Animations** on
-> the iPad. See [docs/skills/ipad-setup.md](docs/skills/ipad-setup.md) for
-> the full checklist. Without this setting, diff-based cursor detection
-> mis-identifies icon pointer-effect highlights as the cursor and click-at
-> will not land on target.
+> **iPad usage — prefer keyboard workflows.** USB keyboard input on the
+> iPad (Cmd+Space for Spotlight, Cmd+F for in-app search, plus typing) is
+> far more reliable than cursor clicks because iPadOS pointer acceleration
+> is non-disableable. See
+> [docs/skills/ipad-keyboard-workflow.md](docs/skills/ipad-keyboard-workflow.md)
+> for the recommended pattern. Use the cursor click tools below only for
+> UI elements with no keyboard equivalent. iPad-side settings checklist:
+> [docs/skills/ipad-setup.md](docs/skills/ipad-setup.md).
 
 - **`pikvm_ipad_unlock`** - Unlock an iPad from lock screen via a USB HID swipe-up gesture (optional: slamFirst, startX, startY, dragPx, chunkMickeys). Verified on iPad-in-1920x1080 portrait: 800 px swipe unlocks.
 - **`pikvm_mouse_move_to`** - Approximate move-to-pixel on a relative-mouse target: slams to origin, emits calculated delta sequence, returns post-move screenshot for visual verification (required: x, y).

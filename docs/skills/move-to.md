@@ -1,7 +1,14 @@
 # pikvm_mouse_move_to — Approximate Move to a Screen Pixel (Relative Mode)
 
-> **iPad users:** read [ipad-setup.md](ipad-setup.md) first. Pointer Animations
-> MUST be disabled for reliable operation.
+> **iPad users — keyboard-first is usually better.**
+> Cursor positioning on iPad is fundamentally fragile due to non-disableable
+> pointer acceleration. Most agent tasks can be done end-to-end via the
+> keyboard pattern in
+> [ipad-keyboard-workflow.md](ipad-keyboard-workflow.md). Reach for this
+> tool only when keyboard navigation can't reach the UI element you need.
+>
+> See [ipad-setup.md](ipad-setup.md) for recommended iPadOS settings
+> when you do need cursor positioning.
 
 ## Purpose
 Move the pointer to an approximate target pixel on a PiKVM target in relative mouse mode (iPad, etc.). The tool slams the pointer to the top-left corner to establish a known origin, emits a calculated delta sequence using a ballistics profile (if any) or a default `1.0` px/mickey, then returns a post-move screenshot.
