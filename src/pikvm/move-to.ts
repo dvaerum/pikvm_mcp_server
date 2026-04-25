@@ -259,7 +259,11 @@ async function maybePersistTemplate(
 ): Promise<void> {
   if (cachedTemplate) return; // already have one
   try {
-    const t = extractCursorTemplateDecoded(screenshot, cursorPos, 32);
+    // 24 px (down from 32) tightens the crop around the iPad's ~22px
+    // arrow cursor, reducing background contamination that hurts cross-
+    // wallpaper template matching. See cursor-detect.test.ts for the
+    // contract.
+    const t = extractCursorTemplateDecoded(screenshot, cursorPos, 24);
     cachedTemplate = t;
     await saveCursorTemplate(t, TEMPLATE_PATH);
   } catch {
@@ -300,12 +304,35 @@ async function discoverOrigin(
       // its open-loop emission from this position.
       return { point: located.position, method: 'detect-then-move' };
     }
+    // locateCursor failed (typically: busy screen with too many cluster
+    // candidates, or cursor faded too far for our wake-nudge). Try
+    // template-match against a single screenshot using the cached
+    // cursor template — works when the cursor IS visible somewhere in
+    // the frame but motion-diff couldn't pair it.
+    const tmpl = await getCachedTemplate();
+    if (tmpl) {
+      const shot = await decodeScreenshot((await client.screenshot()).buffer);
+      const found = findCursorByTemplateDecoded(shot, tmpl, {
+        verbose: options.verbose,
+      });
+      if (found) {
+        if (options.verbose) {
+          console.error(
+            `[move-to] locateCursor failed; template-match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)} — using as origin`,
+          );
+        }
+        return { point: found.position, method: 'detect-then-move' };
+      }
+      if (options.verbose) {
+        console.error('[move-to] locateCursor AND template-match failed to find cursor');
+      }
+    }
     if (options.forbidSlamFallback) {
       throw new Error(
-        'moveToPixel: detect-then-move failed and slam fallback forbidden ' +
-        '(forbidSlamFallback=true, set when target is iPad to avoid hot-corner re-lock). ' +
-        'Cursor cannot be located — try waking the iPad with a small move first, ' +
-        'or pass strategy="assume-at" with assumeCursorAt if you know where the cursor is.',
+        'moveToPixel: detect-then-move failed (motion-diff and template-match both ' +
+        'returned no cursor) and slam fallback forbidden (forbidSlamFallback=true, set ' +
+        'when target is iPad to avoid hot-corner re-lock). ' +
+        'Try waking the iPad first, or pass strategy="assume-at" with assumeCursorAt.',
       );
     }
     if (options.verbose) console.error('[move-to] detect-then-move failed; falling back to slam');

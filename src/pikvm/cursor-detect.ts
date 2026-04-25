@@ -378,11 +378,17 @@ export async function locateCursor(
     // BEFORE screenshot captures a faded cursor, the diff between BEFORE
     // (no visible cursor) and AFTER (cursor at post-probe position) only
     // produces ONE cluster — the appear-cluster — and pair selection fails.
-    // A small wake nudge ensures cursor is visible and rendered at full
-    // opacity at BEFORE-screenshot time.
-    await client.mouseMoveRelative(2, 0);
-    await sleep(80);
-    await client.mouseMoveRelative(-2, 0);
+    //
+    // A 2-mickey nudge wasn't reliably enough on iPadOS — the OS seems
+    // to require larger movement before re-rendering the cursor. 30
+    // mickeys round-trip is small enough not to disturb cursor position
+    // significantly (iPadOS acceleration round-trip is asymmetric, so
+    // there's still some residual offset, but locateCursor's caller
+    // doesn't rely on the cursor being at any specific point — it just
+    // needs the cursor visible enough to diff).
+    await client.mouseMoveRelative(30, 0);
+    await sleep(100);
+    await client.mouseMoveRelative(-30, 0);
     await sleep(settleMs);
 
     const before = await takeRawScreenshot(client);
@@ -511,7 +517,7 @@ export interface CursorTemplate {
 export function extractCursorTemplateDecoded(
   screenshot: DecodedScreenshot,
   centre: Point,
-  size = 32,
+  size = 24,
 ): CursorTemplate {
   const half = Math.floor(size / 2);
   const left = Math.max(0, Math.min(screenshot.width - size, centre.x - half));
@@ -529,7 +535,7 @@ export function extractCursorTemplateDecoded(
 export async function extractCursorTemplate(
   screenshot: Buffer,
   centre: Point,
-  size = 32,
+  size = 24,
 ): Promise<CursorTemplate> {
   const decoded = await decodeScreenshot(screenshot);
   return extractCursorTemplateDecoded(decoded, centre, size);
