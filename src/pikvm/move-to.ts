@@ -273,11 +273,15 @@ async function discoverOrigin(
     const located = await locateCursor(client, {
       probeDelta: 20,
       settleMs: 120,
-      detection: { brightnessFloor: 170 },
+      // detection.brightnessFloor defaults to 100 inside locateCursor,
+      // matching detectMotion's default (works on dimmed-modal contexts).
       maxAttempts: 2,
       verbose: options.verbose,
     });
     if (located) {
+      // located.position is the cursor's CURRENT position (post-probe);
+      // locateCursor no longer attempts a fake restore. Move-to plans
+      // its open-loop emission from this position.
       return { point: located.position, method: 'detect-then-move' };
     }
     if (options.verbose) console.error('[move-to] detect-then-move failed; falling back to slam');
