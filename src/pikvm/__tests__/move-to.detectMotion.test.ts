@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { decodeScreenshot } from '../cursor-detect.js';
+import { decodeScreenshot, extractCursorTemplateDecoded } from '../cursor-detect.js';
 import { detectMotion } from '../move-to.js';
 
 async function makeFrame(width: number, height: number, fill: [number, number, number]): Promise<Buffer> {
@@ -175,6 +175,73 @@ describe('detectMotion', () => {
       true,                 // requireAchromatic
     );
     expect(filtered.pair).toBeNull();
+  });
+
+  it('Phase 2: template re-ranks pair selection when geometry is ambiguous', async () => {
+    // Two candidate pairs in the same diff:
+    //   Pair A (widget): pre at (50,50), post at (150,80) — colored orange.
+    //                    Geometrically AT expectedStart/End so geometry wins.
+    //   Pair B (cursor): pre at (60,100), post at (160,130) — gray cursor.
+    //                    Both ~51 px offset from expected positions
+    //                    (within the 120 px preWindow / 600 px postWindow).
+    //
+    // Without template: pair A wins (lower dist to expected positions).
+    // With a gray-cursor template: pair B wins (post-cluster region matches
+    //   the template; pair A's orange post-region scores low).
+    const w = 400, h = 250;
+    const wallpaper = [200, 200, 200] as [number, number, number]; // gray bg
+    const cursor = [240, 240, 240] as [number, number, number];     // gray cursor
+    const orange = [240, 80, 40] as [number, number, number];
+
+    // Frame A: orange widget at (50,50), gray cursor at (60,100).
+    let aBuf = await makeFrame(w, h, wallpaper);
+    aBuf = await stamp(aBuf, 50, 50, 7, orange);
+    aBuf = await stamp(aBuf, 60, 100, 7, cursor);
+    // Frame B: orange widget at (150,80), gray cursor at (160,130).
+    let bBuf = await makeFrame(w, h, wallpaper);
+    bBuf = await stamp(bBuf, 150, 80, 7, orange);
+    bBuf = await stamp(bBuf, 160, 130, 7, cursor);
+
+    const a = await decodeScreenshot(aBuf);
+    const b = await decodeScreenshot(bBuf);
+
+    // Build a gray-cursor template from frame B's known cursor location.
+    const template = extractCursorTemplateDecoded(b, { x: 160, y: 130 }, 24);
+
+    // Baseline (no template): pair A (orange widget) wins by geometry.
+    const baseline = detectMotion(
+      a, b,
+      { x: 50, y: 50 },     // expectedStart matches widget pre
+      { x: 150, y: 80 },    // expectedEnd matches widget post
+      { x: 100, y: 30 },
+      120, 600,
+      false,
+      8, 90,
+      0,
+      false,                // requireAchromatic OFF — isolate template test
+    );
+    expect(baseline.pair).not.toBeNull();
+    // Baseline should pick the geometrically-closer (orange) pair.
+    expect(Math.abs(baseline.pair!.post.centroidX - 150)).toBeLessThan(10);
+    expect(Math.abs(baseline.pair!.post.centroidY - 80)).toBeLessThan(10);
+
+    // With template: pair B (gray cursor) should win because its post-cluster
+    // region matches the template, even though it's geometrically farther.
+    const withTemplate = detectMotion(
+      a, b,
+      { x: 50, y: 50 },
+      { x: 150, y: 80 },
+      { x: 100, y: 30 },
+      120, 600,
+      false,
+      8, 90,
+      0,
+      false,
+      template,             // Phase 2: template
+    );
+    expect(withTemplate.pair).not.toBeNull();
+    // With template, the cursor pair (post at y≈130) should win.
+    expect(Math.abs(withTemplate.pair!.post.centroidY - 130)).toBeLessThan(10);
   });
 
   it('still returns null when commanded direction is ~perpendicular to actual cluster pair', async () => {
