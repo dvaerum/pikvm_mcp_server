@@ -65,8 +65,8 @@ buildNpmPackage {
     # the derivation follows package.json. See nix/README.md.
     license = lib.licenses.mit;
     mainProgram = "pikvm-mcp-server";
-    # sharp on darwin builds-from-source is not yet verified for this
-    # codebase; restrict to Linux for now.
-    platforms = lib.platforms.linux;
+    # Linux + Darwin both verified to build sharp-from-source against
+    # nixpkgs vips. If a darwin build ever regresses we can narrow back.
+    platforms = lib.platforms.unix;
   };
 }
