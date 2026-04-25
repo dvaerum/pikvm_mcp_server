@@ -105,6 +105,55 @@ and post-cluster (where cursor is now).
 | 11 | `595d84f` | Locality-aware ranking in `findCursorByTemplateSet` — prefer per-template matches near a hint over far high-scoring FPs | Catches the (781, 713) 0.944 FP that would otherwise beat the (1057, 837) 0.909 real-cursor match. 5-trial worst-case 275 → 207 px. |
 | 12 | (helper only, not wired) | `isRatioUpdatePlausible` — reject ratio updates that drift > 2× from prior or fall outside [0.5, 4.0] | Wired at 2× threshold made *every* trial regress to 178-207 px because legitimate context-switch adaptations from default (3.04, 5.28) to true iPad (~1.5–2.5) were being blocked. Helper kept for future wiring at a looser threshold (3× or 4×) once we have data on how often legitimate updates exceed 2×. |
 
+## ROOT CAUSE FOUND (2026-04-26): PiKVM streamer + iPadOS render latency ~235 ms
+
+After the phantom-cursor finding (below), I instrumented a
+`latency-probe` mode in `test-client.ts` that emits a known motion
+(+200 X mickeys), then captures `/streamer/snapshot` at increasing
+delays (0, 93, 235, 356, 500, 750, 1000, 1500, 2000 ms after the
+HID emit).
+
+Visually inspected the captured frames:
+
+| Delay since emit | Cursor visible? |
+|---|---|
+| 0 ms | NO — frame identical to baseline |
+| 93 ms | NO |
+| 235 ms | YES — at (~785, 70) |
+| 356 ms | YES — same position |
+| 500 ms+ | YES |
+
+**The PiKVM streamer's snapshot lags the actual screen by 150–235 ms.**
+A screenshot taken sooner than that returns a frame from before the
+HID was applied.
+
+This explains every symptom in this troubleshooting log:
+- `locateCursor` returning "0 raw clusters" — the before- and
+  after-screenshots were both pre-emit frames, so the diff was
+  empty.
+- `detectMotion` returning "no post candidate" — same issue: the
+  shotB grab returned a pre-emit frame, no cursor at the new
+  position.
+- Template-match false positives — when the screenshot has no
+  cursor, NCC scores 0.95+ on whatever wallpaper texture happens
+  to correlate with the cached templates' structure. Without a
+  cursor in the frame, NCC is matching noise.
+
+### The fix
+
+Bump every `settleMs` (post-emit, pre-screenshot) from 150 ms to
+300 ms — comfortably above the measured 235 ms threshold so the
+streamer's next snapshot reflects post-emit reality. Locations:
+
+- `cursor-detect.ts` `locateCursor.settleMs` default: 150 → 300
+- `move-to.ts` `wakeupCursor` settleMs default: 150 → 300
+- `move-to.ts` `discoverOrigin`'s locateCursor call: 120 → 300
+- `move-to.ts` `postMoveSettleMs` default: 30 → 300 (this was the
+  worst offender — 30 ms after open-loop emit guaranteed a pre-emit
+  shotB)
+
+Cost: ~250 ms × 4-7 screenshots = 1–2 s slower per moveTo. Worth it.
+
 ## CRITICAL FINDING (2026-04-26): the algorithm has been clicking on phantom cursors
 
 After actually saving and looking at every intermediate screenshot
