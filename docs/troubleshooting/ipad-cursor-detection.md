@@ -154,6 +154,38 @@ streamer's next snapshot reflects post-emit reality. Locations:
 
 Cost: ~250 ms × 4-7 screenshots = 1–2 s slower per moveTo. Worth it.
 
+### Followup findings post-fix
+
+After the latency fix landed, live test showed cursor IS now visible
+in origin/calib/open-loop screenshots, AND `locateCursor` succeeded
+for the first time on the iPad home screen — found a real pre/post
+cluster pair at (850,301)→(938,301) for a +X probe.
+
+Two remaining issues uncovered by the now-correct screenshots:
+
+1. **iPad cursor cluster is just 4-7 bright pixels.** The original
+   8-px `clusterMin` was rejecting real cursor clusters. Lowered to
+   4. But the looser filter introduces more widget/animation noise
+   into the candidate pool (post-candidates went from ~3 to ~13 in
+   one trial), which then defeats the cluster-pair selection because
+   too many candidates pass direction/sanity filters.
+
+2. **Cached templates are poisoned.** Previous successful "captures"
+   were saved while the algorithm thought the cursor was at FP
+   wallpaper positions. Those templates now match wallpaper
+   structures at score 0.999. Cleared `data/cursor-templates/` and
+   `data/cursor-template.jpg` to force re-capture from a working
+   detection run.
+
+3. **Calibration probe still fails on Y-axis.** The +40 Y probe
+   produces a real cursor pair, but with clusterMin=4 there are 13
+   post-candidates and the right pair gets out-competed by widget
+   noise. Likely fix: bigger calibration probe (100+ mickeys) so
+   the cursor moves much further than any animation noise, giving
+   pair selection a clearer signal. Or: piggyback on
+   `locateCursor`'s already-measured `probeOffsetPx` to skip the
+   redundant calibration probe entirely.
+
 ## CRITICAL FINDING (2026-04-26): the algorithm has been clicking on phantom cursors
 
 After actually saving and looking at every intermediate screenshot
