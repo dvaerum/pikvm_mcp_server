@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { decodeScreenshot, extractCursorTemplateDecoded } from '../cursor-detect.js';
 import {
+  capCorrectionMickeys,
   clampMickeysToScreen,
   detectMotion,
   shouldAbortBlindCorrections,
@@ -286,6 +287,40 @@ function diag(pass: number, mode: MovePassDiagnostic['mode']): MovePassDiagnosti
     linearPhase: false,
   };
 }
+
+describe('capCorrectionMickeys (Phase 9 magnitude cap)', () => {
+  it('returns inputs unchanged when both axes are within cap', () => {
+    const r = capCorrectionMickeys(20, 30, 50);
+    expect(r.x).toBe(20);
+    expect(r.y).toBe(30);
+  });
+
+  it('scales both axes proportionally when X exceeds cap', () => {
+    // X=200, Y=50, cap=100 → scale = 100/200 = 0.5; result (100, 25)
+    const r = capCorrectionMickeys(200, 50, 100);
+    expect(r.x).toBe(100);
+    expect(r.y).toBe(25);
+  });
+
+  it('scales both axes proportionally when Y exceeds cap', () => {
+    // X=20, Y=200, cap=80 → scale = 80/200 = 0.4; result (8, 80)
+    const r = capCorrectionMickeys(20, 200, 80);
+    expect(r.x).toBe(8);
+    expect(r.y).toBe(80);
+  });
+
+  it('preserves sign when scaling', () => {
+    const r = capCorrectionMickeys(-200, 50, 100);
+    expect(r.x).toBe(-100);
+    expect(r.y).toBe(25);
+  });
+
+  it('passes zero through (no division by zero)', () => {
+    const r = capCorrectionMickeys(0, 0, 100);
+    expect(r.x).toBe(0);
+    expect(r.y).toBe(0);
+  });
+});
 
 describe('clampMickeysToScreen (Phase 6 edge guard)', () => {
   const bounds = { width: 1920, height: 1080 };
