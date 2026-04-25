@@ -22,6 +22,14 @@ export interface Cluster {
   pixels: number;
   centroidX: number;
   centroidY: number;
+  /** Mean R over the cluster's pixels in the source RGB frame. Populated
+   *  only when `findClusters` is called with a `sourceRgb` argument.
+   *  Used by detectMotion's optional achromatic filter to reject colored
+   *  widget animations at the cluster level (where anti-aliased cursor
+   *  edges aren't an issue, unlike pixel-level filtering). */
+  meanR?: number;
+  meanG?: number;
+  meanB?: number;
 }
 
 export interface DetectionConfig {
@@ -153,6 +161,10 @@ export function findClusters(
   height: number,
   minSize: number,
   maxSize: number,
+  /** Optional source RGB buffer (3 bytes per pixel, row-major). When
+   *  provided, each cluster gets `meanR`, `meanG`, `meanB` populated
+   *  by averaging the source pixels covered by the cluster. */
+  sourceRgb?: Buffer,
 ): Cluster[] {
   const visited = new Uint8Array(width * height);
   const clusters: Cluster[] = [];
@@ -166,6 +178,9 @@ export function findClusters(
       visited[idx] = 1;
       let sumX = 0;
       let sumY = 0;
+      let sumR = 0;
+      let sumG = 0;
+      let sumB = 0;
       let count = 0;
 
       while (queue.length > 0) {
@@ -174,6 +189,12 @@ export function findClusters(
         const cy = (ci - cx) / width;
         sumX += cx;
         sumY += cy;
+        if (sourceRgb) {
+          const off = ci * 3;
+          sumR += sourceRgb[off];
+          sumG += sourceRgb[off + 1];
+          sumB += sourceRgb[off + 2];
+        }
         count++;
 
         for (let dy = -1; dy <= 1; dy++) {
@@ -191,11 +212,17 @@ export function findClusters(
       }
 
       if (count >= minSize && count <= maxSize) {
-        clusters.push({
+        const c: Cluster = {
           pixels: count,
           centroidX: Math.round(sumX / count),
           centroidY: Math.round(sumY / count),
-        });
+        };
+        if (sourceRgb) {
+          c.meanR = sumR / count;
+          c.meanG = sumG / count;
+          c.meanB = sumB / count;
+        }
+        clusters.push(c);
       }
     }
   }
@@ -245,17 +272,34 @@ export function mergeClusters(clusters: Cluster[], mergeRadius: number): Cluster
     let totalPixels = 0;
     let weightedX = 0;
     let weightedY = 0;
+    let weightedR = 0;
+    let weightedG = 0;
+    let weightedB = 0;
+    let haveColor = true;
     for (const idx of members) {
       const c = clusters[idx];
       totalPixels += c.pixels;
       weightedX += c.centroidX * c.pixels;
       weightedY += c.centroidY * c.pixels;
+      if (c.meanR !== undefined && c.meanG !== undefined && c.meanB !== undefined) {
+        weightedR += c.meanR * c.pixels;
+        weightedG += c.meanG * c.pixels;
+        weightedB += c.meanB * c.pixels;
+      } else {
+        haveColor = false;
+      }
     }
-    merged.push({
+    const m: Cluster = {
       pixels: totalPixels,
       centroidX: Math.round(weightedX / totalPixels),
       centroidY: Math.round(weightedY / totalPixels),
-    });
+    };
+    if (haveColor) {
+      m.meanR = weightedR / totalPixels;
+      m.meanG = weightedG / totalPixels;
+      m.meanB = weightedB / totalPixels;
+    }
+    merged.push(m);
   }
 
   return merged;
@@ -278,7 +322,14 @@ export function diffScreenshotsDecoded(
     config.brightnessFloor,
     config.maxChannelDelta,
   );
-  const raw = findClusters(mask, a.width, a.height, config.minClusterSize, config.maxClusterSize);
+  const raw = findClusters(
+    mask,
+    a.width,
+    a.height,
+    config.minClusterSize,
+    config.maxClusterSize,
+    b.rgb,
+  );
   return mergeClusters(raw, config.mergeRadius);
 }
 

@@ -107,6 +107,76 @@ describe('detectMotion', () => {
     expect(r.preCandidates).toBeGreaterThanOrEqual(2);
   });
 
+  it('REGRESSION (Phase 1): requireAchromatic accepts gray-cursor pair on colored background', async () => {
+    // Cursor is gray (240,240,240) over a uniformly-colored orange backdrop.
+    // The diff produces gray cursor clusters whose mean RGB is ~achromatic.
+    // requireAchromatic must NOT reject this — the failure mode we are
+    // protecting against is killing the cursor, not just colored widgets.
+    // brightnessFloor=0 here so the colored-wallpaper diff isn't suppressed
+    // by per-pixel brightness; we're isolating the achromatic-filter test.
+    const w = 400, h = 300;
+    const wallpaper = [180, 100, 60] as [number, number, number]; // orange
+    const cursor = [240, 240, 240] as [number, number, number];
+    const a = await decodeScreenshot(await stamp(await makeFrame(w, h, wallpaper), 50, 50, 7, cursor));
+    const b = await decodeScreenshot(await stamp(await makeFrame(w, h, wallpaper), 150, 80, 7, cursor));
+
+    const r = detectMotion(
+      a, b,
+      { x: 50, y: 50 },
+      { x: 150, y: 80 },
+      { x: 100, y: 30 },
+      120, 600,
+      false,
+      8, 90,
+      0,                    // brightnessFloor disabled
+      true,                 // requireAchromatic
+    );
+    expect(r.pair).not.toBeNull();
+  });
+
+  it('Phase 1: requireAchromatic rejects a single colored-widget pair', async () => {
+    // Build a frame pair where the ONLY change is a colored (orange) blob
+    // moving — no cursor at all. With requireAchromatic on, this must
+    // return null because the only candidate cluster's mean colour is
+    // chromatic (high R, low G/B). brightnessFloor=0 to focus the test
+    // on the achromatic-filter path.
+    const w = 400, h = 300;
+    const wallpaper = [200, 200, 200] as [number, number, number]; // gray bg
+    const widgetA = [240, 80, 40] as [number, number, number];     // orange
+    const widgetB = [240, 80, 40] as [number, number, number];     // same orange
+    const a = await decodeScreenshot(await stamp(await makeFrame(w, h, wallpaper), 60, 60, 7, widgetA));
+    const b = await decodeScreenshot(await stamp(await makeFrame(w, h, wallpaper), 160, 90, 7, widgetB));
+
+    // Without requireAchromatic: this colored-blob pair WOULD be picked
+    // as a valid pair (same shape, right direction, valid magnitude).
+    const baseline = detectMotion(
+      a, b,
+      { x: 60, y: 60 },
+      { x: 160, y: 90 },
+      { x: 100, y: 30 },
+      120, 600,
+      false,
+      8, 90,
+      0,
+    );
+    expect(baseline.pair).not.toBeNull();
+
+    // With requireAchromatic on: filter rejects the colored cluster, no
+    // pair survives, motion-diff returns null.
+    const filtered = detectMotion(
+      a, b,
+      { x: 60, y: 60 },
+      { x: 160, y: 90 },
+      { x: 100, y: 30 },
+      120, 600,
+      false,
+      8, 90,
+      0,
+      true,                 // requireAchromatic
+    );
+    expect(filtered.pair).toBeNull();
+  });
+
   it('still returns null when commanded direction is ~perpendicular to actual cluster pair', async () => {
     const w = 400, h = 300;
     const wallpaper = [200, 200, 200] as [number, number, number];
