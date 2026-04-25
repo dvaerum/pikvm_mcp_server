@@ -17,7 +17,8 @@ Individual tool usage guides:
 | `click-element` | [click-element.md](click-element.md) | Click with pikvm_mouse_click |
 | `scroll-page` | [scroll-page.md](scroll-page.md) | Scroll with pikvm_mouse_scroll |
 | `auto-calibrate` | [auto-calibrate.md](auto-calibrate.md) | Automatic mouse calibration with pikvm_auto_calibrate |
-| *(precondition)* | [ipad-setup.md](ipad-setup.md) | **One-time iPad settings for reliable operation** — read this first |
+| *(precondition)* | [ipad-setup.md](ipad-setup.md) | **One-time iPad settings** — version-aware (iPadOS 17/18 vs 26+) |
+| *(workflow)* | [ipad-keyboard-workflow.md](ipad-keyboard-workflow.md) | **Preferred iPad agent pattern** — Cmd+Space, Cmd+F, type. Use instead of cursor clicks when possible. |
 | `ipad-unlock` | [ipad-unlock.md](ipad-unlock.md) | Unlock iPad lock screen with pikvm_ipad_unlock |
 | `measure-ballistics` | [measure-ballistics.md](measure-ballistics.md) | Characterise relative-mouse ballistics with pikvm_measure_ballistics |
 | `move-to` | [move-to.md](move-to.md) | Approximate move-to-pixel with pikvm_mouse_move_to |
