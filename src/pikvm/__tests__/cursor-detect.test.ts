@@ -13,6 +13,8 @@ import sharp from 'sharp';
 import {
   decodeScreenshot,
   diffScreenshotsDecoded,
+  findCursorByTemplate,
+  extractCursorTemplate,
   DEFAULT_DETECTION_CONFIG,
 } from '../cursor-detect.js';
 
@@ -146,5 +148,64 @@ describe('diffScreenshotsDecoded', () => {
     expect(strictSized.length).toBeLessThanOrEqual(1);
     // 100 catches both because wallpaper 120 > 100 floor.
     expect(looseSized.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('findCursorByTemplate minScore default', () => {
+  // Live data observed on the iPad's stuck-modal screen:
+  //   real cursor template-matches scored 0.85–0.97
+  //   false positives over the modal scrim scored 0.74–0.82
+  //
+  // Default minScore must be high enough to reject all observed
+  // false positives but low enough to accept all observed real
+  // matches. 0.83 sits cleanly between them.
+
+  /** Build a screenshot with a distinctive cursor-pattern region at (cx, cy). */
+  async function buildScreenshotWithCursor(w: number, h: number, cx: number, cy: number): Promise<Buffer> {
+    const buf = Buffer.alloc(w * h * 3, 100);
+    for (let y = cy - 12; y < cy + 12; y++) {
+      for (let x = cx - 12; x < cx + 12; x++) {
+        if (x < 0 || x >= w || y < 0 || y >= h) continue;
+        const i = (y * w + x) * 3;
+        const dx = x - cx, dy = y - cy;
+        const v = 200 + dx * 2 + dy * 2;
+        buf[i] = buf[i + 1] = buf[i + 2] = Math.min(255, Math.max(0, v));
+      }
+    }
+    return sharp(buf, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
+  }
+
+  it('exact match (step=1) scores ≥ 0.95 — sanity baseline', async () => {
+    const screenshot = await buildScreenshotWithCursor(200, 150, 50, 50);
+    const tmpl = await extractCursorTemplate(screenshot, { x: 50, y: 50 }, 24);
+    const exact = await findCursorByTemplate(screenshot, tmpl, { step: 1, minScore: 0.5 });
+    expect(exact).not.toBeNull();
+    expect(exact!.score).toBeGreaterThan(0.95);
+  });
+
+  it('REGRESSION: rejects no-cursor / uniform-noise frame at default minScore', async () => {
+    // Capture a template from a screenshot that has the cursor pattern.
+    const withCursor = await buildScreenshotWithCursor(200, 150, 50, 50);
+    const tmpl = await extractCursorTemplate(withCursor, { x: 50, y: 50 }, 24);
+    // Match against a uniform frame (no cursor visible at all).
+    const uniform = await sharp(Buffer.alloc(200 * 150 * 3, 100), { raw: { width: 200, height: 150, channels: 3 } })
+      .png()
+      .toBuffer();
+    const result = await findCursorByTemplate(uniform, tmpl);
+    // With the new 0.83 default, no spurious match should be accepted.
+    expect(result).toBeNull();
+  });
+
+  it('caller can lower minScore for permissive search', async () => {
+    const withCursor = await buildScreenshotWithCursor(200, 150, 50, 50);
+    const tmpl = await extractCursorTemplate(withCursor, { x: 50, y: 50 }, 24);
+    const uniform = await sharp(Buffer.alloc(200 * 150 * 3, 100), { raw: { width: 200, height: 150, channels: 3 } })
+      .png()
+      .toBuffer();
+    // Threshold low enough that even noise might pass.
+    const permissive = await findCursorByTemplate(uniform, tmpl, { minScore: -1 });
+    // Just verifies the option flows through; the actual returned position
+    // is whatever scored best.
+    expect(permissive).not.toBeNull();
   });
 });
