@@ -538,7 +538,10 @@ export class PiKVMClient {
       // non-zero press duration (~50 ms) to register the click as a tap;
       // back-to-back press/release (as sent with no delay) is sometimes
       // ignored as a flutter.
-      const downMs = options?.downMs ?? 80;
+      // Default 150 ms — empirically iPadOS modal dialogs require ~120-200 ms
+      // hold to register a tap reliably. 80 ms worked for home-screen icons
+      // but missed on adversarial UI like "Are you sure?" modal OK buttons.
+      const downMs = options?.downMs ?? 150;
       params.set('state', 'true');
       await this.request('POST', `/hid/events/send_mouse_button?${params}`);
       if (downMs > 0) {

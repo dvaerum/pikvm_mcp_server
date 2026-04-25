@@ -313,7 +313,7 @@ export async function locateCursor(
   client: PiKVMClient,
   options: LocateCursorOptions = {},
 ): Promise<LocateCursorResult | null> {
-  const probeDelta = options.probeDelta ?? 10;
+  const baseProbeDelta = options.probeDelta ?? 10;
   const settleMs = options.settleMs ?? 150;
   const maxAttempts = options.maxAttempts ?? 3;
   // Default brightness floor lowered from 170 to 100 — same fix as
@@ -325,7 +325,31 @@ export async function locateCursor(
     ...options.detection,
   };
 
+  // Probe-size sweep. iPad UI contexts vary — small probe (10 mickeys)
+  // is fast and works on quiet screens; larger probes (30, 60) produce
+  // more diff signal on busy/animated screens at the cost of moving the
+  // cursor more. Try increasing sizes per attempt so we don't fail on
+  // busy screens just because the default 10-mickey probe was too small.
+  const probeDeltas = [
+    baseProbeDelta,
+    Math.max(baseProbeDelta * 3, 30),
+    Math.max(baseProbeDelta * 6, 60),
+  ];
+
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const probeDelta = probeDeltas[Math.min(attempt, probeDeltas.length - 1)];
+
+    // Wake-up move: iPadOS fades cursor after ~1 s of inactivity. If the
+    // BEFORE screenshot captures a faded cursor, the diff between BEFORE
+    // (no visible cursor) and AFTER (cursor at post-probe position) only
+    // produces ONE cluster — the appear-cluster — and pair selection fails.
+    // A small wake nudge ensures cursor is visible and rendered at full
+    // opacity at BEFORE-screenshot time.
+    await client.mouseMoveRelative(2, 0);
+    await sleep(80);
+    await client.mouseMoveRelative(-2, 0);
+    await sleep(settleMs);
+
     const before = await takeRawScreenshot(client);
     await sleep(settleMs);
 
@@ -347,18 +371,64 @@ export async function locateCursor(
       continue;
     }
 
-    if (clusters.length !== 2) {
+    // Filter to cursor-sized clusters first — rejects animated widget
+    // noise (clock seconds, weather, etc.) on busy screens that produce
+    // many large clusters.
+    const sized = clusters.filter((c) => c.pixels >= 8 && c.pixels <= 90);
+
+    if (sized.length < 2) {
       if (options.verbose) {
-        console.error(`[locateCursor] attempt ${attempt + 1}: ${clusters.length} clusters (expected 2)`);
+        console.error(
+          `[locateCursor] attempt ${attempt + 1}: ${clusters.length} total, ${sized.length} cursor-sized [8-90px] (need ≥2)`,
+        );
       }
       continue;
     }
 
-    // The probe was in +x direction, so the cluster with smaller x is the
-    // pre-probe position; the larger x is where the cursor IS now.
-    const [a, b] = clusters;
-    const pre = a.centroidX <= b.centroidX ? a : b;
-    const post = pre === a ? b : a;
+    // The probe was +x by `probeDelta` mickeys. Pick the pair whose
+    // displacement best matches: roughly +x direction, distance close to
+    // probeDelta * (typical px/mickey ≈ 1.0). On a quiet screen this is
+    // just `clusters.length === 2`; on busy screens we filter out
+    // unrelated motion.
+    let pre: Cluster | null = null;
+    let post: Cluster | null = null;
+    let bestScore = -Infinity;
+    const expectedDispMin = probeDelta * 0.3;
+    const expectedDispMax = probeDelta * 4;
+    for (const aClu of sized) {
+      for (const bClu of sized) {
+        if (aClu === bClu) continue;
+        const dx = bClu.centroidX - aClu.centroidX;
+        const dy = bClu.centroidY - aClu.centroidY;
+        // Probe is +x, so we want dx > 0 and |dy| small.
+        if (dx <= 0) continue;
+        const mag = Math.hypot(dx, dy);
+        if (mag < expectedDispMin || mag > expectedDispMax) continue;
+        // Direction within ~30° of +x.
+        if (dx / mag < 0.85) continue;
+        // Score: closer to expected magnitude wins. Also prefer
+        // similarly-sized clusters (same cursor at two positions).
+        const sizeRatio =
+          Math.max(aClu.pixels, bClu.pixels) /
+          Math.max(1, Math.min(aClu.pixels, bClu.pixels));
+        if (sizeRatio > 4) continue;
+        const score = -Math.abs(mag - probeDelta) - 5 * Math.log2(sizeRatio);
+        if (score > bestScore) {
+          bestScore = score;
+          pre = aClu;
+          post = bClu;
+        }
+      }
+    }
+
+    if (!pre || !post) {
+      if (options.verbose) {
+        console.error(
+          `[locateCursor] attempt ${attempt + 1}: ${sized.length} cursor-sized clusters but no +x pair within ${expectedDispMin}-${expectedDispMax}px`,
+        );
+      }
+      continue;
+    }
     const probeOffsetPx: Point = {
       x: post.centroidX - pre.centroidX,
       y: post.centroidY - pre.centroidY,
