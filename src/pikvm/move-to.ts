@@ -482,7 +482,14 @@ interface MotionDiffResult {
  *  (R≈G≈B); colored animated widgets (clock-second hand, weather icons)
  *  produce chromatic clusters that this filter removes. Default false
  *  for backward compat with existing tests; `moveToPixel` enables it
- *  for iPad use. */
+ *  for iPad use.
+ *
+ *  `template` (Phase 2): when provided, every valid candidate pair has
+ *  its post-cluster region scored against the template; the combined
+ *  geometric+template score re-ranks pair selection. Lets a slightly-
+ *  worse-positioned but template-matching pair beat a better-positioned
+ *  but template-mismatching pair (e.g. icon-corner geometry beating the
+ *  real cursor on noisy home-screen diffs). */
 export function detectMotion(
   a: DecodedScreenshot,
   b: DecodedScreenshot,
@@ -496,6 +503,7 @@ export function detectMotion(
   clusterMax: number = 90,
   brightnessFloor: number = 100,
   requireAchromatic: boolean = false,
+  template: CursorTemplate | null = null,
 ): MotionDiffResult {
   // brightnessFloor lowered from 170 → 100. Cursor pixels rendered over
   // a dimmed-modal scrim or a dark wallpaper land in 100–160 range; the
@@ -599,7 +607,10 @@ export function detectMotion(
 
   const maxMickeys = Math.max(Math.abs(commandedMickeys.x), Math.abs(commandedMickeys.y));
 
-  let best: { pair: MotionPair; score: number } | null = null;
+  // Phase 2: collect ALL valid pairs (don't early-bind to best). The
+  // template-validation pass below re-ranks them when a template is
+  // available; without a template we still pick by max geometric score.
+  const validPairs: { pair: MotionPair; geomScore: number; templateScore: number }[] = [];
   for (const pre of preCandidates) {
     for (const post of postCandidates) {
       if (pre === post) continue;
@@ -625,29 +636,63 @@ export function detectMotion(
         Math.max(1, Math.min(pre.pixels, post.pixels));
       if (sizeRatio > 4) continue;
 
-      const score =
+      const geomScore =
         -dist(post, expectedEnd)
         - dist(pre, expectedStart)
         - 30 * Math.log2(sizeRatio);
-      if (!best || score > best.score) {
-        best = {
-          pair: {
-            pre,
-            post,
-            displacement: { x: dispX, y: dispY },
-            livePxPerMickey,
-          },
-          score,
-        };
-      }
+      validPairs.push({
+        pair: {
+          pre,
+          post,
+          displacement: { x: dispX, y: dispY },
+          livePxPerMickey,
+        },
+        geomScore,
+        templateScore: 0,
+      });
+    }
+  }
+
+  // Phase 2: when a template is available, score each candidate's
+  // post-cluster region against it. Combined ranking lets a slightly-
+  // worse-positioned but template-matching pair beat a better-positioned
+  // but template-mismatching one (the home-screen-icon-corner failure
+  // mode).
+  if (template !== null && validPairs.length > 0) {
+    for (const cand of validPairs) {
+      const tm = findCursorByTemplateDecoded(b, template, {
+        searchCentre: { x: cand.pair.post.centroidX, y: cand.pair.post.centroidY },
+        searchWindow: 30,
+        minScore: 0,        // accept anything; we use score for ranking
+        step: 2,
+      });
+      cand.templateScore = tm?.score ?? 0;
+    }
+  }
+
+  // Combined ranking: geometric score plus 100×templateScore. Template
+  // score in [0,1] dominates the geometric (typically [-300, 0] for
+  // close-to-expected pairs) when present.
+  let best: { pair: MotionPair; score: number; templateScore: number } | null = null;
+  for (const cand of validPairs) {
+    const total = cand.geomScore + cand.templateScore * 100;
+    if (!best || total > best.score) {
+      best = {
+        pair: cand.pair,
+        score: total,
+        templateScore: cand.templateScore,
+      };
     }
   }
 
   if (verbose && best) {
+    const tmplPart = template !== null
+      ? ` template=${best.templateScore.toFixed(3)}`
+      : '';
     console.error(
       `[motion] picked pre=(${best.pair.pre.centroidX},${best.pair.pre.centroidY},${best.pair.pre.pixels}px) ` +
         `post=(${best.pair.post.centroidX},${best.pair.post.centroidY},${best.pair.post.pixels}px) ` +
-        `disp=(${best.pair.displacement.x},${best.pair.displacement.y}) ratio=${best.pair.livePxPerMickey.toFixed(3)}`,
+        `disp=(${best.pair.displacement.x},${best.pair.displacement.y}) ratio=${best.pair.livePxPerMickey.toFixed(3)}${tmplPart}`,
     );
   }
 
@@ -755,6 +800,11 @@ export async function moveToPixel(
   let calibratedRatioY = pxPerMickeyY;
   let calibrationReason: string = `using fallback ratio ${fallback}`;
 
+  // Phase 2: fetch the cached cursor template once. Passed to every
+  // detectMotion call so it can re-rank candidate pairs by template
+  // match. Null if no template has been captured yet (first-run).
+  const sessionTemplate = await getCachedTemplate();
+
   // shotA-pre captured BEFORE the calibration probe; shotA captured AFTER.
   // diff(shotA-pre, shotA) measures the calibration probe's effect.
   const shotAPre = await decodeScreenshot((await client.screenshot()).buffer);
@@ -794,6 +844,7 @@ export async function moveToPixel(
       clusterMax,
       100,                  // brightnessFloor (default)
       true,                 // requireAchromatic — Phase 1
+      sessionTemplate,      // Phase 2: template-validated pair selection
     );
     if (calibResult.pair) {
       const measured = calibResult.pair.livePxPerMickey;
@@ -886,6 +937,7 @@ export async function moveToPixel(
         clusterMax,
         100,                  // brightnessFloor (default)
         true,                 // requireAchromatic — Phase 1
+        sessionTemplate,      // Phase 2
       )
     : null;
 
@@ -1062,6 +1114,7 @@ export async function moveToPixel(
         clusterMax,
         100,                  // brightnessFloor (default)
         true,                 // requireAchromatic — Phase 1
+        sessionTemplate,      // Phase 2
       );
 
       let passMode: 'motion' | 'template' | 'predicted' = 'predicted';
