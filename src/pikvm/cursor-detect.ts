@@ -483,13 +483,16 @@ export async function locateCursor(
 
     // Filter to cursor-sized clusters first — rejects animated widget
     // noise (clock seconds, weather, etc.) on busy screens that produce
-    // many large clusters.
-    const sized = clusters.filter((c) => c.pixels >= 8 && c.pixels <= 90);
+    // many large clusters. Phase 14b: clusterMin lowered from 8 to 4 to
+    // match moveToPixel — iPad cursor cluster is just 4-7 bright pixels
+    // after the brightness floor culls anti-aliased edges. The 8-px floor
+    // was rejecting the real cursor and admitting only widget noise.
+    const sized = clusters.filter((c) => c.pixels >= 4 && c.pixels <= 90);
 
     if (sized.length < 2) {
       if (options.verbose) {
         console.error(
-          `[locateCursor] attempt ${attempt + 1}: ${clusters.length} total, ${sized.length} cursor-sized [8-90px] (need ≥2)`,
+          `[locateCursor] attempt ${attempt + 1}: ${clusters.length} total, ${sized.length} cursor-sized [4-90px] (need ≥2)`,
         );
       }
       continue;
