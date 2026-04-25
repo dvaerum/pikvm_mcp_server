@@ -37,11 +37,16 @@ import {
   decodeScreenshot,
   diffScreenshotsDecoded,
   extractCursorTemplateDecoded,
-  findCursorByTemplateDecoded,
-  loadCursorTemplate,
+  findCursorByTemplateSet,
   locateCursor,
-  saveCursorTemplate,
 } from './cursor-detect.js';
+import {
+  DEFAULT_TEMPLATE_DIR,
+  LEGACY_TEMPLATE_PATH,
+  loadTemplateSet,
+  migrateLegacyTemplate,
+  persistTemplate,
+} from './template-set.js';
 import {
   detectBoundsOrNull,
   getLastGoodBounds,
@@ -239,18 +244,25 @@ export function isStaleTemplateMatch(
 }
 
 // ============================================================================
-// Cursor template cache. Captured on first successful motion-diff, persisted
-// to disk, and reused as a non-perturbing detection fallback when motion-diff
-// fails (cursor faded, screen too noisy, etc.).
+// Cursor template SET cache. Captured on every successful motion-diff that
+// passes the looksLikeCursor gate, persisted to a templates directory, and
+// reused as a non-perturbing detection fallback when motion-diff fails.
+//
+// Phase 3: a single cached template is brittle across backdrops — once the
+// cursor moves over a different wallpaper or panel, NCC drops below threshold
+// and template-match stops contributing. The set-aware cache iterates every
+// captured template and uses whichever scores highest at match time.
 // ============================================================================
 
-const TEMPLATE_PATH = './data/cursor-template.jpg';
-let cachedTemplate: CursorTemplate | null | undefined; // undefined = unloaded
+let cachedTemplates: CursorTemplate[] | undefined; // undefined = unloaded
 
-async function getCachedTemplate(): Promise<CursorTemplate | null> {
-  if (cachedTemplate !== undefined) return cachedTemplate;
-  cachedTemplate = await loadCursorTemplate(TEMPLATE_PATH).catch(() => null);
-  return cachedTemplate;
+async function getCachedTemplates(): Promise<CursorTemplate[]> {
+  if (cachedTemplates !== undefined) return cachedTemplates;
+  // Migrate the legacy single-file template into the set directory so older
+  // installs don't lose their cache when this code ships.
+  await migrateLegacyTemplate(LEGACY_TEMPLATE_PATH, DEFAULT_TEMPLATE_DIR).catch(() => undefined);
+  cachedTemplates = await loadTemplateSet(DEFAULT_TEMPLATE_DIR).catch(() => []);
+  return cachedTemplates;
 }
 
 /** Validate that a candidate template region looks plausibly like a
@@ -282,7 +294,6 @@ async function maybePersistTemplate(
   screenshot: DecodedScreenshot,
   cursorPos: { x: number; y: number },
 ): Promise<void> {
-  if (cachedTemplate) return; // already have one
   try {
     // 24 px (down from 32) tightens the crop around the iPad's ~22px
     // arrow cursor, reducing background contamination that hurts cross-
@@ -293,12 +304,15 @@ async function maybePersistTemplate(
     // motion-diff picking a wrong pair (icon corner, animated widget)
     // and the bad capture poisoning all future template matches in a
     // self-reinforcing loop.
-    if (!looksLikeCursor(t)) {
-      // Don't persist — wait for a better motion-diff result.
-      return;
-    }
-    cachedTemplate = t;
-    await saveCursorTemplate(t, TEMPLATE_PATH);
+    if (!looksLikeCursor(t)) return;
+
+    // Phase 3: route through the set-aware persistence layer. It dedups
+    // perceptually-similar captures (same cursor over same backdrop) and
+    // caps the directory at TEMPLATE_SET_CAP, dropping the oldest when
+    // a new perceptually-distinct backdrop arrives.
+    const existing = await getCachedTemplates();
+    const result = await persistTemplate(DEFAULT_TEMPLATE_DIR, t, existing);
+    cachedTemplates = result.kept;
   } catch {
     // Best-effort; failing to persist is non-fatal.
   }
@@ -329,22 +343,22 @@ async function discoverOrigin(
     // perturbs the planning, and a high-confidence match (≥0.85) is
     // grounded in actual cursor pixels rather than potentially-confused
     // motion-diff cluster pairs.
-    const tmpl = await getCachedTemplate();
-    if (tmpl) {
+    const tmplSet = await getCachedTemplates();
+    if (tmplSet.length > 0) {
       const shot = await decodeScreenshot((await client.screenshot()).buffer);
-      const found = findCursorByTemplateDecoded(shot, tmpl, {
+      const found = findCursorByTemplateSet(shot, tmplSet, {
         verbose: options.verbose,
       });
       if (found) {
         if (options.verbose) {
           console.error(
-            `[move-to] template-match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)} — using as origin (skipped probe-and-diff)`,
+            `[move-to] template-match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)} (template #${found.templateIndex} of ${tmplSet.length}) — using as origin (skipped probe-and-diff)`,
           );
         }
         return { point: found.position, method: 'detect-then-move' };
       }
       if (options.verbose) {
-        console.error('[move-to] template-match below threshold; falling through to probe-and-diff');
+        console.error(`[move-to] template-match below threshold across ${tmplSet.length} cached template(s); falling through to probe-and-diff`);
       }
     }
     // FALLBACK: locateCursor probe-and-diff. Used when no template is
@@ -503,7 +517,7 @@ export function detectMotion(
   clusterMax: number = 90,
   brightnessFloor: number = 100,
   requireAchromatic: boolean = false,
-  template: CursorTemplate | null = null,
+  templates: CursorTemplate[] = [],
 ): MotionDiffResult {
   // brightnessFloor lowered from 170 → 100. Cursor pixels rendered over
   // a dimmed-modal scrim or a dark wallpaper land in 100–160 range; the
@@ -653,14 +667,16 @@ export function detectMotion(
     }
   }
 
-  // Phase 2: when a template is available, score each candidate's
-  // post-cluster region against it. Combined ranking lets a slightly-
-  // worse-positioned but template-matching pair beat a better-positioned
-  // but template-mismatching one (the home-screen-icon-corner failure
-  // mode).
-  if (template !== null && validPairs.length > 0) {
+  // Phase 2 + 3: when at least one template is cached, score each
+  // candidate's post-cluster region against the WHOLE template set.
+  // The combined ranking (geometric + template) lets a slightly-worse-
+  // positioned but template-matching pair beat a better-positioned but
+  // template-mismatching pair (the home-screen icon-corner failure mode).
+  // Multi-template ensures we still recover detection across backdrops
+  // the cursor visits during a session.
+  if (templates.length > 0 && validPairs.length > 0) {
     for (const cand of validPairs) {
-      const tm = findCursorByTemplateDecoded(b, template, {
+      const tm = findCursorByTemplateSet(b, templates, {
         searchCentre: { x: cand.pair.post.centroidX, y: cand.pair.post.centroidY },
         searchWindow: 30,
         minScore: 0,        // accept anything; we use score for ranking
@@ -686,7 +702,7 @@ export function detectMotion(
   }
 
   if (verbose && best) {
-    const tmplPart = template !== null
+    const tmplPart = templates.length > 0
       ? ` template=${best.templateScore.toFixed(3)}`
       : '';
     console.error(
@@ -800,10 +816,10 @@ export async function moveToPixel(
   let calibratedRatioY = pxPerMickeyY;
   let calibrationReason: string = `using fallback ratio ${fallback}`;
 
-  // Phase 2: fetch the cached cursor template once. Passed to every
-  // detectMotion call so it can re-rank candidate pairs by template
-  // match. Null if no template has been captured yet (first-run).
-  const sessionTemplate = await getCachedTemplate();
+  // Phase 2 + 3: fetch the cached cursor template SET once. Passed to
+  // every detectMotion call so it can re-rank candidate pairs by template
+  // match. Empty array if no templates have been captured yet (first-run).
+  const sessionTemplates = await getCachedTemplates();
 
   // shotA-pre captured BEFORE the calibration probe; shotA captured AFTER.
   // diff(shotA-pre, shotA) measures the calibration probe's effect.
@@ -844,7 +860,7 @@ export async function moveToPixel(
       clusterMax,
       100,                  // brightnessFloor (default)
       true,                 // requireAchromatic — Phase 1
-      sessionTemplate,      // Phase 2: template-validated pair selection
+      sessionTemplates,     // Phase 2 + 3: template-validated pair selection (multi-template)
     );
     if (calibResult.pair) {
       const measured = calibResult.pair.livePxPerMickey;
@@ -937,7 +953,7 @@ export async function moveToPixel(
         clusterMax,
         100,                  // brightnessFloor (default)
         true,                 // requireAchromatic — Phase 1
-        sessionTemplate,      // Phase 2
+        sessionTemplates,     // Phase 2 + 3
       )
     : null;
 
@@ -962,9 +978,8 @@ export async function moveToPixel(
     if (verbose && doCorrect) {
       console.error(`[move-to] motion-diff returned null: ${motionFailReason}`);
     }
-    const tmpl = await getCachedTemplate();
-    if (tmpl) {
-      const found = findCursorByTemplateDecoded(shotB, tmpl, {
+    if (sessionTemplates.length > 0) {
+      const found = findCursorByTemplateSet(shotB, sessionTemplates, {
         searchCentre: predictedPostOpen,
         searchWindow: postWindow,
         verbose,
@@ -973,19 +988,19 @@ export async function moveToPixel(
         currentPos = found.position;
         finalDetectedPosition = { ...currentPos };
         openLoopMode = 'template';
-        openLoopReason = `template-match score=${found.score.toFixed(3)} (motion: ${motionFailReason})`;
+        openLoopReason = `template-match score=${found.score.toFixed(3)} tpl#${found.templateIndex}/${sessionTemplates.length} (motion: ${motionFailReason})`;
         if (verbose) {
           console.error(
-            `[move-to] motion-diff failed; template match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
+            `[move-to] motion-diff failed; template-match recovered cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)} via template #${found.templateIndex}/${sessionTemplates.length}`,
           );
         }
       } else {
         currentPos = { ...predictedPostOpen };
         openLoopMode = 'predicted';
-        openLoopReason = `template-match below threshold (motion: ${motionFailReason})`;
+        openLoopReason = `template-match below threshold across ${sessionTemplates.length} templates (motion: ${motionFailReason})`;
         if (verbose) {
           console.error(
-            `[move-to] WARN open-loop: motion-diff (${motionFailReason}) AND template-match both failed; trusting prediction`,
+            `[move-to] WARN open-loop: motion-diff (${motionFailReason}) AND template-match (${sessionTemplates.length} cached) both failed; trusting prediction`,
           );
         }
       }
@@ -1114,7 +1129,7 @@ export async function moveToPixel(
         clusterMax,
         100,                  // brightnessFloor (default)
         true,                 // requireAchromatic — Phase 1
-        sessionTemplate,      // Phase 2
+        sessionTemplates,     // Phase 2 + 3
       );
 
       let passMode: 'motion' | 'template' | 'predicted' = 'predicted';
@@ -1137,10 +1152,9 @@ export async function moveToPixel(
         // Motion-diff failed on correction — try template match before
         // falling back to prediction.
         const motionFailReason = cResult.reason ?? 'unknown';
-        const tmpl = await getCachedTemplate();
         let templated = false;
-        if (tmpl) {
-          const found = findCursorByTemplateDecoded(shotC, tmpl, {
+        if (sessionTemplates.length > 0) {
+          const found = findCursorByTemplateSet(shotC, sessionTemplates, {
             searchCentre: newPredicted,
             searchWindow: postWindow,
             verbose,

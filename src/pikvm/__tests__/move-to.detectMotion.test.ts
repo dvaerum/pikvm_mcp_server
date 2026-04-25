@@ -237,7 +237,7 @@ describe('detectMotion', () => {
       8, 90,
       0,
       false,
-      template,             // Phase 2: template
+      [template],           // Phase 2 + 3: template set
     );
     expect(withTemplate.pair).not.toBeNull();
     // With template, the cursor pair (post at y≈130) should win.

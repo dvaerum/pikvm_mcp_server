@@ -774,6 +774,49 @@ export async function findCursorByTemplate(
   return findCursorByTemplateDecoded(decoded, template, options);
 }
 
+export interface FindCursorSetResult extends FindCursorResult {
+  /** Index in the input templates[] of the template that won. Lets the
+   *  caller tell which captured backdrop best matched the current frame
+   *  (e.g. for diagnostic logging). */
+  templateIndex: number;
+}
+
+/**
+ * Multi-template variant of findCursorByTemplateDecoded. Iterates the
+ * supplied template set, runs each one's NCC search, and returns the
+ * highest-scoring match across all templates.
+ *
+ * Used to recover detection across the different backdrops the cursor
+ * encounters during a session — a single cached template captured against
+ * one wallpaper context tends to dip below threshold once the cursor
+ * moves over a different context.
+ *
+ * Returns null when the set is empty or no template's best score reaches
+ * `options.minScore`.
+ */
+export function findCursorByTemplateSet(
+  screenshot: DecodedScreenshot,
+  templates: CursorTemplate[],
+  options: FindCursorOptions = {},
+): FindCursorSetResult | null {
+  if (templates.length === 0) return null;
+  // Pass minScore=0 to each individual call so we always get the best-
+  // available score back; we apply the minScore threshold once at the
+  // outer level after picking the winner.
+  const innerOpts: FindCursorOptions = { ...options, minScore: 0 };
+  let best: FindCursorSetResult | null = null;
+  for (let i = 0; i < templates.length; i++) {
+    const r = findCursorByTemplateDecoded(screenshot, templates[i], innerOpts);
+    if (!r) continue;
+    if (!best || r.score > best.score) {
+      best = { ...r, templateIndex: i };
+    }
+  }
+  const minScore = options.minScore ?? 0.83;
+  if (!best || best.score < minScore) return null;
+  return best;
+}
+
 /**
  * Persist a cursor template to disk for reuse across invocations.
  */
