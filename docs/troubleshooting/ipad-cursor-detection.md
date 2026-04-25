@@ -105,6 +105,21 @@ and post-cluster (where cursor is now).
 | 11 | `595d84f` | Locality-aware ranking in `findCursorByTemplateSet` — prefer per-template matches near a hint over far high-scoring FPs | Catches the (781, 713) 0.944 FP that would otherwise beat the (1057, 837) 0.909 real-cursor match. 5-trial worst-case 275 → 207 px. |
 | 12 | (helper only, not wired) | `isRatioUpdatePlausible` — reject ratio updates that drift > 2× from prior or fall outside [0.5, 4.0] | Wired at 2× threshold made *every* trial regress to 178-207 px because legitimate context-switch adaptations from default (3.04, 5.28) to true iPad (~1.5–2.5) were being blocked. Helper kept for future wiring at a looser threshold (3× or 4×) once we have data on how often legitimate updates exceed 2×. |
 
+## End-to-end click verification (the bottom line)
+
+Manual `click(1027, 825)` targeting the iPad Settings icon, post-Phase-12:
+
+- Algorithm reports: `Final cursor at (1131,970); residual = 178 px`
+- Post-click screenshot: **home screen unchanged — Settings did NOT open**
+- The cursor landed 178 px past the icon onto wallpaper; clicking
+  wallpaper does nothing.
+
+This is the honest state: under current code, a click at a known
+home-screen icon coordinate misses the icon roughly 50-80% of the
+time (depending on the trial's correction-pass luck). The
+architectural directions documented below are the path forward; the
+patch series has reached the limit of what local fixes can deliver.
+
 ## What we measured live
 
 5-trial moveto sequence to (1027, 825) on the unlocked iPad home
