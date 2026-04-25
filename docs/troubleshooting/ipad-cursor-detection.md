@@ -199,6 +199,48 @@ Y-dominant — only skip it when the X-probe-axis matches the
 warmup-axis. Live verified Phase 15 measures both ratios cleanly:
 X 0.85 from locateCursor probe + Y 0.811 from calibration probe.
 
+### Phase 17 — capping open-loop burst (REVERTED)
+
+The Phase 16 doc said the next architectural step is wake-emit-
+verify: each chunk's emit stays in the slow regime that matches
+calibration. Phase 17 implemented this by capping the open-loop
+burst to 25 mickeys/axis and bumping the correction-pass budget
+to 12, expecting the correction loop to do the bulk of the move
+via multiple small verifiable chunks.
+
+**Live result was worse, not better**: residual went 152 (Phase
+16) → 506 (Phase 17). The reason is more passes means more chances
+for motion-diff to pick a wrong cluster pair on a noisy frame.
+One bad pair update sends `currentPos` to the wrong place; the
+next correction emits in the wrong direction; circuit breaker
+fires; final residual is huge.
+
+**Reverted Phase 17.** The open-loop burst goes back to clamp-only
+(no per-axis cap), and `maxCorrectionPasses` back to 5.
+
+The real lesson: **fewer-but-more-correct passes beat more-but-
+noisier passes**. Wake-emit-verify only works if each verify step
+is reliable. With the iPad home screen's widget noise + the small
+cursor cluster (4-7 px), motion-diff's pair selection is
+noticeably more error-prone than the open-loop's bulk-displacement
+detection. The bulk move covers more pixels per emit, which
+correlates the cursor cluster pair more strongly than animation
+clusters that move only a few pixels per second.
+
+The right path forward is therefore **not** more correction
+passes. It's making each correction pass more reliable. Concrete
+next steps:
+- Per-pass micro-probe before correction emit: small +X bump (10
+  mickeys), screenshot, diff to confirm cursor's actual current
+  position before planning the corrective emit. Cost: extra
+  screenshot per pass. Benefit: prevents cluster-pair-confusion
+  from poisoning `currentPos`.
+- Or adopt an entirely different detection strategy on busy
+  frames — e.g. iPadOS Live Caption / Voice Control accessibility
+  surfaces, mouse position via remote-debug protocol if iPad
+  exposes one, screen-recording the iPad and reading cursor from
+  recording metadata.
+
 ### Phase 16 — slower open-loop chunks
 
 After Phase 15, calibrations were measuring (X=0.817, Y=1.961) but
