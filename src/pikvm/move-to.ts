@@ -226,6 +226,38 @@ function clamp(v: number, lo: number, hi: number): number {
 // the false positive didn't.
 // ============================================================================
 
+/** Phase 11: locality-aware ranking for multi-template match results.
+ *  When the cursor was just at `expectedNear` (e.g. a confirmed prior
+ *  position from the previous correction pass), prefer candidates
+ *  within `radiusPx` of that prior over far high-scoring matches. The
+ *  high-score-everywhere strategy picks stable false positives at iPad
+ *  UI elements; this anchors selection to recent ground-truth.
+ *
+ *  When `expectedNear` is null, OR when no candidates fall within the
+ *  radius, falls back to global highest-score selection — preserves
+ *  the existing behaviour for cold-start (no prior known position)
+ *  and for legitimate large moves (cursor is now far from the prior).
+ *
+ *  Pure helper, unit-tested. Generic over the candidate shape so it
+ *  can be applied to FindCursorResult, FindCursorSetResult, or any
+ *  future variant with `position` and `score`. */
+export function pickNearestPlausibleMatch<T extends { position: { x: number; y: number }; score: number }>(
+  matches: T[],
+  expectedNear: { x: number; y: number } | null,
+  radiusPx: number,
+): T | null {
+  if (matches.length === 0) return null;
+  if (expectedNear) {
+    const within = matches.filter((m) =>
+      Math.hypot(m.position.x - expectedNear.x, m.position.y - expectedNear.y) <= radiusPx,
+    );
+    if (within.length > 0) {
+      return within.reduce((a, b) => (a.score > b.score ? a : b));
+    }
+  }
+  return matches.reduce((a, b) => (a.score > b.score ? a : b));
+}
+
 /** Phase 10: origin-verification predicate. After template-match
  *  claims the cursor is at `claimed`, we emit a small probe move and
  *  inspect the post-cluster centroid in the resulting motion-diff.
@@ -1140,6 +1172,15 @@ export async function moveToPixel(
       const found = findCursorByTemplateSet(shotB, sessionTemplates, {
         searchCentre: predictedPostOpen,
         searchWindow: postWindow,
+        // Phase 11: cursor was at postWarmupExpected before the
+        // open-loop emit; predictedPostOpen is where it SHOULD be now.
+        // Both are plausible anchors for locality ranking — but the
+        // real cursor is somewhere along the path between them, not
+        // at the iPad UI's stable false-positive locations 200+ px
+        // from either. Anchor to predicted landing with a generous
+        // radius that covers acceleration variance.
+        expectedNear: predictedPostOpen,
+        expectedNearRadius: 200,
         verbose,
       });
       if (found) {
@@ -1328,6 +1369,12 @@ export async function moveToPixel(
           const found = findCursorByTemplateSet(shotC, sessionTemplates, {
             searchCentre: newPredicted,
             searchWindow: postWindow,
+            // Phase 11: small correction emits move the cursor only a
+            // few tens of pixels. The cursor is near `prevPos`
+            // (last-known-good position), not at iPad UI false-positive
+            // locations far away. Anchor selection there.
+            expectedNear: prevPos,
+            expectedNearRadius: 100,
             verbose,
           });
           if (found) {

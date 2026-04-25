@@ -705,6 +705,15 @@ export interface FindCursorOptions {
    *  ~16× faster than step=1 and ~4× faster than step=2. Drop to 1-2
    *  when sub-pixel cursor centring matters. */
   step?: number;
+  /** Phase 11 (multi-template ranking only): when supplied, prefer
+   *  per-template matches whose position is within `expectedNearRadius`
+   *  of this hint over far high-scoring matches. Anchors selection to
+   *  recently-confirmed cursor position so a stable false positive at
+   *  a fixed iPad UI element doesn't beat the real cursor in a
+   *  correction-pass fallback. Ignored by `findCursorByTemplateDecoded`
+   *  (single-template). */
+  expectedNear?: Point;
+  expectedNearRadius?: number;
   verbose?: boolean;
 }
 
@@ -816,16 +825,35 @@ export function findCursorByTemplateSet(
   // available score back; we apply the minScore threshold once at the
   // outer level after picking the winner.
   const innerOpts: FindCursorOptions = { ...options, minScore: 0 };
-  let best: FindCursorSetResult | null = null;
+  const allMatches: FindCursorSetResult[] = [];
   for (let i = 0; i < templates.length; i++) {
     const r = findCursorByTemplateDecoded(screenshot, templates[i], innerOpts);
-    if (!r) continue;
-    if (!best || r.score > best.score) {
-      best = { ...r, templateIndex: i };
+    if (r) allMatches.push({ ...r, templateIndex: i });
+  }
+  if (allMatches.length === 0) return null;
+
+  // Phase 11: locality-aware ranking. When a hint is provided, prefer
+  // matches within the hint radius over far high-scoring matches. The
+  // iPad UI has fixed elements that score 0.85-0.95 against varied
+  // templates; without the hint, those FPs win over the real cursor
+  // sitting near the previous confirmed position.
+  let best: FindCursorSetResult | null = null;
+  if (options.expectedNear) {
+    const hint = options.expectedNear;
+    const radius = options.expectedNearRadius ?? 100;
+    const within = allMatches.filter((m) =>
+      Math.hypot(m.position.x - hint.x, m.position.y - hint.y) <= radius,
+    );
+    if (within.length > 0) {
+      best = within.reduce((a, b) => (a.score >= b.score ? a : b));
     }
   }
+  if (!best) {
+    best = allMatches.reduce((a, b) => (a.score >= b.score ? a : b));
+  }
+
   const minScore = options.minScore ?? 0.83;
-  if (!best || best.score < minScore) return null;
+  if (best.score < minScore) return null;
   return best;
 }
 
