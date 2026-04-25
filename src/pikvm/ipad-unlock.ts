@@ -25,16 +25,25 @@
 
 import { PiKVMClient, ScreenResolution } from './client.js';
 import { slamToCorner } from './ballistics.js';
+import {
+  detectIpadBounds,
+  slamOriginFromBounds,
+  unlockStartFromBounds,
+  IpadBounds,
+} from './orientation.js';
 
 export interface IpadUnlockOptions {
   /** Whether to slam to top-left first to establish a known cursor position
    *  before positioning at the unlock start. Useful when the cursor state is
    *  unknown. Default true. */
   slamFirst?: boolean;
-  /** HDMI X of the unlock-swipe start. Default 955 (iPad portrait center). */
+  /** HDMI X of the unlock-swipe start. Default: auto-detected from the
+   *  iPad's letterbox bounds (centre X). Override only if detection fails
+   *  or you need a non-centre swipe origin. */
   startX?: number;
-  /** HDMI Y of the unlock-swipe start. Default 1035 (just above the home
-   *  indicator bar on the observed iPad). */
+  /** HDMI Y of the unlock-swipe start. Default: auto-detected from the
+   *  iPad's letterbox bounds (~45 px above the bottom edge, where the home
+   *  indicator lives). */
   startY?: number;
   /** Total pixel distance to drag upward. Default 800. */
   dragPx?: number;
@@ -60,6 +69,9 @@ export interface IpadUnlockResult {
   dragPx: number;
   chunkCount: number;
   swipeDurationMs: number;
+  /** iPad bounds used for swipe positioning. Null if startX/startY were
+   *  both passed explicitly (no detection performed). */
+  bounds: IpadBounds | null;
   message: string;
 }
 
@@ -72,24 +84,42 @@ export async function unlockIpad(
   options: IpadUnlockOptions = {},
 ): Promise<IpadUnlockResult> {
   const slamFirst = options.slamFirst ?? true;
-  const startX = options.startX ?? 955;
-  const startY = options.startY ?? 1035;
   const dragPx = options.dragPx ?? 800;
   const chunkMickeys = options.chunkMickeys ?? 30;
   const slamPaceMs = options.slamPaceMs ?? 60;
   const ppm = options.positionPxPerMickey ?? 1.0;
   const postSettleMs = options.postSettleMs ?? 1000;
 
-  // 1. Optionally slam so we know the starting position (top-left, near (625, 65)).
+  // Auto-detect iPad bounds unless caller has fully overridden positioning.
+  let bounds: IpadBounds | null = null;
+  if (options.startX === undefined || options.startY === undefined) {
+    try {
+      bounds = await detectIpadBounds(client, { verbose: options.verbose });
+      if (options.verbose) {
+        console.error(
+          `[ipad-unlock] detected ${bounds.orientation} bounds ` +
+            `(${bounds.x},${bounds.y}) ${bounds.width}×${bounds.height}`,
+        );
+      }
+    } catch (e) {
+      if (options.verbose) console.error(`[ipad-unlock] bounds detection failed: ${(e as Error).message}; using portrait defaults`);
+    }
+  }
+
+  const detectedSwipeStart = bounds ? unlockStartFromBounds(bounds) : { x: 955, y: 1035 };
+  const startX = options.startX ?? detectedSwipeStart.x;
+  const startY = options.startY ?? detectedSwipeStart.y;
+
+  // 1. Optionally slam so we know the starting position (top-left of iPad content).
   if (slamFirst) {
     await slamToCorner(client, { corner: 'top-left', paceMs: slamPaceMs });
   }
 
-  // 2. Position the cursor at (startX, startY). Assume post-slam origin is
-  // (625, 65) in HDMI space (standard iPad portrait letterbox). If the user
-  // passed different startX/startY, compute deltas.
-  const originX = 625;
-  const originY = 65;
+  // 2. Position the cursor at (startX, startY). Post-slam origin is the
+  // top-left of the iPad content within the HDMI letterbox.
+  const slamOrigin = bounds ? slamOriginFromBounds(bounds) : { x: 625, y: 65 };
+  const originX = slamOrigin.x;
+  const originY = slamOrigin.y;
   const dx = Math.round((startX - originX) / ppm);
   const dy = Math.round((startY - originY) / ppm);
 
@@ -147,6 +177,7 @@ export async function unlockIpad(
     dragPx,
     chunkCount,
     swipeDurationMs,
+    bounds,
     message,
   };
 }

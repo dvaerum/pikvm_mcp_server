@@ -20,6 +20,7 @@ Individual tool usage guides:
 | *(precondition)* | [ipad-setup.md](ipad-setup.md) | **One-time iPad settings** — version-aware (iPadOS 17/18 vs 26+) |
 | *(workflow)* | [ipad-keyboard-workflow.md](ipad-keyboard-workflow.md) | **Preferred iPad agent pattern** — Cmd+Space, Cmd+F, type. Use instead of cursor clicks when possible. |
 | `ipad-unlock` | [ipad-unlock.md](ipad-unlock.md) | Unlock iPad lock screen with pikvm_ipad_unlock |
+| `detect-orientation` | [detect-orientation.md](detect-orientation.md) | Detect iPad bounds and orientation with pikvm_detect_orientation |
 | `measure-ballistics` | [measure-ballistics.md](measure-ballistics.md) | Characterise relative-mouse ballistics with pikvm_measure_ballistics |
 | `move-to` | [move-to.md](move-to.md) | Approximate move-to-pixel with pikvm_mouse_move_to |
 | `click-at` | [click-at.md](click-at.md) | Approximate click-at-pixel with pikvm_mouse_click_at |
