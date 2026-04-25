@@ -253,6 +253,31 @@ async function getCachedTemplate(): Promise<CursorTemplate | null> {
   return cachedTemplate;
 }
 
+/** Validate that a candidate template region looks plausibly like a
+ *  cursor: at least one bright (≥170 channel) achromatic pixel
+ *  (R,G,B within 30 of each other), and average saturation across
+ *  the region is low. Rejects icon corners and colored UI elements
+ *  that motion-diff sometimes mistakes for the cursor. Exported for
+ *  unit tests. */
+export function looksLikeCursor(t: CursorTemplate): boolean {
+  const px = t.width * t.height;
+  let brightAchromatic = 0;
+  let totalSaturation = 0;
+  for (let i = 0; i < px; i++) {
+    const o = i * 3;
+    const r = t.rgb[o], g = t.rgb[o + 1], b = t.rgb[o + 2];
+    const cMin = Math.min(r, g, b);
+    const cMax = Math.max(r, g, b);
+    const sat = cMax - cMin;
+    totalSaturation += sat;
+    if (cMin >= 170 && sat <= 30) brightAchromatic++;
+  }
+  // Need ≥ 4% of the template to be bright-achromatic (cursor pixels)
+  // and average saturation < 50 (whole region is mostly grayscale).
+  const meanSat = totalSaturation / px;
+  return brightAchromatic >= px * 0.04 && meanSat < 50;
+}
+
 async function maybePersistTemplate(
   screenshot: DecodedScreenshot,
   cursorPos: { x: number; y: number },
@@ -264,6 +289,14 @@ async function maybePersistTemplate(
     // wallpaper template matching. See cursor-detect.test.ts for the
     // contract.
     const t = extractCursorTemplateDecoded(screenshot, cursorPos, 24);
+    // Reject templates that don't look cursor-like — protects against
+    // motion-diff picking a wrong pair (icon corner, animated widget)
+    // and the bad capture poisoning all future template matches in a
+    // self-reinforcing loop.
+    if (!looksLikeCursor(t)) {
+      // Don't persist — wait for a better motion-diff result.
+      return;
+    }
     cachedTemplate = t;
     await saveCursorTemplate(t, TEMPLATE_PATH);
   } catch {
@@ -290,6 +323,33 @@ async function discoverOrigin(
   }
 
   if (requested === 'detect-then-move') {
+    // PRIMARY: template-match against a single screenshot. When a cached
+    // cursor template exists and the cursor IS visible, this is faster
+    // and more accurate than probe-and-diff — no cursor movement
+    // perturbs the planning, and a high-confidence match (≥0.85) is
+    // grounded in actual cursor pixels rather than potentially-confused
+    // motion-diff cluster pairs.
+    const tmpl = await getCachedTemplate();
+    if (tmpl) {
+      const shot = await decodeScreenshot((await client.screenshot()).buffer);
+      const found = findCursorByTemplateDecoded(shot, tmpl, {
+        verbose: options.verbose,
+      });
+      if (found) {
+        if (options.verbose) {
+          console.error(
+            `[move-to] template-match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)} — using as origin (skipped probe-and-diff)`,
+          );
+        }
+        return { point: found.position, method: 'detect-then-move' };
+      }
+      if (options.verbose) {
+        console.error('[move-to] template-match below threshold; falling through to probe-and-diff');
+      }
+    }
+    // FALLBACK: locateCursor probe-and-diff. Used when no template is
+    // cached yet (first-run) or the template scored below threshold
+    // (different wallpaper, very different lighting, etc.).
     const located = await locateCursor(client, {
       probeDelta: 20,
       settleMs: 120,
@@ -304,28 +364,8 @@ async function discoverOrigin(
       // its open-loop emission from this position.
       return { point: located.position, method: 'detect-then-move' };
     }
-    // locateCursor failed (typically: busy screen with too many cluster
-    // candidates, or cursor faded too far for our wake-nudge). Try
-    // template-match against a single screenshot using the cached
-    // cursor template — works when the cursor IS visible somewhere in
-    // the frame but motion-diff couldn't pair it.
-    const tmpl = await getCachedTemplate();
-    if (tmpl) {
-      const shot = await decodeScreenshot((await client.screenshot()).buffer);
-      const found = findCursorByTemplateDecoded(shot, tmpl, {
-        verbose: options.verbose,
-      });
-      if (found) {
-        if (options.verbose) {
-          console.error(
-            `[move-to] locateCursor failed; template-match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)} — using as origin`,
-          );
-        }
-        return { point: found.position, method: 'detect-then-move' };
-      }
-      if (options.verbose) {
-        console.error('[move-to] locateCursor AND template-match failed to find cursor');
-      }
+    if (options.verbose) {
+      console.error('[move-to] template-match AND locateCursor both failed');
     }
     if (options.forbidSlamFallback) {
       throw new Error(
