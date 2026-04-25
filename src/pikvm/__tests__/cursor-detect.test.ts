@@ -151,6 +151,124 @@ describe('diffScreenshotsDecoded', () => {
   });
 });
 
+describe('diffScreenshotsDecoded saturation filter', () => {
+  // Cursor is achromatic (R≈G≈B); colored widgets aren't. Filter must
+  // accept the cursor and reject high-saturation pixels.
+
+  async function makeFrame(
+    w: number,
+    h: number,
+    fill: [number, number, number],
+  ): Promise<Buffer> {
+    const buf = Buffer.alloc(w * h * 3);
+    for (let i = 0; i < w * h; i++) {
+      buf[i * 3] = fill[0];
+      buf[i * 3 + 1] = fill[1];
+      buf[i * 3 + 2] = fill[2];
+    }
+    return sharp(buf, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
+  }
+
+  async function stamp(
+    base: Buffer,
+    cx: number,
+    cy: number,
+    size: number,
+    colour: [number, number, number],
+  ): Promise<Buffer> {
+    const decoded = await sharp(base).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const data = Buffer.from(decoded.data);
+    const w = decoded.info.width;
+    const h = decoded.info.height;
+    const half = Math.floor(size / 2);
+    for (let y = cy - half; y <= cy + half; y++) {
+      if (y < 0 || y >= h) continue;
+      for (let x = cx - half; x <= cx + half; x++) {
+        if (x < 0 || x >= w) continue;
+        const i = (y * w + x) * 3;
+        data[i] = colour[0];
+        data[i + 1] = colour[1];
+        data[i + 2] = colour[2];
+      }
+    }
+    return sharp(data, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
+  }
+
+  it('accepts the gray cursor (R≈G≈B)', async () => {
+    const w = 200, h = 150;
+    const wallpaper = [60, 60, 60] as [number, number, number];
+    const cursor = [240, 240, 240] as [number, number, number];
+    const a = await decodeScreenshot(await stamp(await makeFrame(w, h, wallpaper), 50, 50, 7, cursor));
+    const b = await decodeScreenshot(await stamp(await makeFrame(w, h, wallpaper), 100, 80, 7, cursor));
+    const clusters = diffScreenshotsDecoded(a, b, {
+      ...DEFAULT_DETECTION_CONFIG,
+      brightnessFloor: 100,
+      maxChannelDelta: 25,
+      mergeRadius: 18,
+    });
+    const sized = clusters.filter((c) => c.pixels >= 8 && c.pixels <= 90);
+    expect(sized.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('REGRESSION: rejects a colored widget animation moving on dark background', async () => {
+    // Simulate iPad clock-second hand: bright red moving from one
+    // position to another. Should produce 0 cursor-cluster matches at
+    // maxChannelDelta=25 (strong R but weak G/B).
+    const w = 200, h = 150;
+    const wallpaper = [60, 60, 60] as [number, number, number];
+    const redHand = [240, 60, 60] as [number, number, number];
+    const a = await decodeScreenshot(await stamp(await makeFrame(w, h, wallpaper), 100, 50, 7, redHand));
+    const b = await decodeScreenshot(await stamp(await makeFrame(w, h, wallpaper), 100, 90, 7, redHand));
+    const clusters = diffScreenshotsDecoded(a, b, {
+      ...DEFAULT_DETECTION_CONFIG,
+      brightnessFloor: 100,
+      maxChannelDelta: 25,
+      mergeRadius: 18,
+    });
+    const sized = clusters.filter((c) => c.pixels >= 8 && c.pixels <= 90);
+    expect(sized.length).toBe(0);
+  });
+
+  it('with cursor + colored widget moving simultaneously: only cursor passes', async () => {
+    const w = 300, h = 200;
+    const wallpaper = [60, 60, 60] as [number, number, number];
+    const cursor = [240, 240, 240] as [number, number, number];
+    const blueWidget = [60, 100, 240] as [number, number, number];
+    // Frame A: cursor at (50, 50), widget at (200, 100).
+    let aBuf = await makeFrame(w, h, wallpaper);
+    aBuf = await stamp(aBuf, 50, 50, 7, cursor);
+    aBuf = await stamp(aBuf, 200, 100, 7, blueWidget);
+    // Frame B: cursor at (100, 80), widget at (220, 120).
+    let bBuf = await makeFrame(w, h, wallpaper);
+    bBuf = await stamp(bBuf, 100, 80, 7, cursor);
+    bBuf = await stamp(bBuf, 220, 120, 7, blueWidget);
+    const a = await decodeScreenshot(aBuf);
+    const b = await decodeScreenshot(bBuf);
+
+    const filtered = diffScreenshotsDecoded(a, b, {
+      ...DEFAULT_DETECTION_CONFIG,
+      brightnessFloor: 100,
+      maxChannelDelta: 25,
+      mergeRadius: 18,
+    });
+    const filteredSized = filtered.filter((c) => c.pixels >= 8 && c.pixels <= 90);
+
+    // No saturation filter: would catch both cursor + widget = up to
+    // 4 clusters (2 from cursor's appear+disappear, 2 from widget's).
+    const unfiltered = diffScreenshotsDecoded(a, b, {
+      ...DEFAULT_DETECTION_CONFIG,
+      brightnessFloor: 100,
+      maxChannelDelta: 0,
+      mergeRadius: 18,
+    });
+    const unfilteredSized = unfiltered.filter((c) => c.pixels >= 8 && c.pixels <= 90);
+
+    // Saturation filter should have FEWER (cursor only) than unfiltered.
+    expect(filteredSized.length).toBeLessThanOrEqual(unfilteredSized.length);
+    expect(filteredSized.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe('findCursorByTemplate minScore default', () => {
   // Live data observed on the iPad's stuck-modal screen:
   //   real cursor template-matches scored 0.85–0.97

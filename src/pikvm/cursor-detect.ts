@@ -35,6 +35,13 @@ export interface DetectionConfig {
    *  hands). Requiring the after-pixel to be bright filters those out.
    *  Set to 0 to disable brightness filtering. */
   brightnessFloor: number;
+  /** Maximum allowed channel imbalance for a pixel to count as cursor-
+   *  colored. iPadOS cursor is achromatic (R≈G≈B); animated colored
+   *  widgets (weather icons, clock-second hand) have much larger
+   *  channel deltas and are rejected. Default 25 — tight enough to
+   *  reject colored UI elements, loose enough to allow JPEG noise on
+   *  the gray cursor. Set to 0 to disable. */
+  maxChannelDelta: number;
 }
 
 export const DEFAULT_DETECTION_CONFIG: DetectionConfig = {
@@ -43,6 +50,13 @@ export const DEFAULT_DETECTION_CONFIG: DetectionConfig = {
   maxClusterSize: 2500,
   mergeRadius: 30,
   brightnessFloor: 170,
+  // Default 0 = no pixel-level saturation filter. Pixel-level filtering
+  // kills anti-aliased cursor edges (where R/G/B differ due to alpha
+  // blending against the wallpaper). The right place to filter colored-
+  // widget noise is at the CLUSTER level — see filterAchromaticClusters
+  // below — which inspects the cluster's centroid colour after the
+  // cluster has formed from all (including blended) pixels.
+  maxChannelDelta: 0,
 };
 
 // ============================================================================
@@ -91,6 +105,14 @@ export function diffPixels(
   height: number,
   threshold: number,
   brightnessFloor = 0,
+  /** Maximum allowed channel imbalance (max - min over R/G/B) for a
+   *  pixel to count as cursor-colored. iPadOS cursor is achromatic
+   *  (grayscale white-ish), so its R, G, B values are within ~20 of
+   *  each other. Animated colored widgets (clock-second hand, weather
+   *  icons) have larger imbalances and are rejected.
+   *  Pass 0 (default) to disable saturation filtering — backward
+   *  compatible with callers that don't care about colour. */
+  maxChannelDelta = 0,
 ): boolean[] {
   const total = width * height;
   const mask = new Array<boolean>(total);
@@ -103,16 +125,24 @@ export function diffPixels(
       mask[i] = false;
       continue;
     }
+    const br = b[offset];
+    const bg = b[offset + 1];
+    const bb = b[offset + 2];
     if (brightnessFloor > 0) {
-      // Pixel must have become bright in B (cursor-colored: roughly equal
-      // R/G/B and above brightnessFloor).
-      const br = b[offset];
-      const bg = b[offset + 1];
-      const bb = b[offset + 2];
-      mask[i] = br >= brightnessFloor && bg >= brightnessFloor && bb >= brightnessFloor;
-    } else {
-      mask[i] = true;
+      if (!(br >= brightnessFloor && bg >= brightnessFloor && bb >= brightnessFloor)) {
+        mask[i] = false;
+        continue;
+      }
     }
+    if (maxChannelDelta > 0) {
+      const cMax = Math.max(br, bg, bb);
+      const cMin = Math.min(br, bg, bb);
+      if (cMax - cMin > maxChannelDelta) {
+        mask[i] = false;
+        continue;
+      }
+    }
+    mask[i] = true;
   }
   return mask;
 }
@@ -242,7 +272,12 @@ export function diffScreenshotsDecoded(
   if (a.width !== b.width || a.height !== b.height) {
     throw new Error('Screenshot dimensions changed between captures');
   }
-  const mask = diffPixels(a.rgb, b.rgb, a.width, a.height, config.diffThreshold, config.brightnessFloor);
+  const mask = diffPixels(
+    a.rgb, b.rgb, a.width, a.height,
+    config.diffThreshold,
+    config.brightnessFloor,
+    config.maxChannelDelta,
+  );
   const raw = findClusters(mask, a.width, a.height, config.minClusterSize, config.maxClusterSize);
   return mergeClusters(raw, config.mergeRadius);
 }
