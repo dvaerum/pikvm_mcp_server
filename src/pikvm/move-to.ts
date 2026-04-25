@@ -26,6 +26,7 @@ import { PiKVMClient, ScreenResolution } from './client.js';
 import {
   BallisticsProfile,
   lookupPxPerMickey,
+  profileIsFreshFor,
   slamToCorner,
 } from './ballistics.js';
 import {
@@ -88,12 +89,75 @@ export interface MoveToOptions {
   slamCalls?: number;
   slamPaceMs?: number;
   verbose?: boolean;
+
+  // -- Phase C: linear-region final approach -------------------------------
+  // iPadOS pointer acceleration is velocity-dependent. Slow, small moves
+  // land in a near-1:1 region with low variance — the only regime in which
+  // open-loop emission is trustworthy. Once we're within
+  // `linearTriggerResidualPx` of the target, switch to small-magnitude
+  // slow-pace bursts and tighten the convergence target so passes stop at
+  // single-digit residuals instead of bottoming out around `minResidualPx`.
+
+  /** Per-call mickey size during the linear-region approach. Default 8 —
+   *  small enough that iPadOS doesn't kick acceleration in. */
+  linearChunkMagnitude?: number;
+  /** Inter-call pace during the linear approach. Default 60 ms — slow
+   *  enough that consecutive deltas don't accumulate into a fast burst. */
+  linearChunkPaceMs?: number;
+  /** Residual at which we drop into the linear regime. Default 100 px. */
+  linearTriggerResidualPx?: number;
+  /** Convergence target during the linear regime. Default 3 px. */
+  linearResidualPx?: number;
+  /** Max linear-regime passes (independent of `maxCorrectionPasses`).
+   *  Default 4. */
+  linearMaxPasses?: number;
+  /** Per-axis sanity bounds for the live ratio update. Default [0.3, 5];
+   *  loosened from the original [0.5, 3] which was rejecting real bursts
+   *  on iPadOS and silently reverting to fallback. */
+  ratioClampLo?: number;
+  ratioClampHi?: number;
+
+  /** When set, every frame captured during this move (shotA, shotB,
+   *  per-pass shotC) is written to this directory as a JPEG. Use only
+   *  for debugging — the disk traffic adds latency. */
+  debugDir?: string;
 }
 
 export interface CorrectionPass {
   detectedCursor: { x: number; y: number };
   livePxPerMickey: number;
   correctionMickeys: { x: number; y: number };
+  /** How the post-correction position was determined. `motion`: motion-
+   *  diff succeeded. `template`: motion-diff failed and template-match
+   *  succeeded. `predicted`: both detection paths failed; we trusted
+   *  the open-loop prediction (and probably introduced error). */
+  mode: 'motion' | 'template' | 'predicted';
+  /** Free-form diagnostic: failure reason when motion-diff returned
+   *  null, template-match score when fallback fired, etc. */
+  reason: string | null;
+}
+
+/** A single step in moveToPixel's per-pass accounting. Tracks both the
+ *  open-loop probe and every correction so the caller can see exactly
+ *  where convergence stalled. */
+export interface MovePassDiagnostic {
+  /** 0 = the initial open-loop emission; 1..N = correction passes. */
+  pass: number;
+  /** Which detection path produced the post-position estimate. */
+  mode: 'motion' | 'template' | 'predicted';
+  /** Position estimate after this pass (motion-diff post centroid,
+   *  template-match centre, or open-loop prediction). */
+  detectedAt: { x: number; y: number };
+  /** Euclidean residual to target. */
+  residualPx: number;
+  /** px/mickey ratio used to plan this pass's emission. */
+  ratioUsed: { x: number; y: number };
+  /** Why the chosen mode was used (motion-diff failure reason, template
+   *  score, or "ok"). */
+  reason: string | null;
+  /** True if this pass was emitted in the slow/small linear-region
+   *  approach mode (Phase C). */
+  linearPhase: boolean;
 }
 
 export interface MoveToResult {
@@ -107,11 +171,16 @@ export interface MoveToResult {
   chunkCount: number;
   strategy: MoveStrategy;
   corrections: CorrectionPass[];
+  /** Per-pass accounting (open-loop + each correction). */
+  diagnostics: MovePassDiagnostic[];
   /** Best-known cursor position after all moves. Comes from the last
-   *  successful motion-diff detection; null if detection never
-   *  succeeded (in which case the caller should treat accuracy as
-   *  uncertain). */
+   *  successful motion-diff or template-match detection; null if no
+   *  detection ever succeeded (in which case the caller should treat
+   *  accuracy as uncertain). */
   finalDetectedPosition: { x: number; y: number } | null;
+  /** Final residual (Euclidean px from target to finalDetectedPosition).
+   *  null when finalDetectedPosition is null. */
+  finalResidualPx: number | null;
   resolution: ScreenResolution;
   message: string;
 }
@@ -262,6 +331,21 @@ interface MotionPair {
   livePxPerMickey: number;
 }
 
+/** Return shape for `detectMotion`. On success carries the pair; on
+ *  failure carries a structured reason so callers can surface it in
+ *  diagnostics rather than silently trusting prediction. */
+interface MotionDiffResult {
+  pair: MotionPair | null;
+  /** Compact human-readable failure reason; null on success. Rendered into
+   *  CorrectionPass.reason and the [move-to] WARN log line. */
+  reason: string | null;
+  /** Cluster bookkeeping for diagnostics. */
+  rawClusters: number;
+  sizedClusters: number;
+  preCandidates: number;
+  postCandidates: number;
+}
+
 function detectMotion(
   a: DecodedScreenshot,
   b: DecodedScreenshot,
@@ -271,17 +355,26 @@ function detectMotion(
   preWindow: number,
   postWindow: number,
   verbose: boolean,
-): MotionPair | null {
+  clusterMin: number = 8,
+  clusterMax: number = 90,
+  brightnessFloor: number = 100,
+): MotionDiffResult {
+  // brightnessFloor lowered from 170 → 100. Cursor pixels rendered over
+  // a dimmed-modal scrim or a dark wallpaper land in 100–160 range; the
+  // 170 floor was rejecting them entirely and motion-diff returned zero
+  // clusters. 100 still rejects most non-cursor noise (dark UI elements
+  // are below 100 per channel) while catching cursor on dim contexts.
+  // Verified empirically with a frame-by-frame trace 2026-04-25.
   const clusters = diffScreenshotsDecoded(a, b, {
     ...DEFAULT_DETECTION_CONFIG,
-    brightnessFloor: 170,
+    brightnessFloor,
     mergeRadius: 18,
   });
 
-  // Cursor is typically 15-50 px. Tighten this range to reject iPadOS
-  // pointer-effect highlights on icons (which are 80-200 px) and widget
-  // animations (which vary).
-  const sized = clusters.filter((c) => c.pixels >= 10 && c.pixels <= 60);
+  // Cursor is typically 15-50 px steady, can blur to ~70 px during fast
+  // bursts. Tighten this range to reject iPadOS pointer-effect highlights
+  // on icons (which are 100+ px) and widget animations (variable).
+  const sized = clusters.filter((c) => c.pixels >= clusterMin && c.pixels <= clusterMax);
 
   const dist = (c: Cluster, p: { x: number; y: number }) =>
     Math.hypot(c.centroidX - p.x, c.centroidY - p.y);
@@ -291,13 +384,32 @@ function detectMotion(
 
   if (verbose) {
     console.error(
-      `[motion] ${clusters.length} total, ${sized.length} cursor-sized; ` +
+      `[motion] ${clusters.length} total, ${sized.length} cursor-sized [${clusterMin}-${clusterMax}px]; ` +
         `pre-cands(window=${preWindow}@${Math.round(expectedStart.x)},${Math.round(expectedStart.y)})=${preCandidates.length}, ` +
         `post-cands(window=${postWindow}@${Math.round(expectedEnd.x)},${Math.round(expectedEnd.y)})=${postCandidates.length}`,
     );
   }
 
-  if (preCandidates.length === 0 || postCandidates.length === 0) return null;
+  const result = (pair: MotionPair | null, reason: string | null): MotionDiffResult => ({
+    pair, reason,
+    rawClusters: clusters.length,
+    sizedClusters: sized.length,
+    preCandidates: preCandidates.length,
+    postCandidates: postCandidates.length,
+  });
+
+  if (sized.length === 0) {
+    return result(null, `no clusters in ${clusterMin}-${clusterMax}px size range (raw=${clusters.length})`);
+  }
+  if (preCandidates.length === 0 && postCandidates.length === 0) {
+    return result(null, 'no pre or post candidates within search windows');
+  }
+  if (preCandidates.length === 0) {
+    return result(null, `no pre candidate within ${preWindow}px of expected start`);
+  }
+  if (postCandidates.length === 0) {
+    return result(null, `no post candidate within ${postWindow}px of expected end`);
+  }
 
   // Commanded direction in px (approximate — magnitude is approximate
   // because we haven't measured the actual ratio yet; we use direction only
@@ -363,7 +475,8 @@ function detectMotion(
     );
   }
 
-  return best ? best.pair : null;
+  if (best) return result(best.pair, null);
+  return result(null, `${preCandidates.length}×${postCandidates.length} cands considered, no pair passed direction/sanity filters`);
 }
 
 // ============================================================================
@@ -377,22 +490,56 @@ export async function moveToPixel(
 ): Promise<MoveToResult> {
   const resolution = await client.getResolution(true);
 
-  const fallback = options.fallbackPxPerMickey ?? 1.3;
+  // Phase B defaults — tuned from live observation of this iPad:
+  // - fallback 1.3 → 1.0  (the linear-region value)
+  // - minResidualPx 25 → 8
+  // - maxCorrectionPasses 2 → 5
+  // - cluster filter 10-60 → 8-90 (handles motion blur on fast bursts)
+  // - ratio clamp [0.5, 3] → [0.3, 5] (don't reject real bursts)
+  const fallback = options.fallbackPxPerMickey ?? 1.0;
   const chunkMag = options.chunkMagnitude ?? 60;
   const chunkPaceMs = options.chunkPaceMs ?? 20;
   const postSettleMs = options.postMoveSettleMs ?? 30;
   const doCorrect = options.correct !== false;
-  const maxPasses = options.maxCorrectionPasses ?? 2;
-  const minResidualPx = options.minResidualPx ?? 25;
+  const maxPasses = options.maxCorrectionPasses ?? 5;
+  const minResidualPx = options.minResidualPx ?? 8;
   const warmupMickeys = options.warmupMickeys ?? 8;
   const preWindow = options.preWindow ?? 120;
   const postWindow = options.postWindow ?? 600;
   const verbose = options.verbose ?? false;
+  const ratioLo = options.ratioClampLo ?? 0.3;
+  const ratioHi = options.ratioClampHi ?? 5;
+  // Phase C: linear-region approach knobs.
+  const linChunkMag = options.linearChunkMagnitude ?? 8;
+  const linChunkPaceMs = options.linearChunkPaceMs ?? 60;
+  const linTriggerPx = options.linearTriggerResidualPx ?? 100;
+  const linResidualPx = options.linearResidualPx ?? 3;
+  const linMaxPasses = options.linearMaxPasses ?? 4;
+  // Cursor cluster size range (Phase B): widened from 10-60 to 8-90.
+  const clusterMin = 8;
+  const clusterMax = 90;
+
+  // Phase B: validate ballistics profile freshness against current
+  // resolution. A profile measured on a different device silently
+  // mis-predicts every move; better to drop it and warn.
+  let profile: BallisticsProfile | null = options.profile ?? null;
+  if (profile) {
+    const profileRes = profile.resolution;
+    if (!profileIsFreshFor(profile, resolution)) {
+      if (verbose) {
+        console.error(
+          `[move-to] WARN profile resolution ${profileRes.width}×${profileRes.height} ` +
+            `does not match current ${resolution.width}×${resolution.height}; dropping profile, using fallback ${fallback}`,
+        );
+      }
+      profile = null;
+    }
+  }
 
   const pxPerMickeyX =
-    (options.profile && lookupPxPerMickey(options.profile, 'x', chunkMag, 'slow')) ?? fallback;
+    (profile && lookupPxPerMickey(profile, 'x', chunkMag, 'slow')) ?? fallback;
   const pxPerMickeyY =
-    (options.profile && lookupPxPerMickey(options.profile, 'y', chunkMag, 'slow')) ?? fallback;
+    (profile && lookupPxPerMickey(profile, 'y', chunkMag, 'slow')) ?? fallback;
 
   const targetX = clamp(Math.round(target.x), 0, resolution.width - 1);
   const targetY = clamp(Math.round(target.y), 0, resolution.height - 1);
@@ -450,12 +597,27 @@ export async function moveToPixel(
 
   // 6. Motion diff (open-loop)
   const corrections: CorrectionPass[] = [];
+  const diagnostics: MovePassDiagnostic[] = [];
   let finalDetectedPosition: { x: number; y: number } | null = null;
   let observedRatioX = pxPerMickeyX;
   let observedRatioY = pxPerMickeyY;
   let currentPos: { x: number; y: number };
+  let openLoopMode: 'motion' | 'template' | 'predicted' = 'predicted';
+  let openLoopReason: string | null = null;
 
-  const motion = doCorrect
+  // Debug: when verbose, dump the frame pair so failures can be inspected.
+  const debugDir = options.debugDir ?? null;
+  if (debugDir) {
+    await import('fs').then((fs) => fs.promises.mkdir(debugDir, { recursive: true }));
+    await import('fs').then((fs) =>
+      fs.promises.writeFile(`${debugDir}/00-shotA.jpg`, shotA.buffer)
+    );
+    await import('fs').then((fs) =>
+      fs.promises.writeFile(`${debugDir}/01-shotB.jpg`, shotB.buffer)
+    );
+  }
+
+  const motionResult = doCorrect
     ? detectMotion(
         shotA,
         shotB,
@@ -465,10 +627,13 @@ export async function moveToPixel(
         preWindow,
         postWindow,
         verbose,
+        clusterMin,
+        clusterMax,
       )
     : null;
 
-  if (motion) {
+  if (motionResult && motionResult.pair) {
+    const motion = motionResult.pair;
     currentPos = { x: motion.post.centroidX, y: motion.post.centroidY };
     // Update ratios from observed motion (only for the dominant axis).
     if (Math.abs(openMickeysX) > Math.abs(openMickeysY)) {
@@ -476,17 +641,18 @@ export async function moveToPixel(
     } else {
       observedRatioY = Math.abs(motion.displacement.y) / Math.max(1, Math.abs(openMickeysY));
     }
-    // Use same ratio on the other axis if no info.
-    if (observedRatioX < 0.5 || observedRatioX > 3) observedRatioX = fallback;
-    if (observedRatioY < 0.5 || observedRatioY > 3) observedRatioY = fallback;
+    if (observedRatioX < ratioLo || observedRatioX > ratioHi) observedRatioX = fallback;
+    if (observedRatioY < ratioLo || observedRatioY > ratioHi) observedRatioY = fallback;
     finalDetectedPosition = { ...currentPos };
-
-    // Capture & persist a cursor template on first success — useful as a
-    // non-perturbing detection fallback for future calls.
+    openLoopMode = 'motion';
+    openLoopReason = `live ratio ${motion.livePxPerMickey.toFixed(3)}`;
     await maybePersistTemplate(shotB, currentPos);
   } else {
-    // Motion-diff failed. Try template matching as a fallback — this
-    // doesn't require any cursor movement and is robust to widget noise.
+    // Motion-diff failed. Try template matching as a fallback.
+    const motionFailReason = motionResult ? motionResult.reason : 'correction disabled';
+    if (verbose && doCorrect) {
+      console.error(`[move-to] motion-diff returned null: ${motionFailReason}`);
+    }
     const tmpl = await getCachedTemplate();
     if (tmpl) {
       const found = findCursorByTemplateDecoded(shotB, tmpl, {
@@ -497,6 +663,8 @@ export async function moveToPixel(
       if (found) {
         currentPos = found.position;
         finalDetectedPosition = { ...currentPos };
+        openLoopMode = 'template';
+        openLoopReason = `template-match score=${found.score.toFixed(3)} (motion: ${motionFailReason})`;
         if (verbose) {
           console.error(
             `[move-to] motion-diff failed; template match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
@@ -504,30 +672,98 @@ export async function moveToPixel(
         }
       } else {
         currentPos = { ...predicted };
+        openLoopMode = 'predicted';
+        openLoopReason = `template-match below threshold (motion: ${motionFailReason})`;
+        if (verbose) {
+          console.error(
+            `[move-to] WARN open-loop: motion-diff (${motionFailReason}) AND template-match both failed; trusting prediction`,
+          );
+        }
       }
     } else {
       currentPos = { ...predicted };
+      openLoopMode = 'predicted';
+      openLoopReason = `no template cached (motion: ${motionFailReason})`;
+      if (verbose && doCorrect) {
+        console.error(
+          `[move-to] WARN open-loop: motion-diff failed (${motionFailReason}) and no cursor template cached; trusting prediction`,
+        );
+      }
     }
   }
+
+  diagnostics.push({
+    pass: 0,
+    mode: openLoopMode,
+    detectedAt: { ...currentPos },
+    residualPx: Math.hypot(currentPos.x - targetX, currentPos.y - targetY),
+    ratioUsed: { x: observedRatioX, y: observedRatioY },
+    reason: openLoopReason,
+    linearPhase: false,
+  });
 
   // 7. Correction passes — each diffs before/after its own delta.
   let prevShot = shotB;
   let prevPos = currentPos;
+  let linearEntered = false;
+  let totalPasses = 0;
+
   if (doCorrect) {
-    for (let pass = 0; pass < maxPasses; pass++) {
+    // Combined budget: at most maxPasses gross + linMaxPasses linear.
+    // We always ALLOW the linear phase to start once residual drops
+    // below the trigger; it has its own pass budget.
+    let grossPassesUsed = 0;
+    let linearPassesUsed = 0;
+
+    while (true) {
       const errX = targetX - currentPos.x;
       const errY = targetY - currentPos.y;
-      if (Math.abs(errX) < minResidualPx && Math.abs(errY) < minResidualPx) {
+      const residual = Math.hypot(errX, errY);
+
+      // Decide which regime we're in. Phase C: enter linear region as
+      // soon as residual is small enough that small/slow chunks can
+      // span it without acceleration kicking in.
+      const useLinear = residual <= linTriggerPx;
+      const passLimit = useLinear ? linMaxPasses : maxPasses;
+      const passUsed = useLinear ? linearPassesUsed : grossPassesUsed;
+      const stopPx = useLinear ? linResidualPx : minResidualPx;
+      const usedChunkMag = useLinear ? linChunkMag : chunkMag;
+      const usedChunkPaceMs = useLinear ? linChunkPaceMs : chunkPaceMs;
+
+      if (residual < stopPx) {
         if (verbose) {
-          console.error(`[move-to] pass ${pass}: residual (${errX},${errY}) within tolerance; done.`);
+          console.error(
+            `[move-to] pass ${totalPasses}: residual ${residual.toFixed(1)}px within ${useLinear ? 'linear' : 'gross'} tolerance ${stopPx}px; done.`,
+          );
+        }
+        break;
+      }
+      if (passUsed >= passLimit) {
+        if (verbose) {
+          console.error(
+            `[move-to] ${useLinear ? 'linear' : 'gross'} pass budget exhausted at ${passLimit}; remaining residual ${residual.toFixed(1)}px`,
+          );
         }
         break;
       }
 
+      if (useLinear && !linearEntered) {
+        linearEntered = true;
+        if (verbose) {
+          console.error(
+            `[move-to] entering LINEAR phase: residual=${residual.toFixed(1)}px ≤ ${linTriggerPx}px; ` +
+              `chunkMag=${linChunkMag} pace=${linChunkPaceMs}ms target≤${linResidualPx}px`,
+          );
+        }
+      }
+
       const corrMickeysX = Math.round(errX / observedRatioX);
       const corrMickeysY = Math.round(errY / observedRatioY);
+      if (corrMickeysX === 0 && corrMickeysY === 0) {
+        if (verbose) console.error(`[move-to] pass ${totalPasses + 1}: zero-mickey correction; cannot improve further.`);
+        break;
+      }
 
-      // Predicted new position after correction.
       const newPredicted = {
         x: currentPos.x + corrMickeysX * observedRatioX,
         y: currentPos.y + corrMickeysY * observedRatioY,
@@ -535,16 +771,24 @@ export async function moveToPixel(
 
       if (verbose) {
         console.error(
-          `[move-to] correction pass ${pass + 1}: err=(${errX},${errY}) ` +
-            `→ mickeys=(${corrMickeysX},${corrMickeysY}) @ ratio=(${observedRatioX.toFixed(3)},${observedRatioY.toFixed(3)})`,
+          `[move-to] ${useLinear ? 'linear' : 'gross'} pass ${totalPasses + 1}: ` +
+            `err=(${errX.toFixed(1)},${errY.toFixed(1)}) → mickeys=(${corrMickeysX},${corrMickeysY}) ` +
+            `@ ratio=(${observedRatioX.toFixed(3)},${observedRatioY.toFixed(3)}) chunk=${usedChunkMag} pace=${usedChunkPaceMs}ms`,
         );
       }
 
-      await emitChunked(client, corrMickeysX, corrMickeysY, chunkMag, chunkPaceMs);
+      await emitChunked(client, corrMickeysX, corrMickeysY, usedChunkMag, usedChunkPaceMs);
       await sleep(postSettleMs);
       const shotC = await decodeScreenshot((await client.screenshot()).buffer);
+      if (debugDir) {
+        const tag = String(totalPasses + 1).padStart(2, '0');
+        const phaseTag = useLinear ? 'L' : 'G';
+        await import('fs').then((fs) =>
+          fs.promises.writeFile(`${debugDir}/${tag}-${phaseTag}-pass-shotC.jpg`, shotC.buffer)
+        );
+      }
 
-      const cMotion = detectMotion(
+      const cResult = detectMotion(
         prevShot,
         shotC,
         prevPos,
@@ -553,38 +797,96 @@ export async function moveToPixel(
         preWindow,
         postWindow,
         verbose,
+        clusterMin,
+        clusterMax,
       );
 
-      if (cMotion) {
+      let passMode: 'motion' | 'template' | 'predicted' = 'predicted';
+      let passReason: string | null = null;
+
+      if (cResult.pair) {
+        const cMotion = cResult.pair;
         currentPos = { x: cMotion.post.centroidX, y: cMotion.post.centroidY };
-        // Update ratio on dominant axis
         if (Math.abs(corrMickeysX) > Math.abs(corrMickeysY)) {
           const r = Math.abs(cMotion.displacement.x) / Math.max(1, Math.abs(corrMickeysX));
-          if (r >= 0.5 && r <= 3) observedRatioX = r;
+          if (r >= ratioLo && r <= ratioHi) observedRatioX = r;
         } else {
           const r = Math.abs(cMotion.displacement.y) / Math.max(1, Math.abs(corrMickeysY));
-          if (r >= 0.5 && r <= 3) observedRatioY = r;
+          if (r >= ratioLo && r <= ratioHi) observedRatioY = r;
         }
         finalDetectedPosition = { ...currentPos };
+        passMode = 'motion';
+        passReason = `live ratio ${cMotion.livePxPerMickey.toFixed(3)}`;
       } else {
-        // Detection failed — trust prediction.
-        currentPos = newPredicted;
+        // Motion-diff failed on correction — try template match before
+        // falling back to prediction.
+        const motionFailReason = cResult.reason ?? 'unknown';
+        const tmpl = await getCachedTemplate();
+        let templated = false;
+        if (tmpl) {
+          const found = findCursorByTemplateDecoded(shotC, tmpl, {
+            searchCentre: newPredicted,
+            searchWindow: postWindow,
+            verbose,
+          });
+          if (found) {
+            currentPos = found.position;
+            finalDetectedPosition = { ...currentPos };
+            passMode = 'template';
+            passReason = `template score=${found.score.toFixed(3)} (motion: ${motionFailReason})`;
+            templated = true;
+            if (verbose) {
+              console.error(
+                `[move-to] WARN pass ${totalPasses + 1}: motion-diff failed (${motionFailReason}); template-match recovered cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
+              );
+            }
+          }
+        }
+        if (!templated) {
+          currentPos = newPredicted;
+          passMode = 'predicted';
+          passReason = `motion: ${motionFailReason}; no template fallback`;
+          if (verbose) {
+            console.error(
+              `[move-to] WARN pass ${totalPasses + 1}: motion-diff failed (${motionFailReason}) AND template-match unavailable; trusting prediction`,
+            );
+          }
+        }
       }
 
       corrections.push({
-        detectedCursor: cMotion
-          ? { x: cMotion.post.centroidX, y: cMotion.post.centroidY }
-          : { x: Math.round(newPredicted.x), y: Math.round(newPredicted.y) },
-        livePxPerMickey: cMotion?.livePxPerMickey ?? (observedRatioX + observedRatioY) / 2,
+        detectedCursor: cResult.pair
+          ? { x: cResult.pair.post.centroidX, y: cResult.pair.post.centroidY }
+          : { x: Math.round(currentPos.x), y: Math.round(currentPos.y) },
+        livePxPerMickey: cResult.pair?.livePxPerMickey ?? (observedRatioX + observedRatioY) / 2,
         correctionMickeys: { x: corrMickeysX, y: corrMickeysY },
+        mode: passMode,
+        reason: passReason,
+      });
+
+      diagnostics.push({
+        pass: totalPasses + 1,
+        mode: passMode,
+        detectedAt: { ...currentPos },
+        residualPx: Math.hypot(currentPos.x - targetX, currentPos.y - targetY),
+        ratioUsed: { x: observedRatioX, y: observedRatioY },
+        reason: passReason,
+        linearPhase: useLinear,
       });
 
       prevShot = shotC;
       prevPos = currentPos;
+      totalPasses++;
+      if (useLinear) linearPassesUsed++;
+      else grossPassesUsed++;
     }
   }
 
   const shot = await client.screenshot();
+
+  const finalResidualPx = finalDetectedPosition
+    ? Math.hypot(finalDetectedPosition.x - targetX, finalDetectedPosition.y - targetY)
+    : null;
 
   const parts: string[] = [];
   parts.push(`Target (${targetX},${targetY}).`);
@@ -593,24 +895,26 @@ export async function moveToPixel(
     `Open-loop emitted ${Math.abs(openMickeysX)}X+${Math.abs(openMickeysY)}Y mickeys in ${chunkCount} chunk(s); ` +
       `default px/mickey=(${pxPerMickeyX.toFixed(2)},${pxPerMickeyY.toFixed(2)}).`,
   );
-  if (motion) {
-    parts.push(
-      `Motion-diff detected landing at (${motion.post.centroidX},${motion.post.centroidY}); ` +
-        `live ratio ≈ ${motion.livePxPerMickey.toFixed(2)}.`,
-    );
-  } else if (doCorrect) {
-    parts.push('Motion-diff failed — cursor pair not found; using predicted landing.');
-  }
+  parts.push(`Open-loop landing via ${openLoopMode}: ${openLoopReason ?? 'n/a'}.`);
   if (corrections.length > 0) {
+    const grossCount = corrections.filter((_, i) => !diagnostics[i + 1]?.linearPhase).length;
+    const linearCount = corrections.length - grossCount;
     parts.push(
-      `${corrections.length} correction pass(es); ` +
+      `${corrections.length} correction pass(es) (${grossCount} gross, ${linearCount} linear); ` +
         `last applied (${corrections[corrections.length - 1].correctionMickeys.x},${corrections[corrections.length - 1].correctionMickeys.y}) mickeys.`,
     );
+    const lastFailures = corrections.filter((c) => c.mode !== 'motion').length;
+    if (lastFailures > 0) {
+      parts.push(`${lastFailures}/${corrections.length} pass(es) used template/predicted fallback (motion-diff blind).`);
+    }
   }
-  if (finalDetectedPosition) {
+  if (linearEntered) {
+    parts.push(`Linear approach engaged; final ratio ≈ (${observedRatioX.toFixed(2)}, ${observedRatioY.toFixed(2)}).`);
+  }
+  if (finalDetectedPosition && finalResidualPx !== null) {
     parts.push(
-      `Final cursor detected at (${finalDetectedPosition.x},${finalDetectedPosition.y}); ` +
-        `residual (${finalDetectedPosition.x - targetX},${finalDetectedPosition.y - targetY}).`,
+      `Final cursor at (${finalDetectedPosition.x},${finalDetectedPosition.y}); ` +
+        `residual (${finalDetectedPosition.x - targetX},${finalDetectedPosition.y - targetY}) = ${finalResidualPx.toFixed(1)}px.`,
     );
   } else if (doCorrect) {
     parts.push('Final position not detected — click accuracy uncertain.');
@@ -630,7 +934,9 @@ export async function moveToPixel(
     chunkCount,
     strategy: actualStrategy,
     corrections,
+    diagnostics,
     finalDetectedPosition,
+    finalResidualPx,
     resolution,
     message: parts.join(' '),
   };
