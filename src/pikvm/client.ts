@@ -427,10 +427,46 @@ export class PiKVMClient {
   }
 
   /**
-   * Send a keyboard shortcut (multiple keys pressed together)
+   * Send a keyboard shortcut (multiple keys pressed together).
+   *
+   * Implementation note: PiKVM's `/hid/events/send_shortcut` endpoint
+   * accepts a request and returns 200, but on iPadOS the events appear
+   * to arrive too close together for the OS to recognise the leading
+   * key(s) as held modifiers — for example `["MetaLeft", "Space"]` did
+   * not open Spotlight on iPadOS 26.1 when sent via that endpoint, even
+   * though the same sequence did work when emitted manually with ~50 ms
+   * spacing between events. So this implementation emits an explicit
+   * press → settle → tap last key → settle → release sequence using
+   * `send_key`, which is reliable across iPadOS versions.
+   *
+   * The last key in the array is the "action" key (pressed-and-released);
+   * all preceding keys are held as modifiers. This matches the convention
+   * used by the original `pikvm_shortcut` MCP tool docs ("modifier keys
+   * first, then the action key").
    */
   async sendShortcut(keys: string[]): Promise<void> {
-    await this.request('POST', '/hid/events/send_shortcut', keys);
+    if (keys.length === 0) return;
+    if (keys.length === 1) {
+      await this.sendKey(keys[0]);
+      return;
+    }
+    const modifiers = keys.slice(0, -1);
+    const actionKey = keys[keys.length - 1];
+    const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    // Press modifiers in order, settling between each.
+    for (const mod of modifiers) {
+      await this.sendKey(mod, { state: true });
+      await settle(40);
+    }
+    // Tap the action key (default click = press + release).
+    await this.sendKey(actionKey);
+    await settle(40);
+    // Release modifiers in reverse order.
+    for (const mod of [...modifiers].reverse()) {
+      await this.sendKey(mod, { state: false });
+      await settle(40);
+    }
   }
 
   /**
