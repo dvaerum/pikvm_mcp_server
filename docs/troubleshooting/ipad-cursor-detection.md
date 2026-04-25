@@ -186,6 +186,42 @@ Two remaining issues uncovered by the now-correct screenshots:
    `locateCursor`'s already-measured `probeOffsetPx` to skip the
    redundant calibration probe entirely.
 
+### Phase 15 — separate Y calibration when Y-dominant
+
+Phase 14 set `calibratedRatioY = ratioFromXProbe` (assumed
+symmetric). Live data showed iPad pointer acceleration is per-axis
+AND per-direction — X probe gave 0.85, but actual X-direction in
+the opposite movement was 0.076 (12× different); Y ratio was 2.04
+when X was 0.85 in the same trial.
+
+Phase 15 lets the calibration probe still run when the move is
+Y-dominant — only skip it when the X-probe-axis matches the
+warmup-axis. Live verified Phase 15 measures both ratios cleanly:
+X 0.85 from locateCursor probe + Y 0.811 from calibration probe.
+
+### Phase 16 — slower open-loop chunks
+
+After Phase 15, calibrations were measuring (X=0.817, Y=1.961) but
+the open-loop motion-diff observed live ratio 3.572. Same context,
+same direction — different ratios because iPadOS pointer
+acceleration is **velocity-dependent**: slow probes (40 mickey at
+30 ms pace) get a low ratio, fast bursts (60 mickey at 20 ms pace)
+get a higher one.
+
+Slowed open-loop default chunk to chunkMag=20 / chunkPaceMs=30 (was
+60/20). Live: residual dropped from 265 px to 152 px. Still not
+matching calibration ratio because iPadOS acceleration depends on
+TOTAL emitted distance per pointer-event-burst, not just per-chunk
+velocity — a 184-mickey emit at 20-mickey chunks still hits the
+acceleration curve harder than a 40-mickey calibration probe.
+
+This is a fundamental iPadOS limitation: a single px/mickey ratio
+cannot describe the system. The next architectural step is "wake-
+emit-verify" — emit a small chunk (≤30 mickeys), measure the
+actual displacement via motion-diff, plan the NEXT chunk based on
+that observed ratio. Each chunk's emit stays in the slow regime
+that matches calibration.
+
 ### Phase 14 — locateCursor probe doubles as calibration
 
 Implemented option 2 above. `LocateCursorResult` now exposes
