@@ -346,7 +346,8 @@ interface MotionDiffResult {
   postCandidates: number;
 }
 
-function detectMotion(
+/** Exported for unit tests. Not part of the public MCP tool surface. */
+export function detectMotion(
   a: DecodedScreenshot,
   b: DecodedScreenshot,
   expectedStart: { x: number; y: number },
@@ -379,13 +380,26 @@ function detectMotion(
   const dist = (c: Cluster, p: { x: number; y: number }) =>
     Math.hypot(c.centroidX - p.x, c.centroidY - p.y);
 
-  const preCandidates = sized.filter((c) => dist(c, expectedStart) <= preWindow);
+  const preCandidatesWindow = sized.filter((c) => dist(c, expectedStart) <= preWindow);
   const postCandidates = sized.filter((c) => dist(c, expectedEnd) <= postWindow);
+
+  // Fallback: if the windowed pre-search came up empty but we have
+  // multiple sized clusters, the cursor probably wasn't where we
+  // expected (slam mis-anchored, prior trial drifted, modal trapping,
+  // etc.). Open the pre-pool to ALL sized clusters; the direction +
+  // magnitude validation downstream still keeps bad pairs out.
+  let preCandidates = preCandidatesWindow;
+  let preWindowExpanded = false;
+  if (preCandidatesWindow.length === 0 && sized.length >= 2) {
+    preCandidates = sized;
+    preWindowExpanded = true;
+  }
 
   if (verbose) {
     console.error(
       `[motion] ${clusters.length} total, ${sized.length} cursor-sized [${clusterMin}-${clusterMax}px]; ` +
-        `pre-cands(window=${preWindow}@${Math.round(expectedStart.x)},${Math.round(expectedStart.y)})=${preCandidates.length}, ` +
+        `pre-cands(window=${preWindow}@${Math.round(expectedStart.x)},${Math.round(expectedStart.y)})=${preCandidatesWindow.length}` +
+        `${preWindowExpanded ? ` →expanded to ${preCandidates.length} (no pre in window)` : ''}, ` +
         `post-cands(window=${postWindow}@${Math.round(expectedEnd.x)},${Math.round(expectedEnd.y)})=${postCandidates.length}`,
     );
   }
@@ -405,7 +419,7 @@ function detectMotion(
     return result(null, 'no pre or post candidates within search windows');
   }
   if (preCandidates.length === 0) {
-    return result(null, `no pre candidate within ${preWindow}px of expected start`);
+    return result(null, `no pre candidate within ${preWindow}px of expected start (and only ${sized.length} sized cluster total)`);
   }
   if (postCandidates.length === 0) {
     return result(null, `no post candidate within ${postWindow}px of expected end`);
