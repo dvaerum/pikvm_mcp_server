@@ -121,6 +121,14 @@ export interface MoveToOptions {
    *  per-pass shotC) is written to this directory as a JPEG. Use only
    *  for debugging — the disk traffic adds latency. */
   debugDir?: string;
+
+  /** Calibration probe size in mickeys. Emitted along the dominant axis
+   *  before the open-loop emission, diff'd against pre-probe screenshot
+   *  to learn the iPad's real px/mickey ratio fresh per-call. Default 40
+   *  — large enough to produce a clear cluster pair, small enough not
+   *  to overshoot. Set to 0 to disable (uses fallback ratio for
+   *  open-loop, learns from open-loop diff as before). */
+  calibrationProbeMickeys?: number;
 }
 
 export interface CorrectionPass {
@@ -612,32 +620,109 @@ export async function moveToPixel(
     y: origin.y + signY * rawMickeysY * pxPerMickeyY,
   };
 
-  // 2. Warmup — ensure cursor is rendered at screenshot-A time.
-  //    Warmup direction matches the measurement axis (commanded direction).
+  // 2. Calibration probe — measure iPadOS effective px/mickey ratio
+  //    fresh BEFORE the open-loop emission. iPadOS pointer acceleration
+  //    varies per-context (1.0–1.7× observed live). The original code
+  //    only learned ratio AFTER the open-loop emission, by which point
+  //    a 1.0-vs-1.5 mismatch had already over-shot the target by 250+ px.
+  //
+  //    Probe: emit `calibProbeMickeys` (default 40) along the dominant
+  //    axis at slow pace, diff against pre-probe screenshot. The detected
+  //    cluster pair gives us a real px/mickey for THIS device + THIS
+  //    context. If diff fails, fall through to fallback ratio.
+  const calibProbeMickeys = options.calibrationProbeMickeys ?? 40;
   const warmupAxis: Axis = Math.abs(dxPx) >= Math.abs(dyPx) ? 'x' : 'y';
   const warmupSign = warmupAxis === 'x' ? signX : signY;
-  const warmupX = warmupAxis === 'x' ? warmupMickeys * warmupSign : 0;
-  const warmupY = warmupAxis === 'y' ? warmupMickeys * warmupSign : 0;
-  if (warmupMickeys > 0) {
-    await client.mouseMoveRelative(warmupX, warmupY);
-    await sleep(100);
+
+  let calibratedRatioX = pxPerMickeyX;
+  let calibratedRatioY = pxPerMickeyY;
+  let calibrationReason: string = `using fallback ratio ${fallback}`;
+
+  // shotA-pre captured BEFORE the calibration probe; shotA captured AFTER.
+  // diff(shotA-pre, shotA) measures the calibration probe's effect.
+  const shotAPre = await decodeScreenshot((await client.screenshot()).buffer);
+
+  const calibX = warmupAxis === 'x' ? calibProbeMickeys * warmupSign : 0;
+  const calibY = warmupAxis === 'y' ? calibProbeMickeys * warmupSign : 0;
+  if (calibProbeMickeys > 0) {
+    // Emit calibration probe slow + chunked so the diff reliably catches
+    // both pre and post cursor positions.
+    await emitChunked(client, calibX, calibY, 20, 30);
+    await sleep(150);
   }
 
-  // After warmup, estimated cursor position (for pre-window matching) is
-  // origin + warmup * fallback (small; just a better guess than origin).
-  const warmupPxX = warmupX * pxPerMickeyX;
-  const warmupPxY = warmupY * pxPerMickeyY;
-  const postWarmupExpected = {
-    x: origin.x + warmupPxX,
-    y: origin.y + warmupPxY,
-  };
-
-  // 3. Screenshot A — decoded once and reused for diffs / template extraction.
+  // 3. Screenshot A — captured AFTER calibration probe. shotAPre vs shotA
+  //    yields calibration ratio; shotA vs shotB yields open-loop ratio.
   const shotA = await decodeScreenshot((await client.screenshot()).buffer);
 
-  // 4. Open-loop emission
-  const openMickeysX = signX * rawMickeysX;
-  const openMickeysY = signY * rawMickeysY;
+  // postWarmupExpected: where the cursor is now, after the calibration
+  // probe. Initial estimate uses fallback ratio; will be refined if
+  // calibration succeeds.
+  const calibExpectedEnd = {
+    x: origin.x + calibX * pxPerMickeyX,
+    y: origin.y + calibY * pxPerMickeyY,
+  };
+
+  if (calibProbeMickeys > 0 && doCorrect) {
+    const calibResult = detectMotion(
+      shotAPre,
+      shotA,
+      origin,
+      calibExpectedEnd,
+      { x: calibX, y: calibY },
+      preWindow,
+      Math.max(postWindow, 200),
+      verbose,
+      clusterMin,
+      clusterMax,
+    );
+    if (calibResult.pair) {
+      const measured = calibResult.pair.livePxPerMickey;
+      if (measured >= ratioLo && measured <= ratioHi) {
+        calibratedRatioX = warmupAxis === 'x' ? measured : calibratedRatioX;
+        calibratedRatioY = warmupAxis === 'y' ? measured : calibratedRatioY;
+        // Apply same ratio to other axis as a best guess (acceleration
+        // typically symmetric across X/Y in iPadOS).
+        if (warmupAxis === 'x') calibratedRatioY = measured;
+        else calibratedRatioX = measured;
+        calibrationReason = `calibration probe measured ratio ${measured.toFixed(3)} on ${warmupAxis}-axis (using for both)`;
+        if (verbose) {
+          console.error(
+            `[move-to] CALIBRATION: ${calibProbeMickeys}-mickey ${warmupAxis} probe measured ratio=${measured.toFixed(3)} (was using fallback ${fallback})`,
+          );
+        }
+      } else {
+        calibrationReason = `calibration ratio ${measured.toFixed(3)} out of [${ratioLo}, ${ratioHi}] sanity range; falling back`;
+      }
+    } else {
+      calibrationReason = `calibration probe diff failed: ${calibResult.reason}; falling back`;
+    }
+  }
+
+  // Re-plan open-loop using calibrated ratio.
+  const dxPxNow = targetX - (origin.x + calibX * calibratedRatioX);
+  const dyPxNow = targetY - (origin.y + calibY * calibratedRatioY);
+  const planRatioX = calibratedRatioX;
+  const planRatioY = calibratedRatioY;
+  const rawMickeysXNow = Math.round(Math.abs(dxPxNow) / planRatioX);
+  const rawMickeysYNow = Math.round(Math.abs(dyPxNow) / planRatioY);
+  const signXNow = dxPxNow >= 0 ? 1 : -1;
+  const signYNow = dyPxNow >= 0 ? 1 : -1;
+
+  const postCalibPos = {
+    x: origin.x + calibX * calibratedRatioX,
+    y: origin.y + calibY * calibratedRatioY,
+  };
+  const predictedPostOpen = {
+    x: postCalibPos.x + signXNow * rawMickeysXNow * planRatioX,
+    y: postCalibPos.y + signYNow * rawMickeysYNow * planRatioY,
+  };
+
+  const postWarmupExpected = postCalibPos;
+
+  // 4. Open-loop emission — uses calibrated ratio + remaining-distance plan.
+  const openMickeysX = signXNow * rawMickeysXNow;
+  const openMickeysY = signYNow * rawMickeysYNow;
   const chunkCount = await emitChunked(client, openMickeysX, openMickeysY, chunkMag, chunkPaceMs);
 
   // Settle briefly so the streamer catches up and cursor is still visible.
@@ -650,8 +735,8 @@ export async function moveToPixel(
   const corrections: CorrectionPass[] = [];
   const diagnostics: MovePassDiagnostic[] = [];
   let finalDetectedPosition: { x: number; y: number } | null = null;
-  let observedRatioX = pxPerMickeyX;
-  let observedRatioY = pxPerMickeyY;
+  let observedRatioX = calibratedRatioX;
+  let observedRatioY = calibratedRatioY;
   let currentPos: { x: number; y: number };
   let openLoopMode: 'motion' | 'template' | 'predicted' = 'predicted';
   let openLoopReason: string | null = null;
@@ -673,7 +758,7 @@ export async function moveToPixel(
         shotA,
         shotB,
         postWarmupExpected,
-        predicted,
+        predictedPostOpen,
         { x: openMickeysX, y: openMickeysY },
         preWindow,
         postWindow,
@@ -707,7 +792,7 @@ export async function moveToPixel(
     const tmpl = await getCachedTemplate();
     if (tmpl) {
       const found = findCursorByTemplateDecoded(shotB, tmpl, {
-        searchCentre: predicted,
+        searchCentre: predictedPostOpen,
         searchWindow: postWindow,
         verbose,
       });
@@ -722,7 +807,7 @@ export async function moveToPixel(
           );
         }
       } else {
-        currentPos = { ...predicted };
+        currentPos = { ...predictedPostOpen };
         openLoopMode = 'predicted';
         openLoopReason = `template-match below threshold (motion: ${motionFailReason})`;
         if (verbose) {
@@ -732,7 +817,7 @@ export async function moveToPixel(
         }
       }
     } else {
-      currentPos = { ...predicted };
+      currentPos = { ...predictedPostOpen };
       openLoopMode = 'predicted';
       openLoopReason = `no template cached (motion: ${motionFailReason})`;
       if (verbose && doCorrect) {
@@ -1000,7 +1085,7 @@ export async function moveToPixel(
     screenshotWidth: shot.screenshotWidth,
     screenshotHeight: shot.screenshotHeight,
     target: { x: targetX, y: targetY },
-    predicted,
+    predicted: predictedPostOpen,
     emittedMickeys: { x: Math.abs(openMickeysX), y: Math.abs(openMickeysY) },
     usedPxPerMickey: { x: observedRatioX, y: observedRatioY },
     chunkCount,
