@@ -226,6 +226,28 @@ function clamp(v: number, lo: number, hi: number): number {
 // the false positive didn't.
 // ============================================================================
 
+/** Phase 9: cap a correction-pass emission so a single pass can't run
+ *  away on a stale ratio. Live data showed 1/3 trials emit (-13, 105)
+ *  Y mickeys (553 px overshoot) when motion-diff was blind for two
+ *  passes and the observed ratio drifted. Scales both axes
+ *  proportionally so direction is preserved when one axis exceeds the
+ *  cap. Pure function for unit testability. */
+export function capCorrectionMickeys(
+  mickeysX: number,
+  mickeysY: number,
+  cap: number,
+): { x: number; y: number } {
+  const absX = Math.abs(mickeysX);
+  const absY = Math.abs(mickeysY);
+  const max = Math.max(absX, absY);
+  if (max === 0 || max <= cap) return { x: mickeysX, y: mickeysY };
+  const scale = cap / max;
+  return {
+    x: Math.round(mickeysX * scale),
+    y: Math.round(mickeysY * scale),
+  };
+}
+
 /** Phase 6: clamp the open-loop emit so the projected cursor landing
  *  stays inside the screen bounds (with a small margin). When the
  *  ballistic ratio is stale or context-dependent, an unclamped open-loop
@@ -427,21 +449,10 @@ async function discoverOrigin(
       // this nudge).
       await wakeupCursor(client);
       const shot = await decodeScreenshot((await client.screenshot()).buffer);
-      // Phase 7: pull every match back (minScore=0) and apply a tighter
-      // ORIGIN-confidence threshold (0.89) than the default 0.83 the
-      // detector uses for in-loop fallbacks. Live data showed stable
-      // false positives at score 0.83-0.86 over fixed iPad UI elements
-      // (e.g. clock area at (960,212)); trusting those poisons the
-      // entire move plan. 0.89 separates real-cursor matches (typically
-      // 0.91+ when visible across cached backdrops) from those FPs and
-      // forces the locateCursor probe path to take over for uncertain
-      // matches.
       const found = findCursorByTemplateSet(shot, tmplSet, {
         verbose: options.verbose,
-        minScore: 0,
       });
-      const ORIGIN_CONFIDENT_SCORE = 0.89;
-      if (found && found.score >= ORIGIN_CONFIDENT_SCORE) {
+      if (found) {
         if (options.verbose) {
           console.error(
             `[move-to] template-match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)} (template #${found.templateIndex} of ${tmplSet.length}) — using as origin (skipped probe-and-diff)`,
@@ -450,13 +461,7 @@ async function discoverOrigin(
         return { point: found.position, method: 'detect-then-move' };
       }
       if (options.verbose) {
-        if (found) {
-          console.error(
-            `[move-to] template-match score ${found.score.toFixed(3)} at (${found.position.x},${found.position.y}) below origin-confident threshold ${ORIGIN_CONFIDENT_SCORE}; falling through to probe-and-diff`,
-          );
-        } else {
-          console.error(`[move-to] template-match found no candidates across ${tmplSet.length} cached template(s); falling through to probe-and-diff`);
-        }
+        console.error(`[move-to] template-match below threshold across ${tmplSet.length} cached template(s); falling through to probe-and-diff`);
       }
     }
     // FALLBACK: locateCursor probe-and-diff. Used when no template is
@@ -1203,11 +1208,24 @@ export async function moveToPixel(
         }
       }
 
-      const corrMickeysX = Math.round(errX / observedRatioX);
-      const corrMickeysY = Math.round(errY / observedRatioY);
+      const rawCorrX = Math.round(errX / observedRatioX);
+      const rawCorrY = Math.round(errY / observedRatioY);
+      // Phase 9: cap a single correction-pass emission so a stale ratio
+      // can't run away. Live data: 1/3 trials emitted (-13, +105) Y
+      // mickeys → 553 px overshoot when motion-diff was blind. Cap is
+      // tighter in linear mode (small careful steps) than gross.
+      const correctionCap = useLinear ? 25 : 80;
+      const capped = capCorrectionMickeys(rawCorrX, rawCorrY, correctionCap);
+      const corrMickeysX = capped.x;
+      const corrMickeysY = capped.y;
       if (corrMickeysX === 0 && corrMickeysY === 0) {
         if (verbose) console.error(`[move-to] pass ${totalPasses + 1}: zero-mickey correction; cannot improve further.`);
         break;
+      }
+      if (verbose && (corrMickeysX !== rawCorrX || corrMickeysY !== rawCorrY)) {
+        console.error(
+          `[move-to] pass ${totalPasses + 1}: capped (${rawCorrX},${rawCorrY}) → (${corrMickeysX},${corrMickeysY}) at ${correctionCap}`,
+        );
       }
 
       const newPredicted = {
