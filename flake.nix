@@ -15,7 +15,6 @@
   outputs = { self, nixpkgs, flake-utils, nixitin, ... }:
     let
       overlay = import ./nix/overlay.nix;
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
     in
     flake-utils.lib.eachDefaultSystem (system:
       let
@@ -23,13 +22,8 @@
           inherit system;
           overlays = [ overlay ];
         };
-        isSupported = builtins.elem system supportedSystems;
       in
-      # The package is Linux-only (sharp + vips, untested on darwin). Only
-      # expose `packages` and the package-using devShell on supported
-      # systems so `nix flake check` works on macOS hosts that drive the
-      # home-manager module remotely.
-      (nixpkgs.lib.optionalAttrs isSupported {
+      ({
         packages = {
           default = pkgs.pikvm-mcp-server;
           pikvm-mcp-server = pkgs.pikvm-mcp-server;

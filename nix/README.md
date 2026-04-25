@@ -118,10 +118,8 @@ claude mcp remove pikvm
 ## Platform support
 
 - ✅ `x86_64-linux`, `aarch64-linux`
-- ❌ `*-darwin` — `sharp` builds-from-source against vips on Darwin
-  haven't been verified for this codebase. Evaluation works
-  (`nix flake check` passes on macOS) so you can drive a Linux
-  home-manager from a Mac, but `nix build` is Linux-only for now.
+- ✅ `aarch64-darwin`, `x86_64-darwin` — sharp builds from source
+  against the nixpkgs vips on darwin too. Verified on aarch64-darwin.
 
 ## Known inconsistency: license
 
