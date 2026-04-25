@@ -87,6 +87,44 @@ describe('findClusters — cluster-level color', () => {
     expect(sat).toBeLessThan(20); // gray
   });
 
+  it('Phase 8: brightness floor passes pixels bright in EITHER frame (pre+post both form)', async () => {
+    // Cursor (240,240,240) at (10,10) in frame A; same cursor at (40,40)
+    // in frame B. Wallpaper is dim (40,60,80) — at the OLD cursor
+    // position (10,10), B has wallpaper which fails brightnessFloor=170.
+    // Without the OR-across-frames check, only the post cluster (40,40)
+    // would form. The fix is to pass a pixel if EITHER frame has bright
+    // RGB at that location, so the pre cluster forms too.
+    const w = 60, h = 60;
+    const wallpaper: [number, number, number] = [40, 60, 80];
+    const cursor: [number, number, number] = [240, 240, 240];
+    const inSquare = (x: number, y: number, cx: number, cy: number, half: number) =>
+      Math.abs(x - cx) <= half && Math.abs(y - cy) <= half;
+
+    const aBuf = await frame(w, h, (i) => {
+      const x = i % w, y = Math.floor(i / w);
+      return inSquare(x, y, 10, 10, 3) ? cursor : wallpaper;
+    });
+    const bBuf = await frame(w, h, (i) => {
+      const x = i % w, y = Math.floor(i / w);
+      return inSquare(x, y, 40, 40, 3) ? cursor : wallpaper;
+    });
+
+    const a = await decodeScreenshot(aBuf);
+    const b = await decodeScreenshot(bBuf);
+    const mask = diffPixels(a.rgb, b.rgb, w, h, 30, 170, 0);
+    const clusters = findClusters(mask, w, h, 4, 1000);
+    // We want BOTH pre (~10,10) and post (~40,40) clusters.
+    expect(clusters.length).toBeGreaterThanOrEqual(2);
+    const positions = clusters.map((c) => `${c.centroidX},${c.centroidY}`).sort();
+    // Loose check that one cluster centroid is near (10,10) and the other near (40,40).
+    const hasNear = (cx: number, cy: number) =>
+      clusters.some((c) =>
+        Math.abs(c.centroidX - cx) <= 4 && Math.abs(c.centroidY - cy) <= 4,
+      );
+    expect(hasNear(10, 10)).toBe(true);
+    expect(hasNear(40, 40)).toBe(true);
+  });
+
   it('mean color reflects actual pixel values (sanity)', async () => {
     const w = 20, h = 20;
     // 4×4 BLUE cluster.

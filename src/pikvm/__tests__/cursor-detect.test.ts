@@ -82,11 +82,13 @@ describe('diffScreenshotsDecoded', () => {
     expect(sized.length).toBeGreaterThanOrEqual(2);
   });
 
-  // Regression: cursor on a DIM modal-scrim wallpaper (60). With
-  // brightnessFloor=170 we get only one cluster (or zero); with floor=100
-  // we get both. This is the exact bug that produced the user's
-  // "0 raw clusters" mystery.
-  it('REGRESSION: floor=170 misses cursor over dim wallpaper (the bug)', async () => {
+  // Phase 8 (post-fix contract): with the OR-across-frames brightness
+  // check, a pixel is included in the diff if EITHER frame has bright
+  // RGB at that location. The cursor at (50,50) in frame A is bright
+  // (240) so the pre cluster forms even though wallpaper at the same
+  // position in B is dim (60). Both pre and post clusters appear at
+  // any reasonable brightness floor.
+  it('floor=170 catches BOTH clusters on dim wallpaper (Phase 8 OR-brightness)', async () => {
     const w = 300, h = 200;
     const dimWallpaper = [60, 60, 60] as [number, number, number];
     const cursorWhite = [240, 240, 240] as [number, number, number];
@@ -94,19 +96,16 @@ describe('diffScreenshotsDecoded', () => {
     const baseB = await stampSquare(await makeScreenshot(w, h, dimWallpaper), 150, 80, 7, cursorWhite);
     const a = await decodeScreenshot(baseA);
     const b = await decodeScreenshot(baseB);
-    const clustersStrict = diffScreenshotsDecoded(a, b, {
+    const clusters = diffScreenshotsDecoded(a, b, {
       ...DEFAULT_DETECTION_CONFIG,
       brightnessFloor: 170,
       mergeRadius: 18,
     });
-    // With the strict floor, the disappear-at-(50,50) cluster is rejected
-    // because frame B's pixel there is dim wallpaper (60). At most we
-    // get the appear-cluster.
-    const sizedStrict = clustersStrict.filter((c) => c.pixels >= 8 && c.pixels <= 90);
-    expect(sizedStrict.length).toBeLessThanOrEqual(1);
+    const sized = clusters.filter((c) => c.pixels >= 8 && c.pixels <= 90);
+    expect(sized.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('floor=100 catches cursor over dim wallpaper (the fix)', async () => {
+  it('floor=100 catches BOTH clusters on dim wallpaper (Phase 8)', async () => {
     const w = 300, h = 200;
     const dimWallpaper = [60, 60, 60] as [number, number, number];
     const cursorWhite = [240, 240, 240] as [number, number, number];
@@ -114,23 +113,16 @@ describe('diffScreenshotsDecoded', () => {
     const baseB = await stampSquare(await makeScreenshot(w, h, dimWallpaper), 150, 80, 7, cursorWhite);
     const a = await decodeScreenshot(baseA);
     const b = await decodeScreenshot(baseB);
-    const clustersLoose = diffScreenshotsDecoded(a, b, {
+    const clusters = diffScreenshotsDecoded(a, b, {
       ...DEFAULT_DETECTION_CONFIG,
       brightnessFloor: 100,
       mergeRadius: 18,
     });
-    // Wait — at floor=100, the wallpaper-revealed pixel at (50,50) is 60
-    // which is BELOW 100 too. So this still misses the disappear cluster.
-    // What floor=100 actually fixes is wallpaper at brightness 100-170 —
-    // not pitch dark. Mid-dim wallpaper.
-    const sizedLoose = clustersLoose.filter((c) => c.pixels >= 8 && c.pixels <= 90);
-    expect(sizedLoose.length).toBeLessThanOrEqual(1);
-    // The appear-at-new-pos cluster should always be found regardless of
-    // floor: cursor pixel (240) is far above any reasonable floor.
-    expect(sizedLoose.length).toBeGreaterThanOrEqual(1);
+    const sized = clusters.filter((c) => c.pixels >= 8 && c.pixels <= 90);
+    expect(sized.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('mid-dim wallpaper (~120): floor=170 misses, floor=100 catches both', async () => {
+  it('mid-dim wallpaper (~120): both floors catch both clusters (Phase 8)', async () => {
     const w = 300, h = 200;
     const midWallpaper = [120, 120, 120] as [number, number, number];
     const cursorWhite = [240, 240, 240] as [number, number, number];
@@ -144,9 +136,7 @@ describe('diffScreenshotsDecoded', () => {
     const strictSized = strict.filter((c) => c.pixels >= 8 && c.pixels <= 90);
     const looseSized = loose.filter((c) => c.pixels >= 8 && c.pixels <= 90);
 
-    // 170 misses the disappear cluster (revealed wallpaper at 120 < 170).
-    expect(strictSized.length).toBeLessThanOrEqual(1);
-    // 100 catches both because wallpaper 120 > 100 floor.
+    expect(strictSized.length).toBeGreaterThanOrEqual(2);
     expect(looseSized.length).toBeGreaterThanOrEqual(2);
   });
 });
