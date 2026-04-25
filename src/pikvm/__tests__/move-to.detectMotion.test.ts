@@ -16,6 +16,7 @@ import {
   clampMickeysToScreen,
   detectMotion,
   isOriginProbeMatchPlausible,
+  pickNearestPlausibleMatch,
   shouldAbortBlindCorrections,
 } from '../move-to.js';
 import type { MovePassDiagnostic } from '../move-to.js';
@@ -288,6 +289,59 @@ function diag(pass: number, mode: MovePassDiagnostic['mode']): MovePassDiagnosti
     linearPhase: false,
   };
 }
+
+describe('pickNearestPlausibleMatch (Phase 11 multi-template ranking)', () => {
+  // When multi-template fallback returns multiple plausible cursor
+  // positions across a screenshot (each template's NCC peak is at a
+  // different spot, with several scoring high enough to look like the
+  // cursor), naïve "highest-score-wins" picks a stable false positive
+  // over the real cursor. The correction-pass case has a strong prior:
+  // the cursor was just at `prevPos` and moved a small predictable
+  // amount. Prefer matches NEAR that prior over far high-scoring FPs.
+  type M = { position: { x: number; y: number }; score: number };
+
+  const make = (x: number, y: number, s: number): M => ({ position: { x, y }, score: s });
+
+  it('prefers a closer-to-hint match over a far higher-scoring one', () => {
+    const matches: M[] = [
+      make(800, 700, 0.94),  // far, very high score (FP at UI element)
+      make(1057, 837, 0.91),  // near hint, slightly lower score
+    ];
+    const r = pickNearestPlausibleMatch(matches, { x: 1027, y: 825 }, 100);
+    expect(r).not.toBeNull();
+    expect(r!.position.x).toBe(1057);
+    expect(r!.position.y).toBe(837);
+  });
+
+  it('falls back to highest score when nothing is within hint radius', () => {
+    const matches: M[] = [
+      make(800, 700, 0.94),
+      make(50, 50, 0.91),
+    ];
+    const r = pickNearestPlausibleMatch(matches, { x: 1027, y: 825 }, 100);
+    expect(r).not.toBeNull();
+    expect(r!.position.x).toBe(800);
+    expect(r!.score).toBe(0.94);
+  });
+
+  it('returns null when input is empty', () => {
+    expect(pickNearestPlausibleMatch([], { x: 100, y: 100 }, 50)).toBeNull();
+  });
+
+  it('returns highest score when no hint is provided', () => {
+    const matches: M[] = [make(0, 0, 0.5), make(100, 100, 0.95), make(200, 200, 0.7)];
+    const r = pickNearestPlausibleMatch(matches, null, 100);
+    expect(r!.score).toBe(0.95);
+  });
+
+  it('chooses the highest-score match within radius (not the closest one)', () => {
+    // Both within 100 px of hint (0,0): (20,20) is ~28 px away,
+    // (50,50) is ~71 px away. Higher-scoring one wins.
+    const matches: M[] = [make(20, 20, 0.85), make(50, 50, 0.93)];
+    const r = pickNearestPlausibleMatch(matches, { x: 0, y: 0 }, 100);
+    expect(r!.score).toBe(0.93);
+  });
+});
 
 describe('isOriginProbeMatchPlausible (Phase 10 origin verification)', () => {
   // After template-match claims the cursor is at `claimed`, we emit a
