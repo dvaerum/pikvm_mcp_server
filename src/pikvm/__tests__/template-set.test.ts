@@ -23,10 +23,12 @@ import {
 import {
   TEMPLATE_SET_CAP,
   loadTemplateSet,
+  migrateLegacyTemplate,
   persistTemplate,
   planAddition,
   templateSimilarity,
 } from '../template-set.js';
+import { saveCursorTemplate } from '../cursor-detect.js';
 
 function gradientTemplate(seed: number): CursorTemplate {
   const w = 24, h = 24;
@@ -262,6 +264,68 @@ describe('persistTemplate (disk-backed)', () => {
       expect(after.length).toBe(before.length);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('migrateLegacyTemplate (one-time upgrade behaviour)', () => {
+  async function tempRoot(): Promise<string> {
+    return await fs.mkdtemp(path.join(os.tmpdir(), 'pikvm-tplmig-'));
+  }
+
+  it('adopts a legacy single-file template into an empty set directory', async () => {
+    const root = await tempRoot();
+    try {
+      const legacyPath = path.join(root, 'cursor-template.jpg');
+      const dir = path.join(root, 'cursor-templates');
+      // Pre-create a legacy file by saving a known template.
+      await saveCursorTemplate(gradientTemplate(5), legacyPath);
+
+      await migrateLegacyTemplate(legacyPath, dir);
+
+      const loaded = await loadTemplateSet(dir);
+      expect(loaded).toHaveLength(1);
+      // Legacy file should still exist (rollback safety — we copy, not move).
+      await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('is a no-op when the set directory already has entries', async () => {
+    const root = await tempRoot();
+    try {
+      const legacyPath = path.join(root, 'cursor-template.jpg');
+      const dir = path.join(root, 'cursor-templates');
+      await saveCursorTemplate(gradientTemplate(5), legacyPath);
+      await fs.mkdir(dir, { recursive: true });
+      // Pre-existing template in the set directory.
+      await saveCursorTemplate(gradientTemplate(99), path.join(dir, '00.jpg'));
+
+      await migrateLegacyTemplate(legacyPath, dir);
+
+      // Set still has only the pre-existing entry; legacy not added.
+      const loaded = await loadTemplateSet(dir);
+      expect(loaded).toHaveLength(1);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('is a no-op when the legacy file does not exist', async () => {
+    const root = await tempRoot();
+    try {
+      const legacyPath = path.join(root, 'cursor-template.jpg');
+      const dir = path.join(root, 'cursor-templates');
+
+      // No legacy file, no set dir — should not throw.
+      await migrateLegacyTemplate(legacyPath, dir);
+
+      // Set still empty (or missing — either is fine).
+      const loaded = await loadTemplateSet(dir);
+      expect(loaded).toHaveLength(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });
