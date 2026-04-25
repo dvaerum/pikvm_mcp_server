@@ -59,6 +59,10 @@ npm install
 npm run build
 ```
 
+### Nix / home-manager (Linux)
+
+A flake at the repo root packages the server reproducibly and exposes a home-manager module (`services.pikvm-mcp`) that installs it, reads the password from a file at runtime, and registers the MCP server in `~/.claude.json` via deep-merge so it coexists with other producers. See [`docs/nix.md`](docs/nix.md) (or [`nix/README.md`](nix/README.md) for the full guide).
+
 ## Configuration
 
 Copy `.env.example` to `.env` and configure:
