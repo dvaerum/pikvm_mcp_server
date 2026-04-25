@@ -15,6 +15,7 @@ import {
   capCorrectionMickeys,
   clampMickeysToScreen,
   detectMotion,
+  isOriginProbeMatchPlausible,
   shouldAbortBlindCorrections,
 } from '../move-to.js';
 import type { MovePassDiagnostic } from '../move-to.js';
@@ -287,6 +288,56 @@ function diag(pass: number, mode: MovePassDiagnostic['mode']): MovePassDiagnosti
     linearPhase: false,
   };
 }
+
+describe('isOriginProbeMatchPlausible (Phase 10 origin verification)', () => {
+  // After template-match claims the cursor is at `claimed`, we emit a
+  // small +X probe and look at the post-cluster centroid. The post
+  // cluster should be near `claimed + (probe*ratio, 0)`. If the
+  // observed post is wildly elsewhere, the template-match origin was
+  // a false positive.
+  const tolerance = 40;
+
+  it('accepts a post-cluster near the predicted landing', () => {
+    const r = isOriginProbeMatchPlausible(
+      { x: 100, y: 200 },           // claimed origin
+      { x: 132, y: 202 },           // observed post
+      { x: 30, y: 0 },              // probe offset (+30 px X)
+      tolerance,
+    );
+    expect(r).toBe(true);
+  });
+
+  it('rejects a post-cluster far from the predicted landing', () => {
+    const r = isOriginProbeMatchPlausible(
+      { x: 100, y: 200 },
+      { x: 800, y: 50 },             // observed post is far away
+      { x: 30, y: 0 },
+      tolerance,
+    );
+    expect(r).toBe(false);
+  });
+
+  it('rejects when observed post is at the claimed position (cursor did not move)', () => {
+    // Cursor "didn't move" relative to the claimed origin → claim is wrong.
+    const r = isOriginProbeMatchPlausible(
+      { x: 100, y: 200 },
+      { x: 102, y: 200 },
+      { x: 30, y: 0 },
+      tolerance,
+    );
+    expect(r).toBe(false);
+  });
+
+  it('handles negative probe direction', () => {
+    const r = isOriginProbeMatchPlausible(
+      { x: 200, y: 200 },
+      { x: 175, y: 200 },           // moved -25 X
+      { x: -30, y: 0 },             // probe was -30 px X
+      tolerance,
+    );
+    expect(r).toBe(true);
+  });
+});
 
 describe('capCorrectionMickeys (Phase 9 magnitude cap)', () => {
   it('returns inputs unchanged when both axes are within cap', () => {

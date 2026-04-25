@@ -226,6 +226,39 @@ function clamp(v: number, lo: number, hi: number): number {
 // the false positive didn't.
 // ============================================================================
 
+/** Phase 10: origin-verification predicate. After template-match
+ *  claims the cursor is at `claimed`, we emit a small probe move and
+ *  inspect the post-cluster centroid in the resulting motion-diff.
+ *  The post cluster should land near `claimed + probeOffsetPx`. If
+ *  it's far from that prediction (or right back at `claimed` — meaning
+ *  the cursor didn't move at all), the template-match origin was a
+ *  stable false positive at a fixed UI element and we must fall
+ *  through to a fresh probe-and-diff.
+ *
+ *  Pure helper so the decision is unit-tested independently of the
+ *  PiKVMClient. `tolerance` is in pixels — generous enough to absorb
+ *  iPad pointer-acceleration drift and JPEG-noise centroid wobble. */
+export function isOriginProbeMatchPlausible(
+  claimed: { x: number; y: number },
+  observedPost: { x: number; y: number },
+  probeOffsetPx: { x: number; y: number },
+  tolerance = 40,
+): boolean {
+  const predicted = {
+    x: claimed.x + probeOffsetPx.x,
+    y: claimed.y + probeOffsetPx.y,
+  };
+  const distToPredicted = Math.hypot(observedPost.x - predicted.x, observedPost.y - predicted.y);
+  if (distToPredicted > tolerance) return false;
+  // Also reject if observed post is right back at the claimed origin —
+  // that means the cursor did not move at all, so the claimed origin
+  // can't be the real cursor (the real cursor would have moved).
+  const distToClaimed = Math.hypot(observedPost.x - claimed.x, observedPost.y - claimed.y);
+  const probeMag = Math.hypot(probeOffsetPx.x, probeOffsetPx.y);
+  if (distToClaimed < probeMag * 0.25) return false;
+  return true;
+}
+
 /** Phase 9: cap a correction-pass emission so a single pass can't run
  *  away on a stale ratio. Live data showed 1/3 trials emit (-13, 105)
  *  Y mickeys (553 px overshoot) when motion-diff was blind for two
@@ -437,9 +470,11 @@ async function discoverOrigin(
     // PRIMARY: template-match against a single screenshot. When a cached
     // cursor template exists and the cursor IS visible, this is faster
     // and more accurate than probe-and-diff — no cursor movement
-    // perturbs the planning, and a high-confidence match (≥0.85) is
-    // grounded in actual cursor pixels rather than potentially-confused
-    // motion-diff cluster pairs.
+    // perturbs the planning. Template-match origin is imperfect (stable
+    // FPs at iPad UI elements at score 0.83) but empirically still
+    // better than always-probe (Phase 10 measured locateCursor failing
+    // 3/5 trials on the iPad home screen — see docs/troubleshooting/
+    // ipad-cursor-detection.md for the full evaluation).
     const tmplSet = await getCachedTemplates();
     if (tmplSet.length > 0) {
       // Phase 5: wake the cursor so template-match has a fresh
