@@ -28,16 +28,53 @@ import {
   BallisticsProfile,
 } from './pikvm/ballistics.js';
 import { moveToPixel } from './pikvm/move-to.js';
-import { unlockIpad } from './pikvm/ipad-unlock.js';
+import {
+  unlockIpad,
+  launchIpadApp,
+  ipadGoHome,
+  ipadOpenAppSwitcher,
+} from './pikvm/ipad-unlock.js';
 
 // Defer initialization to main() for proper error handling
 let pikvm: PiKVMClient;
 let calibrationConfig: { rounds: number; verifyRounds: number; moveDelayMs: number };
 let cachedProfile: BallisticsProfile | null = null;
+let mouseAbsoluteMode: boolean = true; // refreshed at startup; true = absolute tools usable
 const lock = new BusyLock();
 
 async function refreshProfile(path?: string): Promise<void> {
   cachedProfile = await loadProfile(path ?? './data/ballistics.json').catch(() => null);
+}
+
+/** List of tool names that only work on a target with `mouse.absolute=true`.
+ *  When the device reports relative mode, these are gated with a clear
+ *  error pointing the caller to the relative-mode tools. */
+const ABSOLUTE_MOUSE_TOOLS = new Set<string>([
+  'pikvm_calibrate',
+  'pikvm_set_calibration',
+  'pikvm_get_calibration',
+  'pikvm_clear_calibration',
+  'pikvm_auto_calibrate',
+]);
+const ABSOLUTE_MOUSE_NOTE =
+  'This target reports mouse.absolute=false (typical for iPad / boot-mouse HID). ' +
+  'Use the relative-mode tools instead: pikvm_ipad_unlock, pikvm_mouse_move with relative:true, ' +
+  'pikvm_mouse_click_at, pikvm_mouse_move_to, pikvm_mouse_click. See docs/skills/ipad-keyboard-workflow.md ' +
+  'for the recommended pattern.';
+
+/** For pikvm_mouse_move and pikvm_mouse_click, x/y arguments mean *absolute*
+ *  positioning which doesn't work on a relative-only target. Detect that
+ *  call shape and gate it. */
+function callsAbsoluteMode(name: string, args: Record<string, unknown>): boolean {
+  if (name === 'pikvm_mouse_move') {
+    // Absolute is the default unless relative:true is set.
+    return args.relative !== true;
+  }
+  if (name === 'pikvm_mouse_click') {
+    // Absolute only when both x and y are supplied.
+    return typeof args.x === 'number' && typeof args.y === 'number';
+  }
+  return false;
 }
 
 // ============================================================================
@@ -352,6 +389,41 @@ const tools: Tool[] = [
     },
   },
   {
+    name: 'pikvm_ipad_home',
+    description: 'Return the iPad to the home screen from any foreground app, by emitting the same swipe-up-from-home-indicator gesture used by pikvm_ipad_unlock. Idempotent on the home screen; dismisses any foreground app; unlocks if currently on the lock screen. Returns a post-gesture screenshot.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        settleMs: { type: 'number', description: 'Settle delay after the gesture (ms). Default 800.' },
+      },
+    },
+  },
+  {
+    name: 'pikvm_ipad_app_switcher',
+    description: 'Open the iPad App Switcher (Cmd+Tab) and capture a screenshot of available apps. Cmd is held while screenshotting (so the switcher stays visible) then released, which selects the currently-focused app in the switcher. For multi-step switching, drive Cmd manually via pikvm_key.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        holdMs: { type: 'number', description: 'How long to hold Cmd before screenshotting (ms). Default 800.' },
+      },
+    },
+  },
+  {
+    name: 'pikvm_ipad_launch_app',
+    description: 'Launch an iPad app via the verified keyboard-first pipeline: unlock (if locked) → Spotlight (Cmd+Space) → type the app name → Enter. Returns a post-launch screenshot. Far more reliable than clicking an app icon — bypasses cursor positioning entirely. Verified on iPadOS 26.1 for Files, Settings, App Store. If the named app does not appear in Spotlight (typo, app not installed, locale-specific name), iPad returns to the home screen and the screenshot will reflect that.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        appName: { type: 'string', description: 'App name as it appears in Spotlight (case-insensitive). Examples: "Files", "Settings", "App Store", "Safari".' },
+        unlockFirst: { type: 'boolean', description: 'Run pikvm_ipad_unlock first. Default true. Set false if you know the iPad is already unlocked and want to skip the swipe.' },
+        spotlightSettleMs: { type: 'number', description: 'Settle after opening Spotlight (ms). Default 700.' },
+        postTypeSettleMs: { type: 'number', description: 'Settle after typing the app name (ms). Default 600.' },
+        launchSettleMs: { type: 'number', description: 'Settle after pressing Enter, before returning screenshot (ms). Default 1500.' },
+      },
+      required: ['appName'],
+    },
+  },
+  {
     name: 'pikvm_mouse_move_to',
     description: 'Move the mouse pointer to an approximate target pixel on a PiKVM target in RELATIVE mouse mode (e.g. iPad). Default strategy ("detect-then-move") probes+diffs to locate the cursor without moving it much, then emits a chunked delta sequence to the target. Runs up to 2 correction passes (probe-driven) and a ground-truth detection pass so the returned message reports the actual cursor landing position. Returns a post-move screenshot. Use pikvm_mouse_click_at for "move then click".',
     inputSchema: {
@@ -546,6 +618,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: 'text', text: `Error: ${lock.holder} in progress, please wait.` }],
       isError: true,
     };
+  }
+
+  // Gate absolute-mouse-only tools when the target reports mouse.absolute=false.
+  // The relative-mode tools (pikvm_mouse_move with relative:true,
+  // pikvm_mouse_click_at, etc.) remain available.
+  if (!mouseAbsoluteMode) {
+    if (ABSOLUTE_MOUSE_TOOLS.has(name) || callsAbsoluteMode(name, args as Record<string, unknown>)) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error: tool '${name}' requires absolute-mode mouse. ${ABSOLUTE_MOUSE_NOTE}`,
+          },
+        ],
+        isError: true,
+      };
+    }
   }
 
   try {
@@ -811,6 +900,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'pikvm_ipad_launch_app': {
+        const appName = requireString(args.appName, 'appName');
+        const result = await launchIpadApp(pikvm, appName, {
+          unlockFirst: validateBoolean(args.unlockFirst) ?? true,
+          spotlightSettleMs: validateNumber(args.spotlightSettleMs, 0, 5000),
+          postTypeSettleMs: validateNumber(args.postTypeSettleMs, 0, 5000),
+          launchSettleMs: validateNumber(args.launchSettleMs, 0, 10000),
+        });
+        return {
+          content: [
+            { type: 'text', text: result.message },
+            { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+          ],
+        };
+      }
+
+      case 'pikvm_ipad_home': {
+        const result = await ipadGoHome(pikvm, {
+          settleMs: validateNumber(args.settleMs, 0, 5000),
+        });
+        return {
+          content: [
+            { type: 'text', text: result.message },
+            { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+          ],
+        };
+      }
+
+      case 'pikvm_ipad_app_switcher': {
+        const result = await ipadOpenAppSwitcher(pikvm, {
+          holdMs: validateNumber(args.holdMs, 100, 5000),
+        });
+        return {
+          content: [
+            { type: 'text', text: result.message },
+            { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+          ],
+        };
+      }
+
       case 'pikvm_mouse_move_to': {
         const tx = requireNumber(args.x, 'x');
         const ty = requireNumber(args.y, 'y');
@@ -1024,6 +1153,31 @@ async function main() {
   await refreshProfile();
   if (cachedProfile) {
     console.error(`Loaded ballistics profile (${cachedProfile.samples.length} samples).`);
+  }
+
+  // Detect whether the target is in absolute or relative mouse mode so we
+  // can gate absolute-only tools (calibration, etc.) when running on iPad.
+  try {
+    const hid = await pikvm.getHidProfile();
+    mouseAbsoluteMode = hid.mouseAbsolute;
+    console.error(
+      `HID: mouse=${hid.mouseOnline ? 'online' : 'offline'}/${hid.mouseAbsolute ? 'absolute' : 'relative'}, ` +
+        `keyboard=${hid.keyboardOnline ? 'online' : 'offline'}.`,
+    );
+    if (!hid.mouseAbsolute) {
+      console.error(
+        'Target is in RELATIVE mouse mode (mouse.absolute=false). ' +
+          'Absolute-mode tools (pikvm_calibrate*, pikvm_auto_calibrate, pikvm_mouse_move default, ' +
+          'pikvm_mouse_click with x/y) will be refused with a guidance message. ' +
+          'Use pikvm_mouse_click_at, pikvm_mouse_move_to, and the keyboard-first workflow ' +
+          '(see docs/skills/ipad-keyboard-workflow.md).',
+      );
+    }
+  } catch (err) {
+    console.error(
+      `Warning: could not read HID profile (${(err as Error).message}). ` +
+        'Defaulting to absolute mode; relative-mode-only tools may surface confusing errors on this device.',
+    );
   }
 
   const transport = new StdioServerTransport();

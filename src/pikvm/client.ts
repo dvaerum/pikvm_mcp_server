@@ -576,6 +576,34 @@ export class PiKVMClient {
   }
 
   /**
+   * Read HID configuration flags. Used by the MCP server to decide whether
+   * absolute-mode mouse tools are usable on the current target. iPad and
+   * other relative-only HID hosts will report `mouse.absolute=false`.
+   */
+  async getHidProfile(): Promise<{
+    online: boolean;
+    mouseAbsolute: boolean;
+    mouseOnline: boolean;
+    keyboardOnline: boolean;
+  }> {
+    interface HidResponse {
+      result: {
+        online?: boolean;
+        mouse?: { absolute?: boolean; online?: boolean };
+        keyboard?: { online?: boolean };
+      };
+    }
+    const response = await this.request<HidResponse>('GET', '/hid');
+    const r = response.result;
+    return {
+      online: r.online ?? false,
+      mouseAbsolute: r.mouse?.absolute ?? true,
+      mouseOnline: r.mouse?.online ?? false,
+      keyboardOnline: r.keyboard?.online ?? false,
+    };
+  }
+
+  /**
    * Check authentication
    */
   async checkAuth(): Promise<boolean> {
