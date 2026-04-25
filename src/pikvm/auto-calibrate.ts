@@ -80,8 +80,10 @@ function detectionConfigFrom(config: AutoCalibrationConfig): DetectionConfig {
     maxClusterSize: config.maxClusterSize,
     mergeRadius: config.mergeRadius,
     // Absolute-mouse auto-calibrate works on whatever target the PiKVM is
-    // attached to (not iPad-specific); don't filter by brightness there.
+    // attached to (not iPad-specific); don't filter by brightness or
+    // saturation there.
     brightnessFloor: 0,
+    maxChannelDelta: 0,
   };
 }
 
