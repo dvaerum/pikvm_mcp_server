@@ -514,7 +514,19 @@ export async function wakeupCursor(
 async function discoverOrigin(
   client: PiKVMClient,
   options: MoveToOptions,
-): Promise<{ point: { x: number; y: number }; method: MoveStrategy }> {
+): Promise<{
+  point: { x: number; y: number };
+  method: MoveStrategy;
+  /** When origin was discovered via the locateCursor probe path,
+   *  carry the observed offset and emitted mickey count so
+   *  moveToPixel can use them as the calibration measurement and
+   *  skip the redundant separate calibration probe. Null when
+   *  origin came from template-match or assume-at. */
+  probeMeasurement?: {
+    offsetPx: { x: number; y: number };
+    mickeys: { x: number; y: number };
+  };
+}> {
   const requested = options.strategy
     ?? (options.slamFirst === false ? 'assume-at' : 'detect-then-move');
 
@@ -589,7 +601,17 @@ async function discoverOrigin(
       // located.position is the cursor's CURRENT position (post-probe);
       // locateCursor no longer attempts a fake restore. Move-to plans
       // its open-loop emission from this position.
-      return { point: located.position, method: 'detect-then-move' };
+      // Phase 14: pass through the probe's offset + mickeys so the
+      // caller can compute px/mickey ratio without a redundant
+      // calibration probe. The probe was X-axis only.
+      return {
+        point: located.position,
+        method: 'detect-then-move',
+        probeMeasurement: {
+          offsetPx: located.probeOffsetPx,
+          mickeys: located.probeMickeys,
+        },
+      };
     }
     if (options.verbose) {
       console.error('[move-to] template-match AND locateCursor both failed');
@@ -1041,6 +1063,30 @@ export async function moveToPixel(
   let calibratedRatioY = pxPerMickeyY;
   let calibrationReason: string = `using fallback ratio ${fallback}`;
 
+  // Phase 14: when discoverOrigin used the locateCursor probe, it
+  // already measured the px/mickey ratio for free. Use that as the
+  // initial calibrated ratio and skip the separate calibration
+  // probe — saves ~1.5 s and avoids the noise problem where
+  // clusterMin=4 admits widget animations into the calib pair pool.
+  let skipCalibrationProbe = false;
+  if (discovered.probeMeasurement) {
+    const m = discovered.probeMeasurement;
+    if (m.mickeys.x !== 0) {
+      const r = Math.abs(m.offsetPx.x) / Math.abs(m.mickeys.x);
+      if (r >= ratioLo && r <= ratioHi) {
+        calibratedRatioX = r;
+        calibratedRatioY = r; // assume symmetric — typical iPad behaviour
+        calibrationReason = `from locateCursor probe: ${Math.abs(m.offsetPx.x)}px/${Math.abs(m.mickeys.x)}mickeys = ${r.toFixed(3)}`;
+        skipCalibrationProbe = true;
+        if (verbose) {
+          console.error(
+            `[move-to] CALIBRATION (from locateCursor probe): ratio=${r.toFixed(3)} (skip redundant calibration probe)`,
+          );
+        }
+      }
+    }
+  }
+
   // Phase 2 + 3: fetch the cached cursor template SET once. Passed to
   // every detectMotion call so it can re-rank candidate pairs by template
   // match. Empty array if no templates have been captured yet (first-run).
@@ -1050,9 +1096,11 @@ export async function moveToPixel(
   // diff(shotA-pre, shotA) measures the calibration probe's effect.
   const shotAPre = await decodeScreenshot((await client.screenshot()).buffer);
 
-  const calibX = warmupAxis === 'x' ? calibProbeMickeys * warmupSign : 0;
-  const calibY = warmupAxis === 'y' ? calibProbeMickeys * warmupSign : 0;
-  if (calibProbeMickeys > 0) {
+  // Phase 14: skip calibration probe entirely when locateCursor's
+  // probe already gave us a ratio measurement.
+  const calibX = (skipCalibrationProbe || warmupAxis !== 'x') ? 0 : calibProbeMickeys * warmupSign;
+  const calibY = (skipCalibrationProbe || warmupAxis !== 'y') ? 0 : calibProbeMickeys * warmupSign;
+  if ((calibX !== 0 || calibY !== 0) && calibProbeMickeys > 0) {
     // Emit calibration probe slow + chunked so the diff reliably catches
     // both pre and post cursor positions.
     await emitChunked(client, calibX, calibY, 20, 30);
@@ -1071,7 +1119,7 @@ export async function moveToPixel(
     y: origin.y + calibY * pxPerMickeyY,
   };
 
-  if (calibProbeMickeys > 0 && doCorrect) {
+  if (!skipCalibrationProbe && calibProbeMickeys > 0 && doCorrect) {
     const calibResult = detectMotion(
       shotAPre,
       shotA,

@@ -391,6 +391,12 @@ export interface LocateCursorResult {
   /** Where the cursor was BEFORE the probe — informational. */
   prePosition: Point;
   probeOffsetPx: Point;       // observed displacement from the probe
+  /** Signed mickey count emitted in the successful probe (the probe
+   *  was X-axis only, so y is always 0). Lets the caller compute
+   *  px/mickey ratio = |probeOffsetPx.x| / |probeMickeys.x| without
+   *  having to run a separate calibration probe — `locateCursor`
+   *  has already done the work. */
+  probeMickeys: Point;
   clusterCount: number;       // for diagnostics
 }
 
@@ -545,6 +551,7 @@ export async function locateCursor(
     }
 
     return {
+      probeMickeys: { x: probeDelta, y: 0 },
       // post = where the cursor IS after this function returns.
       position: { x: post.centroidX, y: post.centroidY },
       prePosition: { x: pre.centroidX, y: pre.centroidY },
