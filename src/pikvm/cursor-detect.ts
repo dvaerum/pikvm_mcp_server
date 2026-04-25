@@ -133,11 +133,23 @@ export function diffPixels(
       mask[i] = false;
       continue;
     }
+    const ar = a[offset];
+    const ag = a[offset + 1];
+    const ab = a[offset + 2];
     const br = b[offset];
     const bg = b[offset + 1];
     const bb = b[offset + 2];
     if (brightnessFloor > 0) {
-      if (!(br >= brightnessFloor && bg >= brightnessFloor && bb >= brightnessFloor)) {
+      // Phase 8: pass a pixel if EITHER frame has bright RGB at this
+      // location. The cursor is bright in whichever frame contains it;
+      // the OTHER frame has the (often-dim) wallpaper revealed. Checking
+      // only frame B's brightness (the previous behaviour) silently
+      // culled the pre-cluster on dim wallpapers, which is why
+      // locateCursor's "need ≥2 sized clusters" check kept failing on
+      // the iPad home screen.
+      const aBright = ar >= brightnessFloor && ag >= brightnessFloor && ab >= brightnessFloor;
+      const bBright = br >= brightnessFloor && bg >= brightnessFloor && bb >= brightnessFloor;
+      if (!aBright && !bBright) {
         mask[i] = false;
         continue;
       }
