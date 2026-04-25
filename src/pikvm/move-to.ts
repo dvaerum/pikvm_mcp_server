@@ -500,11 +500,14 @@ async function maybePersistTemplate(
  *  cursor's actual position next anyway). */
 export async function wakeupCursor(
   client: PiKVMClient,
-  settleMs = 150,
+  settleMs = 300,
 ): Promise<void> {
   await client.mouseMoveRelative(30, 0);
   await sleep(80);
   await client.mouseMoveRelative(-30, 0);
+  // Must exceed PiKVM streamer + iPadOS render latency (measured 150–
+  // 235 ms in the latency-probe research, 2026-04-26). See
+  // docs/troubleshooting/ipad-cursor-detection.md for the data.
   await sleep(settleMs);
 }
 
@@ -575,9 +578,10 @@ async function discoverOrigin(
     // (different wallpaper, very different lighting, etc.).
     const located = await locateCursor(client, {
       probeDelta: 20,
-      settleMs: 120,
-      // detection.brightnessFloor defaults to 100 inside locateCursor,
-      // matching detectMotion's default (works on dimmed-modal contexts).
+      // settleMs default (300) is now derived from PiKVM streamer
+      // latency research (2026-04-26) — must exceed ~235 ms or the
+      // post-probe screenshot will return a pre-emit frame from the
+      // streamer's buffer, causing motion-diff to find no cursor pair.
       maxAttempts: 2,
       verbose: options.verbose,
     });
@@ -945,7 +949,13 @@ export async function moveToPixel(
   const fallback = options.fallbackPxPerMickey ?? 1.0;
   const chunkMag = options.chunkMagnitude ?? 60;
   const chunkPaceMs = options.chunkPaceMs ?? 20;
-  const postSettleMs = options.postMoveSettleMs ?? 30;
+  // postSettleMs must exceed PiKVM streamer + iPadOS render latency
+  // (~235 ms, see latency-probe research in docs/troubleshooting/
+  // ipad-cursor-detection.md). The previous 30 ms default guaranteed
+  // the post-emit screenshot returned a pre-emit frame from the
+  // streamer's buffer, which is why motion-diff kept finding "no
+  // post candidate within 600 px of expected end".
+  const postSettleMs = options.postMoveSettleMs ?? 300;
   const doCorrect = options.correct !== false;
   const maxPasses = options.maxCorrectionPasses ?? 5;
   const minResidualPx = options.minResidualPx ?? 8;
@@ -962,7 +972,13 @@ export async function moveToPixel(
   const linResidualPx = options.linearResidualPx ?? 3;
   const linMaxPasses = options.linearMaxPasses ?? 4;
   // Cursor cluster size range (Phase B): widened from 10-60 to 8-90.
-  const clusterMin = 8;
+  // The iPad cursor at top of screen against the wallpaper's
+  // brightness ranges produces a cluster of just ~4-7 bright pixels
+  // (centre of the arrow + tip). 8-px floor was rejecting real
+  // cursor clusters and accepting only widget-noise. Loosened to 4.
+  // Latency-probe research (2026-04-26) confirmed real cursor moves
+  // were being rejected by the cluster-size filter.
+  const clusterMin = 4;
   const clusterMax = 90;
 
   // Phase B: validate ballistics profile freshness against current

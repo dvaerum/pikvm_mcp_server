@@ -379,7 +379,7 @@ async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
  */
 export interface LocateCursorOptions {
   probeDelta?: number;        // default 10 (mickeys, +x direction)
-  settleMs?: number;          // default 150 (ms between move and screenshot)
+  settleMs?: number;          // default 300 (ms between move and screenshot — must exceed PiKVM streamer + iPadOS render latency, measured at 150-235 ms; see docs/troubleshooting/ipad-cursor-detection.md)
   detection?: Partial<DetectionConfig>;
   maxAttempts?: number;       // default 3, for transient diff failures
   verbose?: boolean;
@@ -412,7 +412,7 @@ export async function locateCursor(
   options: LocateCursorOptions = {},
 ): Promise<LocateCursorResult | null> {
   const baseProbeDelta = options.probeDelta ?? 10;
-  const settleMs = options.settleMs ?? 150;
+  const settleMs = options.settleMs ?? 300;
   const maxAttempts = options.maxAttempts ?? 3;
   // Default brightness floor lowered from 170 to 100 — same fix as
   // detectMotion in move-to.ts. iPadOS dimmed-modal contexts render the
