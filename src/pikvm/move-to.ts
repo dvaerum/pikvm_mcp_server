@@ -31,18 +31,23 @@ import {
 import {
   Cluster,
   CursorTemplate,
+  DecodedScreenshot,
   DEFAULT_DETECTION_CONFIG,
-  diffScreenshots,
-  extractCursorTemplate,
-  findCursorByTemplate,
+  decodeScreenshot,
+  diffScreenshotsDecoded,
+  extractCursorTemplateDecoded,
+  findCursorByTemplateDecoded,
   loadCursorTemplate,
   locateCursor,
   saveCursorTemplate,
 } from './cursor-detect.js';
 import {
-  detectIpadBounds,
+  detectBoundsOrNull,
+  getLastGoodBounds,
   slamOriginFromBounds,
+  LEGACY_PORTRAIT_SLAM_ORIGIN,
 } from './orientation.js';
+import { sleep } from './util.js';
 
 export type MoveStrategy = 'detect-then-move' | 'slam-then-move' | 'assume-at';
 export type Axis = 'x' | 'y';
@@ -111,9 +116,6 @@ export interface MoveToResult {
   message: string;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
@@ -134,12 +136,12 @@ async function getCachedTemplate(): Promise<CursorTemplate | null> {
 }
 
 async function maybePersistTemplate(
-  screenshot: Buffer,
+  screenshot: DecodedScreenshot,
   cursorPos: { x: number; y: number },
 ): Promise<void> {
   if (cachedTemplate) return; // already have one
   try {
-    const t = await extractCursorTemplate(screenshot, cursorPos, 32);
+    const t = extractCursorTemplateDecoded(screenshot, cursorPos, 32);
     cachedTemplate = t;
     await saveCursorTemplate(t, TEMPLATE_PATH);
   } catch {
@@ -181,19 +183,33 @@ async function discoverOrigin(
 
   // Auto-detect iPad bounds for the slam origin if not explicitly set,
   // so landscape and non-default-letterbox iPads work without configuration.
+  // Fast path: if we already have a sane cached detection from earlier in
+  // this process, reuse it instead of re-decoding + re-scanning a fresh
+  // screenshot (~50 ms saving per call on tight loops).
   let slamOrigin = options.slamOriginPx;
   if (!slamOrigin) {
-    try {
-      const bounds = await detectIpadBounds(client, { verbose: options.verbose });
+    let bounds = getLastGoodBounds();
+    if (bounds) {
+      if (options.verbose) {
+        console.error(
+          `[move-to] using cached ${bounds.orientation} bounds ${bounds.width}×${bounds.height} (no re-detection)`,
+        );
+      }
+    } else {
+      bounds = await detectBoundsOrNull(client, {
+        verbose: options.verbose,
+        logPrefix: 'move-to',
+      });
+    }
+    if (bounds) {
       slamOrigin = slamOriginFromBounds(bounds);
       if (options.verbose) {
         console.error(
           `[move-to] auto-detected ${bounds.orientation} slam-origin (${slamOrigin.x},${slamOrigin.y})`,
         );
       }
-    } catch (e) {
-      if (options.verbose) console.error(`[move-to] bounds detection failed: ${(e as Error).message}; using portrait default`);
-      slamOrigin = { x: 625, y: 65 };
+    } else {
+      slamOrigin = LEGACY_PORTRAIT_SLAM_ORIGIN;
     }
   }
 
@@ -246,17 +262,17 @@ interface MotionPair {
   livePxPerMickey: number;
 }
 
-async function detectMotion(
-  a: Buffer,
-  b: Buffer,
+function detectMotion(
+  a: DecodedScreenshot,
+  b: DecodedScreenshot,
   expectedStart: { x: number; y: number },
   expectedEnd: { x: number; y: number },
   commandedMickeys: { x: number; y: number },
   preWindow: number,
   postWindow: number,
   verbose: boolean,
-): Promise<MotionPair | null> {
-  const clusters = await diffScreenshots(a, b, {
+): MotionPair | null {
+  const clusters = diffScreenshotsDecoded(a, b, {
     ...DEFAULT_DETECTION_CONFIG,
     brightnessFloor: 170,
     mergeRadius: 18,
@@ -418,8 +434,8 @@ export async function moveToPixel(
     y: origin.y + warmupPxY,
   };
 
-  // 3. Screenshot A
-  const shotA = await client.screenshot();
+  // 3. Screenshot A — decoded once and reused for diffs / template extraction.
+  const shotA = await decodeScreenshot((await client.screenshot()).buffer);
 
   // 4. Open-loop emission
   const openMickeysX = signX * rawMickeysX;
@@ -430,7 +446,7 @@ export async function moveToPixel(
   if (postSettleMs > 0) await sleep(postSettleMs);
 
   // 5. Screenshot B
-  const shotB = await client.screenshot();
+  const shotB = await decodeScreenshot((await client.screenshot()).buffer);
 
   // 6. Motion diff (open-loop)
   const corrections: CorrectionPass[] = [];
@@ -440,9 +456,9 @@ export async function moveToPixel(
   let currentPos: { x: number; y: number };
 
   const motion = doCorrect
-    ? await detectMotion(
-        shotA.buffer,
-        shotB.buffer,
+    ? detectMotion(
+        shotA,
+        shotB,
         postWarmupExpected,
         predicted,
         { x: openMickeysX, y: openMickeysY },
@@ -467,13 +483,13 @@ export async function moveToPixel(
 
     // Capture & persist a cursor template on first success — useful as a
     // non-perturbing detection fallback for future calls.
-    await maybePersistTemplate(shotB.buffer, currentPos);
+    await maybePersistTemplate(shotB, currentPos);
   } else {
     // Motion-diff failed. Try template matching as a fallback — this
     // doesn't require any cursor movement and is robust to widget noise.
     const tmpl = await getCachedTemplate();
     if (tmpl) {
-      const found = await findCursorByTemplate(shotB.buffer, tmpl, {
+      const found = findCursorByTemplateDecoded(shotB, tmpl, {
         searchCentre: predicted,
         searchWindow: postWindow,
         verbose,
@@ -526,11 +542,11 @@ export async function moveToPixel(
 
       await emitChunked(client, corrMickeysX, corrMickeysY, chunkMag, chunkPaceMs);
       await sleep(postSettleMs);
-      const shotC = await client.screenshot();
+      const shotC = await decodeScreenshot((await client.screenshot()).buffer);
 
-      const cMotion = await detectMotion(
-        prevShot.buffer,
-        shotC.buffer,
+      const cMotion = detectMotion(
+        prevShot,
+        shotC,
         prevPos,
         newPredicted,
         { x: corrMickeysX, y: corrMickeysY },

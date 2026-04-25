@@ -11,6 +11,7 @@
 
 import sharp from 'sharp';
 import type { PiKVMClient } from './client.js';
+import { sleep } from './util.js';
 
 export interface Point {
   x: number;
@@ -54,6 +55,33 @@ export async function decodeToRgb(
   const image = sharp(buffer).removeAlpha().raw();
   const { data, info } = await image.toBuffer({ resolveWithObject: true });
   return { data, width: info.width, height: info.height };
+}
+
+/**
+ * A screenshot together with its decoded RGB pixels. Pass this through the
+ * detection pipeline to avoid paying the JPEG-decode cost more than once
+ * per frame.
+ */
+export interface DecodedScreenshot {
+  /** The raw JPEG buffer — kept around so callers can still hand it to
+   *  sharp for re-encoding (e.g. saving a cursor template). */
+  buffer: Buffer;
+  /** Decoded RGB pixels, length = width × height × 3. */
+  rgb: Buffer;
+  width: number;
+  height: number;
+}
+
+/** Decode a screenshot's JPEG buffer once and return both the buffer and
+ *  the decoded RGB pixels in a single object. */
+export async function decodeScreenshot(buffer: Buffer): Promise<DecodedScreenshot> {
+  const decoded = await decodeToRgb(buffer);
+  return {
+    buffer,
+    rgb: decoded.data,
+    width: decoded.width,
+    height: decoded.height,
+  };
 }
 
 export function diffPixels(
@@ -203,37 +231,35 @@ export function mergeClusters(clusters: Cluster[], mergeRadius: number): Cluster
   return merged;
 }
 
+/** Diff two pre-decoded screenshots. Use this when you already have the
+ *  decoded RGB on hand (e.g. inside `moveToPixel`'s open-loop loop) to
+ *  avoid the redundant `sharp` decode that the buffer-taking variant does. */
+export function diffScreenshotsDecoded(
+  a: DecodedScreenshot,
+  b: DecodedScreenshot,
+  config: DetectionConfig = DEFAULT_DETECTION_CONFIG,
+): Cluster[] {
+  if (a.width !== b.width || a.height !== b.height) {
+    throw new Error('Screenshot dimensions changed between captures');
+  }
+  const mask = diffPixels(a.rgb, b.rgb, a.width, a.height, config.diffThreshold, config.brightnessFloor);
+  const raw = findClusters(mask, a.width, a.height, config.minClusterSize, config.maxClusterSize);
+  return mergeClusters(raw, config.mergeRadius);
+}
+
+/** Convenience wrapper for callers that only have the JPEG buffers. */
 export async function diffScreenshots(
   bufA: Buffer,
   bufB: Buffer,
   config: DetectionConfig = DEFAULT_DETECTION_CONFIG,
 ): Promise<Cluster[]> {
-  const imgA = await decodeToRgb(bufA);
-  const imgB = await decodeToRgb(bufB);
-
-  if (imgA.width !== imgB.width || imgA.height !== imgB.height) {
-    throw new Error('Screenshot dimensions changed between captures');
-  }
-
-  const mask = diffPixels(
-    imgA.data,
-    imgB.data,
-    imgA.width,
-    imgA.height,
-    config.diffThreshold,
-    config.brightnessFloor,
-  );
-  const raw = findClusters(mask, imgA.width, imgA.height, config.minClusterSize, config.maxClusterSize);
-  return mergeClusters(raw, config.mergeRadius);
+  const [a, b] = await Promise.all([decodeScreenshot(bufA), decodeScreenshot(bufB)]);
+  return diffScreenshotsDecoded(a, b, config);
 }
 
 // ============================================================================
 // Helpers for ballistics / move-to
 // ============================================================================
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
   const result = await client.screenshot();
@@ -348,26 +374,35 @@ export interface CursorTemplate {
 }
 
 /**
- * Crop a square region from a screenshot centred on a known cursor position
- * and return it as a `CursorTemplate`. Used to build a template after the
- * first successful motion-based detection.
+ * Crop a square region from a pre-decoded screenshot centred on a known
+ * cursor position and return it as a `CursorTemplate`. Used to build a
+ * template after the first successful motion-based detection.
  */
+export function extractCursorTemplateDecoded(
+  screenshot: DecodedScreenshot,
+  centre: Point,
+  size = 32,
+): CursorTemplate {
+  const half = Math.floor(size / 2);
+  const left = Math.max(0, Math.min(screenshot.width - size, centre.x - half));
+  const top = Math.max(0, Math.min(screenshot.height - size, centre.y - half));
+
+  const out = Buffer.allocUnsafe(size * size * 3);
+  for (let y = 0; y < size; y++) {
+    const srcOffset = ((top + y) * screenshot.width + left) * 3;
+    screenshot.rgb.copy(out, y * size * 3, srcOffset, srcOffset + size * 3);
+  }
+  return { rgb: out, width: size, height: size };
+}
+
+/** Convenience wrapper for callers that only have the JPEG buffer. */
 export async function extractCursorTemplate(
   screenshot: Buffer,
   centre: Point,
   size = 32,
 ): Promise<CursorTemplate> {
-  const decoded = await decodeToRgb(screenshot);
-  const half = Math.floor(size / 2);
-  const left = Math.max(0, Math.min(decoded.width - size, centre.x - half));
-  const top = Math.max(0, Math.min(decoded.height - size, centre.y - half));
-
-  const out = Buffer.allocUnsafe(size * size * 3);
-  for (let y = 0; y < size; y++) {
-    const srcOffset = ((top + y) * decoded.width + left) * 3;
-    decoded.data.copy(out, y * size * 3, srcOffset, srcOffset + size * 3);
-  }
-  return { rgb: out, width: size, height: size };
+  const decoded = await decodeScreenshot(screenshot);
+  return extractCursorTemplateDecoded(decoded, centre, size);
 }
 
 /**
@@ -465,8 +500,11 @@ export interface FindCursorOptions {
   /** Minimum correlation score to accept (0..1). Default 0.6. iPadOS
    *  cursor against varied wallpapers usually scores 0.7+. */
   minScore?: number;
-  /** Step in pixels between correlation samples. 1 = exhaustive,
-   *  slower; 2-4 is a good speed/accuracy compromise. Default 2. */
+  /** Step in pixels between correlation samples. 1 = exhaustive
+   *  (slowest, pixel-perfect); higher values trade accuracy for speed.
+   *  Default 4 — well within `moveToPixel`'s 30-px residual tolerance,
+   *  ~16× faster than step=1 and ~4× faster than step=2. Drop to 1-2
+   *  when sub-pixel cursor centring matters. */
   step?: number;
   verbose?: boolean;
 }
@@ -477,32 +515,31 @@ export interface FindCursorResult {
 }
 
 /**
- * Find the cursor in a screenshot by template matching. Returns the best
- * match position and its correlation score, or null if the score fell
- * below `minScore`.
+ * Find the cursor in a pre-decoded screenshot by template matching.
+ * Returns the best match position and its correlation score, or null if
+ * the score fell below `minScore`.
  *
  * Use this as a fallback when motion-as-probe diff fails to find a cursor
  * pair (e.g. the user passed `correct: false` and no movement happened
  * between captures, or the screen is too noisy for diffing).
  */
-export async function findCursorByTemplate(
-  screenshot: Buffer,
+export function findCursorByTemplateDecoded(
+  screenshot: DecodedScreenshot,
   template: CursorTemplate,
   options: FindCursorOptions = {},
-): Promise<FindCursorResult | null> {
-  const decoded = await decodeToRgb(screenshot);
+): FindCursorResult | null {
   const stats = computeTemplateStats(template);
-  const step = options.step ?? 2;
+  const step = options.step ?? 4;
   const minScore = options.minScore ?? 0.6;
 
-  let xMin = 0, xMax = decoded.width - template.width;
-  let yMin = 0, yMax = decoded.height - template.height;
+  let xMin = 0, xMax = screenshot.width - template.width;
+  let yMin = 0, yMax = screenshot.height - template.height;
   if (options.searchCentre && options.searchWindow !== undefined) {
     const w = options.searchWindow;
     xMin = Math.max(0, Math.floor(options.searchCentre.x - w - template.width / 2));
-    xMax = Math.min(decoded.width - template.width, Math.ceil(options.searchCentre.x + w - template.width / 2));
+    xMax = Math.min(screenshot.width - template.width, Math.ceil(options.searchCentre.x + w - template.width / 2));
     yMin = Math.max(0, Math.floor(options.searchCentre.y - w - template.height / 2));
-    yMax = Math.min(decoded.height - template.height, Math.ceil(options.searchCentre.y + w - template.height / 2));
+    yMax = Math.min(screenshot.height - template.height, Math.ceil(options.searchCentre.y + w - template.height / 2));
   }
 
   let bestScore = -Infinity;
@@ -510,7 +547,7 @@ export async function findCursorByTemplate(
   let bestY = 0;
   for (let y = yMin; y <= yMax; y += step) {
     for (let x = xMin; x <= xMax; x += step) {
-      const score = correlateAt(decoded.data, decoded.width, stats, x, y);
+      const score = correlateAt(screenshot.rgb, screenshot.width, stats, x, y);
       if (score > bestScore) {
         bestScore = score;
         bestX = x;
@@ -534,6 +571,16 @@ export async function findCursorByTemplate(
     },
     score: bestScore,
   };
+}
+
+/** Convenience wrapper for callers that only have the JPEG buffer. */
+export async function findCursorByTemplate(
+  screenshot: Buffer,
+  template: CursorTemplate,
+  options: FindCursorOptions = {},
+): Promise<FindCursorResult | null> {
+  const decoded = await decodeScreenshot(screenshot);
+  return findCursorByTemplateDecoded(decoded, template, options);
 }
 
 /**

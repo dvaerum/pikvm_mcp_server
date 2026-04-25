@@ -27,6 +27,15 @@ import { decodeToRgb } from './cursor-detect.js';
 
 export type IpadOrientation = 'portrait' | 'landscape';
 
+/** Hardcoded fallback for the post-slam top-left origin when bounds
+ *  detection fails. Calibrated against the reference iPad's portrait
+ *  letterbox in a 1920×1080 HDMI frame. */
+export const LEGACY_PORTRAIT_SLAM_ORIGIN = { x: 625, y: 65 } as const;
+
+/** Hardcoded fallback for the unlock-swipe start point when bounds
+ *  detection fails. Same reference iPad as above. */
+export const LEGACY_PORTRAIT_UNLOCK_START = { x: 955, y: 1035 } as const;
+
 // Cache the most recent sane detection. Detection from a dark-content app
 // (e.g. Files in dark mode with all-black canvas) can falsely shrink the
 // vertical bounds because the iPad's solid-black render is indistinguishable
@@ -161,12 +170,40 @@ export function clearOrientationCache(): void {
   lastGoodBounds = null;
 }
 
+/** Read the most recent successful detection without triggering a new one.
+ *  Returns null if no detection has succeeded yet in this process. */
+export function getLastGoodBounds(): IpadBounds | null {
+  return lastGoodBounds;
+}
+
 export async function detectIpadBounds(
   client: PiKVMClient,
   options: DetectOptions = {},
 ): Promise<IpadBounds> {
   const shot = await client.screenshot();
   return detectIpadBoundsFromBuffer(shot.buffer, options);
+}
+
+/**
+ * Best-effort wrapper around `detectIpadBounds`. Returns null on failure
+ * (e.g. all-black HDMI capture) instead of throwing, optionally logging
+ * the failure with a caller-supplied prefix when verbose. Encapsulates
+ * the try/catch pattern that both `unlockIpad` and `moveToPixel`'s
+ * origin discovery use.
+ */
+export async function detectBoundsOrNull(
+  client: PiKVMClient,
+  options: DetectOptions & { logPrefix?: string } = {},
+): Promise<IpadBounds | null> {
+  try {
+    return await detectIpadBounds(client, options);
+  } catch (e) {
+    if (options.verbose) {
+      const prefix = options.logPrefix ?? 'orientation';
+      console.error(`[${prefix}] bounds detection failed: ${(e as Error).message}`);
+    }
+    return null;
+  }
 }
 
 /**
