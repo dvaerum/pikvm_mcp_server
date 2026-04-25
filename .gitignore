@@ -30,6 +30,9 @@ coverage/
 test-screenshot.jpg
 *.m4v
 
+# Benchmark output (gitignored: device-specific, regenerated per run)
+bench-results/
+
 # Test/dev files
 test-client.ts
 test_prompt.txt
