@@ -389,6 +389,44 @@ Scroll the mouse wheel vertically or horizontally.
     },
   },
 
+  // ---------- detect-orientation ----------
+  {
+    name: 'detect-orientation',
+    description: 'Guide for pikvm_detect_orientation — find the iPad letterbox bounds within the HDMI capture',
+    getMessages() {
+      return [
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: `# pikvm_detect_orientation — Detect iPad Bounds and Orientation
+
+## Purpose
+PiKVM captures the full HDMI frame (e.g. 1920×1080), but an iPad displayed in portrait fills only a vertical strip in the middle, with black letterbox bars on either side; in landscape, the iPad fills (or nearly fills) the frame. This tool finds the iPad's actual content rectangle inside the HDMI capture and reports its size, position, centre, and orientation.
+
+## Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| brightnessSum | number | 60 | Per-channel sum (R+G+B) above which a pixel counts as iPad content rather than letterbox black. Lower this if your iPad has very dark wallpaper that the default threshold misses. |
+
+## Example Call
+\`\`\`json
+{ "name": "pikvm_detect_orientation", "arguments": {} }
+\`\`\`
+
+## When to Use
+- **Almost never directly.** \`pikvm_ipad_unlock\` and \`pikvm_mouse_move_to\` both call this internally when their swipe/slam origin arguments are not set, so most agents can rely on automatic orientation handling.
+- Call manually for debugging or when you want to precompute slam/unlock origins to skip repeated detection cost.
+
+## Tips
+- If detection throws "entire screenshot is black" the HDMI input is disconnected or the iPad is asleep — wake it via \`pikvm_ipad_unlock\` or a key press first.
+- Animated wallpaper transitions can shift the detected rect by a few pixels; that is fine for slam/swipe origins which only need the rough centre and inset corner.`,
+          },
+        },
+      ];
+    },
+  },
+
   // ---------- ipad-unlock ----------
   {
     name: 'ipad-unlock',
@@ -408,10 +446,12 @@ iPadOS requires a swipe-up-from-bottom gesture to dismiss the lock screen. With 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | slamFirst | boolean | true | Slam to top-left first for a known origin |
-| startX | number | 955 | HDMI X of swipe start (iPad portrait center) |
-| startY | number | 1035 | HDMI Y of swipe start (just above home indicator) |
+| startX | number | auto | HDMI X of swipe start. Auto-detected from iPad letterbox bounds (centre X). Override only if detection misfires. |
+| startY | number | auto | HDMI Y of swipe start. Auto-detected from iPad letterbox bounds (~45 px above the iPad bottom edge). Override only if detection misfires. |
 | dragPx | number | 800 | Total upward drag distance |
 | chunkMickeys | number | 30 | Per-call mickey size (smaller = faster motion) |
+
+The unlock swipe origin is computed from \`pikvm_detect_orientation\` so it works for portrait or landscape iPads in any letterbox position without manual tuning. Pass explicit \`startX\`/\`startY\` only if auto-detection picks the wrong area (e.g. when the iPad's HDMI signal is partly black for non-letterbox reasons).
 
 ## Example Call
 \`\`\`json
@@ -505,8 +545,8 @@ Move the pointer to an approximate target pixel on a PiKVM target in relative mo
 | x | number | *(required)* | Target X in HDMI screenshot pixels |
 | y | number | *(required)* | Target Y in HDMI screenshot pixels |
 | slamFirst | boolean | true | Slam to top-left before moving (establishes origin) |
-| slamOriginX | number | 625 | HDMI X of post-slam origin (iPad portrait letterbox) |
-| slamOriginY | number | 65 | HDMI Y of post-slam origin |
+| slamOriginX | number | auto | HDMI X of post-slam origin. Auto-detected from iPad letterbox bounds via \`pikvm_detect_orientation\`; works for portrait or landscape. Override only if detection misfires. |
+| slamOriginY | number | auto | HDMI Y of post-slam origin. Auto-detected. |
 | fallbackPxPerMickey | number | 1.0 | px/mickey used when no profile |
 | chunkMagnitude | number | 127 | Per-call delta size |
 | chunkPaceMs | number | 20 | Pace between chunked calls (ms) |
@@ -529,7 +569,7 @@ Open-loop: within **~20-100 pixels** of target on this iPad. That's close enough
 \`\`\`
 
 ## Tips
-- The default slam origin (625, 65) is tuned for an iPad displayed portrait in a 1920×1080 HDMI frame. If your letterbox is different, measure once by calling \`pikvm_mouse_move_to\` with some known target and correcting the offset.
+- Slam origin auto-detection runs \`pikvm_detect_orientation\` on the current frame and reads the iPad letterbox bounds, so portrait, landscape, or non-default-position iPads work without manual tuning. If detection misfires (e.g. fully-black wallpaper), pass \`slamOriginX\`/\`slamOriginY\` explicitly.
 - Prefer \`pikvm_mouse_click_at\` when you want "move + click in one step".`,
           },
         },
@@ -559,8 +599,8 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 | y | number | *(required)* | Target Y in HDMI screenshot pixels |
 | button | string | left | left / right / middle / up / down |
 | slamFirst | boolean | true | Slam to top-left before moving |
-| slamOriginX | number | 625 | HDMI X of post-slam origin |
-| slamOriginY | number | 65 | HDMI Y of post-slam origin |
+| slamOriginX | number | auto | HDMI X of post-slam origin. Auto-detected via \`pikvm_detect_orientation\`. |
+| slamOriginY | number | auto | HDMI Y of post-slam origin. Auto-detected. |
 
 ## When to Use
 - Tapping an iPad app icon whose bounding box is ≥100×100 px — the ~50 px accuracy is inside the hit target.

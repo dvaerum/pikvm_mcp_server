@@ -34,6 +34,7 @@ import {
   ipadGoHome,
   ipadOpenAppSwitcher,
 } from './pikvm/ipad-unlock.js';
+import { detectIpadBounds } from './pikvm/orientation.js';
 
 // Defer initialization to main() for proper error handling
 let pikvm: PiKVMClient;
@@ -385,6 +386,16 @@ const tools: Tool[] = [
         startY: { type: 'number', description: 'HDMI Y of the unlock-swipe start. Default 1035 (just above the home indicator bar).' },
         dragPx: { type: 'number', description: 'Total pixel distance dragged upward. Default 800. If the swipe does not unlock, try 1000 or 1200.' },
         chunkMickeys: { type: 'number', description: 'Per-call mickey size for the drag. Smaller = faster apparent motion. Default 30.' },
+      },
+    },
+  },
+  {
+    name: 'pikvm_detect_orientation',
+    description: 'Detect the iPad content bounds and orientation within the HDMI capture frame. Useful for landscape-aware automation — returns the iPad bounding rect (x/y/width/height), centre point, orientation (portrait or landscape), and full HDMI resolution. Both pikvm_ipad_unlock and pikvm_mouse_move_to call this automatically when their offset arguments are not specified, so most callers do not need to invoke it directly. Use this tool when you want to inspect the iPad layout, or precompute slam/swipe origins for repeated calls.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        brightnessSum: { type: 'number', description: 'Per-channel sum (R+G+B) above which a pixel counts as iPad content rather than letterbox black. Default 60.' },
       },
     },
   },
@@ -912,6 +923,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             { type: 'text', text: result.message },
             { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+          ],
+        };
+      }
+
+      case 'pikvm_detect_orientation': {
+        const bounds = await detectIpadBounds(pikvm, {
+          brightnessSum: validateNumber(args.brightnessSum, 0, 765),
+        });
+        const message =
+          `iPad ${bounds.orientation} content: ${bounds.width}×${bounds.height} ` +
+          `at HDMI (${bounds.x},${bounds.y})→(${bounds.x + bounds.width - 1},${bounds.y + bounds.height - 1}); ` +
+          `centre (${bounds.centerX},${bounds.centerY}); ` +
+          `HDMI frame ${bounds.resolution.width}×${bounds.resolution.height}.`;
+        return {
+          content: [
+            { type: 'text', text: message },
+            { type: 'text', text: JSON.stringify(bounds) },
           ],
         };
       }

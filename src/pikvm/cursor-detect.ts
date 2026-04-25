@@ -330,3 +330,246 @@ export async function locateCursor(
 
   return null;
 }
+
+// ============================================================================
+// Template matching — fallback cursor detection that doesn't rely on motion.
+// ============================================================================
+
+/**
+ * A cursor template captured from a screenshot at a known cursor position.
+ * Stored as raw RGB pixels with explicit dimensions so we don't pay the
+ * decode cost on every match.
+ */
+export interface CursorTemplate {
+  /** Raw RGB pixel data, length = width × height × 3. */
+  rgb: Buffer;
+  width: number;
+  height: number;
+}
+
+/**
+ * Crop a square region from a screenshot centred on a known cursor position
+ * and return it as a `CursorTemplate`. Used to build a template after the
+ * first successful motion-based detection.
+ */
+export async function extractCursorTemplate(
+  screenshot: Buffer,
+  centre: Point,
+  size = 32,
+): Promise<CursorTemplate> {
+  const decoded = await decodeToRgb(screenshot);
+  const half = Math.floor(size / 2);
+  const left = Math.max(0, Math.min(decoded.width - size, centre.x - half));
+  const top = Math.max(0, Math.min(decoded.height - size, centre.y - half));
+
+  const out = Buffer.allocUnsafe(size * size * 3);
+  for (let y = 0; y < size; y++) {
+    const srcOffset = ((top + y) * decoded.width + left) * 3;
+    decoded.data.copy(out, y * size * 3, srcOffset, srcOffset + size * 3);
+  }
+  return { rgb: out, width: size, height: size };
+}
+
+/**
+ * Pre-computed sums used by normalised cross-correlation; computed once for
+ * a template so repeated matching is fast.
+ */
+interface TemplateStats {
+  template: CursorTemplate;
+  mean: [number, number, number];
+  /** sum of (px - mean)² across all template pixels and channels. */
+  varianceSum: number;
+}
+
+function computeTemplateStats(t: CursorTemplate): TemplateStats {
+  const n = t.width * t.height;
+  let sumR = 0, sumG = 0, sumB = 0;
+  for (let i = 0; i < n; i++) {
+    const o = i * 3;
+    sumR += t.rgb[o];
+    sumG += t.rgb[o + 1];
+    sumB += t.rgb[o + 2];
+  }
+  const mean: [number, number, number] = [sumR / n, sumG / n, sumB / n];
+  let varianceSum = 0;
+  for (let i = 0; i < n; i++) {
+    const o = i * 3;
+    const dr = t.rgb[o] - mean[0];
+    const dg = t.rgb[o + 1] - mean[1];
+    const db = t.rgb[o + 2] - mean[2];
+    varianceSum += dr * dr + dg * dg + db * db;
+  }
+  return { template: t, mean, varianceSum };
+}
+
+/**
+ * Normalised cross-correlation between a template and a region of the
+ * screenshot. Returns a value in [-1, 1]; 1 = identical, 0 = uncorrelated.
+ *
+ * Resilient to per-channel brightness offsets (e.g. cursor over a darker
+ * vs lighter wallpaper area), because the mean of each region is
+ * subtracted before correlation.
+ */
+function correlateAt(
+  screen: Buffer,
+  screenWidth: number,
+  region: TemplateStats,
+  topLeftX: number,
+  topLeftY: number,
+): number {
+  const t = region.template;
+  const n = t.width * t.height;
+  // Compute region mean
+  let sumR = 0, sumG = 0, sumB = 0;
+  for (let y = 0; y < t.height; y++) {
+    const screenRow = ((topLeftY + y) * screenWidth + topLeftX) * 3;
+    for (let x = 0; x < t.width; x++) {
+      const o = screenRow + x * 3;
+      sumR += screen[o];
+      sumG += screen[o + 1];
+      sumB += screen[o + 2];
+    }
+  }
+  const meanR = sumR / n;
+  const meanG = sumG / n;
+  const meanB = sumB / n;
+
+  let dot = 0;
+  let regionVariance = 0;
+  for (let y = 0; y < t.height; y++) {
+    const screenRow = ((topLeftY + y) * screenWidth + topLeftX) * 3;
+    const tRow = y * t.width * 3;
+    for (let x = 0; x < t.width; x++) {
+      const so = screenRow + x * 3;
+      const to = tRow + x * 3;
+      const sr = screen[so] - meanR;
+      const sg = screen[so + 1] - meanG;
+      const sb = screen[so + 2] - meanB;
+      const tr = t.rgb[to] - region.mean[0];
+      const tg = t.rgb[to + 1] - region.mean[1];
+      const tb = t.rgb[to + 2] - region.mean[2];
+      dot += sr * tr + sg * tg + sb * tb;
+      regionVariance += sr * sr + sg * sg + sb * sb;
+    }
+  }
+  const denom = Math.sqrt(regionVariance * region.varianceSum);
+  if (denom === 0) return 0;
+  return dot / denom;
+}
+
+export interface FindCursorOptions {
+  /** Optional search window — only correlate within
+   *  (centre.x ± window, centre.y ± window). Defaults to whole frame. */
+  searchCentre?: Point;
+  searchWindow?: number;
+  /** Minimum correlation score to accept (0..1). Default 0.6. iPadOS
+   *  cursor against varied wallpapers usually scores 0.7+. */
+  minScore?: number;
+  /** Step in pixels between correlation samples. 1 = exhaustive,
+   *  slower; 2-4 is a good speed/accuracy compromise. Default 2. */
+  step?: number;
+  verbose?: boolean;
+}
+
+export interface FindCursorResult {
+  position: Point;
+  score: number;
+}
+
+/**
+ * Find the cursor in a screenshot by template matching. Returns the best
+ * match position and its correlation score, or null if the score fell
+ * below `minScore`.
+ *
+ * Use this as a fallback when motion-as-probe diff fails to find a cursor
+ * pair (e.g. the user passed `correct: false` and no movement happened
+ * between captures, or the screen is too noisy for diffing).
+ */
+export async function findCursorByTemplate(
+  screenshot: Buffer,
+  template: CursorTemplate,
+  options: FindCursorOptions = {},
+): Promise<FindCursorResult | null> {
+  const decoded = await decodeToRgb(screenshot);
+  const stats = computeTemplateStats(template);
+  const step = options.step ?? 2;
+  const minScore = options.minScore ?? 0.6;
+
+  let xMin = 0, xMax = decoded.width - template.width;
+  let yMin = 0, yMax = decoded.height - template.height;
+  if (options.searchCentre && options.searchWindow !== undefined) {
+    const w = options.searchWindow;
+    xMin = Math.max(0, Math.floor(options.searchCentre.x - w - template.width / 2));
+    xMax = Math.min(decoded.width - template.width, Math.ceil(options.searchCentre.x + w - template.width / 2));
+    yMin = Math.max(0, Math.floor(options.searchCentre.y - w - template.height / 2));
+    yMax = Math.min(decoded.height - template.height, Math.ceil(options.searchCentre.y + w - template.height / 2));
+  }
+
+  let bestScore = -Infinity;
+  let bestX = 0;
+  let bestY = 0;
+  for (let y = yMin; y <= yMax; y += step) {
+    for (let x = xMin; x <= xMax; x += step) {
+      const score = correlateAt(decoded.data, decoded.width, stats, x, y);
+      if (score > bestScore) {
+        bestScore = score;
+        bestX = x;
+        bestY = y;
+      }
+    }
+  }
+
+  if (options.verbose) {
+    console.error(
+      `[template-match] best score=${bestScore.toFixed(3)} at (${bestX + Math.floor(template.width / 2)}, ` +
+        `${bestY + Math.floor(template.height / 2)}) (window=${xMin}-${xMax}×${yMin}-${yMax}, step=${step})`,
+    );
+  }
+
+  if (bestScore < minScore) return null;
+  return {
+    position: {
+      x: bestX + Math.floor(template.width / 2),
+      y: bestY + Math.floor(template.height / 2),
+    },
+    score: bestScore,
+  };
+}
+
+/**
+ * Persist a cursor template to disk for reuse across invocations.
+ */
+export async function saveCursorTemplate(
+  template: CursorTemplate,
+  filePath: string,
+): Promise<void> {
+  const { promises: fs } = await import('fs');
+  const path = await import('path');
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  // Write as a JPEG so we can inspect it as an image; encode raw RGB via sharp.
+  const jpeg = await sharp(template.rgb, {
+    raw: { width: template.width, height: template.height, channels: 3 },
+  })
+    .jpeg({ quality: 95 })
+    .toBuffer();
+  await fs.writeFile(filePath, jpeg);
+}
+
+/**
+ * Load a cursor template previously written by `saveCursorTemplate`.
+ * Returns null if the file is missing.
+ */
+export async function loadCursorTemplate(
+  filePath: string,
+): Promise<CursorTemplate | null> {
+  const { promises: fs } = await import('fs');
+  try {
+    const buf = await fs.readFile(filePath);
+    const decoded = await decodeToRgb(buf);
+    return { rgb: decoded.data, width: decoded.width, height: decoded.height };
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') return null;
+    throw err;
+  }
+}

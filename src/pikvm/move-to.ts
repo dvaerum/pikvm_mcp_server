@@ -30,10 +30,19 @@ import {
 } from './ballistics.js';
 import {
   Cluster,
+  CursorTemplate,
   DEFAULT_DETECTION_CONFIG,
   diffScreenshots,
+  extractCursorTemplate,
+  findCursorByTemplate,
+  loadCursorTemplate,
   locateCursor,
+  saveCursorTemplate,
 } from './cursor-detect.js';
+import {
+  detectIpadBounds,
+  slamOriginFromBounds,
+} from './orientation.js';
 
 export type MoveStrategy = 'detect-then-move' | 'slam-then-move' | 'assume-at';
 export type Axis = 'x' | 'y';
@@ -110,6 +119,35 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 // ============================================================================
+// Cursor template cache. Captured on first successful motion-diff, persisted
+// to disk, and reused as a non-perturbing detection fallback when motion-diff
+// fails (cursor faded, screen too noisy, etc.).
+// ============================================================================
+
+const TEMPLATE_PATH = './data/cursor-template.jpg';
+let cachedTemplate: CursorTemplate | null | undefined; // undefined = unloaded
+
+async function getCachedTemplate(): Promise<CursorTemplate | null> {
+  if (cachedTemplate !== undefined) return cachedTemplate;
+  cachedTemplate = await loadCursorTemplate(TEMPLATE_PATH).catch(() => null);
+  return cachedTemplate;
+}
+
+async function maybePersistTemplate(
+  screenshot: Buffer,
+  cursorPos: { x: number; y: number },
+): Promise<void> {
+  if (cachedTemplate) return; // already have one
+  try {
+    const t = await extractCursorTemplate(screenshot, cursorPos, 32);
+    cachedTemplate = t;
+    await saveCursorTemplate(t, TEMPLATE_PATH);
+  } catch {
+    // Best-effort; failing to persist is non-fatal.
+  }
+}
+
+// ============================================================================
 // Origin discovery (unchanged from Phase 2)
 // ============================================================================
 
@@ -141,7 +179,24 @@ async function discoverOrigin(
     if (options.verbose) console.error('[move-to] detect-then-move failed; falling back to slam');
   }
 
-  const slamOrigin = options.slamOriginPx ?? { x: 625, y: 65 };
+  // Auto-detect iPad bounds for the slam origin if not explicitly set,
+  // so landscape and non-default-letterbox iPads work without configuration.
+  let slamOrigin = options.slamOriginPx;
+  if (!slamOrigin) {
+    try {
+      const bounds = await detectIpadBounds(client, { verbose: options.verbose });
+      slamOrigin = slamOriginFromBounds(bounds);
+      if (options.verbose) {
+        console.error(
+          `[move-to] auto-detected ${bounds.orientation} slam-origin (${slamOrigin.x},${slamOrigin.y})`,
+        );
+      }
+    } catch (e) {
+      if (options.verbose) console.error(`[move-to] bounds detection failed: ${(e as Error).message}; using portrait default`);
+      slamOrigin = { x: 625, y: 65 };
+    }
+  }
+
   await slamToCorner(client, {
     calls: options.slamCalls,
     paceMs: options.slamPaceMs,
@@ -409,8 +464,34 @@ export async function moveToPixel(
     if (observedRatioX < 0.5 || observedRatioX > 3) observedRatioX = fallback;
     if (observedRatioY < 0.5 || observedRatioY > 3) observedRatioY = fallback;
     finalDetectedPosition = { ...currentPos };
+
+    // Capture & persist a cursor template on first success — useful as a
+    // non-perturbing detection fallback for future calls.
+    await maybePersistTemplate(shotB.buffer, currentPos);
   } else {
-    currentPos = { ...predicted };
+    // Motion-diff failed. Try template matching as a fallback — this
+    // doesn't require any cursor movement and is robust to widget noise.
+    const tmpl = await getCachedTemplate();
+    if (tmpl) {
+      const found = await findCursorByTemplate(shotB.buffer, tmpl, {
+        searchCentre: predicted,
+        searchWindow: postWindow,
+        verbose,
+      });
+      if (found) {
+        currentPos = found.position;
+        finalDetectedPosition = { ...currentPos };
+        if (verbose) {
+          console.error(
+            `[move-to] motion-diff failed; template match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
+          );
+        }
+      } else {
+        currentPos = { ...predicted };
+      }
+    } else {
+      currentPos = { ...predicted };
+    }
   }
 
   // 7. Correction passes — each diffs before/after its own delta.

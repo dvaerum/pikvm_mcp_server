@@ -7,10 +7,12 @@ iPadOS requires a swipe-up-from-bottom gesture to dismiss the lock screen. With 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | slamFirst | boolean | true | Slam to top-left first for a known origin |
-| startX | number | 955 | HDMI X of swipe start (iPad portrait center) |
-| startY | number | 1035 | HDMI Y of swipe start (just above home indicator) |
+| startX | number | auto | HDMI X of swipe start. Auto-detected from iPad letterbox bounds (centre X). Override only if detection misfires. |
+| startY | number | auto | HDMI Y of swipe start. Auto-detected (~45 px above the iPad bottom edge). |
 | dragPx | number | 800 | Total upward drag distance |
 | chunkMickeys | number | 30 | Per-call mickey size (smaller = faster motion) |
+
+The unlock swipe origin is computed from `pikvm_detect_orientation` so it works for portrait or landscape iPads in any letterbox position without manual tuning.
 
 ## Example Call
 ```json
