@@ -190,6 +190,39 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 // ============================================================================
+// Stale-template-match guard.
+//
+// Problem: template-match has stable false positives — e.g., a button or
+// glyph in the iPad UI that scores 0.74-0.82 against the cursor template.
+// When motion-diff is failing in a noisy context, the algorithm trusts
+// template-match. If the false positive is at a fixed location, every
+// correction pass "finds" the cursor there and emits the same correction,
+// burning the pass budget without progress.
+//
+// Detection: if template-match returns the same position (within 5 px)
+// after we emitted ≥30 mickeys of correction in between, treat as stale
+// and reject the match — the real cursor moved with the emission, but
+// the false positive didn't.
+// ============================================================================
+
+/** Returns true if `current` should be rejected as a stale repeat of
+ *  `previous` after a correction whose magnitude is `emittedMickeys`.
+ *  Exported for unit tests. */
+export function isStaleTemplateMatch(
+  current: { x: number; y: number },
+  previous: { x: number; y: number } | null,
+  emittedMickeys: number,
+): boolean {
+  if (previous === null) return false;
+  const drift = Math.hypot(current.x - previous.x, current.y - previous.y);
+  // 5 px drift threshold: real cursor + JPEG noise rarely produces less
+  // than this when actually re-detected.
+  // 30 mickey emission threshold: smaller corrections may legitimately
+  // not move the cursor enough to register a different match.
+  return drift < 5 && emittedMickeys >= 30;
+}
+
+// ============================================================================
 // Cursor template cache. Captured on first successful motion-diff, persisted
 // to disk, and reused as a non-perturbing detection fallback when motion-diff
 // fails (cursor faded, screen too noisy, etc.).
@@ -706,6 +739,10 @@ export async function moveToPixel(
     }
   }
 
+  // Track template-match position to catch stable false positives.
+  let lastTemplateMatch: { x: number; y: number } | null =
+    openLoopMode === 'template' ? { ...currentPos } : null;
+
   diagnostics.push({
     pass: 0,
     mode: openLoopMode,
@@ -844,15 +881,32 @@ export async function moveToPixel(
             verbose,
           });
           if (found) {
-            currentPos = found.position;
-            finalDetectedPosition = { ...currentPos };
-            passMode = 'template';
-            passReason = `template score=${found.score.toFixed(3)} (motion: ${motionFailReason})`;
-            templated = true;
-            if (verbose) {
-              console.error(
-                `[move-to] WARN pass ${totalPasses + 1}: motion-diff failed (${motionFailReason}); template-match recovered cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
-              );
+            // Stable false-positive guard: if template-match returns the
+            // same spot it returned last pass after we emitted significant
+            // mickeys, the match is not the cursor — the cursor moved.
+            const emittedMag = Math.hypot(corrMickeysX, corrMickeysY);
+            if (isStaleTemplateMatch(found.position, lastTemplateMatch, emittedMag)) {
+              if (verbose) {
+                console.error(
+                  `[move-to] WARN pass ${totalPasses + 1}: template-match returned stale position (${found.position.x},${found.position.y}) after ${emittedMag.toFixed(0)} mickeys emitted — rejecting as stable false positive`,
+                );
+              }
+              passMode = 'predicted';
+              passReason = `template-match stale at (${found.position.x},${found.position.y}) after ${emittedMag.toFixed(0)} mickeys`;
+              currentPos = newPredicted;
+              templated = true;
+            } else {
+              currentPos = found.position;
+              finalDetectedPosition = { ...currentPos };
+              lastTemplateMatch = { ...found.position };
+              passMode = 'template';
+              passReason = `template score=${found.score.toFixed(3)} (motion: ${motionFailReason})`;
+              templated = true;
+              if (verbose) {
+                console.error(
+                  `[move-to] WARN pass ${totalPasses + 1}: motion-diff failed (${motionFailReason}); template-match recovered cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
+                );
+              }
             }
           }
         }
