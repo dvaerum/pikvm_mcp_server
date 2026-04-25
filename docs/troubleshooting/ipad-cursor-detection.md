@@ -186,6 +186,29 @@ Two remaining issues uncovered by the now-correct screenshots:
    `locateCursor`'s already-measured `probeOffsetPx` to skip the
    redundant calibration probe entirely.
 
+### Phase 14 — locateCursor probe doubles as calibration
+
+Implemented option 2 above. `LocateCursorResult` now exposes
+`probeMickeys` (signed mickey count of the successful probe).
+`discoverOrigin` returns this through to `moveToPixel`, which uses
+it to seed `calibratedRatioX`/`Y` and skips the separate
+calibration probe entirely. Saves one screenshot (~250 ms) and
+removes the noise-prone Y-axis calibration step that was failing
+in step 3 above.
+
+The architectural shape is now:
+- `locateCursor` — does origin discovery AND ratio measurement in
+  one probe-and-diff pass.
+- `moveToPixel` — uses the measured ratio to plan open-loop;
+  refines via correction-pass motion-diff if available.
+
+When `locateCursor` fails (the diff didn't surface a +X cursor
+pair, e.g. on a very busy frame), the fallback path still runs the
+classical calibration probe — but with `forbidSlamFallback=true`
+on iPad, `locateCursor` failure is now a hard throw rather than a
+silent slam-fallback corrupting the iPad. This is the right
+honesty-vs-availability trade-off.
+
 ## CRITICAL FINDING (2026-04-26): the algorithm has been clicking on phantom cursors
 
 After actually saving and looking at every intermediate screenshot
