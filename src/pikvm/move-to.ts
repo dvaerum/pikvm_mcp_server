@@ -226,6 +226,47 @@ function clamp(v: number, lo: number, hi: number): number {
 // the false positive didn't.
 // ============================================================================
 
+/** Phase 6: clamp the open-loop emit so the projected cursor landing
+ *  stays inside the screen bounds (with a small margin). When the
+ *  ballistic ratio is stale or context-dependent, an unclamped open-loop
+ *  can shoot the cursor off-screen, which loses motion-diff (no post
+ *  cluster) and template-match (no cursor pixels in any frame). The
+ *  clamp keeps the cursor in-frame so subsequent verification has a
+ *  chance to recover the position.
+ *
+ *  Pure function so it can be unit-tested standalone. Returns the
+ *  signed mickey counts to actually emit. Inputs with ratio ≤ 0 are
+ *  returned unchanged (no projection possible). */
+export function clampMickeysToScreen(
+  origin: { x: number; y: number },
+  signedMickeysX: number,
+  signedMickeysY: number,
+  ratioX: number,
+  ratioY: number,
+  bounds: { width: number; height: number },
+  margin = 20,
+): { x: number; y: number } {
+  let x = signedMickeysX;
+  let y = signedMickeysY;
+  if (ratioX > 0) {
+    const projectedX = origin.x + x * ratioX;
+    if (projectedX < margin) {
+      x = Math.ceil((margin - origin.x) / ratioX);
+    } else if (projectedX > bounds.width - margin) {
+      x = Math.floor((bounds.width - margin - origin.x) / ratioX);
+    }
+  }
+  if (ratioY > 0) {
+    const projectedY = origin.y + y * ratioY;
+    if (projectedY < margin) {
+      y = Math.ceil((margin - origin.y) / ratioY);
+    } else if (projectedY > bounds.height - margin) {
+      y = Math.floor((bounds.height - margin - origin.y) / ratioY);
+    }
+  }
+  return { x, y };
+}
+
 /** Phase 4: blind-pass circuit breaker. Returns true if the last 2
  *  diagnostic entries are both `predicted` mode — i.e., motion-diff and
  *  template-match have BOTH failed twice in a row. Continuing to emit
@@ -939,16 +980,36 @@ export async function moveToPixel(
     x: origin.x + calibX * calibratedRatioX,
     y: origin.y + calibY * calibratedRatioY,
   };
+  // Phase 6: clamp open-loop to keep projected cursor landing inside
+  // the screen. iPad ratio variance (1.0–2.0× observed) means a stale
+  // ratio can plan an emission that pushes the cursor off-screen, which
+  // loses motion-diff (no post cluster) and template-match (no cursor
+  // pixels). Clamp keeps cursor in-frame so verification can recover.
+  const clampedOpen = clampMickeysToScreen(
+    postCalibPos,
+    signXNow * rawMickeysXNow,
+    signYNow * rawMickeysYNow,
+    planRatioX,
+    planRatioY,
+    { width: resolution.width, height: resolution.height },
+  );
+  const openMickeysX = clampedOpen.x;
+  const openMickeysY = clampedOpen.y;
   const predictedPostOpen = {
-    x: postCalibPos.x + signXNow * rawMickeysXNow * planRatioX,
-    y: postCalibPos.y + signYNow * rawMickeysYNow * planRatioY,
+    x: postCalibPos.x + openMickeysX * planRatioX,
+    y: postCalibPos.y + openMickeysY * planRatioY,
   };
 
   const postWarmupExpected = postCalibPos;
 
+  if (verbose && (openMickeysX !== signXNow * rawMickeysXNow || openMickeysY !== signYNow * rawMickeysYNow)) {
+    console.error(
+      `[move-to] open-loop CLAMPED to keep cursor on-screen: ` +
+        `(${signXNow * rawMickeysXNow},${signYNow * rawMickeysYNow}) → (${openMickeysX},${openMickeysY})`,
+    );
+  }
+
   // 4. Open-loop emission — uses calibrated ratio + remaining-distance plan.
-  const openMickeysX = signXNow * rawMickeysXNow;
-  const openMickeysY = signYNow * rawMickeysYNow;
   const chunkCount = await emitChunked(client, openMickeysX, openMickeysY, chunkMag, chunkPaceMs);
 
   // Settle briefly so the streamer catches up and cursor is still visible.
