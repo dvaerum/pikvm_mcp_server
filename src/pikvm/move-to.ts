@@ -474,7 +474,15 @@ interface MotionDiffResult {
   postCandidates: number;
 }
 
-/** Exported for unit tests. Not part of the public MCP tool surface. */
+/** Exported for unit tests. Not part of the public MCP tool surface.
+ *
+ *  `requireAchromatic` (Phase 1): when true, sized clusters whose mean
+ *  RGB has a saturation > 40 (i.e. one channel ≥ 40 brighter than the
+ *  darkest) are rejected before pair scoring. iPadOS cursor is gray
+ *  (R≈G≈B); colored animated widgets (clock-second hand, weather icons)
+ *  produce chromatic clusters that this filter removes. Default false
+ *  for backward compat with existing tests; `moveToPixel` enables it
+ *  for iPad use. */
 export function detectMotion(
   a: DecodedScreenshot,
   b: DecodedScreenshot,
@@ -487,6 +495,7 @@ export function detectMotion(
   clusterMin: number = 8,
   clusterMax: number = 90,
   brightnessFloor: number = 100,
+  requireAchromatic: boolean = false,
 ): MotionDiffResult {
   // brightnessFloor lowered from 170 → 100. Cursor pixels rendered over
   // a dimmed-modal scrim or a dark wallpaper land in 100–160 range; the
@@ -509,7 +518,32 @@ export function detectMotion(
     Math.hypot(c.centroidX - p.x, c.centroidY - p.y);
 
   const preCandidatesWindow = sized.filter((c) => dist(c, expectedStart) <= preWindow);
-  const postCandidates = sized.filter((c) => dist(c, expectedEnd) <= postWindow);
+  let postCandidates = sized.filter((c) => dist(c, expectedEnd) <= postWindow);
+
+  // Phase 1: optional cluster-level achromatic filter applied to POST
+  // candidates only. The post-cluster's mean colour comes from frame B
+  // at cursor pixels — for the cursor it's gray (R≈G≈B); for a colored
+  // widget animation it's the widget's chromatic colour. The PRE cluster's
+  // mean is whatever was underneath (often the wallpaper, possibly
+  // chromatic) so filtering pre would reject real cursors over colored
+  // wallpapers. Filtering at the CLUSTER level — not pixel level — keeps
+  // anti-aliased cursor edges intact.
+  if (requireAchromatic) {
+    const before = postCandidates.length;
+    postCandidates = postCandidates.filter((c) => {
+      if (c.meanR === undefined || c.meanG === undefined || c.meanB === undefined) {
+        return true; // no color info → don't filter
+      }
+      const sat = Math.max(c.meanR, c.meanG, c.meanB) -
+        Math.min(c.meanR, c.meanG, c.meanB);
+      return sat <= 40;
+    });
+    if (verbose) {
+      console.error(
+        `[motion] achromatic filter: ${before} post-candidates → ${postCandidates.length} achromatic`,
+      );
+    }
+  }
 
   // Fallback: if the windowed pre-search came up empty but we have
   // multiple sized clusters, the cursor probably wasn't where we
@@ -758,6 +792,8 @@ export async function moveToPixel(
       verbose,
       clusterMin,
       clusterMax,
+      100,                  // brightnessFloor (default)
+      true,                 // requireAchromatic — Phase 1
     );
     if (calibResult.pair) {
       const measured = calibResult.pair.livePxPerMickey;
@@ -848,6 +884,8 @@ export async function moveToPixel(
         verbose,
         clusterMin,
         clusterMax,
+        100,                  // brightnessFloor (default)
+        true,                 // requireAchromatic — Phase 1
       )
     : null;
 
@@ -1022,6 +1060,8 @@ export async function moveToPixel(
         verbose,
         clusterMin,
         clusterMax,
+        100,                  // brightnessFloor (default)
+        true,                 // requireAchromatic — Phase 1
       );
 
       let passMode: 'motion' | 'template' | 'predicted' = 'predicted';
