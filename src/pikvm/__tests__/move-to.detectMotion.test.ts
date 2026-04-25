@@ -11,7 +11,8 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { decodeScreenshot, extractCursorTemplateDecoded } from '../cursor-detect.js';
-import { detectMotion } from '../move-to.js';
+import { detectMotion, shouldAbortBlindCorrections } from '../move-to.js';
+import type { MovePassDiagnostic } from '../move-to.js';
 
 async function makeFrame(width: number, height: number, fill: [number, number, number]): Promise<Buffer> {
   const buf = Buffer.alloc(width * height * 3);
@@ -267,5 +268,48 @@ describe('detectMotion', () => {
     );
     expect(r.pair).toBeNull();
     expect(r.reason).toMatch(/no pair passed|no post candidate|no pre candidate/i);
+  });
+});
+
+function diag(pass: number, mode: MovePassDiagnostic['mode']): MovePassDiagnostic {
+  return {
+    pass,
+    mode,
+    detectedAt: { x: 0, y: 0 },
+    residualPx: 100,
+    ratioUsed: { x: 1, y: 1 },
+    reason: null,
+    linearPhase: false,
+  };
+}
+
+describe('shouldAbortBlindCorrections (Phase 4 circuit breaker)', () => {
+  it('returns false on the first predicted pass (single failure can be recovered)', () => {
+    const ds = [diag(0, 'motion'), diag(1, 'predicted')];
+    expect(shouldAbortBlindCorrections(ds)).toBe(false);
+  });
+
+  it('returns true after 2 consecutive predicted passes', () => {
+    const ds = [diag(0, 'motion'), diag(1, 'predicted'), diag(2, 'predicted')];
+    expect(shouldAbortBlindCorrections(ds)).toBe(true);
+  });
+
+  it('a template-recovered pass between two predicted passes resets the streak', () => {
+    const ds = [
+      diag(0, 'motion'),
+      diag(1, 'predicted'),
+      diag(2, 'template'),
+      diag(3, 'predicted'),
+    ];
+    expect(shouldAbortBlindCorrections(ds)).toBe(false);
+  });
+
+  it('returns false on an empty diagnostic list', () => {
+    expect(shouldAbortBlindCorrections([])).toBe(false);
+  });
+
+  it('returns false if last pass is verified (motion or template)', () => {
+    const ds = [diag(0, 'predicted'), diag(1, 'predicted'), diag(2, 'motion')];
+    expect(shouldAbortBlindCorrections(ds)).toBe(false);
   });
 });

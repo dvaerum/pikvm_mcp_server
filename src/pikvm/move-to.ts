@@ -226,6 +226,22 @@ function clamp(v: number, lo: number, hi: number): number {
 // the false positive didn't.
 // ============================================================================
 
+/** Phase 4: blind-pass circuit breaker. Returns true if the last 2
+ *  diagnostic entries are both `predicted` mode — i.e., motion-diff and
+ *  template-match have BOTH failed twice in a row. Continuing to emit
+ *  corrections in this state compounds error (each pass shifts
+ *  `currentPos` by an unverified prediction whose ratio may be stale).
+ *  Caller should break out of the correction loop and trust the last
+ *  verified position rather than burn the rest of the pass budget.
+ *
+ *  Exported for unit tests. */
+export function shouldAbortBlindCorrections(diagnostics: MovePassDiagnostic[]): boolean {
+  if (diagnostics.length < 2) return false;
+  const last = diagnostics[diagnostics.length - 1];
+  const secondLast = diagnostics[diagnostics.length - 2];
+  return last.mode === 'predicted' && secondLast.mode === 'predicted';
+}
+
 /** Returns true if `current` should be rejected as a stale repeat of
  *  `previous` after a correction whose magnitude is `emittedMickeys`.
  *  Exported for unit tests. */
@@ -1226,6 +1242,21 @@ export async function moveToPixel(
       totalPasses++;
       if (useLinear) linearPassesUsed++;
       else grossPassesUsed++;
+
+      // Phase 4: blind-pass circuit breaker. After 2 consecutive
+      // predicted-mode passes (motion-diff blind AND template-match
+      // unable to recover), every further emission shifts currentPos by
+      // an unverified prediction whose ratio may be stale — error
+      // compounds. Bail out and trust the last verified position rather
+      // than burn budget overshooting.
+      if (shouldAbortBlindCorrections(diagnostics)) {
+        if (verbose) {
+          console.error(
+            `[move-to] CIRCUIT BREAKER: 2 consecutive predicted passes; aborting correction loop to avoid compounding overshoot. residual=${diagnostics[diagnostics.length - 1].residualPx.toFixed(1)}px`,
+          );
+        }
+        break;
+      }
     }
   }
 
