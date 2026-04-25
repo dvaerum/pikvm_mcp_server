@@ -270,8 +270,14 @@ async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
  * Options for `locateCursor`.
  *
  * The probe is a small known mouse delta used to create two frames with the
- * cursor in different positions, so `diffScreenshots` can find it. After the
- * probe, a compensating move returns the pointer close to where it started.
+ * cursor in different positions, so `diffScreenshots` can find it.
+ *
+ * **Caller contract:** after this function returns, the cursor is at
+ * `result.position` (NOT at its original pre-probe position). The function
+ * does NOT attempt to restore the cursor — iPadOS pointer acceleration is
+ * asymmetric, so a compensating move can leave the cursor anywhere between
+ * the pre and post positions, silently lying about its post-call state.
+ * Callers that want the cursor restored should re-locate after their move.
  */
 export interface LocateCursorOptions {
   probeDelta?: number;        // default 10 (mickeys, +x direction)
@@ -282,18 +288,26 @@ export interface LocateCursorOptions {
 }
 
 export interface LocateCursorResult {
-  position: Point;            // cursor position in screenshot-pixel space
+  /** Cursor position AFTER the probe (i.e. where it is when this returns). */
+  position: Point;
+  /** Where the cursor was BEFORE the probe — informational. */
+  prePosition: Point;
   probeOffsetPx: Point;       // observed displacement from the probe
   clusterCount: number;       // for diagnostics
 }
 
 /**
  * Locate the current cursor position by probing — send a small known delta,
- * diff before/after screenshots, pick the cluster that corresponds to the
- * pre-probe position. Restores the cursor with a compensating delta.
+ * diff before/after screenshots, identify the cluster pair.
  *
  * Returns null if detection fails after retries (e.g. cursor hidden, screen
  * too noisy, cursor on a region that doesn't diff well).
+ *
+ * Default `detection.brightnessFloor` is 100 (lowered from the
+ * DEFAULT_DETECTION_CONFIG of 170). The 170 default rejects cursor pixels
+ * rendered over dimmed-modal scrims; 100 catches them. Callers can still
+ * pass a higher floor via `detection.brightnessFloor` for very-bright
+ * contexts where false positives are a concern.
  */
 export async function locateCursor(
   client: PiKVMClient,
@@ -302,7 +316,14 @@ export async function locateCursor(
   const probeDelta = options.probeDelta ?? 10;
   const settleMs = options.settleMs ?? 150;
   const maxAttempts = options.maxAttempts ?? 3;
-  const detection: DetectionConfig = { ...DEFAULT_DETECTION_CONFIG, ...options.detection };
+  // Default brightness floor lowered from 170 to 100 — same fix as
+  // detectMotion in move-to.ts. iPadOS dimmed-modal contexts render the
+  // cursor with channel values 100-160; the 170 floor was rejecting them.
+  const detection: DetectionConfig = {
+    ...DEFAULT_DETECTION_CONFIG,
+    brightnessFloor: 100,
+    ...options.detection,
+  };
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const before = await takeRawScreenshot(client);
@@ -312,9 +333,11 @@ export async function locateCursor(
     await sleep(settleMs);
     const after = await takeRawScreenshot(client);
 
-    // Compensate (best-effort — iPadOS acceleration makes this approximate).
-    await client.mouseMoveRelative(-probeDelta, 0);
-    await sleep(settleMs);
+    // NB: no compensating move. iPadOS pointer-acceleration asymmetry
+    // means a -probeDelta call doesn't undo a +probeDelta call. Returning
+    // the cursor's actual current position (post-probe) is honest; faking
+    // a restore that doesn't actually restore is what poisoned the
+    // algorithm in earlier iterations.
 
     let clusters: Cluster[];
     try {
@@ -332,7 +355,7 @@ export async function locateCursor(
     }
 
     // The probe was in +x direction, so the cluster with smaller x is the
-    // pre-probe position (what we want).
+    // pre-probe position; the larger x is where the cursor IS now.
     const [a, b] = clusters;
     const pre = a.centroidX <= b.centroidX ? a : b;
     const post = pre === a ? b : a;
@@ -343,12 +366,14 @@ export async function locateCursor(
 
     if (options.verbose) {
       console.error(
-        `[locateCursor] pre=(${pre.centroidX},${pre.centroidY}) post=(${post.centroidX},${post.centroidY}) offset=(${probeOffsetPx.x},${probeOffsetPx.y})`,
+        `[locateCursor] pre=(${pre.centroidX},${pre.centroidY}) post=(${post.centroidX},${post.centroidY}) offset=(${probeOffsetPx.x},${probeOffsetPx.y}) — cursor now at post`,
       );
     }
 
     return {
-      position: { x: pre.centroidX, y: pre.centroidY },
+      // post = where the cursor IS after this function returns.
+      position: { x: post.centroidX, y: post.centroidY },
+      prePosition: { x: pre.centroidX, y: pre.centroidY },
       probeOffsetPx,
       clusterCount: clusters.length,
     };
