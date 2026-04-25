@@ -16,6 +16,7 @@ import {
   clampMickeysToScreen,
   detectMotion,
   isOriginProbeMatchPlausible,
+  isRatioUpdatePlausible,
   pickNearestPlausibleMatch,
   shouldAbortBlindCorrections,
 } from '../move-to.js';
@@ -289,6 +290,41 @@ function diag(pass: number, mode: MovePassDiagnostic['mode']): MovePassDiagnosti
     linearPhase: false,
   };
 }
+
+describe('isRatioUpdatePlausible (Phase 12 ratio-update guard)', () => {
+  // Ratio updates from ad-hoc correction-pass diffs can drift wildly
+  // when the picked cluster pair was actually a widget animation, not
+  // the real cursor. Live trace caught Y ratio degrading to 0.34
+  // (true iPad Y ratio is 1.5-3.0); each subsequent correction
+  // barely moved the cursor. Reject ratio updates that:
+  //   - drift > 2× away from the previous trusted ratio in one pass
+  //   - drop below 0.5 or above 4.0 (well within fallback iPad range)
+
+  it('accepts a ratio close to previous (small drift)', () => {
+    expect(isRatioUpdatePlausible(2.0, 1.8)).toBe(true);
+    expect(isRatioUpdatePlausible(1.5, 2.5)).toBe(true);
+  });
+
+  it('rejects a ratio that drifts > 2x from previous', () => {
+    expect(isRatioUpdatePlausible(3.0, 0.3)).toBe(false);
+    expect(isRatioUpdatePlausible(1.0, 5.0)).toBe(false);
+  });
+
+  it('rejects out-of-band absolute ratios even when previous is loose', () => {
+    expect(isRatioUpdatePlausible(0.4, 0.3)).toBe(false); // both below 0.5
+    expect(isRatioUpdatePlausible(4.5, 5.0)).toBe(false); // both above 4.0
+  });
+
+  it('accepts when previous is null/undefined (first measurement)', () => {
+    expect(isRatioUpdatePlausible(null, 2.0)).toBe(true);
+    expect(isRatioUpdatePlausible(null, 0.6)).toBe(true);
+  });
+
+  it('rejects when previous is null but new ratio is wild', () => {
+    expect(isRatioUpdatePlausible(null, 0.3)).toBe(false);
+    expect(isRatioUpdatePlausible(null, 6.0)).toBe(false);
+  });
+});
 
 describe('pickNearestPlausibleMatch (Phase 11 multi-template ranking)', () => {
   // When multi-template fallback returns multiple plausible cursor

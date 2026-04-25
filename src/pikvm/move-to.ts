@@ -226,6 +226,30 @@ function clamp(v: number, lo: number, hi: number): number {
 // the false positive didn't.
 // ============================================================================
 
+/** Phase 12: ratio-update guard. Each correction pass that succeeds
+ *  via motion-diff updates the live px/mickey ratio used for the next
+ *  emission. If the diff picked a wrong cluster pair (e.g. a widget
+ *  animation pair instead of the real cursor pair), the resulting
+ *  "live ratio" can be wildly off — live data caught Y ratio
+ *  degrading to 0.34 (real iPad Y is 1.5–3.0), after which every
+ *  subsequent correction barely moved the cursor. Reject updates
+ *  that:
+ *    - drift > 2× away from the prior trusted ratio in one pass
+ *    - fall outside the absolute [0.5, 4.0] range that bounds iPad
+ *      pointer-acceleration variance across known contexts
+ *
+ *  When `prev` is null (no prior measurement), the absolute-range
+ *  check still applies. Pure helper for unit testability. */
+export function isRatioUpdatePlausible(
+  prev: number | null,
+  candidate: number,
+): boolean {
+  if (candidate < 0.5 || candidate > 4.0) return false;
+  if (prev === null) return true;
+  const ratio = candidate > prev ? candidate / prev : prev / candidate;
+  return ratio <= 2.0;
+}
+
 /** Phase 11: locality-aware ranking for multi-template match results.
  *  When the cursor was just at `expectedNear` (e.g. a confirmed prior
  *  position from the previous correction pass), prefer candidates

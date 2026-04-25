@@ -103,6 +103,7 @@ and post-cluster (where cursor is now).
 | 9 | `b5b0468` | Cap per-correction emission at 25 mickeys (linear) / 80 (gross) | Worst-case 5-trial residual: 553 → 275 px. Bounds blind-mode damage but doesn't fix accuracy. |
 | 10 | `9068c7a` | `isOriginProbeMatchPlausible` helper + always-locateCursor evaluation (reverted) | locateCursor itself fails 3/5 on iPad home screen, so always-probe is strictly worse. Helper kept for future redesign. Troubleshooting doc added. |
 | 11 | `595d84f` | Locality-aware ranking in `findCursorByTemplateSet` — prefer per-template matches near a hint over far high-scoring FPs | Catches the (781, 713) 0.944 FP that would otherwise beat the (1057, 837) 0.909 real-cursor match. 5-trial worst-case 275 → 207 px. |
+| 12 | (helper only, not wired) | `isRatioUpdatePlausible` — reject ratio updates that drift > 2× from prior or fall outside [0.5, 4.0] | Wired at 2× threshold made *every* trial regress to 178-207 px because legitimate context-switch adaptations from default (3.04, 5.28) to true iPad (~1.5–2.5) were being blocked. Helper kept for future wiring at a looser threshold (3× or 4×) once we have data on how often legitimate updates exceed 2×. |
 
 ## What we measured live
 
