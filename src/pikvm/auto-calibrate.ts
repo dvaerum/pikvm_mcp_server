@@ -11,6 +11,7 @@ import {
   DetectionConfig,
   diffScreenshots as detectDiffScreenshots,
 } from './cursor-detect.js';
+import { sleep } from './util.js';
 
 // ============================================================================
 // Types
@@ -95,10 +96,6 @@ async function diffScreenshots(
 // ============================================================================
 // Helpers
 // ============================================================================
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);

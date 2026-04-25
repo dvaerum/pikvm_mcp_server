@@ -26,6 +26,7 @@ import {
   diffScreenshots,
   locateCursor,
 } from './cursor-detect.js';
+import { sleep } from './util.js';
 
 // ============================================================================
 // Types
@@ -91,10 +92,6 @@ export interface MeasureBallisticsResult {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
   const result = await client.screenshot();
