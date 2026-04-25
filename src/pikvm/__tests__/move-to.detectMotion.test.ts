@@ -15,8 +15,6 @@ import {
   capCorrectionMickeys,
   clampMickeysToScreen,
   detectMotion,
-  isOriginProbeMatchPlausible,
-  isRatioUpdatePlausible,
   pickNearestPlausibleMatch,
   shouldAbortBlindCorrections,
 } from '../move-to.js';
@@ -291,41 +289,6 @@ function diag(pass: number, mode: MovePassDiagnostic['mode']): MovePassDiagnosti
   };
 }
 
-describe('isRatioUpdatePlausible (Phase 12 ratio-update guard)', () => {
-  // Ratio updates from ad-hoc correction-pass diffs can drift wildly
-  // when the picked cluster pair was actually a widget animation, not
-  // the real cursor. Live trace caught Y ratio degrading to 0.34
-  // (true iPad Y ratio is 1.5-3.0); each subsequent correction
-  // barely moved the cursor. Reject ratio updates that:
-  //   - drift > 2× away from the previous trusted ratio in one pass
-  //   - drop below 0.5 or above 4.0 (well within fallback iPad range)
-
-  it('accepts a ratio close to previous (small drift)', () => {
-    expect(isRatioUpdatePlausible(2.0, 1.8)).toBe(true);
-    expect(isRatioUpdatePlausible(1.5, 2.5)).toBe(true);
-  });
-
-  it('rejects a ratio that drifts > 2x from previous', () => {
-    expect(isRatioUpdatePlausible(3.0, 0.3)).toBe(false);
-    expect(isRatioUpdatePlausible(1.0, 5.0)).toBe(false);
-  });
-
-  it('rejects out-of-band absolute ratios even when previous is loose', () => {
-    expect(isRatioUpdatePlausible(0.4, 0.3)).toBe(false); // both below 0.5
-    expect(isRatioUpdatePlausible(4.5, 5.0)).toBe(false); // both above 4.0
-  });
-
-  it('accepts when previous is null/undefined (first measurement)', () => {
-    expect(isRatioUpdatePlausible(null, 2.0)).toBe(true);
-    expect(isRatioUpdatePlausible(null, 0.6)).toBe(true);
-  });
-
-  it('rejects when previous is null but new ratio is wild', () => {
-    expect(isRatioUpdatePlausible(null, 0.3)).toBe(false);
-    expect(isRatioUpdatePlausible(null, 6.0)).toBe(false);
-  });
-});
-
 describe('pickNearestPlausibleMatch (Phase 11 multi-template ranking)', () => {
   // When multi-template fallback returns multiple plausible cursor
   // positions across a screenshot (each template's NCC peak is at a
@@ -376,56 +339,6 @@ describe('pickNearestPlausibleMatch (Phase 11 multi-template ranking)', () => {
     const matches: M[] = [make(20, 20, 0.85), make(50, 50, 0.93)];
     const r = pickNearestPlausibleMatch(matches, { x: 0, y: 0 }, 100);
     expect(r!.score).toBe(0.93);
-  });
-});
-
-describe('isOriginProbeMatchPlausible (Phase 10 origin verification)', () => {
-  // After template-match claims the cursor is at `claimed`, we emit a
-  // small +X probe and look at the post-cluster centroid. The post
-  // cluster should be near `claimed + (probe*ratio, 0)`. If the
-  // observed post is wildly elsewhere, the template-match origin was
-  // a false positive.
-  const tolerance = 40;
-
-  it('accepts a post-cluster near the predicted landing', () => {
-    const r = isOriginProbeMatchPlausible(
-      { x: 100, y: 200 },           // claimed origin
-      { x: 132, y: 202 },           // observed post
-      { x: 30, y: 0 },              // probe offset (+30 px X)
-      tolerance,
-    );
-    expect(r).toBe(true);
-  });
-
-  it('rejects a post-cluster far from the predicted landing', () => {
-    const r = isOriginProbeMatchPlausible(
-      { x: 100, y: 200 },
-      { x: 800, y: 50 },             // observed post is far away
-      { x: 30, y: 0 },
-      tolerance,
-    );
-    expect(r).toBe(false);
-  });
-
-  it('rejects when observed post is at the claimed position (cursor did not move)', () => {
-    // Cursor "didn't move" relative to the claimed origin → claim is wrong.
-    const r = isOriginProbeMatchPlausible(
-      { x: 100, y: 200 },
-      { x: 102, y: 200 },
-      { x: 30, y: 0 },
-      tolerance,
-    );
-    expect(r).toBe(false);
-  });
-
-  it('handles negative probe direction', () => {
-    const r = isOriginProbeMatchPlausible(
-      { x: 200, y: 200 },
-      { x: 175, y: 200 },           // moved -25 X
-      { x: -30, y: 0 },             // probe was -30 px X
-      tolerance,
-    );
-    expect(r).toBe(true);
   });
 });
 

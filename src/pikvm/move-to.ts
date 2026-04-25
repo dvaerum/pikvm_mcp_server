@@ -227,30 +227,6 @@ function clamp(v: number, lo: number, hi: number): number {
 // the false positive didn't.
 // ============================================================================
 
-/** Phase 12: ratio-update guard. Each correction pass that succeeds
- *  via motion-diff updates the live px/mickey ratio used for the next
- *  emission. If the diff picked a wrong cluster pair (e.g. a widget
- *  animation pair instead of the real cursor pair), the resulting
- *  "live ratio" can be wildly off — live data caught Y ratio
- *  degrading to 0.34 (real iPad Y is 1.5–3.0), after which every
- *  subsequent correction barely moved the cursor. Reject updates
- *  that:
- *    - drift > 2× away from the prior trusted ratio in one pass
- *    - fall outside the absolute [0.5, 4.0] range that bounds iPad
- *      pointer-acceleration variance across known contexts
- *
- *  When `prev` is null (no prior measurement), the absolute-range
- *  check still applies. Pure helper for unit testability. */
-export function isRatioUpdatePlausible(
-  prev: number | null,
-  candidate: number,
-): boolean {
-  if (candidate < 0.5 || candidate > 4.0) return false;
-  if (prev === null) return true;
-  const ratio = candidate > prev ? candidate / prev : prev / candidate;
-  return ratio <= 2.0;
-}
-
 /** Phase 11: locality-aware ranking for multi-template match results.
  *  When the cursor was just at `expectedNear` (e.g. a confirmed prior
  *  position from the previous correction pass), prefer candidates
@@ -281,39 +257,6 @@ export function pickNearestPlausibleMatch<T extends { position: { x: number; y: 
     }
   }
   return matches.reduce((a, b) => (a.score > b.score ? a : b));
-}
-
-/** Phase 10: origin-verification predicate. After template-match
- *  claims the cursor is at `claimed`, we emit a small probe move and
- *  inspect the post-cluster centroid in the resulting motion-diff.
- *  The post cluster should land near `claimed + probeOffsetPx`. If
- *  it's far from that prediction (or right back at `claimed` — meaning
- *  the cursor didn't move at all), the template-match origin was a
- *  stable false positive at a fixed UI element and we must fall
- *  through to a fresh probe-and-diff.
- *
- *  Pure helper so the decision is unit-tested independently of the
- *  PiKVMClient. `tolerance` is in pixels — generous enough to absorb
- *  iPad pointer-acceleration drift and JPEG-noise centroid wobble. */
-export function isOriginProbeMatchPlausible(
-  claimed: { x: number; y: number },
-  observedPost: { x: number; y: number },
-  probeOffsetPx: { x: number; y: number },
-  tolerance = 40,
-): boolean {
-  const predicted = {
-    x: claimed.x + probeOffsetPx.x,
-    y: claimed.y + probeOffsetPx.y,
-  };
-  const distToPredicted = Math.hypot(observedPost.x - predicted.x, observedPost.y - predicted.y);
-  if (distToPredicted > tolerance) return false;
-  // Also reject if observed post is right back at the claimed origin —
-  // that means the cursor did not move at all, so the claimed origin
-  // can't be the real cursor (the real cursor would have moved).
-  const distToClaimed = Math.hypot(observedPost.x - claimed.x, observedPost.y - claimed.y);
-  const probeMag = Math.hypot(probeOffsetPx.x, probeOffsetPx.y);
-  if (distToClaimed < probeMag * 0.25) return false;
-  return true;
 }
 
 /** Phase 9: cap a correction-pass emission so a single pass can't run
