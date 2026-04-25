@@ -23,7 +23,7 @@
  * distance. The drag takes ~400 ms end-to-end including HTTP latency.
  */
 
-import { PiKVMClient } from './client.js';
+import { PiKVMClient, ScreenResolution } from './client.js';
 import { slamToCorner } from './ballistics.js';
 
 export interface IpadUnlockOptions {
@@ -148,5 +148,191 @@ export async function unlockIpad(
     chunkCount,
     swipeDurationMs,
     message,
+  };
+}
+
+// ============================================================================
+// Composed iPad keyboard helpers — bundle the verified keyboard-first patterns
+// into single-call tools so agents don't have to chain primitives.
+// ============================================================================
+
+export interface IpadLaunchAppOptions {
+  /** Whether to attempt unlock first if the screen state is unknown.
+   *  Default true. Setting this to false skips the swipe (cheaper if
+   *  the caller knows the iPad is already unlocked). */
+  unlockFirst?: boolean;
+  /** Settle delay between Spotlight open and typing (ms). Default 700. */
+  spotlightSettleMs?: number;
+  /** Settle delay after typing the app name, before Enter (ms). Default 600. */
+  postTypeSettleMs?: number;
+  /** Settle delay after Enter, before returning the screenshot (ms).
+   *  Default 1500 — apps usually launch within 1 s, this gives a margin. */
+  launchSettleMs?: number;
+  verbose?: boolean;
+}
+
+export interface IpadLaunchAppResult {
+  screenshot: Buffer;
+  screenshotWidth: number;
+  screenshotHeight: number;
+  appName: string;
+  unlocked: boolean;
+  resolution: ScreenResolution;
+  message: string;
+}
+
+/**
+ * Launch an iPad app via the verified keyboard pipeline:
+ * unlock → Cmd+Space (Spotlight) → type app name → Enter → settle → screenshot.
+ *
+ * This is far more reliable than `pikvm_mouse_click_at` on an icon because
+ * it bypasses cursor positioning entirely. Verified live for Files,
+ * Settings, App Store on iPadOS 26.1.
+ */
+export async function launchIpadApp(
+  client: PiKVMClient,
+  appName: string,
+  options: IpadLaunchAppOptions = {},
+): Promise<IpadLaunchAppResult> {
+  if (!appName || appName.trim().length === 0) {
+    throw new Error('appName is required');
+  }
+  const unlockFirst = options.unlockFirst ?? true;
+  const spotlightSettleMs = options.spotlightSettleMs ?? 700;
+  const postTypeSettleMs = options.postTypeSettleMs ?? 600;
+  const launchSettleMs = options.launchSettleMs ?? 1500;
+
+  let unlocked = false;
+  if (unlockFirst) {
+    if (options.verbose) console.error(`[launch-app] unlocking iPad`);
+    await unlockIpad(client, { verbose: options.verbose });
+    unlocked = true;
+  }
+
+  if (options.verbose) console.error('[launch-app] Cmd+Space');
+  await client.sendShortcut(['MetaLeft', 'Space']);
+  await sleep(spotlightSettleMs);
+
+  if (options.verbose) console.error(`[launch-app] type "${appName}"`);
+  await client.type(appName);
+  await sleep(postTypeSettleMs);
+
+  if (options.verbose) console.error('[launch-app] Enter');
+  await client.sendKey('Enter');
+  await sleep(launchSettleMs);
+
+  const shot = await client.screenshot();
+  const resolution = await client.getResolution();
+
+  return {
+    screenshot: shot.buffer,
+    screenshotWidth: shot.screenshotWidth,
+    screenshotHeight: shot.screenshotHeight,
+    appName,
+    unlocked,
+    resolution,
+    message:
+      `Launched '${appName}' via Spotlight (unlocked=${unlocked}). ` +
+      `Inspect the returned screenshot to confirm the app opened. ` +
+      `If Spotlight returned to home screen instead, the app name didn't match — try a partial name or check spelling.`,
+  };
+}
+
+export interface IpadHomeOptions {
+  /** Settle delay after the gesture before screenshotting. Default 800 ms. */
+  settleMs?: number;
+  verbose?: boolean;
+}
+
+export interface IpadHomeResult {
+  screenshot: Buffer;
+  screenshotWidth: number;
+  screenshotHeight: number;
+  message: string;
+}
+
+/**
+ * Return to the iPad home screen from any foreground app via Cmd+H.
+ *
+ * Background: mouse swipe-up gestures from the bottom edge consistently
+ * open the App Switcher on iPadOS (regardless of distance or speed),
+ * not the home screen. Apple seems to reserve the true "go home"
+ * gesture for finger touch. The keyboard shortcut Cmd+H ("Hide app")
+ * works reliably from any foreground app and is what we use here.
+ *
+ * Idempotent on the home screen. Does NOT unlock from the lock screen —
+ * use `unlockIpad` for that.
+ */
+export async function ipadGoHome(
+  client: PiKVMClient,
+  options: IpadHomeOptions = {},
+): Promise<IpadHomeResult> {
+  const settleMs = options.settleMs ?? 800;
+
+  if (options.verbose) console.error('[ipad-home] Cmd+H');
+  await client.sendShortcut(['MetaLeft', 'KeyH']);
+  await sleep(settleMs);
+
+  const shot = await client.screenshot();
+  return {
+    screenshot: shot.buffer,
+    screenshotWidth: shot.screenshotWidth,
+    screenshotHeight: shot.screenshotHeight,
+    message:
+      'Sent Cmd+H to dismiss the foreground app. Inspect the screenshot to confirm ' +
+      'the iPad is on the home screen. (Cmd+H does not unlock the iPad — call ' +
+      'pikvm_ipad_unlock from the lock screen instead.)',
+  };
+}
+
+export interface IpadAppSwitcherOptions {
+  /** How long to hold the modifier (Cmd) so the App Switcher stays visible.
+   *  Default 800 ms. The caller can use the returned screenshot to identify
+   *  apps and follow up with arrow keys + Enter to switch, or
+   *  pikvm_ipad_home to dismiss. */
+  holdMs?: number;
+  verbose?: boolean;
+}
+
+export interface IpadAppSwitcherResult {
+  screenshot: Buffer;
+  screenshotWidth: number;
+  screenshotHeight: number;
+  message: string;
+}
+
+/**
+ * Open the iPad App Switcher (Cmd+Tab) and capture a screenshot showing the
+ * available apps, while keeping Cmd held briefly so the switcher stays
+ * open long enough to capture. Then releases Cmd, which dismisses the
+ * switcher (or selects the focused app, depending on iPadOS behaviour).
+ *
+ * For programmatic switching: call this to see what's available, then chain
+ * `pikvm_shortcut(["MetaLeft","Tab"])` repeatedly to focus the desired app
+ * and finally release Cmd via a manual `pikvm_key('MetaLeft', state:false)`.
+ */
+export async function ipadOpenAppSwitcher(
+  client: PiKVMClient,
+  options: IpadAppSwitcherOptions = {},
+): Promise<IpadAppSwitcherResult> {
+  const holdMs = options.holdMs ?? 800;
+  if (options.verbose) console.error(`[app-switcher] Cmd+Tab, hold ${holdMs}ms`);
+
+  // Press Cmd, tap Tab, hold, screenshot, then release Cmd.
+  await client.sendKey('MetaLeft', { state: true });
+  await sleep(40);
+  await client.sendKey('Tab');
+  await sleep(holdMs);
+  const shot = await client.screenshot();
+  await client.sendKey('MetaLeft', { state: false });
+
+  return {
+    screenshot: shot.buffer,
+    screenshotWidth: shot.screenshotWidth,
+    screenshotHeight: shot.screenshotHeight,
+    message:
+      'Opened App Switcher with Cmd+Tab. The screenshot was captured while Cmd ' +
+      'was held; Cmd has now been released which selects the highlighted app. ' +
+      'For multi-step switching, use pikvm_key with state=true/false manually.',
   };
 }
