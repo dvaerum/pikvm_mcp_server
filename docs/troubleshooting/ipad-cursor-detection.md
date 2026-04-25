@@ -101,6 +101,8 @@ and post-cluster (where cursor is now).
 | 7 | `0b59b29` (then reverted by `b5b0468`) | Tighter origin-template threshold (0.83 → 0.89) to reject FP UI matches | Made bench fail 10/10 because `locateCursor` fallback was already broken. Reverted. |
 | 8 | `0b59b29` | `diffPixels` brightness floor checks A or B (was B-only) | Fixes pre-cluster formation on dim wallpapers — a real bug. Existing tests had pinned the buggy behaviour as if it were intentional; rewritten. |
 | 9 | `b5b0468` | Cap per-correction emission at 25 mickeys (linear) / 80 (gross) | Worst-case 5-trial residual: 553 → 275 px. Bounds blind-mode damage but doesn't fix accuracy. |
+| 10 | `9068c7a` | `isOriginProbeMatchPlausible` helper + always-locateCursor evaluation (reverted) | locateCursor itself fails 3/5 on iPad home screen, so always-probe is strictly worse. Helper kept for future redesign. Troubleshooting doc added. |
+| 11 | `595d84f` | Locality-aware ranking in `findCursorByTemplateSet` — prefer per-template matches near a hint over far high-scoring FPs | Catches the (781, 713) 0.944 FP that would otherwise beat the (1057, 837) 0.909 real-cursor match. 5-trial worst-case 275 → 207 px. |
 
 ## What we measured live
 
