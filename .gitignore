@@ -41,3 +41,8 @@ data/
 .mcp.json
 .claude
 CLAUDE.md
+
+# Nix build artifacts
+result
+result-*
+
