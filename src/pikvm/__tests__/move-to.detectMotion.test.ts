@@ -11,7 +11,11 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { decodeScreenshot, extractCursorTemplateDecoded } from '../cursor-detect.js';
-import { detectMotion, shouldAbortBlindCorrections } from '../move-to.js';
+import {
+  clampMickeysToScreen,
+  detectMotion,
+  shouldAbortBlindCorrections,
+} from '../move-to.js';
 import type { MovePassDiagnostic } from '../move-to.js';
 
 async function makeFrame(width: number, height: number, fill: [number, number, number]): Promise<Buffer> {
@@ -282,6 +286,48 @@ function diag(pass: number, mode: MovePassDiagnostic['mode']): MovePassDiagnosti
     linearPhase: false,
   };
 }
+
+describe('clampMickeysToScreen (Phase 6 edge guard)', () => {
+  const bounds = { width: 1920, height: 1080 };
+
+  it('passes through when projected landing is well within screen', () => {
+    const r = clampMickeysToScreen({ x: 500, y: 500 }, 100, 50, 1.0, 1.0, bounds);
+    expect(r.x).toBe(100);
+    expect(r.y).toBe(50);
+  });
+
+  it('caps positive-X mickeys to keep cursor inside the right edge', () => {
+    // Origin near right edge, large +X plan would push cursor off-screen.
+    const r = clampMickeysToScreen({ x: 1900, y: 500 }, 200, 0, 1.0, 1.0, bounds);
+    // projectedX = 1900 + 200*1.0 = 2100, off-screen by 200px
+    // cap so projectedX = 1920 - 20 (margin) = 1900 → x = 0 (no movement allowed)
+    expect(r.x).toBeLessThanOrEqual(0);
+    expect(r.y).toBe(0);
+  });
+
+  it('caps negative-Y mickeys to keep cursor inside the top edge', () => {
+    // Origin near top, large -Y plan would push cursor above the screen.
+    const r = clampMickeysToScreen({ x: 500, y: 30 }, 0, -200, 1.0, 1.0, bounds);
+    // projectedY = 30 - 200*1.0 = -170, above screen
+    // cap so projectedY = 20 (margin) → y = (20-30)/1.0 = -10
+    expect(r.y).toBeGreaterThanOrEqual(-15);
+    expect(r.x).toBe(0);
+  });
+
+  it('preserves direction (sign) when clamping', () => {
+    const r = clampMickeysToScreen({ x: 1900, y: 500 }, 500, 100, 2.0, 1.0, bounds);
+    // X would project to 1900 + 1000 = 2900; clamp keeps sign positive but
+    // reduces magnitude.
+    expect(r.x).toBeGreaterThanOrEqual(0);
+    expect(r.y).toBe(100); // Y unaffected
+  });
+
+  it('handles ratio 0 / NaN gracefully (returns input)', () => {
+    const r = clampMickeysToScreen({ x: 500, y: 500 }, 100, 50, 0, 0, bounds);
+    expect(r.x).toBe(100);
+    expect(r.y).toBe(50);
+  });
+});
 
 describe('shouldAbortBlindCorrections (Phase 4 circuit breaker)', () => {
   it('returns false on the first predicted pass (single failure can be recovered)', () => {
