@@ -530,7 +530,11 @@ export function findCursorByTemplateDecoded(
 ): FindCursorResult | null {
   const stats = computeTemplateStats(template);
   const step = options.step ?? 4;
-  const minScore = options.minScore ?? 0.6;
+  // Live data on the iPad: real cursor matches score 0.85-0.97; stable
+  // false positives over a dimmed modal scrim score 0.74-0.82. 0.83
+  // separates them cleanly. Callers wanting looser matching can pass
+  // a smaller value via FindCursorOptions.minScore.
+  const minScore = options.minScore ?? 0.83;
 
   let xMin = 0, xMax = screenshot.width - template.width;
   let yMin = 0, yMax = screenshot.height - template.height;
