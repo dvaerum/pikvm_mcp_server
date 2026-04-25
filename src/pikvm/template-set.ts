@@ -23,7 +23,6 @@ import path from 'path';
 import sharp from 'sharp';
 import {
   CursorTemplate,
-  decodeToRgb,
   loadCursorTemplate,
   saveCursorTemplate,
 } from './cursor-detect.js';
@@ -178,7 +177,3 @@ export async function persistTemplate(
  *  tests can override the directory without re-reading move-to. */
 export const DEFAULT_TEMPLATE_DIR = './data/cursor-templates';
 export const LEGACY_TEMPLATE_PATH = './data/cursor-template.jpg';
-
-// Re-exports so callers can import both detection and persistence from
-// the same module if it's more convenient.
-export { decodeToRgb };
