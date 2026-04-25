@@ -129,6 +129,14 @@ export interface MoveToOptions {
    *  to overshoot. Set to 0 to disable (uses fallback ratio for
    *  open-loop, learns from open-loop diff as before). */
   calibrationProbeMickeys?: number;
+
+  /** When true, refuse to fall back to slam-to-corner if detect-then-move
+   *  fails. Throw instead. On iPad targets, slam-to-top-left triggers the
+   *  iPadOS hot-corner gesture and re-locks the screen — silent slam
+   *  fallback destroys the test environment. The MCP tool layer sets
+   *  this true when the target reports `mouse.absolute=false`. Default
+   *  false (preserves existing behaviour for non-iPad targets). */
+  forbidSlamFallback?: boolean;
 }
 
 export interface CorrectionPass {
@@ -291,6 +299,14 @@ async function discoverOrigin(
       // locateCursor no longer attempts a fake restore. Move-to plans
       // its open-loop emission from this position.
       return { point: located.position, method: 'detect-then-move' };
+    }
+    if (options.forbidSlamFallback) {
+      throw new Error(
+        'moveToPixel: detect-then-move failed and slam fallback forbidden ' +
+        '(forbidSlamFallback=true, set when target is iPad to avoid hot-corner re-lock). ' +
+        'Cursor cannot be located — try waking the iPad with a small move first, ' +
+        'or pass strategy="assume-at" with assumeCursorAt if you know where the cursor is.',
+      );
     }
     if (options.verbose) console.error('[move-to] detect-then-move failed; falling back to slam');
   }

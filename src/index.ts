@@ -1000,6 +1000,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             minResidualPx: validateNumber(args.minResidualPx, 1, 200),
             warmupMickeys: validateNumber(args.warmupMickeys, 0, 50),
             profile: cachedProfile,
+            // On iPad (mouse.absolute=false), slam-to-corner triggers
+            // the hot-corner gesture and re-locks the screen. Refuse
+            // the silent slam fallback; force the caller to handle
+            // detection failure explicitly.
+            forbidSlamFallback: !mouseAbsoluteMode,
           },
         );
         return {
@@ -1032,6 +1037,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             strategy: strategyStr,
             assumeCursorAt,
             profile: cachedProfile,
+            forbidSlamFallback: !mouseAbsoluteMode,
           },
         );
         // Brief pause so iPadOS registers the cursor as stationary before click
