@@ -820,7 +820,12 @@ export function detectMotion(
       const livePxPerMickey = maxMickeys > 0 ? dispMag / maxMickeys : 1;
       // Sanity: ratio must be in [0.3, 4] — iPad is ~1-2, anything wilder
       // is probably a bad pair.
-      if (livePxPerMickey < 0.3 || livePxPerMickey > 4) continue;
+      // Phase 21: bumped upper bound from 4 to 6. Live ballistics
+      // measurement (Phase 18) showed iPad context ratios up to 4.3
+      // for X-axis bursts and 5+ for Y. Tight 4× rejected legitimate
+      // cursor pairs in some open-loop diffs, leaving the algorithm
+      // to fall back to template-FP recovery.
+      if (livePxPerMickey < 0.3 || livePxPerMickey > 6) continue;
 
       // Score: prefer pairs whose post is close to expectedEnd AND pre is
       // close to expectedStart, with similar sizes.

@@ -199,6 +199,32 @@ Y-dominant — only skip it when the X-probe-axis matches the
 warmup-axis. Live verified Phase 15 measures both ratios cleanly:
 X 0.85 from locateCursor probe + Y 0.811 from calibration probe.
 
+### Phase 21 — bumped detectMotion ratio sanity max from 4 to 6 (END-TO-END SUCCESS)
+
+`detectMotion`'s pair-selection rejected any candidate pair whose
+implied px/mickey ratio was outside [0.3, 4]. Live ballistics
+data (Phase 18) showed iPad Y-axis ratios up to 5.7 and X up to
+4.3 in some bursts. The 4× upper bound was rejecting legitimate
+cursor pairs — leaving the algorithm to fall back to template-FP
+recovery, which Phase 20's tighter threshold then correctly
+refused, resulting in honest-but-blind clicks.
+
+Bumped to [0.3, 6]. Live verification: click(1027, 825) target
+**actually opened Settings** — first end-to-end success in
+multiple sessions of patching. The post-click screenshot shows
+Settings → SumUp Payment permissions page (resumed from prior
+state). Cursor visibly at ~(1023, 833) — landed on the Settings
+icon's hit area.
+
+The compound effect of every fix in this session lined up:
+- Phase 13 latency fix: cursor visible in screenshots
+- Phase 14b: locateCursor cluster filter matches cursor size
+- Phase 19: locateCursor primary, calibration fires
+- Phase 20: correction-pass template-match too strict at 0.83
+- Phase 21: motion-diff sanity range admits real cursor pairs
+
+Each was necessary; none alone was sufficient.
+
 ### Phase 20 — tighter correction-pass template-match threshold
 
 Default `findCursorByTemplateSet` minScore is 0.83. Live data
