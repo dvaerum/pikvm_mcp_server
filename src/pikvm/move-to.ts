@@ -528,7 +528,12 @@ export function looksLikeCursor(t: CursorTemplate): boolean {
     }
     if (size > largest) largest = size;
   }
-  return largest >= brightCount * 0.5;
+  // Phase 66: cohesion threshold raised from 0.5 → 0.75. Live data showed
+  // a microphone-icon template (largest component 50% of bright) and a
+  // "Fi" text-fragment template (60%) passing the 0.5 gate. Real cursor
+  // templates measure 100% cohesion (single connected blob). Tightening
+  // to 0.75 keeps real cursors and rejects multi-blob icons / text.
+  return largest >= brightCount * 0.75;
 }
 
 async function maybePersistTemplate(
