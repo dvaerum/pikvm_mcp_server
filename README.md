@@ -118,7 +118,7 @@ Or if using the .env file:
 ## Available Tools
 
 ### Diagnostics
-- **`pikvm_version`** - Return the running server version. Use to detect a stale deployment: query this and compare against `main` (currently `0.5.32`).
+- **`pikvm_version`** - Return the running server version. Use to detect a stale deployment: query this and compare against `main` (currently `0.5.33`).
 - **`pikvm_health_check`** - One-call deployment health: server version + safety-guard state + live HID profile + iPad bounds detection. Run FIRST after deployment; surfaces stale deployments, failed startup detection, and target-type mismatches.
 
 ### Display

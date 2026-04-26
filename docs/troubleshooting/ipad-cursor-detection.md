@@ -50,6 +50,36 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 45 attempt + revert (v0.5.33, 2026-04-26): post-move template-driven micro-correction triggers gestures
+
+Tried adding a post-moveToPixel correction loop that uses template-match
+(empirically more reliable than motion-diff: NCC scores 0.97 in
+benches) to find the cursor and emit small mickeys toward the target,
+iteratively. Goal: converge from ~30 px residual to <10 px reliably.
+
+Live result: triggered the iPad APP SWITCHER. The correction emits
+pushed cursor down to the iPad's bottom edge, where iPadOS's swipe-up-
+from-bottom gesture activated and opened the multitasking switcher.
+Same destructive-gesture failure mode as Phase 32's hot-corner-on-
+top-left, just on a different edge.
+
+Contributing factors:
+1. The 80 ms inter-iteration settle was shorter than the streamer's
+   ~235 ms latency. Subsequent screenshots showed STALE cursor
+   positions, leading the loop to emit additional motion thinking
+   the cursor hadn't yet moved → drift compounded.
+2. iPadOS's pointer-acceleration variance turned the small per-
+   iteration emits into unpredictable larger pixel jumps under some
+   conditions, the same variance that bounds the iconToleranceResidualPx
+   ceiling.
+3. No bounds-aware safety: the loop didn't refuse to emit toward the
+   iPad bottom edge.
+
+REVERTED. The microCorrectionIterations option remains in the type
+for future opt-in experimentation but defaults to 0. The architectural
+30 px residual ceiling stands; correcting beyond it without bounds-
+aware gating is destructive.
+
 ### Phase 40 attempt + revert (v0.5.28, 2026-04-26): the icon-tolerance ceiling
 
 Live 5-trial bench against Settings (1027, 832) on a clean, bright iPad
