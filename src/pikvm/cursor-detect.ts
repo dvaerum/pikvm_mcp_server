@@ -382,6 +382,22 @@ export interface LocateCursorOptions {
   settleMs?: number;          // default 300 (ms between move and screenshot — must exceed PiKVM streamer + iPadOS render latency, measured at 150-235 ms; see docs/troubleshooting/ipad-cursor-detection.md)
   detection?: Partial<DetectionConfig>;
   maxAttempts?: number;       // default 3, for transient diff failures
+  /** Phase 27: spatial hint. When set, candidate cluster pairs are
+   *  ranked by proximity of the post-cluster centroid to this hint.
+   *  Pairs further than `expectedNearRadius` from the hint are
+   *  REJECTED. This eliminates widget-animation false positives on
+   *  iPad busy backdrops, where the algorithm already knows roughly
+   *  where the cursor should be (e.g., from the previous iteration's
+   *  probe in a closed-loop correction sequence). Without a hint
+   *  (default), all cluster pairs are considered equally — the
+   *  previous behavior. */
+  expectedNear?: Point;
+  /** Phase 27: max allowed distance (px) from post-cluster centroid
+   *  to expectedNear. Default 200. Generous enough to cover one
+   *  iteration's emit-step displacement plus iPadOS acceleration
+   *  variance, tight enough to reject widget false positives that
+   *  are typically 400+ px from the actual cursor on iPad home. */
+  expectedNearRadius?: number;
   verbose?: boolean;
 }
 
@@ -508,6 +524,8 @@ export async function locateCursor(
     let bestScore = -Infinity;
     const expectedDispMin = probeDelta * 0.3;
     const expectedDispMax = probeDelta * 4;
+    const expectedNear = options.expectedNear;
+    const expectedNearRadius = options.expectedNearRadius ?? 200;
     for (const aClu of sized) {
       for (const bClu of sized) {
         if (aClu === bClu) continue;
@@ -519,13 +537,34 @@ export async function locateCursor(
         if (mag < expectedDispMin || mag > expectedDispMax) continue;
         // Direction within ~30° of +x.
         if (dx / mag < 0.85) continue;
+        // Phase 27: locality filter. When the caller provides a hint
+        // about where the cursor should be, hard-reject pairs whose
+        // post-centroid is far from that hint. Eliminates widget
+        // false positives on iPad busy backdrops.
+        if (expectedNear) {
+          const distToHint = Math.hypot(
+            bClu.centroidX - expectedNear.x,
+            bClu.centroidY - expectedNear.y,
+          );
+          if (distToHint > expectedNearRadius) continue;
+        }
         // Score: closer to expected magnitude wins. Also prefer
         // similarly-sized clusters (same cursor at two positions).
         const sizeRatio =
           Math.max(aClu.pixels, bClu.pixels) /
           Math.max(1, Math.min(aClu.pixels, bClu.pixels));
         if (sizeRatio > 4) continue;
-        const score = -Math.abs(mag - probeDelta) - 5 * Math.log2(sizeRatio);
+        // Phase 27: when expectedNear is provided, also prefer pairs
+        // whose post-cluster is closer to the hint (tie-break in favor
+        // of the more-plausible candidate when multiple pass the gate).
+        let score = -Math.abs(mag - probeDelta) - 5 * Math.log2(sizeRatio);
+        if (expectedNear) {
+          const distToHint = Math.hypot(
+            bClu.centroidX - expectedNear.x,
+            bClu.centroidY - expectedNear.y,
+          );
+          score -= distToHint * 0.05;
+        }
         if (score > bestScore) {
           bestScore = score;
           pre = aClu;

@@ -44,7 +44,10 @@ export interface ProbePosition {
   position: { x: number; y: number };
 }
 
-export type ProbeFn = (client: PiKVMClient) => Promise<ProbePosition | null>;
+export type ProbeFn = (
+  client: PiKVMClient,
+  lastKnown: { x: number; y: number } | null,
+) => Promise<ProbePosition | null>;
 
 export interface ProbeDrivenOptions {
   /** Substitute the locateCursor probe (e.g. for unit tests). */
@@ -91,9 +94,25 @@ export interface ProbeDrivenResult {
   reason: string;
 }
 
-async function defaultProbeFn(client: PiKVMClient): Promise<ProbePosition | null> {
-  const r = await locateCursor(client);
+/**
+ * Default probe function that takes a `lastKnown` hint (Phase 27) so
+ * locateCursor can locality-filter out widget false positives on iPad
+ * busy backdrops. Caller is responsible for tracking lastKnown across
+ * iterations; the orchestrator below does this automatically.
+ */
+async function defaultProbeFn(
+  client: PiKVMClient,
+  lastKnown: Point | null,
+): Promise<ProbePosition | null> {
+  const r = await locateCursor(client, {
+    ...(lastKnown ? { expectedNear: lastKnown, expectedNearRadius: 250 } : {}),
+  });
   return r ? { position: r.position } : null;
+}
+
+interface Point {
+  x: number;
+  y: number;
 }
 
 export async function moveToPixelProbeDriven(
@@ -111,8 +130,9 @@ export async function moveToPixelProbeDriven(
 
   const trace: ProbeDrivenTraceEntry[] = [];
 
-  // Initial probe: ground-truth origin.
-  const initial = await probeFn(client);
+  // Initial probe: ground-truth origin. No lastKnown hint yet — the
+  // first probe has to discover the cursor without spatial guidance.
+  const initial = await probeFn(client, null);
   if (!initial) {
     return {
       success: false,
@@ -163,8 +183,10 @@ export async function moveToPixelProbeDriven(
     }
     if (settleMs > 0) await sleep(settleMs);
 
-    // Probe for ground truth.
-    const probe = await probeFn(client);
+    // Probe for ground truth. Pass current cursor belief as the
+    // spatial hint so locateCursor can locality-filter false positives
+    // (Phase 27).
+    const probe = await probeFn(client, cursor);
     let probeFailed = false;
     const estimatedNewPos = {
       x: cursor.x + stepX * pxPerMickey,
