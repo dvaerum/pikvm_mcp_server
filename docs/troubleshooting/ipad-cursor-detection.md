@@ -698,19 +698,49 @@ is no segment large enough to lose track.
 
 ### 3. Rebase residual-tolerance on confirmed detection
 
-Today the correction loop exits when the *predicted* residual is
-below tolerance. That's why the message reports `residual 1.5 px`
-even when `finalDetectedPosition` is null. Change the exit condition
-to require a *verified* residual ≤ tolerance — i.e. the last pass
-must be `mode: 'motion'` or `mode: 'template'`, not `'predicted'`.
-A trial that ends without verification reports honest "click
-accuracy uncertain" rather than fake success.
+**Status (post-Phase 24): substantially closed via the honest-
+reporting half; the exit-condition half is unnecessary.**
 
-Direction 1 is small, direction 2 is medium, direction 3 is small
-but changes user-visible semantics. All three together would replace
-the current correction loop with a fundamentally more reliable
-design. None of them is appropriate to slot in as a "Phase N+1"
-patch — they want a deliberate refactor.
+The original framing claimed "the message reports `residual 1.5 px`
+even when `finalDetectedPosition` is null". On re-reading the code
+that claim is inaccurate: the message-construction branch at
+`move-to.ts` (the `if (finalDetectedPosition && finalResidualPx !==
+null) { ... } else if (doCorrect) { ... 'Final position not
+detected — click accuracy uncertain.' }`) already handles the null
+case honestly.
+
+The *real* dishonesty was a subtler one: when
+`finalDetectedPosition` was non-null but had been set many passes
+earlier, with intervening predicted passes, the message reported a
+residual as if just verified. Phase 24 (commit `fd1bf55`) added the
+`passesSinceLastVerification` field to `MoveToResult` and appends
+"(last verified N pass(es) ago — N predicted passes since; cursor
+may have drifted, accuracy uncertain)" to the message in that case.
+
+Originally Direction 3 also proposed changing the loop exit
+condition to require `mode: 'motion'` or `'template'` (i.e. forbid
+early-exit on a small predicted residual). After Phase 24 this is
+no longer worth doing:
+- Forcing more correction passes when verification is failing does
+  not make verification succeed (motion-diff struggles because the
+  residual-correction emission is too small to form clusters above
+  size threshold).
+- The extra passes burn ~300–600 ms before the circuit breaker
+  fires, with no improvement to `finalDetectedPosition`.
+- The reported residual still derives from whichever pass last
+  verified. Phase 24's qualifier already tells the operator how
+  stale that is.
+
+The remaining honest-reporting work (if any) belongs at the
+calling-agent layer: the agent reading the MCP-tool message should
+treat "(last verified N pass(es) ago)" as a soft-fail signal and
+either re-aim or escalate, the same way it already treats Phase 23's
+"Click did not trigger a visible screen change" verdict.
+
+Direction 1 (always-locateCursor as origin, small) and Direction 2
+(wake-emit-verify cycle, medium) remain on the architectural
+roadmap; both want a deliberate refactor and have failure modes the
+naive implementations hit (Phase 10 and Phase 17 respectively).
 
 ## What does NOT work, please don't try again
 
