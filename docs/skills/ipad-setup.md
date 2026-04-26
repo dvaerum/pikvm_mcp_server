@@ -64,6 +64,30 @@ delta emits, so per-mickey pixel variance is bounded.
 **How:** Settings → General → Trackpad & Mouse → Tracking Speed →
 drag slider all the way LEFT (slowest).
 
+### Full Keyboard Access ON (enables coordinate-free clicking)
+
+Phase 61/62 finding: with **Full Keyboard Access** enabled, every iPad
+UI element becomes a Tab-stop with a yellow focus ring. Combined with
+the sidebar arrow-key navigation that works without it, this lets
+operators drive the iPad almost entirely via keyboard — bypassing the
+iPadOS pointer-acceleration variance ceiling that bounds
+`pikvm_mouse_click_at` accuracy.
+
+The pattern post-FKA:
+
+- **Sidebar**: `pikvm_key("Escape")` → root, then `ArrowDown`/`ArrowUp`
+  to navigate (works without FKA).
+- **Right pane**: `pikvm_key("Tab")` to focus the first in-pane
+  element, then `ArrowDown`/`ArrowUp` to walk; `Return`/`Space` to
+  activate / toggle (REQUIRES FKA).
+
+**How to enable FKA**: this is a one-time setup step per iPad. The
+toggle itself lives in Settings → Accessibility → Keyboards → Full
+Keyboard Access. Because the sidebar IS keyboard-reachable, the
+operator only needs ONE coordinate-based `pikvm_mouse_click_at` to
+flip the toggle once enabled. After that, all subsequent automation
+can be keyboard-only.
+
 ## Version-specific guidance for cursor detection
 
 The MCP server's `pikvm_mouse_move_to` and `pikvm_mouse_click_at` rely on
