@@ -6,6 +6,30 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## 🩺 Diagnostic-first protocol
+
+When `pikvm_mouse_click_at` misbehaves on iPad, **run
+`pikvm_health_check` FIRST** before reaching for the algorithm. The
+report surfaces every common environmental failure mode in one call:
+
+- **Server version mismatch** → deployed server is stale; redeploy
+  before debugging code.
+- **`mouseAbsoluteMode: true` for an iPad target** → startup HID
+  detection failed; restart the MCP server.
+- **iPad bounds detection failed** → screen is dark or showing an
+  all-black canvas; the cursor-detection algorithms have nothing
+  to work with.
+- **`Screen brightness: mean<50/255 ⚠ VERY DIM`** → iPad
+  auto-brightness has dimmed the display below the cursor-detection
+  threshold (Phase 37/38). Software-side wakes (swipe, key, mouse
+  movement) do NOT restore brightness. Manually adjust the iPad's
+  display brightness slider; consider turning Auto-Brightness OFF
+  per `docs/skills/ipad-setup.md`.
+
+Most "click_at suddenly stopped working" reports turn out to be
+environmental (dim screen, locked screen, stale deployment) rather
+than algorithmic. Save yourself the wild goose chase.
+
 ## ⚠️ DEPLOYMENT FRESHNESS — IMPORTANT
 
 This codebase has shipped many critical iPad-safety fixes since
