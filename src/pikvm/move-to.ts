@@ -116,6 +116,16 @@ export interface MoveToOptions {
   /** Max linear-regime passes (independent of `maxCorrectionPasses`).
    *  Default 4. */
   linearMaxPasses?: number;
+  /** Phase 29: residual at which a verified position is "good enough"
+   *  to click on (e.g. cursor within an icon's hit area). When the
+   *  algorithm has a verified cursor position with residual ≤ this,
+   *  it stops correcting — further refinement on iPad-relative-mouse
+   *  targets risks over-correction into a miss because iPadOS pointer-
+   *  acceleration variance turns small linear emits into wild jumps.
+   *  Default 40 px (covers iPad's ~80 px icon hit area centred). Set
+   *  to 0 to disable and fall back to the older minResidualPx /
+   *  linearResidualPx exits. */
+  iconToleranceResidualPx?: number;
   /** Per-axis sanity bounds for the live ratio update. Default [0.3, 5];
    *  loosened from the original [0.5, 3] which was rejecting real bursts
    *  on iPadOS and silently reverting to fallback. */
@@ -995,6 +1005,15 @@ export async function moveToPixel(
   const linTriggerPx = options.linearTriggerResidualPx ?? 100;
   const linResidualPx = options.linearResidualPx ?? 3;
   const linMaxPasses = options.linearMaxPasses ?? 4;
+  // Phase 29 follow-up: icon-tolerance early exit. iPad icons are
+  // typically ~80 px wide; a click anywhere within ~40 px of icon
+  // centre will register on the icon. When the cursor is verified
+  // (motion or template) within this radius, FURTHER correction is
+  // strictly worse on iPad — iPadOS pointer-acceleration variance
+  // turns small linear emits into wild jumps that move the cursor
+  // OFF the icon. Set to 0 to disable (fall back to the tighter
+  // linResidualPx / minResidualPx exits).
+  const iconToleranceResidualPx = options.iconToleranceResidualPx ?? 40;
   // Cursor cluster size range (Phase B): widened from 10-60 to 8-90.
   // The iPad cursor at top of screen against the wallpaper's
   // brightness ranges produces a cluster of just ~4-7 bright pixels
@@ -1401,6 +1420,30 @@ export async function moveToPixel(
       const errY = targetY - currentPos.y;
       const residual = Math.hypot(errX, errY);
 
+      // Phase 29 follow-up: icon-tolerance early exit. When we have a
+      // VERIFIED current position (passesSinceLastVerification === 0,
+      // meaning the most recent currentPos update came from motion-diff
+      // or template-match — not prediction) AND the residual is within
+      // the icon-tolerance radius, STOP. Further correction on iPad
+      // risks over-correction (live-observed: oscillation between two
+      // wrong positions, eventually clicking the wrong icon). The
+      // verified cursor at, say, 33 px residual is INSIDE the ~80 px
+      // hit area of the target icon — clicking there will register on
+      // the icon. Exiting early avoids the linear-phase trap.
+      if (
+        iconToleranceResidualPx > 0 &&
+        residual <= iconToleranceResidualPx &&
+        passesSinceLastVerification === 0 &&
+        finalDetectedPosition !== null
+      ) {
+        if (verbose) {
+          console.error(
+            `[move-to] ICON-TOLERANCE EXIT: verified residual ${residual.toFixed(1)}px ≤ ${iconToleranceResidualPx}px tolerance; click should land on the target icon's hit area. Skipping further correction.`,
+          );
+        }
+        break;
+      }
+
       // Decide which regime we're in. Phase C: enter linear region as
       // soon as residual is small enough that small/slow chunks can
       // span it without acceleration kicking in.
@@ -1528,18 +1571,25 @@ export async function moveToPixel(
             // (last-known-good position), not at iPad UI false-positive
             // locations far away. Anchor selection there.
             expectedNear: prevPos,
-            expectedNearRadius: 100,
-            // Phase 20: tighter minScore for CORRECTION-PASS template
-            // fallback. Live trace 2026-04-26 caught 0.92-0.99 FPs on
-            // iPad UI elements being trusted as cursor recovery,
-            // poisoning currentPos. The default 0.83 is fine for
-            // origin discovery where we have no prior position to
-            // anchor against, but in correction passes we DO have a
-            // prior — anything claiming to be the cursor at a low
-            // score is more likely the wallpaper-FP than the real
-            // cursor. Below 0.95 → null → trust prediction → circuit
-            // breaker can fire after 2 predicted passes.
-            minScore: 0.95,
+            // Phase 29 follow-up: widen 100 → 150 px. iPadOS pointer-
+            // acceleration variance can put the cursor 100+ px from
+            // prevPos after a single emit. Live: 0.947-scoring real
+            // cursor at 106 px from prevPos was being rejected.
+            expectedNearRadius: 150,
+            // Phase 20 raised minScore to 0.95 to filter UI-element
+            // false positives. Phase 29 follow-up (2026-04-26): live
+            // trace caught a real cursor match at 0.947 being rejected,
+            // forcing a predicted-mode fallback that then missed the
+            // click. Real iPad cursor matches typically score 0.85-0.97
+            // (per troubleshooting doc); 0.95 was on the high end and
+            // rejecting too many legitimate matches.
+            //
+            // The locality filter (expectedNear: prevPos, radius 150)
+            // is the primary defense against far-away UI false positives.
+            // With locality enforced, a 0.88 score within 150 px of the
+            // last verified position is much more likely the cursor
+            // than a UI element. minScore lowered 0.95 → 0.88.
+            minScore: 0.88,
             verbose,
           });
           if (found) {
