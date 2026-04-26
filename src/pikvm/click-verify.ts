@@ -21,6 +21,7 @@ import { moveToPixel } from './move-to.js';
 import type { MoveToOptions, MoveToResult } from './move-to.js';
 import type { PiKVMClient, MouseButton } from './client.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
+import { detectIpadBoundsFromBuffer } from './orientation.js';
 
 export interface ClickVerification {
   /** Pixels that changed between the pre and post screenshots within
@@ -240,16 +241,31 @@ export async function clickAtWithRetry(
   // is below ~50/255. Better to throw a clear "wake the iPad" error after
   // one screenshot than to waste maxRetries+1 attempts on a known-bad
   // environment. Set minBrightness=0 to skip the precheck.
+  //
+  // Phase 38b (v0.5.27): scope the brightness measurement to detected iPad
+  // bounds. Without this, the ~67% black letterbox in a 1920×1080 frame
+  // dragged the mean below threshold even on a fully-bright iPad — false
+  // positive verified live 2026-04-26.
   if (minBrightness > 0) {
     try {
       const shot = await client.screenshot();
-      const brightness = await analyzeBrightness(shot.buffer);
+      let region: { x: number; y: number; width: number; height: number } | undefined;
+      try {
+        const bounds = await detectIpadBoundsFromBuffer(shot.buffer, { verbose: false });
+        region = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+      } catch {
+        // No bounds → analyse full frame (non-iPad target or dark screen).
+      }
+      const brightness = await analyzeBrightness(shot.buffer, { region });
       if (brightness.mean < minBrightness) {
         throw new Error(
           `clickAtWithRetry: screen too dim for cursor detection ` +
           `(mean brightness=${brightness.mean.toFixed(0)}/255, threshold=${minBrightness}). ` +
-          `Wake the iPad: call pikvm_ipad_unlock or manually adjust the iPad's display ` +
-          `brightness. Set minBrightness=0 to skip this check.`,
+          `Possible causes: (1) iPad display brightness too low — adjust manually ` +
+          `(software wakes don't restore it); (2) a security/permission popup is open — ` +
+          `it may be positioned off the HDMI capture frame but is still interactive, ` +
+          `try sending Escape via pikvm_key, then Enter, then Cmd+Period. ` +
+          `Set minBrightness=0 to skip this check.`,
         );
       }
     } catch (err) {
