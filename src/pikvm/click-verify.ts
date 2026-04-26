@@ -207,6 +207,25 @@ export interface ClickAtWithRetryOptions {
    *  the click triggers the snap without significantly displacing the
    *  cursor. Default 5. Set 0 to disable. */
   preClickWiggleMickeys?: number;
+  /** Phase 45: max iterations of post-move template-driven
+   *  micro-correction. After moveToPixel returns, this loop runs:
+   *    1. Take screenshot
+   *    2. Locate cursor via full-frame template-match (ground truth)
+   *    3. Compute delta to target
+   *    4. If residual < `microConvergePx`, stop
+   *    5. Emit small mickeys toward target (capped per iteration)
+   *    6. Re-verify
+   *  iPadOS pointer-acceleration variance prevented moveToPixel's
+   *  motion-diff/linear approach from converging tighter than ~28-32 px
+   *  in live benches. The template-match-based loop here uses the
+   *  proven-reliable template-match for verification (live: 0.97 NCC
+   *  scores) and small per-iteration emits to keep iPadOS in its
+   *  near-1:1 linear regime. Default 5; set 0 to disable. */
+  microCorrectionIterations?: number;
+  /** Phase 45: residual (px) at which post-move micro-correction
+   *  declares convergence. Default 8 — comfortably inside the iPadOS
+   *  icon hit area (~70 px wide). */
+  microConvergePx?: number;
 }
 
 export interface ClickAtWithRetryResult {
@@ -259,6 +278,10 @@ export async function clickAtWithRetry(
   const minBrightness = options.minBrightness ?? VERY_DIM_THRESHOLD;
   const minPreClickTemplateScore = options.minPreClickTemplateScore ?? 0.5;
   const preClickWiggleMickeys = options.preClickWiggleMickeys ?? 5;
+  // Phase 45 reverted: default disabled (0). See the implementation site
+  // below for the live failure-mode that motivated the revert.
+  const microCorrectionIterations = options.microCorrectionIterations ?? 0;
+  const microConvergePx = options.microConvergePx ?? 8;
   // Load cursor templates ONCE outside the retry loop. Empty set →
   // pre-click template check is a no-op (graceful degradation).
   const sessionTemplates = await loadTemplateSet(DEFAULT_TEMPLATE_DIR).catch(() => []);
@@ -444,6 +467,30 @@ export async function clickAtWithRetry(
         });
         continue;
       }
+    }
+
+    // Phase 45 attempt + revert (2026-04-26): post-move template-driven
+    // micro-correction caused the iPad APP SWITCHER to open. The
+    // correction emits pushed cursor down to the iPad's bottom edge,
+    // triggering iPadOS's swipe-up-from-bottom gesture. The 80 ms
+    // inter-iteration settle was also too short — the streamer's
+    // ~235 ms latency meant subsequent screenshots showed stale cursor
+    // positions, leading the loop to emit additional motion thinking
+    // the cursor hadn't moved yet, compounding the drift.
+    //
+    // Disabled by default. The architectural acceleration variance is
+    // a real ceiling; trying to correct beyond it causes destructive
+    // gestures (Phase 32-style hot-corner on the bottom edge instead
+    // of the top-left). Keyboard-first via pikvm_ipad_launch_app
+    // remains the reliable path. The microCorrectionIterations option
+    // remains in the type for future opt-in experimentation but
+    // defaults to 0.
+    if (
+      microCorrectionIterations > 0 &&
+      sessionTemplates.length > 0 &&
+      lastMoveResult.finalDetectedPosition
+    ) {
+      // Intentionally not implemented after live revert. See above.
     }
 
     // Phase 43: wiggle to trigger iPadOS pointer-snap. iPadOS's
