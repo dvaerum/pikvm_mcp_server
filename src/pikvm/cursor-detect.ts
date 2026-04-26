@@ -433,7 +433,14 @@ export async function locateCursor(
   client: PiKVMClient,
   options: LocateCursorOptions = {},
 ): Promise<LocateCursorResult | null> {
-  const baseProbeDelta = options.probeDelta ?? 10;
+  // Phase 29 finding: probeDelta=10 was too small. iPadOS amplifies
+  // small mickey commands by up to 20×, so a 10-mickey probe could
+  // produce 200 px displacement — well outside the previous [3, 40]
+  // px sanity window. Live: 6/6 probes returned null with the old
+  // defaults. Larger probe (60 mickeys) gives the cursor pair a
+  // displacement that dwarfs animation-noise inter-cluster distances
+  // (typically <50 px), which is what makes pair selection work.
+  const baseProbeDelta = options.probeDelta ?? 60;
   const settleMs = options.settleMs ?? 300;
   const maxAttempts = options.maxAttempts ?? 3;
   // Default brightness floor lowered from 170 to 100 — same fix as
@@ -458,22 +465,31 @@ export async function locateCursor(
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const probeDelta = probeDeltas[Math.min(attempt, probeDeltas.length - 1)];
+    // Phase 29: widened sanity window to [probeDelta * 0.3, probeDelta * 25]
+    // (was * 0.3 to * 4) to accommodate iPadOS pointer-acceleration
+    // amplification of up to ~20× on small mickey emits. The wider
+    // window admits more candidates, but the high lower bound (probeDelta
+    // * 0.3) still rejects animation-noise pairs that are typically
+    // separated by < 0.3 * probeDelta = 18 px (for probeDelta=60).
+    const expDispMinLocal = probeDelta * 0.3;
+    const expDispMaxLocal = probeDelta * 25;
 
     // Wake-up move: iPadOS fades cursor after ~1 s of inactivity. If the
     // BEFORE screenshot captures a faded cursor, the diff between BEFORE
     // (no visible cursor) and AFTER (cursor at post-probe position) only
     // produces ONE cluster — the appear-cluster — and pair selection fails.
     //
-    // A 2-mickey nudge wasn't reliably enough on iPadOS — the OS seems
-    // to require larger movement before re-rendering the cursor. 30
-    // mickeys round-trip is small enough not to disturb cursor position
-    // significantly (iPadOS acceleration round-trip is asymmetric, so
-    // there's still some residual offset, but locateCursor's caller
-    // doesn't rely on the cursor being at any specific point — it just
-    // needs the cursor visible enough to diff).
-    await client.mouseMoveRelative(30, 0);
-    await sleep(100);
-    await client.mouseMoveRelative(-30, 0);
+    // Phase 29 finding (2026-04-26): the previous +30/-30 round trip
+    // (net 0 displacement) was insufficient — live: 6/6 locateCursor
+    // calls returned null on the iPad home screen because the BEFORE
+    // shot still had no rendered cursor. A larger one-shot motion (-120
+    // mickeys + 500 ms settle) DOES make the cursor visible (verified
+    // via cursor-visibility test-client mode). Switching wakeup to
+    // larger one-shot single-direction motion lets iPadOS render the
+    // cursor before BEFORE shot. The cursor's net position drifts by
+    // wakeMagnitude * iPadOS-ratio, but we don't depend on a specific
+    // pre-probe position — pre and post are both observed via diff.
+    await client.mouseMoveRelative(-120, 0);
     await sleep(settleMs);
 
     const before = await takeRawScreenshot(client);
@@ -522,8 +538,8 @@ export async function locateCursor(
     let pre: Cluster | null = null;
     let post: Cluster | null = null;
     let bestScore = -Infinity;
-    const expectedDispMin = probeDelta * 0.3;
-    const expectedDispMax = probeDelta * 4;
+    const expectedDispMin = expDispMinLocal;
+    const expectedDispMax = expDispMaxLocal;
     const expectedNear = options.expectedNear;
     const expectedNearRadius = options.expectedNearRadius ?? 200;
     for (const aClu of sized) {
