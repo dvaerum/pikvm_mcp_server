@@ -784,12 +784,26 @@ export function detectMotion(
     preWindowExpanded = true;
   }
 
+  // Phase 29 follow-up (2026-04-26): symmetric fallback for post.
+  // iPadOS pointer-acceleration amplification (up to ~20× on small
+  // mickey emits, per troubleshooting doc) means the actual landing
+  // can be 600+ px from the predicted end position. Without this
+  // fallback, motion-diff fails on every iPad open-loop emit where
+  // amplification was high. Same downstream sanity (direction +
+  // magnitude) keeps bad pairs out.
+  let postWindowExpanded = false;
+  if (postCandidates.length === 0 && sized.length >= 1) {
+    postCandidates = sized;
+    postWindowExpanded = true;
+  }
+
   if (verbose) {
     console.error(
       `[motion] ${clusters.length} total, ${sized.length} cursor-sized [${clusterMin}-${clusterMax}px]; ` +
         `pre-cands(window=${preWindow}@${Math.round(expectedStart.x)},${Math.round(expectedStart.y)})=${preCandidatesWindow.length}` +
         `${preWindowExpanded ? ` →expanded to ${preCandidates.length} (no pre in window)` : ''}, ` +
-        `post-cands(window=${postWindow}@${Math.round(expectedEnd.x)},${Math.round(expectedEnd.y)})=${postCandidates.length}`,
+        `post-cands(window=${postWindow}@${Math.round(expectedEnd.x)},${Math.round(expectedEnd.y)})=${postCandidates.length}` +
+        `${postWindowExpanded ? ` →expanded to ${postCandidates.length} (no post in window)` : ''}`,
     );
   }
 
@@ -1570,6 +1584,39 @@ export async function moveToPixel(
         }
       }
 
+      // Phase 29 follow-up: linear-phase predicted-mode bailout.
+      // The linear phase makes small corrections (≤30 mickeys) trying
+      // to drive residual below 3 px. When motion-diff fails on a
+      // linear pass, "trusting prediction" creates a dangerous belief:
+      // the algorithm thinks the small emit landed exactly at predicted,
+      // but iPadOS amplification means actual landing is unknown.
+      // Result: algorithm exits believing residual ≈ 0 px when actual
+      // residual could be 100+ px (live-observed: clicked wallpaper).
+      //
+      // The honest answer when linear-pass verification fails: STOP.
+      // Revert currentPos to the last verified position (prevPos was
+      // the verified position at the START of this iteration). The
+      // open-loop's verified residual (e.g. 33 px) is GOOD ENOUGH for
+      // most icon-sized targets; trying to refine further blindly is
+      // strictly worse.
+      if (useLinear && passMode === 'predicted') {
+        if (verbose) {
+          console.error(
+            `[move-to] LINEAR BAILOUT: pass ${totalPasses + 1} went predicted; reverting currentPos to last verified (${prevPos.x},${prevPos.y}) and exiting linear phase. Open-loop verified residual is more trustworthy than blind linear refinement.`,
+          );
+        }
+        currentPos = { ...prevPos };
+        // Don't update finalDetectedPosition — it already holds last-verified.
+        corrections.push({
+          detectedCursor: { x: Math.round(currentPos.x), y: Math.round(currentPos.y) },
+          livePxPerMickey: cResult.pair?.livePxPerMickey ?? (observedRatioX + observedRatioY) / 2,
+          correctionMickeys: { x: corrMickeysX, y: corrMickeysY },
+          mode: 'predicted',
+          reason: `${passReason}; linear-bailout (reverted to last verified)`,
+        });
+        break;
+      }
+
       // Phase 24: update verification-lag counter based on this pass's mode.
       if (passMode === 'motion' || passMode === 'template') {
         passesSinceLastVerification = 0;
@@ -1615,6 +1662,38 @@ export async function moveToPixel(
             `[move-to] CIRCUIT BREAKER: 2 consecutive predicted passes; aborting correction loop to avoid compounding overshoot. residual=${diagnostics[diagnostics.length - 1].residualPx.toFixed(1)}px`,
           );
         }
+        break;
+      }
+
+      // Phase 29 follow-up: oscillation / regression detection. iPadOS
+      // pointer-acceleration asymmetry can cause corrections to overshoot
+      // in alternating directions — pass N lands left of target, pass
+      // N+1 overcorrects right, pass N+2 overshoots left, etc. Live-
+      // observed: 5 correction passes oscillating between (900, 732) and
+      // (1132, 973) for a target of (1027, 832), all motion-verified.
+      //
+      // Detection: if this VERIFIED pass's residual is significantly
+      // worse than the previous pass's verified residual, the algorithm
+      // is making things worse. Bail out and revert to the better
+      // previous position. We require the regression to be at least
+      // 50% worse (multiplicative) so normal noise doesn't trip the
+      // guard, and only fire on motion-verified passes (predicted
+      // passes are handled by the blind-pass circuit breaker above).
+      const lastDiag = diagnostics[diagnostics.length - 1];
+      const prevDiagIdx = diagnostics.length - 2;
+      if (
+        prevDiagIdx >= 1 &&
+        lastDiag.mode !== 'predicted' &&
+        diagnostics[prevDiagIdx].mode !== 'predicted' &&
+        lastDiag.residualPx > diagnostics[prevDiagIdx].residualPx * 1.5
+      ) {
+        if (verbose) {
+          console.error(
+            `[move-to] OSCILLATION GUARD: pass ${totalPasses} verified residual ${lastDiag.residualPx.toFixed(1)}px > prev ${diagnostics[prevDiagIdx].residualPx.toFixed(1)}px × 1.5; reverting to prev position (${diagnostics[prevDiagIdx].detectedAt.x},${diagnostics[prevDiagIdx].detectedAt.y}) and exiting`,
+          );
+        }
+        currentPos = { ...diagnostics[prevDiagIdx].detectedAt };
+        finalDetectedPosition = { ...currentPos };
         break;
       }
     }
