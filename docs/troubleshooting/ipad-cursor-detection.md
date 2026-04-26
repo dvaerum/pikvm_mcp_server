@@ -287,6 +287,60 @@ Next attack vector: a `moveToPixelFromCorner` flow that:
 The fresh-from-slam template should be MUCH better than the
 motion-diff-captured cache that's been poisoning matches.
 
+### Phase 30 in progress (2026-04-26, 08:39): slam-BR + open-loop emit, no verify
+
+Implemented `corner-click` test-client mode: slam BR (cursor at known
+~(1190, 920)) + emit relative move toward target + click + verify
+via Phase 23.
+
+**Trial 1**: target Settings (1027, 832), ratio=3.0 X & Y
+- Emit (-54, -29) mickeys
+- Phase 23: 29.02% screen change → click landed on **App Store**
+  (one icon row above Settings)
+- X was correct (verified ratio 3.02). Y overshoot.
+
+**Trial 2**: target Settings (1027, 832), ratioX=3.0 ratioY=7.76
+  (calibrated Y ratio from trial 1's 225px observed / 29 mickeys)
+- Emit (-54, -11) mickeys
+- Phase 23: 27.91% screen change → click landed on **App Store**
+  (same overshoot as trial 1)
+
+### iPadOS amplification is NON-LINEAR with mickey count
+
+The trial 1 → trial 2 calibration assumed iPadOS px/mickey is constant
+for a given axis. It isn't. Trial 1 observed ratio 7.76 for 29 mickeys
+on Y. Trial 2 emitted 11 mickeys on Y; if ratio was constant, expected
+displacement = 11 × 7.76 = 85 px. Actual: ~225 px (same as trial 1
+despite emitting 1/3 as many mickeys).
+
+So the rule **is not** "mickeys × ratio = displacement". Smaller
+emits get amplified MORE per mickey. This is consistent with Phase 18's
+finding that "iPadOS caps per-HID-call displacement at ~60 px
+regardless of mickey count" — but with a wrinkle, since trial 2's 11
+mickeys produced 225 px, way above the 60 px cap.
+
+The actual relationship appears to be that iPadOS pointer acceleration
+treats mickey emits as "pointer velocity samples" and applies a
+ballistic curve. A single fast HID call produces a large displacement
+regardless of mickey magnitude (within reason).
+
+**Implication for slam-anchor strategy**: open-loop relative moves
+from a known corner cannot reach a precise target via mickey counting
+alone. The chain has to be:
+1. Slam BR (known anchor)
+2. Emit relative move (lands SOMEWHERE near target with iPadOS variance)
+3. Take screenshot, find cursor via FRESH template captured from the
+   slam-anchor state (template captured from a verified-known cursor
+   position is high-quality)
+4. Compute residual, emit small correction (with awareness of non-
+   linear ratio — small emits amplify more)
+5. Repeat 3-4 until cursor is within icon-tolerance, then click
+
+The slam-BR primitive remains valuable because it gives a deterministic
+KNOWN cursor position that doesn't depend on locateCursor's broken
+detection. That's the foundation. Next iteration: build the template-
+verification step on top.
+
 **Live trial 5 result (2026-04-26, 08:18)**:
 ```
 Origin via detect-then-move at (886, 435).
