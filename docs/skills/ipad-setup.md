@@ -37,6 +37,33 @@ brightness filter in motion-as-probe cursor detection.
 
 **How:** Settings → Accessibility → Display & Text Size → Increase Contrast → ON.
 
+### Trackpad Inertia OFF (CRITICAL for cursor precision)
+
+When Trackpad Inertia is ON, the cursor "coasts" briefly after motion
+input stops — it continues moving for a few hundred milliseconds. This
+makes cursor position non-deterministic at click-time: the algorithm
+emits delta D, expects cursor at position X, but cursor coasts past X
+to X+30. The 28-32 px residuals observed in cursor click_at benches
+match this coasting drift exactly.
+
+**Turning Trackpad Inertia OFF is the single most impactful iPad
+configuration change for `pikvm_mouse_click_at` reliability.** Without
+inertia, the cursor stops EXACTLY where the last delta-emit landed it,
+removing the variance that bounds the icon-tolerance ceiling.
+
+**How:** Settings → Accessibility → Pointer Control → Trackpad Inertia → OFF.
+
+### Tracking Speed: slowest
+
+iPadOS's pointer-acceleration curve (relative-mouse mode applies a
+non-disableable curve on top of the raw HID delta) is more aggressive
+at higher tracking speeds. Setting Tracking Speed to its slowest
+position keeps the curve in its near-1:1 region for typical small
+delta emits, so per-mickey pixel variance is bounded.
+
+**How:** Settings → General → Trackpad & Mouse → Tracking Speed →
+drag slider all the way LEFT (slowest).
+
 ## Version-specific guidance for cursor detection
 
 The MCP server's `pikvm_mouse_move_to` and `pikvm_mouse_click_at` rely on
