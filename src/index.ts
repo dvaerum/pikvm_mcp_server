@@ -36,7 +36,7 @@ import {
   ipadGoHome,
   ipadOpenAppSwitcher,
 } from './pikvm/ipad-unlock.js';
-import { detectIpadBounds } from './pikvm/orientation.js';
+import { detectIpadBounds, detectIpadBoundsFromBuffer } from './pikvm/orientation.js';
 
 // Defer initialization to main() for proper error handling
 let pikvm: PiKVMClient;
@@ -185,6 +185,14 @@ const tools: Tool[] = [
   {
     name: 'pikvm_version',
     description: `Return the running pikvm-mcp-server version. Useful for detecting whether a deployed server is current with main — if the version doesn't match the latest commit's version, the server needs a redeploy. Currently embedded version: ${VERSION}.`,
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'pikvm_health_check',
+    description: `Diagnose the running MCP server's deployment-critical state in one call. Returns: (1) embedded version (compare against main to detect stale deployment), (2) mouseAbsoluteMode (the gate for absolute-mode tools and forbidSlamFallback — if startup HID-profile detection failed and this is the safe default 'false', non-iPad targets will see absolute-mode tools refused), (3) live HID profile from /api/hid (mouse absolute/relative + online status), (4) attempted iPad bounds detection (orientation + letterbox dimensions if detected). Call this FIRST after deployment to verify the server is healthy and the target is what you think it is. Especially important to run if cursor click_at calls are misbehaving — it'll surface whether the safety guards are active.`,
     inputSchema: {
       type: 'object',
       properties: {},
@@ -685,6 +693,64 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: `pikvm-mcp-server v${VERSION}`,
             },
           ],
+        };
+      }
+
+      case 'pikvm_health_check': {
+        const lines: string[] = [];
+        lines.push(`Server version: v${VERSION}`);
+        lines.push(`mouseAbsoluteMode (in-process flag): ${mouseAbsoluteMode}`);
+        lines.push(
+          `  → forbidSlamFallback in click_at/move_to defaults to ${!mouseAbsoluteMode} ` +
+          `(true = slam-fallback BLOCKED, safe for iPad).`,
+        );
+
+        // Live HID profile — re-read so a transient startup-detection failure
+        // doesn't permanently mislead the operator.
+        try {
+          const hid = await pikvm.getHidProfile();
+          lines.push(
+            `Live HID profile: mouse=${hid.mouseOnline ? 'online' : 'offline'}/` +
+            `${hid.mouseAbsolute ? 'absolute' : 'relative'}, ` +
+            `keyboard=${hid.keyboardOnline ? 'online' : 'offline'}.`,
+          );
+          if (hid.mouseAbsolute !== mouseAbsoluteMode) {
+            lines.push(
+              `  ⚠ MISMATCH: in-process flag (${mouseAbsoluteMode}) differs from live profile ` +
+              `(${hid.mouseAbsolute}). Restart the MCP server to pick up the live value, ` +
+              `or use this call to refresh: the in-process flag is now updated.`,
+            );
+            mouseAbsoluteMode = hid.mouseAbsolute;
+          }
+        } catch (err) {
+          lines.push(`Live HID profile: FAILED to read (${(err as Error).message}).`);
+          lines.push(
+            `  → Cannot verify mouse mode from PiKVM. The in-process flag stands ` +
+            `(currently ${mouseAbsoluteMode}). If your target is iPad, the safe default ` +
+            `(false) protects against slam-on-startup-failure.`,
+          );
+        }
+
+        // Attempt iPad bounds detection — informative on portrait/landscape.
+        try {
+          const shot = await pikvm.screenshot();
+          const bounds = await detectIpadBoundsFromBuffer(shot.buffer, { verbose: false });
+          lines.push(
+            `iPad bounds detection: ${bounds.orientation} ${bounds.width}×${bounds.height} ` +
+            `at HDMI (${bounds.x},${bounds.y}). The Phase 32 slam guard treats portrait ` +
+            `bounds as iPad-letterbox.`,
+          );
+        } catch (err) {
+          lines.push(
+            `iPad bounds detection: FAILED (${(err as Error).message}). ` +
+            `Either the target isn't an iPad in letterbox, OR the screen is currently ` +
+            `dark/uniform (e.g. lock screen, all-black canvas). Phase 32a's fail-safe ` +
+            `still refuses slam in this state.`,
+          );
+        }
+
+        return {
+          content: [{ type: 'text', text: lines.join('\n') }],
         };
       }
 
