@@ -646,11 +646,16 @@ async function discoverOrigin(
     // mickeys to actually reach target. Template-match is now a
     // FALLBACK for when locateCursor fails.
     const located = await locateCursor(client, {
-      probeDelta: 20,
-      // settleMs default (300) is now derived from PiKVM streamer
+      // Phase 69: removed `probeDelta: 20` override. Phase 29 set
+      // locateCursor's default to 60 because small probes get lost in
+      // iPad animation noise; the override here was a legacy from
+      // before that default change and was effectively suppressing the
+      // benefit. Letting locateCursor use its 60-mickey default puts
+      // more displacement signal into motion-diff's pair selection.
+      // settleMs default (300) is derived from PiKVM streamer
       // latency research (2026-04-26) — must exceed ~235 ms or the
       // post-probe screenshot will return a pre-emit frame from the
-      // streamer's buffer, causing motion-diff to find no cursor pair.
+      // streamer's buffer.
       maxAttempts: 2,
       verbose: options.verbose,
     });

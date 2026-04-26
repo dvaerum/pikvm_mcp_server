@@ -50,6 +50,33 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 69 (2026-04-26): remove legacy probeDelta=20 override — tighter residuals
+
+`move-to.ts` line ~648 was passing `probeDelta: 20` to `locateCursor`,
+overriding `locateCursor`'s 60-mickey default that was set in Phase 29
+(based on the finding that small probes get lost in iPad animation
+noise). The override looked like legacy from before Phase 29's
+default change.
+
+**Live bench (n=10)** with override removed (probeDelta uses default 60):
+
+| Trial | Phase 68 (probeDelta=20) | Phase 69 (probeDelta=60) |
+|-------|--------------------------|--------------------------|
+| Successful residuals | [16, 20, 21] | **[9, 8, 6]** |
+| ≤25 px count | 3/10 | 3/10 (same) |
+| Detect-then-move failures | 4/10 | 6/10 (worse) |
+
+Phase 69 trades raw success rate for **much tighter residuals**: when
+detection works, residual drops from ~20 px to ~7 px (3× more precise).
+The detect-failure rate increase may be state-dependent (failures
+clustered at the start of the bench, possibly due to a transient
+iPad state).
+
+For applications where exact cursor placement matters (e.g. tiny
+toggles, fine-grained UI), Phase 69's single-digit residuals are a
+significant improvement. Where any-hit-counts (large icons), Phase 68
+on its own may be slightly more reliable.
+
 ### Phase 68 (2026-04-26): progressive-wake template-match fallback — measurable improvement
 
 The detect-then-move flow had a single-shot template-match fallback:
