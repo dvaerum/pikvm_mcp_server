@@ -27,14 +27,9 @@ import {
   Pace,
   BallisticsProfile,
 } from './pikvm/ballistics.js';
-import { moveToPixel, looksLikeCursor } from './pikvm/move-to.js';
+import { moveToPixel } from './pikvm/move-to.js';
 import { verifyClickByDiff, clickAtWithRetry } from './pikvm/click-verify.js';
-import {
-  decodeScreenshot,
-  diffScreenshotsDecoded,
-  extractCursorTemplate,
-} from './pikvm/cursor-detect.js';
-import { persistTemplate, loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './pikvm/template-set.js';
+import { seedCursorTemplate } from './pikvm/seed-template.js';
 import { VERSION } from './version.js';
 import {
   unlockIpad,
@@ -1402,76 +1397,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'pikvm_seed_cursor_template': {
-        const emitDx = Number(args?.emitDx ?? 100);
-        const emitDy = Number(args?.emitDy ?? 0);
-        const settleMs = Number(args?.settleMs ?? 500);
-
-        const before = await pikvm.screenshot();
-        await pikvm.mouseMoveRelative(emitDx, emitDy);
-        await new Promise((r) => setTimeout(r, settleMs));
-        const after = await pikvm.screenshot();
-
-        const decBefore = await decodeScreenshot(before.buffer);
-        const decAfter = await decodeScreenshot(after.buffer);
-        const clusters = diffScreenshotsDecoded(decBefore, decAfter, {
-          diffThreshold: 30,
-          minClusterSize: 4,
-          maxClusterSize: 200,
-          mergeRadius: 20,
-          brightnessFloor: 100,
-          maxChannelDelta: 0,
+        const result = await seedCursorTemplate(pikvm, {
+          emitDx: args?.emitDx !== undefined ? Number(args.emitDx) : undefined,
+          emitDy: args?.emitDy !== undefined ? Number(args.emitDy) : undefined,
+          settleMs: args?.settleMs !== undefined ? Number(args.settleMs) : undefined,
         });
-        if (clusters.length === 0) {
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                ok: false,
-                cursorPosition: null,
-                templatePersisted: false,
-                reason: 'no motion-diff clusters detected — cursor may be off-screen, dim, or already at the wake-emit destination. Try a larger emitDx/emitDy.',
-              }),
-            }],
-            isError: true,
-          };
-        }
-        const cursorCluster = clusters.sort((a, b) => b.pixels - a.pixels)[0];
-        const cursorPos = {
-          x: Math.round(cursorCluster.centroidX),
-          y: Math.round(cursorCluster.centroidY),
-        };
-        const template = await extractCursorTemplate(after.buffer, cursorPos);
-        if (!looksLikeCursor(template)) {
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                ok: false,
-                cursorPosition: cursorPos,
-                templatePersisted: false,
-                reason: 'looksLikeCursor rejected the extracted template (cohesion / brightness / saturation gate failed). The motion-diff cluster may not actually be the cursor — try a different wake emit, or check that the iPad screen is bright enough.',
-              }),
-            }],
-            isError: true,
-          };
-        }
-        const existing = await loadTemplateSet(DEFAULT_TEMPLATE_DIR);
-        const result = await persistTemplate(DEFAULT_TEMPLATE_DIR, template, existing);
         return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              ok: true,
-              cursorPosition: cursorPos,
-              templatePersisted: result.decision !== 'duplicate',
-              decision: result.decision,
-              templateCount: result.kept.length,
-              reason:
-                result.decision === 'duplicate'
-                  ? 'Template was perceptually similar to an existing one — kept the existing copy.'
-                  : `Template ${result.decision} (${result.kept.length} total).`,
-            }),
-          }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+          isError: !result.ok,
         };
       }
 

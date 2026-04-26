@@ -35,10 +35,11 @@ describe('AGENTS.md freshness', () => {
     expect(doc).toContain(`${workflowPrompts.length} multi-step workflow prompts`);
   });
 
-  it('Total tools count matches 19 hardware + (toolGuides + workflows) skills', async () => {
+  it('Total tools count matches 20 hardware + (toolGuides + workflows) skills', async () => {
     const doc = await readAgentsMd();
-    // 19 = 17 control tools + pikvm_version + pikvm_health_check diagnostics.
-    const expectedTotal = 19 + toolGuidePrompts.length + workflowPrompts.length;
+    // 20 = 17 control tools + pikvm_version + pikvm_health_check
+    // diagnostics + pikvm_seed_cursor_template (Phase 58).
+    const expectedTotal = 20 + toolGuidePrompts.length + workflowPrompts.length;
     expect(doc).toContain(`Total tools: ${expectedTotal}`);
   });
 
