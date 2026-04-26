@@ -20,6 +20,7 @@ import type { DecodedScreenshot } from './cursor-detect.js';
 import { moveToPixel } from './move-to.js';
 import type { MoveToOptions, MoveToResult } from './move-to.js';
 import type { PiKVMClient, MouseButton } from './client.js';
+import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
 
 export interface ClickVerification {
   /** Pixels that changed between the pre and post screenshots within
@@ -173,6 +174,16 @@ export interface ClickAtWithRetryOptions {
    *  detection is reliable enough that null finalDetectedPosition
    *  is rare). Default true. */
   requireVerifiedCursor?: boolean;
+  /** Phase 38: minimum mean RGB brightness (0-255) required to even
+   *  attempt the click. Live-verified 2026-04-26: an iPad in a dim
+   *  display state (mean=29) made every motion-diff probe fail. The
+   *  retry loop wasted 3 attempts on a known-bad environment.
+   *  Pre-checking the brightness once and failing fast saves the
+   *  retry budget AND tells the operator to wake the iPad before
+   *  trying again. Set 0 to disable the precheck. Default
+   *  VERY_DIM_THRESHOLD (50) — matches the threshold below which
+   *  cursor detection has reliably failed in tests. */
+  minBrightness?: number;
 }
 
 export interface ClickAtWithRetryResult {
@@ -222,6 +233,32 @@ export async function clickAtWithRetry(
   };
   const verifyOptions: ClickVerifyOptions = options.verifyOptions ?? {};
   const requireVerifiedCursor = options.requireVerifiedCursor ?? true;
+  const minBrightness = options.minBrightness ?? VERY_DIM_THRESHOLD;
+
+  // Phase 38: brightness precheck — fail fast on a dim screen. Live-verified
+  // 2026-04-26: cursor detection reliably fails when iPad display brightness
+  // is below ~50/255. Better to throw a clear "wake the iPad" error after
+  // one screenshot than to waste maxRetries+1 attempts on a known-bad
+  // environment. Set minBrightness=0 to skip the precheck.
+  if (minBrightness > 0) {
+    try {
+      const shot = await client.screenshot();
+      const brightness = await analyzeBrightness(shot.buffer);
+      if (brightness.mean < minBrightness) {
+        throw new Error(
+          `clickAtWithRetry: screen too dim for cursor detection ` +
+          `(mean brightness=${brightness.mean.toFixed(0)}/255, threshold=${minBrightness}). ` +
+          `Wake the iPad: call pikvm_ipad_unlock or manually adjust the iPad's display ` +
+          `brightness. Set minBrightness=0 to skip this check.`,
+        );
+      }
+    } catch (err) {
+      // If the precheck itself fails (e.g. screenshot RPC error), treat as
+      // ambiguous and let the main loop run — it'll surface its own errors.
+      // Re-throw the dim-screen error since that's the diagnostic we want.
+      if ((err as Error).message.includes('screen too dim')) throw err;
+    }
+  }
 
   const attemptHistory: ClickAtWithRetryResult['attemptHistory'] = [];
   let lastMoveResult: MoveToResult | null = null;
