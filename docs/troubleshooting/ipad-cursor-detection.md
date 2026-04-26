@@ -50,6 +50,27 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 66 (2026-04-26): tighten cohesion threshold to reject icons (50% → 75%)
+
+Investigation of Phase 65's high detect-then-move failure rate revealed
+the bench had been polluting the template set with non-cursor icons:
+
+- `7228431159.jpg`: Wi-Fi icon (12% bright, 100% cohesion — single connected curve)
+- `7228670758.jpg`: Microphone icon (14% bright, 50% cohesion — 2 components)
+- `7229535044.jpg`: "Fi" text fragment (26% bright, 60% cohesion — 3 components)
+
+Real cursor templates measure 100% cohesion (single connected blob).
+
+The Phase 53 cohesion gate at 50% allowed the microphone (50%) and "Fi"
+text (60%) through. Bumping the threshold to **75%** rejects both while
+keeping legitimate cursor templates (which all measure 100%).
+
+This still doesn't reject the Wi-Fi icon (which IS a single connected
+shape). Further work could add shape-asymmetry detection, but for now
+the simpler tightening eliminates 2 of 3 known false-positive classes.
+
+Templates manually deleted to remove pollution before next bench run.
+
 ### Phase 65 (2026-04-26): micro-step config — marginal improvement, NOT a breakthrough
 
 I initially claimed Phase 65 as a breakthrough based on a single 17 px
