@@ -56,10 +56,25 @@ I initially claimed Phase 65 as a breakthrough based on a single 17 px
 residual result. A rigorous bench (5 trials per config, iPad unlocked
 on Settings/Wi-Fi page) walks that back:
 
+**Single-call bench (5 trials, no retry)** — moveToPixel only:
+
 | Config       | ≤25 px | Median | p95   | Detect failures |
 |--------------|--------|--------|-------|-----------------|
 | Baseline     | 0/5    | 109 px | 934 px | 1/5            |
 | Phase 65     | 1/5    | 109 px | 934 px | 2/5            |
+
+**End-to-end bench (10 trials, maxRetries=2)** — clickAtWithRetry:
+
+| Config       | ≤25 px | Median  | Detect fails |
+|--------------|--------|---------|--------------|
+| Baseline     | 0/10   | ~52 px  | 2/10         |
+| Phase 65     | 1/10   | ~80 px  | 4/10         |
+
+The end-to-end bench shows the data the user actually experiences:
+~10% chance of landing within 25 px of target (Phase 65) vs 0%
+(baseline). Both are unacceptable for production point-and-click.
+Bench harnesses: `bench-micro.ts` (single-call) and
+`bench-clickretry.ts` (end-to-end with retries).
 
 **Honest assessment**:
 - Phase 65 had ONE success (≤25 px) out of 5 trials. Baseline had

@@ -103,7 +103,16 @@ Current version on `main`: 0.5.46 (Phase 58 — pikvm_seed_cursor_template MCP t
 
 **Strong recommendation for iPad targets: prefer keyboard workflows over cursor clicks.** USB HID keyboard input is reliable; cursor positioning is fragile because iPadOS pointer acceleration is non-disableable and varies run-to-run. Use `pikvm_shortcut(["MetaLeft","Space"])` + `pikvm_type(<app>)` + `pikvm_key("Enter")` to launch apps via Spotlight; `pikvm_shortcut(["MetaLeft","KeyF"])` to focus in-app search bars. Reserve `pikvm_mouse_click_at` for UI elements with no keyboard equivalent. See `docs/skills/ipad-keyboard-workflow.md` for the recommended pattern and `docs/skills/ipad-setup.md` for iPadOS-version-aware setup.
 
-**Phase 61 finding (2026-04-26)** — iPad Settings is fully arrow-key navigable: `pikvm_key("Escape")` walks UP the navigation stack (sub-page → category → root); `pikvm_key("ArrowDown"/"ArrowUp")` walks the sidebar list; the right pane updates automatically as selection moves. Combined with `Tab`/`Return` for in-pane focus, this lets you navigate Settings categories without a single `pikvm_mouse_click_at`. See `docs/troubleshooting/ipad-cursor-detection.md` § Phase 61 for the verified trace.
+**Phase 61/62 finding (2026-04-26)** — iPad Settings sidebar IS keyboard-navigable: `pikvm_key("Escape")` walks UP the navigation stack (sub-page → category → root); `pikvm_key("ArrowDown"/"ArrowUp")` walks the sidebar list; the right pane updates automatically as selection moves. **Caveat (Phase 62)**: in-pane Tab/Return navigation requires iPadOS's *Full Keyboard Access* to be enabled (one-time setup at Settings → Accessibility → Keyboards → Full Keyboard Access — needs ONE coordinate-based click to flip). Without FKA, only the sidebar is keyboard-reachable. See `docs/troubleshooting/ipad-cursor-detection.md` § Phase 61/62 for the verified trace.
+
+**Phase 65 verification (2026-04-26)** — pikvm_mouse_click_at residual on iPad bench (n=10 with retries=2):
+
+| Config | ≤25 px | Median | Detect fails |
+|--------|--------|--------|--------------|
+| Baseline | 0/10 | ~52 px | 2/10 |
+| Phase 65 micro tuning | 1/10 | ~80 px | 4/10 |
+
+Phase 65's tighter linear correction config is **marginally better** (1/10 vs 0/10 at icon tolerance) but neither is production-reliable for small targets. Cursor-positioning is fundamentally bottlenecked by motion-diff reliability against iPad's animated UI noise — the algorithm fails to *detect* the cursor on 20-40% of attempts, and even when detection works, residual is typically 50-100 px. **For reliable iPad automation, use keyboard workflows.** `pikvm_mouse_click_at` should be reserved for last-resort cases on UI elements with no keyboard equivalent, with the operator prepared for ~80% miss rate on small targets. Reproducible bench: `bench-clickretry.ts`.
 
 ## MCP Prompts & Skill Tools
 
