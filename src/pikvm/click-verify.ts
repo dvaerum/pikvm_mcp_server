@@ -207,6 +207,17 @@ export interface ClickAtWithRetryOptions {
    *  the click triggers the snap without significantly displacing the
    *  cursor. Default 5. Set 0 to disable. */
   preClickWiggleMickeys?: number;
+  /** Phase 50: minimum live-measured px/mickey ratio for an attempt to
+   *  be considered worth retrying. Live-verified 2026-04-26: when iPadOS
+   *  is rate-limiting USB HID input (could be due to a popup, low-power
+   *  state, accessibility throttle, or display-off-but-on state), motion-
+   *  diff measures live ratio 0.5-0.8 vs expected ~3.0. The cursor
+   *  barely moves regardless of emit. Skipping the attempt and surfacing
+   *  the rate-limit lets the operator investigate the iPad-side issue
+   *  rather than accumulating retries that all fail the same way.
+   *  Default 0.4 — well below normal iPadOS variance (1.0-3.0) but above
+   *  the rate-limit floor (0.5-0.8 observed). Set 0 to disable. */
+  minLivePxPerMickey?: number;
   /** Phase 45: max iterations of post-move template-driven
    *  micro-correction. After moveToPixel returns, this loop runs:
    *    1. Take screenshot
@@ -283,6 +294,7 @@ export async function clickAtWithRetry(
   // is small or when emitting would push cursor into an iPad gesture zone.
   const microCorrectionIterations = options.microCorrectionIterations ?? 3;
   const microConvergePx = options.microConvergePx ?? 8;
+  const minLivePxPerMickey = options.minLivePxPerMickey ?? 0.4;
   // Load cursor templates ONCE outside the retry loop. Empty set →
   // pre-click template check is a no-op (graceful degradation).
   const sessionTemplates = await loadTemplateSet(DEFAULT_TEMPLATE_DIR).catch(() => []);
@@ -367,6 +379,45 @@ export async function clickAtWithRetry(
         skippedClickReason: `moveToPixel threw: ${lastMoveError.message}`,
       });
       continue;
+    }
+
+    // Phase 50: detect iPadOS input rate-limiting via observed px/mickey.
+    // Live-verified 2026-04-26: when iPadOS throttles USB HID input
+    // (popup, low-power, accessibility), motion-diff measures live ratio
+    // 0.5-0.8 vs expected ~3.0. Continuing to retry just wastes attempts
+    // — the cursor isn't responsive to our input regardless of strategy.
+    // Surface the rate-limit so the operator investigates iPad-side state.
+    if (minLivePxPerMickey > 0 && lastMoveResult.usedPxPerMickey) {
+      const rx = lastMoveResult.usedPxPerMickey.x;
+      const ry = lastMoveResult.usedPxPerMickey.y;
+      // Both axes must be below threshold to declare rate-limited.
+      // (Some moves are mostly one-axis; the other axis ratio is noisy.)
+      if (rx > 0 && rx < minLivePxPerMickey && ry > 0 && ry < minLivePxPerMickey) {
+        const reason =
+          `iPadOS rate-limiting input (live px/mickey x=${rx.toFixed(2)} y=${ry.toFixed(2)}, ` +
+          `min=${minLivePxPerMickey}). Possible causes: popup intercepting input, low-power ` +
+          `state, accessibility throttle, or display in off-but-on mode. Check the iPad ` +
+          `directly — retries won't help while this state persists.`;
+        lastVerification = {
+          changedPixels: 0,
+          totalPixels: 0,
+          changedFraction: 0,
+          screenChanged: false,
+          message: `Click skipped: ${reason}`,
+        };
+        attemptHistory.push({
+          attempt,
+          screenChanged: false,
+          changedFraction: 0,
+          cursorVerified: false,
+          skippedClickReason: `rate-limit: ratio < ${minLivePxPerMickey}`,
+        });
+        // Don't continue retrying — the rate-limit is a per-iPad-state
+        // condition, not something a fresh probe will overcome. Break out
+        // of the retry loop entirely so the caller sees a clear single
+        // diagnosis instead of N identical "rate-limited" attempts.
+        break;
+      }
     }
 
     // Phase 35: if cursor position couldn't be verified post-move,
