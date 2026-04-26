@@ -37,7 +37,7 @@ import {
   ipadOpenAppSwitcher,
 } from './pikvm/ipad-unlock.js';
 import { detectIpadBounds, detectIpadBoundsFromBuffer } from './pikvm/orientation.js';
-import { analyzeBrightness, formatBrightnessReport } from './pikvm/brightness.js';
+import { analyzeBrightness, formatBrightnessReport, VERY_DIM_THRESHOLD } from './pikvm/brightness.js';
 
 // Defer initialization to main() for proper error handling
 let pikvm: PiKVMClient;
@@ -491,7 +491,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_click_at',
-    description: 'Move the mouse to an approximate target pixel (via pikvm_mouse_move_to) and then click. Returns a post-click screenshot. Inherits pikvm_mouse_move_to\'s detection/correction pipeline. With verifyClick=true (default), also takes a pre-click screenshot and reports whether the click triggered a visible screen change — use this signal to detect a missed click rather than relying on screenshot inspection alone. With maxRetries>0, automatically retries up to N times when the verification reports no screen change; each retry runs a fresh detect-then-move probe so the cursor position is rediscovered from scratch (does NOT compound errors like Phase 17).',
+    description: 'Move the mouse to an approximate target pixel (via pikvm_mouse_move_to) and then click. Returns a post-click screenshot. Inherits pikvm_mouse_move_to\'s detection/correction pipeline. With verifyClick=true (default), also takes a pre-click screenshot and reports whether the click triggered a visible screen change — use this signal to detect a missed click rather than relying on screenshot inspection alone. With maxRetries>0, automatically retries up to N times when the verification reports no screen change; each retry runs a fresh detect-then-move probe so the cursor position is rediscovered from scratch (does NOT compound errors like Phase 17). Phase 38: on iPad targets (mouse.absolute=false), checks screen brightness before clicking — if the iPad display is dimmed below mean=50/255 (live-verified failure threshold for cursor detection), aborts with a "wake the iPad" message instead of wasting attempts on a known-bad environment.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1176,6 +1176,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ? { minChangedFraction: verifyMinChangeFraction }
             : {}),
         };
+
+        // Phase 38: brightness precheck. The retry path (maxRetries>0) does
+        // this inside clickAtWithRetry, so we only need it on the single-shot
+        // path (maxRetries=0). Gate is iPad-only — non-iPad targets don't
+        // suffer from cursor-fade-on-dim-screen.
+        const minBrightness = !mouseAbsoluteMode && maxRetries === 0
+          ? VERY_DIM_THRESHOLD
+          : 0;
+        if (minBrightness > 0) {
+          try {
+            const shot0 = await pikvm.screenshot();
+            const brightness = await analyzeBrightness(shot0.buffer);
+            if (brightness.mean < minBrightness) {
+              return {
+                content: [{
+                  type: 'text',
+                  text:
+                    `Click aborted: screen too dim for cursor detection ` +
+                    `(mean brightness=${brightness.mean.toFixed(0)}/255, threshold=${minBrightness}). ` +
+                    `Wake the iPad: call pikvm_ipad_unlock or manually adjust the iPad's display ` +
+                    `brightness, then retry.`,
+                }],
+                isError: true,
+              };
+            }
+          } catch (_err) {
+            // Precheck failure is non-fatal — fall through to the click.
+          }
+        }
 
         // Phase 25: when maxRetries > 0, use the retry orchestrator
         // (clickAtWithRetry) which loops moveToPixel + click + verify
