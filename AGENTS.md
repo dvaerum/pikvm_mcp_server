@@ -135,9 +135,48 @@ Implementation: `src/prompts/` (types.ts, tool-guides.ts, workflows.ts, skill-to
 
 ## Testing
 
+### Unit tests (offline)
+
+```bash
+npm test           # vitest, ~12 s, 250+ tests
+npm run typecheck  # tsc --noEmit
+```
+
+Tests live in `__tests__/` directories alongside the production
+modules they cover:
+- `src/__tests__/` — `loadConfig`
+- `src/pikvm/__tests__/` — cursor detection, motion-diff, template
+  matching, ballistics, orientation, iPad-unlock, move-to helpers
+- `src/prompts/__tests__/` — prompt registries, MCP-skill-tool
+  generation
+
+Tests are TDD-style: production behaviour is pinned by the test,
+so a refactor that changes behaviour fails fast. PiKVMClient-using
+helpers are tested with a recorded-call mock client — no network
+access required.
+
+Behaviour-change tests follow red→green: write the failing test
+that captures the desired new behaviour, then change production
+until it passes. Test names beginning `REGRESSION:` document a
+specific bug the test was added to catch.
+
+### Live tests (requires real PiKVM)
+
 Test against a real PiKVM device:
 - URL: `https://<your-pikvm-ip>`
 - Access via: PiKVM web interface at `/kvm/`
+
+The `test-client.ts` script (gitignored) drives the local source
+against a live PiKVM, useful for debugging cursor-detection
+issues that don't reproduce in unit tests. Modes include:
+`smoke`, `full`, `moveto`, `click`, `bench`, `latency-probe`,
+`unlock-and-click`. See the file's mode dispatcher for the full
+list.
+
+For iPad-specific cursor-detection troubleshooting, see
+`docs/troubleshooting/ipad-cursor-detection.md` — captures the
+phase-by-phase progression from "phantom cursor" to the latency
+root cause to the current opt-in `progressiveOpenLoop` mode.
 
 ## References
 
