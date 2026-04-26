@@ -177,6 +177,60 @@ Two improvements suggested by this finding:
 
 Both are concrete next-iteration candidates that don't require deep refactor.
 
+### Trial 2 (2026-04-26): click(757, 832) → Books, all signals AGREED on miss
+
+Second live click-verify trial, target Books icon on the quiet left side
+of the home screen (away from animated widgets).
+
+**Algorithm trace (verbose):**
+- locateCursor probe: cursor pre=(888,301) post=(934,314), used as origin
+- Calibration: X-ratio probed at 2.300
+- Open-loop emitted 77X+99Y mickeys in 5 chunks
+- Motion-diff: 11 total clusters, 10 cursor-sized, 8 achromatic. Pair selection failed: "1×6 cands considered, no pair passed direction/sanity filters."
+- Template-match against 4 cached templates: best scores 0.849, 0.738, 0.327, 0.631 — all below the 0.95 correction-pass threshold.
+- Algorithm: trusted prediction. `Final position not detected — click accuracy uncertain.`
+- `passesSinceLastVerification = 1` — Phase 24 correctly flagged unverified.
+
+**Phase 23 verification:**
+- 0.005% of screen changed (112 pixels of 2,073,600).
+- `screenChanged = false`.
+- Message: "Click did not trigger a visible screen change. The click may have missed its target."
+
+**Post-click screenshot inspection:**
+- Cursor visible at ~(1100, 510), in the empty wallpaper region between Reminders and Maps icons.
+- Click landed on wallpaper. No app opened. Phase 23's "no change" verdict is correct.
+
+### Cross-trial pattern
+
+| Trial | Target | Algorithm self-report | Phase 23 screenChanged | Reality | Signals consistent? |
+|---|---|---|---|---|---|
+| 1 | Settings (1027,832) | "verified" residual=283 (FALSE) | true (29%) | Click hit Files icon (wrong target) | Algorithm wrong; Phase 23 correctly says "something happened" |
+| 2 | Books (757,832) | "uncertain", lag=1 | false (0.005%) | Click on wallpaper, no app | All three honest, all agree |
+
+### Decision matrix for the calling agent (validated by these trials)
+
+```
+algorithm_confident = (passesSinceLastVerification == 0) AND (finalDetectedPosition != null)
+phase23_changed     = screenChanged
+
+if !phase23_changed:
+    → CLICK MISSED. Retry with corrected aim.
+    Both trial-2-style failures and "click on wallpaper" cases land here.
+
+if phase23_changed AND post_click_matches_expected_destination:
+    → SUCCESS. Proceed.
+
+if phase23_changed AND !post_click_matches_expected_destination:
+    → WRONG TARGET. Back out (Cmd+H), then retry.
+    Trial 1 lands here: click "succeeded" but on the wrong icon.
+    The algorithm's "verified residual" is NOT trustworthy here.
+```
+
+The above algorithm is implementable at the calling-agent layer using
+only the existing tools' return values. No further server changes
+required to make this work — but Phase 23/24 must be DEPLOYED, which
+they are not on the user's current MCP server (still pre-da3a434).
+
 ## ROOT CAUSE FOUND (2026-04-26): PiKVM streamer + iPadOS render latency ~235 ms
 
 After the phantom-cursor finding (below), I instrumented a
