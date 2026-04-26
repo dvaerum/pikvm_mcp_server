@@ -69,4 +69,40 @@ describe('looksLikeCursor', () => {
     });
     expect(looksLikeCursor(t)).toBe(true);
   });
+
+  it("REGRESSION: rejects a multi-glyph text fragment (e.g. 'ript', 'ck')", () => {
+    // Live failure 2026-04-26: template captures from dark-mode Settings UI
+    // contained text fragments, not cursors. Each character glyph is a
+    // disconnected bright region. A real cursor is ONE cohesive blob;
+    // text is many small disconnected components. Reject when the largest
+    // connected bright component is < ~50% of all bright pixels.
+    //
+    // Template here simulates 4 small disconnected bright glyphs spaced
+    // horizontally — looks like text on dark background.
+    const t = template(24, 24, (i) => {
+      const x = i % 24, y = Math.floor(i / 24);
+      // Four 3×6 bright strokes at x=2-4, 8-10, 14-16, 20-22; y=8-13.
+      const inGlyphRow = y >= 8 && y < 14;
+      const xCol = x % 6;
+      const inGlyphCol = xCol >= 2 && xCol < 5;
+      return inGlyphRow && inGlyphCol ? [240, 240, 240] : [40, 40, 40];
+    });
+    expect(looksLikeCursor(t)).toBe(false);
+  });
+
+  it('accepts a cursor with small anti-alias satellite pixels around the main blob', () => {
+    // A real cursor with anti-aliasing produces a few disconnected dim-
+    // bright outliers around the main shape. The main blob still
+    // dominates (≥50% of bright pixels) so the cohesion test should pass.
+    const t = template(24, 24, (i) => {
+      const x = i % 24, y = Math.floor(i / 24);
+      // Main 6×6 cursor blob centered at (12, 12).
+      const inMain = Math.abs(x - 12) < 3 && Math.abs(y - 12) < 3;
+      // A couple of single-pixel anti-alias outliers.
+      const isSatellite = (x === 5 && y === 5) || (x === 19 && y === 19);
+      const bright = inMain || isSatellite;
+      return bright ? [240, 240, 240] : [40, 40, 40];
+    });
+    expect(looksLikeCursor(t)).toBe(true);
+  });
 });

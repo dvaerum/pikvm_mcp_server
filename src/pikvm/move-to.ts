@@ -423,14 +423,27 @@ async function getCachedTemplates(): Promise<CursorTemplate[]> {
 }
 
 /** Validate that a candidate template region looks plausibly like a
- *  cursor: at least one bright (≥170 channel) achromatic pixel
- *  (R,G,B within 30 of each other), and average saturation across
- *  the region is low. Rejects icon corners and colored UI elements
- *  that motion-diff sometimes mistakes for the cursor. Exported for
- *  unit tests. */
+ *  cursor:
+ *    1. ≥4% of the template is bright (≥170 channel) achromatic
+ *       (R,G,B within 30 of each other).
+ *    2. Mean saturation across the region is low (whole region mostly
+ *       grayscale, not a colored UI element).
+ *    3. Phase 53: bright pixels form a COHESIVE shape — the largest
+ *       connected bright component is ≥50% of total bright pixels. A
+ *       real cursor is one blob; text on dark background is multiple
+ *       disconnected glyphs. Without this gate, dark-mode Settings UI
+ *       captured 'ript' / 'ck' fragments into the template set,
+ *       which then scored 0.999 against themselves and fooled
+ *       Phase 51's full-frame lie-detector.
+ *
+ *  Exported for unit tests.
+ */
 export function looksLikeCursor(t: CursorTemplate): boolean {
-  const px = t.width * t.height;
-  let brightAchromatic = 0;
+  const w = t.width;
+  const h = t.height;
+  const px = w * h;
+  const bright = new Uint8Array(px);
+  let brightCount = 0;
   let totalSaturation = 0;
   for (let i = 0; i < px; i++) {
     const o = i * 3;
@@ -439,12 +452,54 @@ export function looksLikeCursor(t: CursorTemplate): boolean {
     const cMax = Math.max(r, g, b);
     const sat = cMax - cMin;
     totalSaturation += sat;
-    if (cMin >= 170 && sat <= 30) brightAchromatic++;
+    if (cMin >= 170 && sat <= 30) {
+      bright[i] = 1;
+      brightCount++;
+    }
   }
-  // Need ≥ 4% of the template to be bright-achromatic (cursor pixels)
-  // and average saturation < 50 (whole region is mostly grayscale).
   const meanSat = totalSaturation / px;
-  return brightAchromatic >= px * 0.04 && meanSat < 50;
+  if (brightCount < px * 0.04) return false;
+  if (meanSat >= 50) return false;
+
+  // Connected-components on the bright mask (4-connectivity, BFS).
+  // Track only the largest component's size — we don't need the full
+  // labelling, just the maximum.
+  const visited = new Uint8Array(px);
+  const queue = new Int32Array(px);
+  let largest = 0;
+  for (let i = 0; i < px; i++) {
+    if (!bright[i] || visited[i]) continue;
+    visited[i] = 1;
+    queue[0] = i;
+    let head = 0;
+    let tail = 1;
+    let size = 0;
+    while (head < tail) {
+      const idx = queue[head++];
+      size++;
+      const x = idx % w;
+      const y = (idx - x) / w;
+      // 4-connectivity neighbours.
+      if (x > 0) {
+        const n = idx - 1;
+        if (bright[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
+      }
+      if (x < w - 1) {
+        const n = idx + 1;
+        if (bright[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
+      }
+      if (y > 0) {
+        const n = idx - w;
+        if (bright[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
+      }
+      if (y < h - 1) {
+        const n = idx + w;
+        if (bright[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
+      }
+    }
+    if (size > largest) largest = size;
+  }
+  return largest >= brightCount * 0.5;
 }
 
 async function maybePersistTemplate(
