@@ -118,7 +118,7 @@ Or if using the .env file:
 ## Available Tools
 
 ### Diagnostics
-- **`pikvm_version`** - Return the running server version. Use to detect a stale deployment: query this and compare against `main` (currently `0.4.1`).
+- **`pikvm_version`** - Return the running server version. Use to detect a stale deployment: query this and compare against `main` (currently `0.5.0`).
 
 ### Display
 - **`pikvm_screenshot`** - Capture current screen as JPEG (optional: maxWidth, maxHeight, quality)
@@ -195,6 +195,7 @@ The server exposes structured guidance for agents via skills. Each skill is avai
 | `calibrate-mouse-workflow` | `skill_calibrate_mouse_workflow` | — | Calibrate mouse coordinates |
 | `click-ui-element-workflow` | `skill_click_ui_element_workflow` | `element_description` (required) | Find and click a UI element |
 | `fill-form-workflow` | `skill_fill_form_workflow` | `form_description` (optional) | Fill in a form on screen |
+| `ipad-keyboard-first-workflow` | `skill_ipad_keyboard_first_workflow` | `goal` (required) | Reliable keyboard-first iPad workflow (live-validated; bypasses cursor) |
 | `navigate-desktop-workflow` | `skill_navigate_desktop_workflow` | `goal` (required) | Navigate a desktop environment |
 | `auto-calibrate-mouse-workflow` | `skill_auto_calibrate_mouse_workflow` | — | Automatic mouse calibration |
 
