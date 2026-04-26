@@ -50,6 +50,40 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 57 (2026-04-26): attempted Trackpad-Inertia disable via deployed MCP — confirmed deployed server is unsafe on iPad
+
+The user's mantra "be proactive — do not ask me to do things you can do
+yourself" prompted a live attempt to navigate Settings → General →
+Trackpad → Trackpad Inertia and toggle it off via keyboard + mouse.
+
+**Result**: clicking the back arrow at HDMI (929, 99) via the deployed
+MCP server (started before this session, predates Phase 32a) caused the
+algorithm to fall back to slam-then-move, slam to top-left, trigger the
+iPadOS hot-corner gesture, and **re-lock the iPad mid-task**. The
+algorithm message confirmed: `WARNING: detect-origin fell back to slam;
+iPad may have re-locked via hot corner.`
+
+**Conclusion** (consistent with Phase 32a / Phase 33 / Phase 46):
+
+- The deployed MCP server lacks Phase 32a's `forbidSlamOnIpad` strict
+  guard. Any `pikvm_mouse_click_at` call that falls into the
+  `detect-then-move` → `slam-then-move` fallback path on iPad WILL
+  trigger the lock-screen hot corner.
+- v0.5.45 (committed today) ships Phase 32a, Phase 33, and the
+  Phase 51-56 chain that fixes detect-origin reliability. Restarting
+  the MCP server picks up these fixes.
+- Until the operator restarts the MCP server, all
+  `pikvm_mouse_click_at` calls on iPad are unsafe — prefer keyboard
+  workflows (`pikvm_shortcut`, `pikvm_type`, `pikvm_key`) or the local
+  test harness (`npx tsx test-client.ts click-retry …`).
+
+The Trackpad Inertia toggle attempt itself is paused. iPadOS may or
+may not actually expose a configurable inertia toggle in the current
+iOS version; the search results from Spotlight pointed to web articles
+about it but did not surface an in-Settings entry. **Even if the toggle
+exists, it cannot be reliably toggled via the current deployed MCP
+server.**
+
 ### Phase 56 (v0.5.45, 2026-04-26): lower `looksLikeCursor` brightness floor 170 → 100
 
 After Phase 53 shipped (cohesion gate), live `wake-and-capture` produced
