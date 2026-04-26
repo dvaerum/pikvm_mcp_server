@@ -54,8 +54,10 @@ describe('looksLikeCursor', () => {
   });
 
   it('rejects a region with no bright pixels (all dim)', () => {
-    // No pixel reaches the 170 brightness floor → no bright achromatic.
-    const t = template(24, 24, () => [120, 120, 120]);
+    // No pixel reaches the brightness floor → no bright achromatic.
+    // Phase 56 lowered the floor to 100; this test now uses cMin=80
+    // to stay below it.
+    const t = template(24, 24, () => [80, 80, 80]);
     expect(looksLikeCursor(t)).toBe(false);
   });
 
@@ -88,6 +90,22 @@ describe('looksLikeCursor', () => {
       return inGlyphRow && inGlyphCol ? [240, 240, 240] : [40, 40, 40];
     });
     expect(looksLikeCursor(t)).toBe(false);
+  });
+
+  it("REGRESSION (Phase 56): accepts iPadOS's soft-grey cursor (cMin ≈ 120)", () => {
+    // Live capture from iPad on 2026-04-26 produced a cursor template
+    // whose brightest pixel was cMin=143. The pre-Phase-56 threshold of
+    // 170 rejected it; Phase 56 lowered the floor to 100 so iPadOS
+    // soft-grey cursors are accepted while still keeping out
+    // dark/uniform regions. The cohesion gate (Phase 53) and saturation
+    // gate prevent false positives from text/colored elements.
+    const t = template(24, 24, (i) => {
+      const x = i % 24, y = Math.floor(i / 24);
+      const inCursor = Math.abs(x - 12) < 4 && Math.abs(y - 12) < 4;
+      // Cursor at cMin=120 (typical iPadOS soft cursor) on dark backdrop.
+      return inCursor ? [120, 120, 120] : [40, 40, 40];
+    });
+    expect(looksLikeCursor(t)).toBe(true);
   });
 
   it('accepts a cursor with small anti-alias satellite pixels around the main blob', () => {

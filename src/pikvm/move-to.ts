@@ -424,8 +424,8 @@ async function getCachedTemplates(): Promise<CursorTemplate[]> {
 
 /** Validate that a candidate template region looks plausibly like a
  *  cursor:
- *    1. ≥4% of the template is bright (≥170 channel) achromatic
- *       (R,G,B within 30 of each other).
+ *    1. ≥4% of the template is bright (≥CURSOR_BRIGHTNESS_FLOOR channel)
+ *       achromatic (R,G,B within 30 of each other).
  *    2. Mean saturation across the region is low (whole region mostly
  *       grayscale, not a colored UI element).
  *    3. Phase 53: bright pixels form a COHESIVE shape — the largest
@@ -436,8 +436,15 @@ async function getCachedTemplates(): Promise<CursorTemplate[]> {
  *       which then scored 0.999 against themselves and fooled
  *       Phase 51's full-frame lie-detector.
  *
+ *  Phase 56 (v0.5.45): the brightness floor was lowered from 170 → 100.
+ *  Live capture from an iPad showed cursor pixels max out at cMin≈143;
+ *  the 170 threshold was rejecting genuine cursors. The cohesion gate
+ *  (Phase 53) and saturation gate keep text fragments and colored UI
+ *  elements out at the lower threshold.
+ *
  *  Exported for unit tests.
  */
+const CURSOR_BRIGHTNESS_FLOOR = 100;
 export function looksLikeCursor(t: CursorTemplate): boolean {
   const w = t.width;
   const h = t.height;
@@ -452,7 +459,7 @@ export function looksLikeCursor(t: CursorTemplate): boolean {
     const cMax = Math.max(r, g, b);
     const sat = cMax - cMin;
     totalSaturation += sat;
-    if (cMin >= 170 && sat <= 30) {
+    if (cMin >= CURSOR_BRIGHTNESS_FLOOR && sat <= 30) {
       bright[i] = 1;
       brightCount++;
     }
