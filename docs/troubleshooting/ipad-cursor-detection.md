@@ -287,6 +287,46 @@ Next attack vector: a `moveToPixelFromCorner` flow that:
 The fresh-from-slam template should be MUCH better than the
 motion-diff-captured cache that's been poisoning matches.
 
+### Phase 30 cont. (2026-04-26, 09:00): slow-chunked emit is NEARLY NO-OP
+
+`slam-aim-click` mode: slam BR (cursor at ~1283, 1008) → capture
+fresh template → emit chunked move → template-match.
+
+**Live**: emitted 9 chunks of (-5, -5) mickeys with 100ms pauses
+between each (total: -45 mickeys per axis). Result: cursor moved
+only ~8 px in Y, ~1 px in X. Fresh template found cursor at
+(1284, 1000) — basically same as starting position (1283, 1008).
+
+So slow, paced chunked emits are NEARLY NO-OP on iPadOS. Combined
+with the earlier "single fast emit moves ~220 px regardless of
+mickey count" observation:
+
+**iPadOS pointer behavior model (working hypothesis)**:
+- Each HID call is treated as a "pointer event"
+- iPadOS applies a ballistic curve where event SPEED matters more
+  than mickey count
+- Single fast call → big ballistic kick → ~200 px per axis,
+  approximately constant
+- Slow paced calls → iPadOS dampens, treats as steady-state pointing
+  → very small per-call displacement
+
+Implications:
+- Open-loop relative moves ARE achievable but require burst-fast
+  HID calls, not slow chunked ones
+- Each "burst" advances ~200 px; multi-burst chains can reach
+  longer distances
+- Pause BETWEEN bursts (≥1s for cursor render+fade) lets each burst
+  be treated independently, but loses cursor visibility
+- Pause WITHIN bursts (≥100ms) dampens the ballistic curve
+
+The slam-BR primitive gives a guaranteed known-cursor anchor.
+Fresh template capture from there works (template scored 0.744 in
+trial above, cursor visibly at the corner). The chain works.
+
+What's still needed: precise relative movement. Need to find the
+right burst pattern that produces ~controlled 200px-per-burst
+displacement, then chain bursts to reach target with feedback.
+
 ### Phase 30 in progress (2026-04-26, 08:39): slam-BR + open-loop emit, no verify
 
 Implemented `corner-click` test-client mode: slam BR (cursor at known

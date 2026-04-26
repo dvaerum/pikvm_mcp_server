@@ -1,6 +1,6 @@
 {
   "name": "pikvm-mcp-server",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "MCP server for controlling remote machines via PiKVM",
   "main": "dist/index.js",
   "bin": {
