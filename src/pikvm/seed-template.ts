@@ -25,7 +25,7 @@
 import {
   decodeScreenshot,
   diffScreenshotsDecoded,
-  extractCursorTemplate,
+  extractCursorTemplateDecoded,
 } from './cursor-detect.js';
 import type { CursorTemplate } from './cursor-detect.js';
 import { looksLikeCursor } from './move-to.js';
@@ -119,7 +119,10 @@ export async function seedCursorTemplate(
     x: Math.round(cursorCluster.centroidX),
     y: Math.round(cursorCluster.centroidY),
   };
-  const template = await extractCursorTemplate(after.buffer, cursorPos);
+  // Reuse the already-decoded `decAfter` rather than re-decoding the
+  // JPEG via the convenience wrapper. Avoids one full sharp() pipeline
+  // per seed call.
+  const template = extractCursorTemplateDecoded(decAfter, cursorPos, 24);
   if (!looksLikeCursor(template)) {
     return {
       ok: false,
