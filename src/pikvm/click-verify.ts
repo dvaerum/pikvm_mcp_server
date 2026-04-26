@@ -562,10 +562,6 @@ export async function clickAtWithRetry(
         const res = await client.getResolution();
         safeBounds = { x: 0, y: 0, width: res.width, height: res.height };
       }
-      const edgeMinX = safeBounds.x + EDGE_MARGIN_PX;
-      const edgeMaxX = safeBounds.x + safeBounds.width - EDGE_MARGIN_PX;
-      const edgeMinY = safeBounds.y + EDGE_MARGIN_PX;
-      const edgeMaxY = safeBounds.y + safeBounds.height - EDGE_MARGIN_PX;
       for (let iter = 0; iter < microCorrectionIterations; iter++) {
         const microShot = await client.screenshot();
         const microDecoded = await decodeScreenshot(microShot.buffer);
@@ -588,7 +584,7 @@ export async function clickAtWithRetry(
         // for the Phase 45 app-switcher failure mode.
         const predX = found.position.x + mx * ratioX;
         const predY = found.position.y + my * ratioY;
-        if (predX < edgeMinX || predX > edgeMaxX || predY < edgeMinY || predY > edgeMaxY) {
+        if (wouldExceedSafeBounds(predX, predY, safeBounds, EDGE_MARGIN_PX)) {
           // Stop the loop rather than push toward an iPad gesture zone.
           break;
         }
@@ -666,6 +662,36 @@ export async function clickAtWithRetry(
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Phase 49 — pure helper: would a predicted cursor position exit the
+ * safe-bounds margin? This is the safety predicate that prevents the
+ * micro-correction loop from pushing the cursor into iPadOS gesture
+ * zones (top-left = lock screen hot corner; bottom-edge = swipe-up =
+ * app switcher; top-edge = control centre / notifications).
+ *
+ * Returns true if the predicted (predX, predY) is OUTSIDE the
+ * margin-shrunken inner rectangle. The loop should refuse to emit
+ * a delta that would land here.
+ *
+ * Live-verified failure mode (Phase 45 reverted): without this
+ * guard, the micro-correction loop pushed the cursor down to the
+ * iPad's bottom edge (Y > bounds.bottom - margin) and triggered
+ * the swipe-up-from-bottom system gesture — opening the app
+ * switcher. Phase 49 added this predicate; it must stay correct.
+ */
+export function wouldExceedSafeBounds(
+  predX: number,
+  predY: number,
+  safeBounds: { x: number; y: number; width: number; height: number },
+  marginPx: number,
+): boolean {
+  const minX = safeBounds.x + marginPx;
+  const maxX = safeBounds.x + safeBounds.width - marginPx;
+  const minY = safeBounds.y + marginPx;
+  const maxY = safeBounds.y + safeBounds.height - marginPx;
+  return predX < minX || predX > maxX || predY < minY || predY > maxY;
 }
 
 /**
