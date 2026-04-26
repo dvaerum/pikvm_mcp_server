@@ -68,7 +68,7 @@ The server is configured via environment variables or a config file:
 ### Diagnostics
 0. **`pikvm_version`** - Return the running pikvm-mcp-server version. Use to detect a stale deployment: query this and compare against the version on `main` (currently 0.5.40). If they differ, redeploy before trusting any iPad behavior — older servers lack critical iPad-safety fixes (e.g. `forbidSlamFallback`).
 
-Current version on `main`: 0.5.41 (Phase 51 — two-stage pre-click cursor check: narrow-window verify first, full-frame lie-detector only as fallback. Fixes Phase 42 false-positives on iPad status-bar icons).
+Current version on `main`: 0.5.46 (Phase 58 — pikvm_seed_cursor_template MCP tool for bootstrapping cursor templates. Phase 51-56 chain: pre-click two-stage cursor verification, cohesion-gated `looksLikeCursor`, and brightness floor calibrated for iPadOS soft-grey cursor).
 0a. **`pikvm_health_check`** - One-call deployment health report: server version, mouseAbsoluteMode + safety-guard implication, live HID profile, iPad bounds detection. Run FIRST after deployment to verify safety guards are active and the target is what you think it is. Surfaces stale deployments (version mismatch), failed startup detection (mouseAbsoluteMode at safe default), and target type (iPad portrait/landscape vs other).
 
 ### Display
@@ -97,6 +97,7 @@ Current version on `main`: 0.5.41 (Phase 51 — two-stage pre-click cursor check
 15. **`pikvm_mouse_move_to`** - Approximate move-to-pixel via slam-to-corner + delta emission. Returns screenshot for visual verification.
 16. **`pikvm_mouse_click_at`** - `pikvm_mouse_move_to` + `mouseClick` + click verification (pre/post screenshot diff; returns `screenChanged: true|false`). Use the verdict to detect missed clicks instead of eyeballing screenshots; opt out via `verifyClick: false`.
 17. **`pikvm_measure_ballistics`** - Characterise relative-mouse px/mickey via screenshot-diff sampling. Writes profile to `./data/ballistics.json`. Best-effort on iPad — fragile on the home screen due to animated widgets.
+18. **`pikvm_seed_cursor_template`** - Bootstrap a cursor template for Phase 51 pre-click verification. Wakes the cursor with a small relative emit, diffs before/after to find it, and persists a 24×24 template (gated by `looksLikeCursor`). Use ONCE after a fresh deployment or after clearing `data/cursor-templates/`. Subsequent clicks accumulate templates automatically. Safe on iPad — uses small relative emits only, never slams to corner.
 
 **Important on relative-mouse targets**: the absolute-mouse tools (`pikvm_mouse_move`, `pikvm_mouse_click` with x/y, all `pikvm_calibrate*`, `pikvm_auto_calibrate`) do NOT move the iPad pointer because iPadOS only accepts USB boot-mouse descriptor (relative deltas). Agents targeting an iPad should use the relative-mouse tools above.
 
@@ -106,7 +107,7 @@ Current version on `main`: 0.5.41 (Phase 51 — two-stage pre-click cursor check
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 40** (19 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
+**Total tools: 41** (20 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |

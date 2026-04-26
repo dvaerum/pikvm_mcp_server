@@ -27,8 +27,14 @@ import {
   Pace,
   BallisticsProfile,
 } from './pikvm/ballistics.js';
-import { moveToPixel } from './pikvm/move-to.js';
+import { moveToPixel, looksLikeCursor } from './pikvm/move-to.js';
 import { verifyClickByDiff, clickAtWithRetry } from './pikvm/click-verify.js';
+import {
+  decodeScreenshot,
+  diffScreenshotsDecoded,
+  extractCursorTemplate,
+} from './pikvm/cursor-detect.js';
+import { persistTemplate, loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './pikvm/template-set.js';
 import { VERSION } from './version.js';
 import {
   unlockIpad,
@@ -596,6 +602,36 @@ const tools: Tool[] = [
         verbose: {
           type: 'boolean',
           description: 'Log per-round debug data (centroid positions, accept/reject reasons). Default: false.',
+        },
+      },
+    },
+  },
+  {
+    name: 'pikvm_seed_cursor_template',
+    description:
+      'Seed an initial cursor template by emitting a small relative-mouse motion, taking before/after screenshots, ' +
+      "diffing them to locate the cursor, and persisting a 24×24 cursor template to data/cursor-templates/. " +
+      'Use ONCE after a fresh deployment (or after `data/cursor-templates/` is cleared) to bootstrap Phase 51 ' +
+      "pre-click cursor verification — without an initial template, the verification chain has nothing to validate against. " +
+      'Subsequent clicks will accumulate additional templates automatically via the regular motion-diff path. ' +
+      'The captured template is validated by `looksLikeCursor` (cohesion + brightness + saturation gates); ' +
+      'if validation fails, the template is NOT persisted and the response indicates the failure reason. ' +
+      "Returns: { ok, cursorPosition, templatePersisted, reason }. " +
+      'Safe on iPad — uses small relative emits only, never slams to corner.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        emitDx: {
+          type: 'number',
+          description: 'X-axis mickeys for the wake motion. Default 100. Larger = cursor more visible but more screen movement.',
+        },
+        emitDy: {
+          type: 'number',
+          description: 'Y-axis mickeys for the wake motion. Default 0.',
+        },
+        settleMs: {
+          type: 'number',
+          description: 'Delay between motion and post-screenshot to let iPad render the cursor. Default 500.',
         },
       },
     },
@@ -1363,6 +1399,80 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } finally {
           lock.release();
         }
+      }
+
+      case 'pikvm_seed_cursor_template': {
+        const emitDx = Number(args?.emitDx ?? 100);
+        const emitDy = Number(args?.emitDy ?? 0);
+        const settleMs = Number(args?.settleMs ?? 500);
+
+        const before = await pikvm.screenshot();
+        await pikvm.mouseMoveRelative(emitDx, emitDy);
+        await new Promise((r) => setTimeout(r, settleMs));
+        const after = await pikvm.screenshot();
+
+        const decBefore = await decodeScreenshot(before.buffer);
+        const decAfter = await decodeScreenshot(after.buffer);
+        const clusters = diffScreenshotsDecoded(decBefore, decAfter, {
+          diffThreshold: 30,
+          minClusterSize: 4,
+          maxClusterSize: 200,
+          mergeRadius: 20,
+          brightnessFloor: 100,
+          maxChannelDelta: 0,
+        });
+        if (clusters.length === 0) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                cursorPosition: null,
+                templatePersisted: false,
+                reason: 'no motion-diff clusters detected — cursor may be off-screen, dim, or already at the wake-emit destination. Try a larger emitDx/emitDy.',
+              }),
+            }],
+            isError: true,
+          };
+        }
+        const cursorCluster = clusters.sort((a, b) => b.pixels - a.pixels)[0];
+        const cursorPos = {
+          x: Math.round(cursorCluster.centroidX),
+          y: Math.round(cursorCluster.centroidY),
+        };
+        const template = await extractCursorTemplate(after.buffer, cursorPos);
+        if (!looksLikeCursor(template)) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                ok: false,
+                cursorPosition: cursorPos,
+                templatePersisted: false,
+                reason: 'looksLikeCursor rejected the extracted template (cohesion / brightness / saturation gate failed). The motion-diff cluster may not actually be the cursor — try a different wake emit, or check that the iPad screen is bright enough.',
+              }),
+            }],
+            isError: true,
+          };
+        }
+        const existing = await loadTemplateSet(DEFAULT_TEMPLATE_DIR);
+        const result = await persistTemplate(DEFAULT_TEMPLATE_DIR, template, existing);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              ok: true,
+              cursorPosition: cursorPos,
+              templatePersisted: result.decision !== 'duplicate',
+              decision: result.decision,
+              templateCount: result.kept.length,
+              reason:
+                result.decision === 'duplicate'
+                  ? 'Template was perceptually similar to an existing one — kept the existing copy.'
+                  : `Template ${result.decision} (${result.kept.length} total).`,
+            }),
+          }],
+        };
       }
 
       case 'pikvm_auto_calibrate': {
