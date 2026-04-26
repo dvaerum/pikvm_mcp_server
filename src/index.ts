@@ -28,7 +28,7 @@ import {
   BallisticsProfile,
 } from './pikvm/ballistics.js';
 import { moveToPixel } from './pikvm/move-to.js';
-import { verifyClickByDiff } from './pikvm/click-verify.js';
+import { verifyClickByDiff, clickAtWithRetry } from './pikvm/click-verify.js';
 import { VERSION } from './version.js';
 import {
   unlockIpad,
@@ -474,7 +474,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_click_at',
-    description: 'Move the mouse to an approximate target pixel (via pikvm_mouse_move_to) and then click. Returns a post-click screenshot. Inherits pikvm_mouse_move_to\'s detection/correction pipeline. With verifyClick=true (default), also takes a pre-click screenshot and reports whether the click triggered a visible screen change — use this signal to detect a missed click rather than relying on screenshot inspection alone.',
+    description: 'Move the mouse to an approximate target pixel (via pikvm_mouse_move_to) and then click. Returns a post-click screenshot. Inherits pikvm_mouse_move_to\'s detection/correction pipeline. With verifyClick=true (default), also takes a pre-click screenshot and reports whether the click triggered a visible screen change — use this signal to detect a missed click rather than relying on screenshot inspection alone. With maxRetries>0, automatically retries up to N times when the verification reports no screen change; each retry runs a fresh detect-then-move probe so the cursor position is rediscovered from scratch (does NOT compound errors like Phase 17).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -492,6 +492,7 @@ const tools: Tool[] = [
         verifySettleMs: { type: 'number', description: 'Milliseconds to wait between click and post-click screenshot for the UI to render. Default 300.' },
         verifyRegionHalfPx: { type: 'number', description: 'When set, the verification diff is restricted to a square window of ±N HDMI px around the click target. Useful when the expected effect is a small/local UI change (button highlight, focus indicator) and a full-frame diff would be diluted by background animations. Default: full-frame.' },
         verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
+        maxRetries: { type: 'number', description: 'When >0, retry the click up to N times if Phase 23 verification reports no screen change. Each retry runs a fresh detect-then-move probe (NOT compound corrections — independent trials). Recommended for iPad targets where per-attempt hit rate is low: maxRetries=2 typically gives ~88% cumulative hit rate from a 50% per-attempt baseline. Requires verifyClick=true. Default 0 (single-shot, pre-Phase-25 behavior).' },
       },
       required: ['x', 'y'],
     },
@@ -1059,17 +1060,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const verifySettleMs = validateNumber(args.verifySettleMs, 0, 5000) ?? 300;
         const verifyRegionHalfPx = validateNumber(args.verifyRegionHalfPx, 1, 1920);
         const verifyMinChangeFraction = validateNumber(args.verifyMinChangeFraction, 0.0001, 1);
+        const maxRetries = validateNumber(args.maxRetries, 0, 10) ?? 0;
 
-        const result = await moveToPixel(
-          pikvm,
-          { x: tx, y: ty },
-          {
-            strategy: strategyStr,
-            assumeCursorAt,
-            profile: cachedProfile,
-            forbidSlamFallback: !mouseAbsoluteMode,
-          },
-        );
+        const moveOpts = {
+          strategy: strategyStr,
+          assumeCursorAt,
+          profile: cachedProfile,
+          forbidSlamFallback: !mouseAbsoluteMode,
+        };
+        const verifyOpts = {
+          ...(verifyRegionHalfPx !== undefined
+            ? { region: { x: tx, y: ty, halfWidth: verifyRegionHalfPx, halfHeight: verifyRegionHalfPx } }
+            : {}),
+          ...(verifyMinChangeFraction !== undefined
+            ? { minChangedFraction: verifyMinChangeFraction }
+            : {}),
+        };
+
+        // Phase 25: when maxRetries > 0, use the retry orchestrator
+        // (clickAtWithRetry) which loops moveToPixel + click + verify
+        // until success or exhausted retries. When maxRetries === 0,
+        // preserve the single-shot path for backward compat.
+        if (verifyClick && maxRetries > 0) {
+          const r = await clickAtWithRetry(
+            pikvm,
+            { x: tx, y: ty },
+            {
+              maxRetries,
+              button,
+              preClickSettleMs: 80,
+              postClickSettleMs: verifySettleMs,
+              verifyOptions: verifyOpts,
+              moveToOptions: moveOpts,
+            },
+          );
+          const attemptsText =
+            r.attempts === 1
+              ? '1 attempt'
+              : `${r.attempts} attempts (${r.success ? 'succeeded' : 'all failed'})`;
+          return {
+            content: [
+              {
+                type: 'text',
+                text:
+                  r.finalMoveResult.message +
+                  `\nClicked ${button} at approximate position. ` +
+                  `Phase 25 retry-on-miss ran ${attemptsText}. ` +
+                  r.finalVerification.message,
+              },
+              { type: 'image', data: r.postClickScreenshot.toString('base64'), mimeType: 'image/jpeg' },
+            ],
+          };
+        }
+
+        const result = await moveToPixel(pikvm, { x: tx, y: ty }, moveOpts);
         // Brief pause so iPadOS registers the cursor as stationary before click
         await new Promise((r) => setTimeout(r, 80));
         // Pre-click screenshot AFTER cursor has settled at target, so the
@@ -1083,14 +1127,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let verificationText = '';
         if (verifyClick && preShot) {
           try {
-            const verification = await verifyClickByDiff(preShot.buffer, shot.buffer, {
-              ...(verifyRegionHalfPx !== undefined
-                ? { region: { x: tx, y: ty, halfWidth: verifyRegionHalfPx, halfHeight: verifyRegionHalfPx } }
-                : {}),
-              ...(verifyMinChangeFraction !== undefined
-                ? { minChangedFraction: verifyMinChangeFraction }
-                : {}),
-            });
+            const verification = await verifyClickByDiff(preShot.buffer, shot.buffer, verifyOpts);
             verificationText = `\n${verification.message}`;
           } catch (err) {
             verificationText = `\nClick verification skipped: ${err instanceof Error ? err.message : String(err)}.`;
