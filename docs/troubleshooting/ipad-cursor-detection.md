@@ -50,6 +50,54 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 61 (2026-04-26): keyboard arrow-key navigation of iPad Settings sidebar — coordinate-free clicking
+
+**Major finding** — iPad Settings is fully navigable via keyboard arrow
+keys, no mouse clicks required.
+
+**Live verification trace** (deployed MCP, no code changes needed):
+
+1. iPad Settings open on Accessibility / Assistive Access (sub-page).
+2. `pikvm_key("Escape")` → navigate UP one level back to Settings root.
+3. `pikvm_key("ArrowDown")` × N → moves the highlighted sidebar item
+   down one row at a time. The right pane updates automatically to
+   show the selected category's content.
+4. Verified path: Apple Account → Services Included → Add AppleCare
+   Coverage → Airplane Mode → Wi-Fi → Bluetooth — selection moves
+   linearly, right pane shows Bluetooth settings (UL747 Connected,
+   Bluetooth toggle ON, etc.).
+
+**Implications**:
+
+- iPadOS pointer-acceleration variance (the architectural ceiling of
+  Phase 47/49/50) is **bypassed entirely** for any UI element that
+  participates in keyboard focus.
+- Settings categories, sub-rows, toggles in the right pane should all
+  be reachable via Arrow + Tab + Return. This needs to be verified
+  per element class but the sidebar contract is solid.
+- Combined with the existing keyboard primitives (Cmd+Space Spotlight,
+  Cmd+Tab app switcher, Cmd+F find, plain `pikvm_type` for text
+  entry), iPad automation can be **fully keyboard-driven** without
+  ever calling `pikvm_mouse_click_at`.
+
+**Workflow pattern** (no new tools needed):
+
+```
+pikvm_key("Escape")           # back to Settings root
+pikvm_key("ArrowDown") × N    # navigate to target sidebar row
+# right pane now shows the target category — Tab/Arrow/Return inside
+pikvm_screenshot              # verify the category landed
+```
+
+This is the answer to "how do we click reliably on iPad" — for
+Settings (and likely other Apple-supplied apps): we don't. We
+keyboard-navigate. `pikvm_mouse_click_at` is reserved for elements
+with no keyboard equivalent.
+
+**Documentation added** — see `docs/skills/ipad-keyboard-workflow.md`
+for the recommended pattern and Phase 28 / Phase 76 for prior
+keyboard-first work.
+
 ### Phase 57 (2026-04-26): attempted Trackpad-Inertia disable via deployed MCP — confirmed deployed server is unsafe on iPad
 
 The user's mantra "be proactive — do not ask me to do things you can do
