@@ -42,7 +42,15 @@ import { detectIpadBounds } from './pikvm/orientation.js';
 let pikvm: PiKVMClient;
 let calibrationConfig: { rounds: number; verifyRounds: number; moveDelayMs: number };
 let cachedProfile: BallisticsProfile | null = null;
-let mouseAbsoluteMode: boolean = true; // refreshed at startup; true = absolute tools usable
+// Default to FALSE (relative mode = treat as iPad until proven otherwise) so
+// that forbidSlamFallback is automatically TRUE on startup-detection failure.
+// Phase 33: live-verified 2026-04-26 that defaulting to true caused
+// pikvm_mouse_click_at to slam on iPad and re-lock the screen when
+// getHidProfile() failed at startup (network blip, slow PiKVM, etc.).
+// Default-unsafe is unacceptable when the failure mode is "destroys the
+// test environment". Refresh on first successful startup detection; if
+// detection fails, the safe-for-iPad default stands.
+let mouseAbsoluteMode: boolean = false;
 const lock = new BusyLock();
 
 async function refreshProfile(path?: string): Promise<void> {
