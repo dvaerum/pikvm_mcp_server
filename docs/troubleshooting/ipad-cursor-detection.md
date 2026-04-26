@@ -26,6 +26,18 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 32 (v0.5.16, 2026-04-26): explicit-strategy slam guard
+
+Live-verified again 2026-04-26: even with `forbidSlamFallback`
+shipped, an LLM caller passing `strategy='slam-then-move'`
+explicitly STILL slammed and STILL locked the iPad — because the
+existing guard only protected the auto-fallback path, not the
+explicit-strategy path. v0.5.16 adds `forbidSlamOnIpad` (default
+true), which calls `detectIpadBounds` before slamming and refuses
+when iPad-portrait letterbox is detected. The MCP tool description
+for `pikvm_mouse_click_at` and `pikvm_mouse_move_to` now warns
+against `slam-then-move` on iPad targets.
+
 ## Symptom
 
 `pikvm_mouse_click_at(x, y)` against an iPad displayed in a 1920×1080

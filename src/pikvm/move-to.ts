@@ -153,6 +153,14 @@ export interface MoveToOptions {
    *  false (preserves existing behaviour for non-iPad targets). */
   forbidSlamFallback?: boolean;
 
+  /** Phase 32: when true (default), refuse to perform slam-to-corner when
+   *  iPad-portrait letterbox is detected, even if the caller explicitly
+   *  passed strategy='slam-then-move'. This prevents accidental hot-corner
+   *  re-lock when an LLM caller selects the slam strategy without realising
+   *  the target is an iPad. Set false to allow slam-then-move on iPad
+   *  (only safe if the iPad has its hot-corners disabled). Default true. */
+  forbidSlamOnIpad?: boolean;
+
   /** Phase 22: when true, the big open-loop emit is zeroed out; the
    *  correction loop emits the full distance via small verifiable
    *  chunks. Each chunk's emit (capped by Phase 9's per-pass cap)
@@ -613,30 +621,47 @@ async function discoverOrigin(
   // this process, reuse it instead of re-decoding + re-scanning a fresh
   // screenshot (~50 ms saving per call on tight loops).
   let slamOrigin = options.slamOriginPx;
+  let detectedBounds: ReturnType<typeof getLastGoodBounds> = null;
   if (!slamOrigin) {
-    let bounds = getLastGoodBounds();
-    if (bounds) {
+    detectedBounds = getLastGoodBounds();
+    if (detectedBounds) {
       if (options.verbose) {
         console.error(
-          `[move-to] using cached ${bounds.orientation} bounds ${bounds.width}×${bounds.height} (no re-detection)`,
+          `[move-to] using cached ${detectedBounds.orientation} bounds ${detectedBounds.width}×${detectedBounds.height} (no re-detection)`,
         );
       }
     } else {
-      bounds = await detectBoundsOrNull(client, {
+      detectedBounds = await detectBoundsOrNull(client, {
         verbose: options.verbose,
         logPrefix: 'move-to',
       });
     }
-    if (bounds) {
-      slamOrigin = slamOriginFromBounds(bounds);
+    if (detectedBounds) {
+      slamOrigin = slamOriginFromBounds(detectedBounds);
       if (options.verbose) {
         console.error(
-          `[move-to] auto-detected ${bounds.orientation} slam-origin (${slamOrigin.x},${slamOrigin.y})`,
+          `[move-to] auto-detected ${detectedBounds.orientation} slam-origin (${slamOrigin.x},${slamOrigin.y})`,
         );
       }
     } else {
       slamOrigin = LEGACY_PORTRAIT_SLAM_ORIGIN;
     }
+  }
+
+  // Phase 32 safety guard: refuse to slam if we know the target is an iPad.
+  // Live-verified 2026-04-26: explicit slam-then-move on iPad-portrait
+  // letterbox locks the screen via iPadOS hot-corner gesture. The
+  // forbidSlamFallback option only protected the auto-fallback path; this
+  // covers the explicit-strategy case too.
+  const forbidSlamOnIpad = options.forbidSlamOnIpad ?? true;
+  if (forbidSlamOnIpad && detectedBounds && detectedBounds.orientation === 'portrait') {
+    throw new Error(
+      `moveToPixel: refusing slam-then-move because iPad-portrait letterbox detected ` +
+      `(bounds ${detectedBounds.width}×${detectedBounds.height}). Slam-to-corner triggers ` +
+      `iPadOS hot-corner gesture and re-locks the screen mid-session. ` +
+      `Use strategy='detect-then-move' instead, or pass forbidSlamOnIpad=false ` +
+      `to opt out of this guard (only safe if hot-corners are disabled).`,
+    );
   }
 
   await slamToCorner(client, {
