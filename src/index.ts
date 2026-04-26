@@ -510,6 +510,7 @@ const tools: Tool[] = [
         verifyRegionHalfPx: { type: 'number', description: 'When set, the verification diff is restricted to a square window of ±N HDMI px around the click target. Useful when the expected effect is a small/local UI change (button highlight, focus indicator) and a full-frame diff would be diluted by background animations. Default: full-frame.' },
         verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
         maxRetries: { type: 'number', description: 'When >0, retry the click up to N times if Phase 23 verification reports no screen change. Each retry runs a fresh detect-then-move probe (NOT compound corrections — independent trials). Recommended for iPad targets where per-attempt hit rate is low: maxRetries=2 typically gives ~88% cumulative hit rate from a 50% per-attempt baseline. Requires verifyClick=true. Default 0 (single-shot, pre-Phase-25 behavior).' },
+        minBrightness: { type: 'number', description: 'Phase 38 brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness. If below this threshold, abort with a "wake the iPad" error instead of attempting a known-failure click. Default 50 on iPad targets (live-verified threshold below which cursor detection fails); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
       },
       required: ['x', 'y'],
     },
@@ -1161,6 +1162,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const verifyRegionHalfPx = validateNumber(args.verifyRegionHalfPx, 1, 1920);
         const verifyMinChangeFraction = validateNumber(args.verifyMinChangeFraction, 0.0001, 1);
         const maxRetries = validateNumber(args.maxRetries, 0, 10) ?? 0;
+        // Phase 38 / v0.5.26: explicit MCP parameter for the brightness gate.
+        // Default mirrors the auto-policy: VERY_DIM_THRESHOLD=50 on iPad
+        // targets (relative-mouse), 0 elsewhere. Pass 0 explicitly to disable.
+        const minBrightnessArg = validateNumber(args.minBrightness, 0, 255);
+        const minBrightness = minBrightnessArg !== undefined
+          ? minBrightnessArg
+          : (mouseAbsoluteMode ? 0 : VERY_DIM_THRESHOLD);
 
         const moveOpts = {
           strategy: strategyStr,
@@ -1178,13 +1186,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
 
         // Phase 38: brightness precheck. The retry path (maxRetries>0) does
-        // this inside clickAtWithRetry, so we only need it on the single-shot
-        // path (maxRetries=0). Gate is iPad-only — non-iPad targets don't
-        // suffer from cursor-fade-on-dim-screen.
-        const minBrightness = !mouseAbsoluteMode && maxRetries === 0
-          ? VERY_DIM_THRESHOLD
-          : 0;
-        if (minBrightness > 0) {
+        // this inside clickAtWithRetry (we pass minBrightness through). On
+        // the single-shot path (maxRetries=0) we run the gate here.
+        if (minBrightness > 0 && maxRetries === 0) {
           try {
             const shot0 = await pikvm.screenshot();
             const brightness = await analyzeBrightness(shot0.buffer);
@@ -1221,6 +1225,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               postClickSettleMs: verifySettleMs,
               verifyOptions: verifyOpts,
               moveToOptions: moveOpts,
+              minBrightness,
             },
           );
           const attemptsText =
