@@ -29,6 +29,7 @@ import {
 } from './pikvm/ballistics.js';
 import { moveToPixel } from './pikvm/move-to.js';
 import { verifyClickByDiff } from './pikvm/click-verify.js';
+import { VERSION } from './version.js';
 import {
   unlockIpad,
   launchIpadApp,
@@ -173,6 +174,14 @@ const VALID_KEY_STATES = ['press', 'release', 'click'] as const;
 
 // Define available tools
 const tools: Tool[] = [
+  {
+    name: 'pikvm_version',
+    description: `Return the running pikvm-mcp-server version. Useful for detecting whether a deployed server is current with main — if the version doesn't match the latest commit's version, the server needs a redeploy. Currently embedded version: ${VERSION}.`,
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
   {
     name: 'pikvm_screenshot',
     description: 'Capture a screenshot from the PiKVM video stream. Returns the current screen as a JPEG image.',
@@ -579,7 +588,7 @@ const tools: Tool[] = [
 const server = new Server(
   {
     name: 'pikvm-mcp-server',
-    version: '0.2.0',
+    version: VERSION,
   },
   {
     capabilities: {
@@ -659,6 +668,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     switch (name) {
+      case 'pikvm_version': {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `pikvm-mcp-server v${VERSION}`,
+            },
+          ],
+        };
+      }
+
       case 'pikvm_screenshot': {
         const result = await pikvm.screenshot({
           maxWidth: validateNumber(args.maxWidth, 1, 10000),
