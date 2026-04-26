@@ -130,6 +130,59 @@ and post-cluster (where cursor is now).
 | 26 | (this iteration) | Probe-driven correction loop (Direction 2) — new `moveToPixelProbeDriven` in `src/pikvm/move-to-probe-driven.ts`. Replaces motion-diff verification with `locateCursor` probes that emit a known small motion + observe to get ground-truth cursor position each iteration. 8 unit tests with injected probeFn (deterministic + perturbed cursor models, all pass). **Live result on iPad home screen: still doesn't reliably hit small icons.** Initial naive run: position bounced ±600 px between iterations because locateCursor false-positives picked widget edges as cursor. Added plausibility check (reject probes implying jump > 3× expected step + 80 px allowance). With check enabled, algorithm "converges" in belief (residual 18 px reported, claimed cursor at (1028, 850) for Settings target) but post-click screenshot shows cursor visible at the right edge of the screen — algorithm's belief is wrong. Conclusion: probe-driven cannot escape the root limitation that small mickey commands cause UNPREDICTABLY large cursor displacements on iPad (>10× nominal). The cursor's response variance is so high that closed-loop control on `locateCursor` observations is not reliable. |
 | 27 | (this iteration) | `locateCursor.expectedNear` spatial hint — `locateCursor` now accepts `expectedNear: Point` + `expectedNearRadius` (default 200 px). When set, candidate cluster pairs whose post-centroid is far from the hint are HARD REJECTED at the pair-selection gate; remaining candidates get a tie-break score bonus for proximity. Same pattern as Phase 11's `findCursorByTemplateSet`. Wired into Phase 26's probe-driven loop so each iteration's probe is anchored to the previous iteration's known cursor position. **Live result on iPad home screen: did NOT fix it.** With locality filter at radius 250: probes lock onto a fixed widget false-positive (algorithm reported cursor stuck at (773, 387) for 8 iterations). The locality filter prevents the worst noise (Phase 26's ±600 px bouncing) but creates a feedback loop where one false positive becomes a stable anchor for subsequent probes. Useful as opt-in for quiet backdrops where locateCursor would otherwise drift between equally-plausible candidates; not useful on the iPad home screen. |
 
+## Phase 29 in progress — cursor visibility findings (2026-04-26 evening)
+
+User pushed back on "ceiling reached" — cursor click is the project. Resumed.
+
+### Key live finding: weak wakeup is the locateCursor failure
+
+`locateCursor`'s default wakeup is +30 then -30 X mickeys (round trip,
+net zero displacement). On the iPad observed live, this is INSUFFICIENT
+to make the cursor visible in the BEFORE screenshot. Result: 6/6
+consecutive locateCursor calls returned null (`probe-ensemble` mode).
+
+A stronger one-shot motion (-120 X mickeys with no return + 500 ms
+settle to outlast streamer + render latency) DOES make the cursor
+visible: confirmed via `cursor-visibility` mode → cursor clearly
+rendered at ~(1010, 893) in the post-motion screenshot.
+
+### Template cache poisoning
+
+The `data/cursor-templates/` cache had templates that scored 0.99+
+on iPad UI elements rather than the actual cursor. Specifically
+template #3 of 4 stably matched (1112, 276) — the right edge of the
+Maps widget — at 0.996 score, beating the real cursor every time.
+Source of poisoning: `maybePersistTemplate` runs after a
+"successful" motion-diff, but motion-diff false positives caused
+non-cursor regions to be persisted as "cursor templates", which
+then make every subsequent template match worse.
+
+Purged cache. Re-capturing via motion-diff "biggest cluster" also
+unreliable — picks widget animation clusters that happen to be
+larger than the cursor cluster.
+
+### Next iteration's attack vectors
+
+1. **Stronger locateCursor wakeup**: replace +30/-30 round trip
+   with +120/-120 round trip OR +120 one-shot (no return). Test
+   if locateCursor success rate improves.
+2. **Smarter template capture filter**: when picking the cluster
+   to extract a template from, require achromatic (Phase 1 filter
+   already exists — apply it) + cluster size in expected cursor
+   range (4-50 px) + brightness floor.
+3. **Slam-bottom-right** as a safe known-position primitive
+   (iPadOS hot corners are top-left and top-right; bottom-right
+   appears safe). Use to put cursor in a known location for
+   template capture and origin discovery.
+4. **Ensemble probe**: emit N consistent motions with motion-diff
+   between each pair, cluster the resulting positions, take the
+   most-frequently-detected position as the true cursor. Real
+   cursor is consistent; animation noise is random.
+
+These are next-iteration candidates. Code shipped this iteration:
+new test-client.ts modes `cursor-visibility`, `wake-template`,
+`probe-ensemble`, `wake-and-capture` for live diagnosis.
+
 ## Architectural ceiling reached (2026-04-26 evening)
 
 After Phases 23–27, the codebase has explored every direction the
