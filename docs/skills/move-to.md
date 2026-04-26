@@ -11,38 +11,50 @@
 > when you do need cursor positioning.
 
 ## Purpose
-Move the pointer to an approximate target pixel on a PiKVM target in relative mouse mode (iPad, etc.). The tool slams the pointer to the top-left corner to establish a known origin, emits a calculated delta sequence using a ballistics profile (if any) or a default `1.0` px/mickey, then returns a post-move screenshot.
+Move the pointer to an approximate target pixel on a PiKVM target in relative mouse mode (iPad, etc.). Default strategy `"detect-then-move"` probes the cursor with a small motion-diff to discover the origin (no slam required), then emits a chunked delta sequence to the target with up to 2 correction passes plus a ground-truth detection pass. Returns a post-move screenshot.
 
 ## Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | x | number | *(required)* | Target X in HDMI screenshot pixels |
 | y | number | *(required)* | Target Y in HDMI screenshot pixels |
-| slamFirst | boolean | true | Slam to top-left before moving (establishes origin) |
-| slamOriginX | number | 625 | HDMI X of post-slam origin (iPad portrait letterbox) |
-| slamOriginY | number | 65 | HDMI Y of post-slam origin |
-| fallbackPxPerMickey | number | 1.0 | px/mickey used when no profile |
-| chunkMagnitude | number | 127 | Per-call delta size |
-| chunkPaceMs | number | 20 | Pace between chunked calls (ms) |
-| deadZoneMickeys | number | 0 | Extra mickeys to compensate for edge absorption |
+| strategy | string | detect-then-move | Origin discovery. **DO NOT use `"slam-then-move"` on iPad** — slam to top-left triggers the iPadOS hot-corner gesture and re-locks the screen (Phase 32a). |
+| assumeCursorAtX/Y | number | — | With `strategy="assume-at"`, where the cursor currently is. |
+| fallbackPxPerMickey | number | 1.3 | px/mickey when no ballistics profile is loaded. |
+| chunkMagnitude | number | 60 | Per-call delta size in mickeys. |
+| chunkPaceMs | number | 20 | Pace between chunked calls (ms). |
+| correct | boolean | true | Enable motion-diff detection + correction loop. |
+| maxCorrectionPasses | number | 2 | Max correction passes (independent attempts to re-aim). |
+| minResidualPx | number | 25 | Early-exit threshold (px) for the correction loop. |
+| warmupMickeys | number | 8 | Tiny move emitted before screenshot A so the cursor renders. |
+
+(The `slamOriginX/Y` parameters still exist for `strategy="slam-then-move"` but should NOT be used on iPad. The default `detect-then-move` strategy ignores them.)
 
 ## Expected Accuracy
-Open-loop: within **~50–200 pixels** of target on iPad. The iPad's pointer acceleration is non-linear and varies run-to-run, so fully precise targeting requires a closed-loop correction:
 
-1. Call `pikvm_mouse_move_to` to get near the target.
-2. In the returned screenshot, locate the cursor (small arrow, usually on wallpaper).
-3. Compute pixel error (actual - target).
-4. Issue a correction with `pikvm_mouse_move` in relative mode: delta ≈ -(error_x, error_y) mickeys.
-5. Screenshot again; repeat if needed.
+After Phases 65-77 (v0.5.68+):
+
+| Target width | Per-attempt residual ≤ 25 px | 3-attempt rate (with retry layer above) |
+|--------------|------------------------------|------------------------------------------|
+| ≥ 200 px     | ~80% (residual ≤ 100 px) | ~99% |
+| 100-200 px   | ~70% (residual ≤ 100 px) | ~97% |
+| 50-100 px    | ~60% (residual ≤ 50 px)  | ~94% |
+| < 50 px      | ~50% (residual ≤ 25 px)  | ~88% |
+
+Single-digit residuals are achievable when motion-diff succeeds (Phase 69 measured 6-9 px hits). 
+
+## When to Use vs Closed-Loop Correction
+- For most click tasks: prefer `pikvm_mouse_click_at` with `maxRetries: 2` — same algorithm, but with retry-on-miss orchestration baked in.
+- For agent-driven closed-loop where you want screenshot inspection between move and click: this tool returns the screenshot and reported residual, suitable for an agent to compute a correction delta and issue follow-up `pikvm_mouse_move` calls.
 
 ## Example Calls
 ```json
 { "name": "pikvm_mouse_move_to", "arguments": { "x": 960, "y": 540 } }
 
-{ "name": "pikvm_mouse_move_to", "arguments": { "x": 1200, "y": 800, "slamOriginX": 500, "slamOriginY": 60 } }
+{ "name": "pikvm_mouse_move_to", "arguments": { "x": 1200, "y": 800, "strategy": "assume-at", "assumeCursorAtX": 800, "assumeCursorAtY": 700 } }
 ```
 
 ## Tips
-- The default slam origin (625, 65) is tuned for an iPad displayed portrait in a 1920×1080 HDMI frame. If your letterbox differs, measure once and override.
-- Prefer `pikvm_mouse_click_at` for "move + click in one step".
+- Prefer `pikvm_mouse_click_at` for "move + click in one step" — it adds verification and retries.
 - On an iPad that is locked, call `pikvm_ipad_unlock` first — move-to can move the cursor on a locked iPad but clicks will not trigger app behavior.
+- iPadOS dims the cursor after ~1 s of inactivity; the algorithm's warmup nudge handles the common case but extra-long pauses between calls may need a manual wake.
