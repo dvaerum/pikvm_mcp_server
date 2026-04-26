@@ -22,14 +22,25 @@ async function uniformJpeg(width: number, height: number, gray: number): Promise
 }
 
 describe('classifyBrightness', () => {
-  it('classifies very-dim below VERY_DIM_THRESHOLD', () => {
-    const r = classifyBrightness(VERY_DIM_THRESHOLD - 10);
+  // Phase 48: classifyBrightness now takes (mean, stddev). Default stddev=100
+  // (high contrast) for tests that only care about mean. Pass low stddev to
+  // exercise the very-dim path.
+  it('classifies very-dim below VERY_DIM_THRESHOLD when stddev also low', () => {
+    // Both mean low AND stddev low → uniform dark frame → very-dim.
+    const r = classifyBrightness(VERY_DIM_THRESHOLD - 10, 1);
     expect(r.severity).toBe('very-dim');
     expect(r.hint).toMatch(/VERY DIM/);
-    // v0.5.27: hint enumerates two possible causes — brightness setting OR
-    // hidden security overlay. Match either recovery action.
-    expect(r.hint).toMatch(/brightness setting|security\/permission popup/i);
+    expect(r.hint).toMatch(/uniform dark|brightness setting|security/i);
     expect(r.hint).toMatch(/Escape|Auto-Brightness/i);
+  });
+
+  it('Phase 48: low mean + HIGH stddev classifies as dim, NOT very-dim (dark-mode UI)', () => {
+    // Settings dark mode: low mean (~20) but UI text/icons provide stddev.
+    // Cursor detection works fine; gate must NOT block.
+    const r = classifyBrightness(VERY_DIM_THRESHOLD - 10, 5);
+    expect(r.severity).toBe('dim');
+    expect(r.hint).not.toMatch(/VERY DIM/);
+    expect(r.hint).toMatch(/contrast present|dark-mode/i);
   });
 
   it('classifies dim between VERY_DIM_THRESHOLD and DIM_THRESHOLD', () => {
@@ -46,8 +57,8 @@ describe('classifyBrightness', () => {
     expect(classifyBrightness(200).hint).toBe('');
   });
 
-  it('boundary: just below VERY_DIM_THRESHOLD is very-dim', () => {
-    expect(classifyBrightness(VERY_DIM_THRESHOLD - 0.1).severity).toBe('very-dim');
+  it('boundary: just below VERY_DIM_THRESHOLD with low stddev is very-dim', () => {
+    expect(classifyBrightness(VERY_DIM_THRESHOLD - 0.1, 1).severity).toBe('very-dim');
   });
 
   it('boundary: just below DIM_THRESHOLD is dim (not very-dim)', () => {
@@ -91,17 +102,19 @@ describe('analyzeBrightness', () => {
 });
 
 describe('formatBrightnessReport', () => {
-  it('includes mean, per-channel values, and the hint when present', () => {
+  it('includes mean, stddev, per-channel values, and the hint when present', () => {
     const line = formatBrightnessReport({
       mean: 40,
       meanR: 38,
       meanG: 42,
       meanB: 40,
+      stddev: 1.5,
       severity: 'very-dim',
       hint: ' ⚠ VERY DIM — wake the screen.',
     });
     expect(line).toMatch(/Screen brightness/);
     expect(line).toMatch(/mean=40\/255/);
+    expect(line).toMatch(/stddev=1\.5/);
     expect(line).toMatch(/R=38/);
     expect(line).toMatch(/G=42/);
     expect(line).toMatch(/B=40/);
@@ -114,6 +127,7 @@ describe('formatBrightnessReport', () => {
       meanR: 150,
       meanG: 150,
       meanB: 150,
+      stddev: 50,
       severity: 'normal',
       hint: '',
     });
