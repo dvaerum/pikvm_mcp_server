@@ -50,6 +50,37 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 47 (v0.5.34+, 2026-04-26): SSH+HID mouse navigation as a deploy-independent fallback
+
+When the deployed MCP is stale (lacks Phase 32 slam guard) and cursor
+clicks are dangerous, but the operator still needs to do something
+small via the iPad UI (e.g. flip a Settings toggle), there's a
+deploy-independent fallback: SSH to the PiKVM and POST relative-mouse
+deltas directly to kvmd's HID API:
+
+```python
+import asyncio, aiohttp
+auth = aiohttp.BasicAuth("admin", "PASSWORD")
+async with aiohttp.ClientSession(auth=auth, ...) as s:
+    # Slam to bottom-right (NOT top-left — top-left is the iPadOS hot
+    # corner that re-locks the screen). Bottom-right is safe.
+    for _ in range(30):
+        await s.post(".../api/hid/events/send_mouse_relative?delta_x=127&delta_y=127")
+        await asyncio.sleep(0.030)
+    # From the known anchor, emit small slow chunks toward target.
+    # Slow pace (~80ms) keeps iPadOS in its near-1:1 linear regime.
+    for _ in range(N):
+        await s.post(".../api/hid/events/send_mouse_relative?delta_x={dx}&delta_y={dy}")
+        await asyncio.sleep(0.080)
+    # Click via send_mouse_button.
+```
+
+Live-verified 2026-04-26: this navigated through Settings → Accessibility
+sub-pages without locking the iPad. Each click landed within ~30 px of
+its target (same variance ceiling as the MCP's cursor click_at).
+Useful for one-off operator tasks; not a substitute for the MCP's
+algorithm work.
+
 ### Phase 45 attempt + revert (v0.5.33, 2026-04-26): post-move template-driven micro-correction triggers gestures
 
 Tried adding a post-moveToPixel correction loop that uses template-match
