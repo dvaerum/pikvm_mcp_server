@@ -387,37 +387,34 @@ export async function clickAtWithRetry(
     // 0.5-0.8 vs expected ~3.0. Continuing to retry just wastes attempts
     // — the cursor isn't responsive to our input regardless of strategy.
     // Surface the rate-limit so the operator investigates iPad-side state.
-    if (minLivePxPerMickey > 0 && lastMoveResult.usedPxPerMickey) {
+    if (minLivePxPerMickey > 0 && lastMoveResult.usedPxPerMickey
+        && isRateLimited(lastMoveResult.usedPxPerMickey, minLivePxPerMickey)) {
       const rx = lastMoveResult.usedPxPerMickey.x;
       const ry = lastMoveResult.usedPxPerMickey.y;
-      // Both axes must be below threshold to declare rate-limited.
-      // (Some moves are mostly one-axis; the other axis ratio is noisy.)
-      if (rx > 0 && rx < minLivePxPerMickey && ry > 0 && ry < minLivePxPerMickey) {
-        const reason =
-          `iPadOS rate-limiting input (live px/mickey x=${rx.toFixed(2)} y=${ry.toFixed(2)}, ` +
-          `min=${minLivePxPerMickey}). Possible causes: popup intercepting input, low-power ` +
-          `state, accessibility throttle, or display in off-but-on mode. Check the iPad ` +
-          `directly — retries won't help while this state persists.`;
-        lastVerification = {
-          changedPixels: 0,
-          totalPixels: 0,
-          changedFraction: 0,
-          screenChanged: false,
-          message: `Click skipped: ${reason}`,
-        };
-        attemptHistory.push({
-          attempt,
-          screenChanged: false,
-          changedFraction: 0,
-          cursorVerified: false,
-          skippedClickReason: `rate-limit: ratio < ${minLivePxPerMickey}`,
-        });
-        // Don't continue retrying — the rate-limit is a per-iPad-state
-        // condition, not something a fresh probe will overcome. Break out
-        // of the retry loop entirely so the caller sees a clear single
-        // diagnosis instead of N identical "rate-limited" attempts.
-        break;
-      }
+      const reason =
+        `iPadOS rate-limiting input (live px/mickey x=${rx.toFixed(2)} y=${ry.toFixed(2)}, ` +
+        `min=${minLivePxPerMickey}). Possible causes: popup intercepting input, low-power ` +
+        `state, accessibility throttle, or display in off-but-on mode. Check the iPad ` +
+        `directly — retries won't help while this state persists.`;
+      lastVerification = {
+        changedPixels: 0,
+        totalPixels: 0,
+        changedFraction: 0,
+        screenChanged: false,
+        message: `Click skipped: ${reason}`,
+      };
+      attemptHistory.push({
+        attempt,
+        screenChanged: false,
+        changedFraction: 0,
+        cursorVerified: false,
+        skippedClickReason: `rate-limit: ratio < ${minLivePxPerMickey}`,
+      });
+      // Don't continue retrying — the rate-limit is a per-iPad-state
+      // condition, not something a fresh probe will overcome. Break out
+      // of the retry loop entirely so the caller sees a clear single
+      // diagnosis instead of N identical "rate-limited" attempts.
+      break;
     }
 
     // Phase 35: if cursor position couldn't be verified post-move,
@@ -669,4 +666,25 @@ export async function clickAtWithRetry(
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Phase 50 — pure helper: classify the live-measured px/mickey ratio
+ * as rate-limited (true) or normal (false).
+ *
+ * Both axes must report a positive ratio AND be below the threshold for
+ * rate-limit to be declared. A near-zero ratio on a single axis can be a
+ * weak signal from a near-zero-emit-along-that-axis move (the
+ * algorithm's calibration didn't get a clean measurement on that axis
+ * and falls back to a stale/default ratio that may be 0). Single-axis
+ * low ratio doesn't reliably indicate rate-limiting; only when BOTH axes
+ * agree do we treat it as a real condition.
+ */
+export function isRateLimited(
+  observed: { x: number; y: number },
+  threshold: number,
+): boolean {
+  const rx = observed.x;
+  const ry = observed.y;
+  return rx > 0 && rx < threshold && ry > 0 && ry < threshold;
 }
