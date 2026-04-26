@@ -82,6 +82,11 @@ class ScriptedClient {
 const FAST_MOVE_OPTS = {
   strategy: 'slam-then-move' as const,
   forbidSlamFallback: false,
+  // Phase 32: tiny synthetic 100×100 grey frames trip the iPad-portrait
+  // detector (centre column is brighter than letterbox edges). Opt out
+  // of the new guard for these unit tests — the slam path is the unit
+  // under test, not the iPad safety guard.
+  forbidSlamOnIpad: false,
   warmupMickeys: 0,
   calibrationProbeMickeys: 0,
   postMoveSettleMs: 0,

@@ -484,7 +484,7 @@ const tools: Tool[] = [
         strategy: {
           type: 'string',
           enum: ['detect-then-move', 'slam-then-move', 'assume-at'],
-          description: 'Origin discovery. Default "detect-then-move".',
+          description: 'Origin discovery. Default "detect-then-move". DO NOT use "slam-then-move" on iPad targets — slam-to-corner triggers iPadOS hot-corner gesture and re-locks the screen mid-session (live-verified 2026-04-26). The Phase 32 guard refuses slam on detected iPad-portrait letterbox by default; pass forbidSlamOnIpad=false to override (only safe if iPad hot-corners are disabled).',
         },
         assumeCursorAtX: { type: 'number', description: 'With strategy="assume-at", HDMI X where cursor currently is.' },
         assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
