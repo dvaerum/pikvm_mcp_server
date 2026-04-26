@@ -222,6 +222,14 @@ export interface MoveToResult {
   /** Final residual (Euclidean px from target to finalDetectedPosition).
    *  null when finalDetectedPosition is null. */
   finalResidualPx: number | null;
+  /** How many predicted-mode passes ran AFTER the most recent verified
+   *  detection (motion-diff or template-match). 0 means the last
+   *  position update was verified; ≥1 means the algorithm has been
+   *  flying blind since the last verification, so finalResidualPx
+   *  reflects the cursor's last-known position, not necessarily where
+   *  it is now. Phase 24 partial Direction 3 — exposes the stale-
+   *  verification signal without changing exit-condition semantics. */
+  passesSinceLastVerification: number;
   resolution: ScreenResolution;
   message: string;
 }
@@ -1220,6 +1228,10 @@ export async function moveToPixel(
   let currentPos: { x: number; y: number };
   let openLoopMode: 'motion' | 'template' | 'predicted' = 'predicted';
   let openLoopReason: string | null = null;
+  // Phase 24: track how many predicted-mode passes have run since the
+  // last verified detection, so the operator-facing message can flag a
+  // stale residual instead of pretending it was just verified.
+  let passesSinceLastVerification = 0;
 
   // Debug: when debugDir is set, dump every captured frame so failures
   // can be inspected. discoverOrigin already saved 00-origin-shot;
@@ -1338,6 +1350,10 @@ export async function moveToPixel(
       }
     }
   }
+
+  // Phase 24: open-loop is the first thing that could verify the cursor.
+  // If it didn't, the lag counter starts at 1.
+  passesSinceLastVerification = openLoopMode === 'predicted' ? 1 : 0;
 
   // Track template-match position to catch stable false positives.
   let lastTemplateMatch: { x: number; y: number } | null =
@@ -1554,6 +1570,13 @@ export async function moveToPixel(
         }
       }
 
+      // Phase 24: update verification-lag counter based on this pass's mode.
+      if (passMode === 'motion' || passMode === 'template') {
+        passesSinceLastVerification = 0;
+      } else {
+        passesSinceLastVerification++;
+      }
+
       corrections.push({
         detectedCursor: cResult.pair
           ? { x: cResult.pair.post.centroidX, y: cResult.pair.post.centroidY }
@@ -1627,9 +1650,13 @@ export async function moveToPixel(
     parts.push(`Linear approach engaged; final ratio ≈ (${observedRatioX.toFixed(2)}, ${observedRatioY.toFixed(2)}).`);
   }
   if (finalDetectedPosition && finalResidualPx !== null) {
+    const stale =
+      passesSinceLastVerification > 0
+        ? ` (last verified ${passesSinceLastVerification} pass(es) ago — ${passesSinceLastVerification === 1 ? '1 predicted pass' : `${passesSinceLastVerification} predicted passes`} since; cursor may have drifted, accuracy uncertain)`
+        : '';
     parts.push(
       `Final cursor at (${finalDetectedPosition.x},${finalDetectedPosition.y}); ` +
-        `residual (${finalDetectedPosition.x - targetX},${finalDetectedPosition.y - targetY}) = ${finalResidualPx.toFixed(1)}px.`,
+        `residual (${finalDetectedPosition.x - targetX},${finalDetectedPosition.y - targetY}) = ${finalResidualPx.toFixed(1)}px${stale}.`,
     );
   } else if (doCorrect) {
     parts.push('Final position not detected — click accuracy uncertain.');
@@ -1652,6 +1679,7 @@ export async function moveToPixel(
     diagnostics,
     finalDetectedPosition,
     finalResidualPx,
+    passesSinceLastVerification,
     resolution,
     message: parts.join(' '),
   };
