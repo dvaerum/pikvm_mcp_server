@@ -17,6 +17,9 @@
 
 import { decodeScreenshot, diffPixels } from './cursor-detect.js';
 import type { DecodedScreenshot } from './cursor-detect.js';
+import { moveToPixel } from './move-to.js';
+import type { MoveToOptions, MoveToResult } from './move-to.js';
+import type { PiKVMClient, MouseButton } from './client.js';
 
 export interface ClickVerification {
   /** Pixels that changed between the pre and post screenshots within
@@ -121,4 +124,127 @@ export async function verifyClickByDiff(
   const pre = await decodeScreenshot(preBuffer);
   const post = await decodeScreenshot(postBuffer);
   return verifyClickByDecodedFrames(pre, post, options);
+}
+
+// ============================================================================
+// Phase 25 — server-side retry-on-miss orchestrator.
+//
+// iPadOS pointer acceleration is non-deterministic (per the troubleshooting
+// doc, 9× ratio variance per command). A single click_at call has a
+// hit-rate that's well below 100% on small icons. But each retry is an
+// independent random trial: if per-attempt hit rate is ~50%, retrying 3×
+// gets to ~88% cumulative success.
+//
+// Each retry runs a FRESH detect-then-move probe so cursor position is
+// rediscovered from scratch. This is qualitatively different from Phase 17
+// (which retried within the correction loop on stale predicted state and
+// compounded errors).
+// ============================================================================
+
+export interface ClickAtWithRetryOptions {
+  /** Max additional attempts after the first one. 0 = single-shot
+   *  (preserves pre-Phase-25 behavior). Default 0. */
+  maxRetries?: number;
+  /** Mouse button. Default 'left'. */
+  button?: MouseButton;
+  /** Brief pause between move-to-target completion and click, so iPadOS
+   *  registers the cursor as stationary. Default 80 ms. */
+  preClickSettleMs?: number;
+  /** Pause between click and post-click screenshot for the UI to render.
+   *  Streamer latency is ~235 ms; default 300 ms. */
+  postClickSettleMs?: number;
+  /** Threshold + region options forwarded to verifyClickByDiff. */
+  verifyOptions?: ClickVerifyOptions;
+  /** Options forwarded to moveToPixel for each attempt. Default uses
+   *  detect-then-move with forbidSlamFallback=true (iPad-safe). */
+  moveToOptions?: MoveToOptions;
+}
+
+export interface ClickAtWithRetryResult {
+  /** True iff a single attempt's verifyClickByDiff returned screenChanged=true. */
+  success: boolean;
+  /** How many click attempts ran (1 = first-try success or only-attempt). */
+  attempts: number;
+  /** moveToPixel's diagnostic for the FINAL attempt (success or last failure). */
+  finalMoveResult: MoveToResult;
+  /** verifyClickByDiff result for the FINAL attempt. */
+  finalVerification: ClickVerification;
+  /** The screenshot captured AFTER the final attempt's click. */
+  postClickScreenshot: Buffer;
+  /** Per-attempt verification verdicts in order, for diagnostics. */
+  attemptHistory: { attempt: number; screenChanged: boolean; changedFraction: number }[];
+}
+
+/**
+ * Click at a target with verify-and-retry.
+ *
+ * Each attempt is independent: fresh detect-then-move probe, fresh
+ * pre/post screenshots, fresh verification. Stops on the first attempt
+ * that triggers a visible screen change OR after maxRetries+1 attempts.
+ */
+export async function clickAtWithRetry(
+  client: PiKVMClient,
+  target: { x: number; y: number },
+  options: ClickAtWithRetryOptions = {},
+): Promise<ClickAtWithRetryResult> {
+  const maxRetries = options.maxRetries ?? 0;
+  const button: MouseButton = options.button ?? 'left';
+  const preClickSettleMs = options.preClickSettleMs ?? 80;
+  const postClickSettleMs = options.postClickSettleMs ?? 300;
+  const moveToOptions: MoveToOptions = options.moveToOptions ?? {
+    strategy: 'detect-then-move',
+    forbidSlamFallback: true,
+  };
+  const verifyOptions: ClickVerifyOptions = options.verifyOptions ?? {};
+
+  const attemptHistory: ClickAtWithRetryResult['attemptHistory'] = [];
+  let lastMoveResult: MoveToResult | null = null;
+  let lastVerification: ClickVerification | null = null;
+  let lastPostShot: Buffer | null = null;
+
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    // Fresh aim every attempt — moveToPixel runs detect-then-move probe
+    // afresh so cursor position is rediscovered from scratch.
+    lastMoveResult = await moveToPixel(client, target, moveToOptions);
+
+    if (preClickSettleMs > 0) await sleepMs(preClickSettleMs);
+
+    // Pre-click screenshot taken AFTER cursor settles, so the diff
+    // isolates the click's UI effect from cursor motion during move-to.
+    const preShot = await client.screenshot();
+
+    await client.mouseClick(button);
+
+    if (postClickSettleMs > 0) await sleepMs(postClickSettleMs);
+    const postShot = await client.screenshot();
+    lastPostShot = postShot.buffer;
+
+    lastVerification = await verifyClickByDiff(preShot.buffer, postShot.buffer, verifyOptions);
+
+    attemptHistory.push({
+      attempt,
+      screenChanged: lastVerification.screenChanged,
+      changedFraction: lastVerification.changedFraction,
+    });
+
+    if (lastVerification.screenChanged) {
+      // Success — stop retrying.
+      break;
+    }
+  }
+
+  // Loop guarantees lastMoveResult, lastVerification, lastPostShot are set
+  // (maxRetries+1 ≥ 1 always).
+  return {
+    success: lastVerification!.screenChanged,
+    attempts: attemptHistory.length,
+    finalMoveResult: lastMoveResult!,
+    finalVerification: lastVerification!,
+    postClickScreenshot: lastPostShot!,
+    attemptHistory,
+  };
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
