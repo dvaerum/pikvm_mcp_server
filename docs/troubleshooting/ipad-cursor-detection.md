@@ -179,9 +179,39 @@ larger than the cursor cluster.
    most-frequently-detected position as the true cursor. Real
    cursor is consistent; animation noise is random.
 
-These are next-iteration candidates. Code shipped this iteration:
-new test-client.ts modes `cursor-visibility`, `wake-template`,
-`probe-ensemble`, `wake-and-capture` for live diagnosis.
+### Phase 29 follow-up (2026-04-26): locateCursor wakeup + sanity window fixed
+
+Vector 1 SHIPPED. Three changes to `locateCursor`:
+
+- **Wakeup**: changed from `+30/-30` round trip (net 0 displacement) to
+  one-shot `-120` X mickeys. The cursor now reliably renders before
+  the BEFORE shot.
+- **probeDelta default**: 10 → 60. iPadOS amplifies small mickey
+  emits up to ~20×, so a 10-mickey probe could displace the cursor
+  beyond the previous [3, 40] px sanity window — pair selection
+  silently failed. With probeDelta=60, cursor displacement (30-1200 px
+  depending on iPadOS ratio) dwarfs animation-noise inter-cluster
+  distances (typically <50 px), making pair selection robust.
+- **Sanity window**: `[probeDelta * 0.3, probeDelta * 4]` →
+  `[probeDelta * 0.3, probeDelta * 25]`. The wider upper bound
+  accepts cursor pairs displaced by iPadOS amplification while still
+  rejecting noise pairs (which fall below the lower bound).
+
+**Live verification**: ran `probe-ensemble 6` after the change.
+Result: 6/6 probes returned non-null positions (was 0/6 before).
+Density analysis showed 4 of 6 probes clustered at ~(1140, 985),
+which matches the cursor's recent position. The remaining 2 probes
+returned widget false positives — but density-based selection
+correctly identifies the true cursor.
+
+**End-to-end click_at via test-client `click-verify`**: locateCursor
+now successfully detects the origin (was failing before). The full
+click_at pipeline still misses iPad icons because `detectMotion`'s
+post-window (default 600 px) filters out the actual cursor when
+iPadOS amplification puts it >600 px from predicted landing. That's
+the NEXT thing to fix.
+
+330 tests still green. Version bumped 0.5.1 → 0.5.2.
 
 ## Architectural ceiling reached (2026-04-26 evening)
 
