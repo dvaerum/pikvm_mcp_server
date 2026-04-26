@@ -65,6 +65,9 @@ The server is configured via environment variables or a config file:
 
 ## MCP Tools Provided
 
+### Diagnostics
+0. **`pikvm_version`** - Return the running pikvm-mcp-server version. Use to detect a stale deployment: query this and compare against the version on `main` (currently 0.3.0). If they differ, redeploy before trusting any iPad behavior — older servers lack critical iPad-safety fixes (e.g. `forbidSlamFallback`).
+
 ### Display
 1. **`pikvm_screenshot`** - Capture current screen as JPEG
 2. **`pikvm_get_resolution`** - Get current screen resolution (useful for mouse coordinates)
@@ -100,7 +103,7 @@ The server is configured via environment variables or a config file:
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 37** (17 `pikvm_*` hardware tools + 20 `skill_*` guidance tools = 14 tool-guide + 6 workflow).
+**Total tools: 38** (18 `pikvm_*` hardware/diagnostic tools + 20 `skill_*` guidance tools = 14 tool-guide + 6 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |

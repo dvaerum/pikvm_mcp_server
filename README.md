@@ -117,6 +117,9 @@ Or if using the .env file:
 
 ## Available Tools
 
+### Diagnostics
+- **`pikvm_version`** - Return the running server version. Use to detect a stale deployment: query this and compare against `main` (currently `0.3.0`).
+
 ### Display
 - **`pikvm_screenshot`** - Capture current screen as JPEG (optional: maxWidth, maxHeight, quality)
 - **`pikvm_get_resolution`** - Get screen resolution and valid coordinate ranges
