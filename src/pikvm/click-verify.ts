@@ -228,10 +228,38 @@ export async function clickAtWithRetry(
   let lastVerification: ClickVerification | null = null;
   let lastPostShot: Buffer | null = null;
 
+  let lastMoveError: Error | null = null;
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     // Fresh aim every attempt — moveToPixel runs detect-then-move probe
     // afresh so cursor position is rediscovered from scratch.
-    lastMoveResult = await moveToPixel(client, target, moveToOptions);
+    //
+    // Phase 36: catch moveToPixel throws (e.g. forbidSlamFallback when
+    // cursor cannot be located) and treat them as a failed attempt rather
+    // than aborting the whole retry sequence. iPadOS sometimes hides the
+    // cursor entirely; on the next attempt the detect probes themselves
+    // re-render it. Letting the retry loop run again gives it a chance.
+    try {
+      lastMoveResult = await moveToPixel(client, target, moveToOptions);
+      lastMoveError = null;
+    } catch (err) {
+      lastMoveError = err as Error;
+      lastVerification = {
+        changedPixels: 0,
+        totalPixels: 0,
+        changedFraction: 0,
+        screenChanged: false,
+        message:
+          `Click skipped: moveToPixel threw — ${lastMoveError.message}`,
+      };
+      attemptHistory.push({
+        attempt,
+        screenChanged: false,
+        changedFraction: 0,
+        cursorVerified: false,
+        skippedClickReason: `moveToPixel threw: ${lastMoveError.message}`,
+      });
+      continue;
+    }
 
     // Phase 35: if cursor position couldn't be verified post-move,
     // skip the click — clicking blind when residual is unknown
@@ -291,21 +319,34 @@ export async function clickAtWithRetry(
     }
   }
 
+  // Phase 36: if EVERY attempt threw, there's no MoveToResult or
+  // screenshot to return. Re-throw the last error so the caller sees the
+  // underlying problem (e.g. cursor cannot be located, even after
+  // maxRetries probes). Without this, `lastMoveResult!` would crash with
+  // "cannot read properties of null".
+  if (lastMoveResult === null) {
+    throw new Error(
+      `clickAtWithRetry: every attempt (${attemptHistory.length}) failed to ` +
+      `establish a cursor position — last error was: ` +
+      `${lastMoveError?.message ?? 'unknown'}. ` +
+      `Try waking the iPad, calling pikvm_health_check to verify the target, ` +
+      `or use the keyboard-first workflow.`,
+    );
+  }
+
   // If every attempt was skipped (cursor never verified), there's no
   // post-click screenshot to return. Use the LAST move's screenshot as
   // a stand-in so callers always have an image to inspect.
   if (lastPostShot === null) {
-    lastPostShot = lastMoveResult!.screenshot;
+    lastPostShot = lastMoveResult.screenshot;
   }
 
-  // Loop guarantees lastMoveResult, lastVerification, lastPostShot are set
-  // (maxRetries+1 ≥ 1 always).
   return {
     success: lastVerification!.screenChanged,
     attempts: attemptHistory.length,
-    finalMoveResult: lastMoveResult!,
+    finalMoveResult: lastMoveResult,
     finalVerification: lastVerification!,
-    postClickScreenshot: lastPostShot!,
+    postClickScreenshot: lastPostShot,
     attemptHistory,
   };
 }
