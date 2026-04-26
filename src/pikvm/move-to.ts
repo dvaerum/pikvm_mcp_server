@@ -725,7 +725,11 @@ async function discoverOrigin(
         'moveToPixel: detect-then-move failed (motion-diff and template-match both ' +
         'returned no cursor) and slam fallback forbidden (forbidSlamFallback=true, set ' +
         'when target is iPad to avoid hot-corner re-lock). ' +
-        'Try waking the iPad first, or pass strategy="assume-at" with assumeCursorAt.',
+        'COMMON CAUSE (Phase 70 finding): iPad is on the lock screen. ' +
+        'Lock-screen wallpaper has no cursor for the algorithm to find. ' +
+        'Run pikvm_ipad_unlock first, then retry. ' +
+        'Other workarounds: pass strategy="assume-at" with assumeCursorAt, ' +
+        'or use a keyboard workflow (Phase 61/62 sidebar arrow-key navigation).',
       );
     }
     if (options.verbose) console.error('[move-to] detect-then-move failed; falling back to slam');
