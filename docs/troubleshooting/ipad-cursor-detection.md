@@ -50,6 +50,59 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 64 (2026-04-26): micro-step measure-emit loop — negative result on iPad
+
+**Hypothesis**: emit ONE small chunk → screenshot → find cursor → recompute
+ratio → repeat. Each step stays in iPad's "linear regime" (low pointer-
+acceleration variance) and is measured before the next emits, so error
+can't compound. Should converge below the icon-tolerance budget.
+
+**Implementation**: added two options to `MoveToOptions` —
+`linearCorrectionCap` (default 25; lowered for iPad to 8-40), and
+`disableLinearBailout` (default false; needed for true micro-step).
+Wired through to the existing Phase 22 `progressiveOpenLoop` pathway.
+
+**Live result**: doesn't converge on iPad. Three failure modes observed:
+
+1. **Motion-diff fails on small emits**. With `linearCorrectionCap: 20`
+   (~20 px movement per emit at observed ratio ~1.0), the post-emit
+   diff produces 1×9 cursor candidates but none pass direction/sanity
+   filters. The cursor *did* move, but the diff can't isolate it from
+   widget animation noise. Motion-diff seems to need ≥40 px movement
+   for reliable cluster identification.
+
+2. **LINEAR BAILOUT fires after one blind pass**. Existing safety net
+   (added in earlier phase) reverts to last-verified position and
+   exits linear refinement when motion-diff goes blind. Disabling it
+   (`disableLinearBailout: true`) doesn't help because…
+
+3. **CIRCUIT BREAKER fires after 2 blind passes**. Phase 4's safety
+   net stops the correction loop on consecutive predicted passes to
+   prevent stale-ratio runaway. Cannot be disabled without removing
+   essential protection.
+
+**Conclusion**: micro-step is architecturally blocked. Each "step
+measured before next emits" requires the measurement to actually find
+the cursor. iPad's animated UI + small per-emit displacement = motion-
+diff blind passes = safety nets fire = loop exits before convergence.
+Without a more reliable cursor-finder for sub-40-px movements, micro-
+step cannot work.
+
+**What this confirms**: the ~30-50 px residual ceiling on iPad is real
+and architectural. Possible future paths (NOT shipped):
+- A cursor-finder that doesn't depend on motion-diff (e.g. a global
+  template match every pass — currently too slow at step=4 for the
+  full frame).
+- Different HID descriptors that bypass iPadOS's pointer acceleration
+  (Phase 31 explored touchscreen HID and confirmed iPadOS rejects it).
+- Operating-system-level changes (Trackpad Inertia OFF, Tracking Speed
+  slowest, FKA on) — already documented in `ipad-setup.md`.
+
+**Code shipped**: `linearCorrectionCap` and `disableLinearBailout`
+options remain (off by default). Useful for future experiments and
+specialised configurations. The `micro-click` test-client mode is
+preserved for repeating the experiment if motion-diff improves.
+
 ### Phase 61 (2026-04-26): keyboard arrow-key navigation of iPad Settings sidebar — coordinate-free clicking
 
 **Major finding** — iPad Settings is fully navigable via keyboard arrow
