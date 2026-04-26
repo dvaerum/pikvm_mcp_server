@@ -66,7 +66,8 @@ The server is configured via environment variables or a config file:
 ## MCP Tools Provided
 
 ### Diagnostics
-0. **`pikvm_version`** - Return the running pikvm-mcp-server version. Use to detect a stale deployment: query this and compare against the version on `main` (currently 0.5.18). If they differ, redeploy before trusting any iPad behavior — older servers lack critical iPad-safety fixes (e.g. `forbidSlamFallback`).
+0. **`pikvm_version`** - Return the running pikvm-mcp-server version. Use to detect a stale deployment: query this and compare against the version on `main` (currently 0.5.19). If they differ, redeploy before trusting any iPad behavior — older servers lack critical iPad-safety fixes (e.g. `forbidSlamFallback`).
+0a. **`pikvm_health_check`** - One-call deployment health report: server version, mouseAbsoluteMode + safety-guard implication, live HID profile, iPad bounds detection. Run FIRST after deployment to verify safety guards are active and the target is what you think it is. Surfaces stale deployments (version mismatch), failed startup detection (mouseAbsoluteMode at safe default), and target type (iPad portrait/landscape vs other).
 
 ### Display
 1. **`pikvm_screenshot`** - Capture current screen as JPEG
@@ -103,7 +104,7 @@ The server is configured via environment variables or a config file:
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 39** (18 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
+**Total tools: 40** (19 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
