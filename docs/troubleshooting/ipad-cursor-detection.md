@@ -199,6 +199,39 @@ Y-dominant — only skip it when the X-probe-axis matches the
 warmup-axis. Live verified Phase 15 measures both ratios cleanly:
 X 0.85 from locateCursor probe + Y 0.811 from calibration probe.
 
+### Phase 19 — locateCursor PRIMARY for origin (template-match fallback)
+
+The pre-Phase-19 ordering put template-match first and only used
+locateCursor as fallback. With the latency fix (Phase 13) in
+place, locateCursor is now reliable on the iPad — and crucially,
+it's the only origin path that produces `probeMeasurement` for
+Phase 14 to use as live calibration. Template-match-as-origin
+silently skipped Phase 14, leaving planning to use profile
+defaults (3.04, 5.28 X/Y) that are 4-6× off the actual iPad
+ratios in this context.
+
+Live trace 2026-04-26 click(1027, 825):
+- Pre-Phase-19: template-match origin → no Phase 14 → planRatio
+  (3.0, 3.72) → emit (-14, -3) → cursor landed 154 px east of
+  target.
+- Post-Phase-19: locateCursor primary → Phase 14 FIRES,
+  `CALIBRATION X ratio from probe: 1.317` → emit (-204, -19) →
+  open-loop residual to predicted is small but motion-diff
+  failed and template-match returned FPs that confused the
+  correction loop. Visible final residual ~180 px.
+
+The Phase 14 calibration is now correct. The residual is shifted
+to a different bottleneck: when motion-diff fails between
+correction passes (which still happens on busy iPad frames), the
+template-match recovery picks FPs and currentPos drifts. The
+Phase 11 locality-aware ranking helps but isn't sufficient when
+the prior position is itself a tracking error.
+
+Template-match remains as a fallback when locateCursor fails
+(returns null after maxAttempts). This preserves availability
+without giving up the calibration data when probe-based origin
+succeeds.
+
 ### Phase 18 — fresh ballistics profile (data, not code)
 
 The pre-existing `data/ballistics.json` was captured 2026-04-23

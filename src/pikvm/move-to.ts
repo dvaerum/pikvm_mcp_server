@@ -496,42 +496,21 @@ async function discoverOrigin(
   }
 
   if (requested === 'detect-then-move') {
-    // PRIMARY: template-match against a single screenshot. When a cached
-    // cursor template exists and the cursor IS visible, this is faster
-    // and more accurate than probe-and-diff — no cursor movement
-    // perturbs the planning. Template-match origin is imperfect (stable
-    // FPs at iPad UI elements at score 0.83) but empirically still
-    // better than always-probe (Phase 10 measured locateCursor failing
-    // 3/5 trials on the iPad home screen — see docs/troubleshooting/
-    // ipad-cursor-detection.md for the full evaluation).
-    const tmplSet = await getCachedTemplates();
-    if (tmplSet.length > 0) {
-      // Phase 5: wake the cursor so template-match has a fresh
-      // visible cursor to score against. Without this, faded-cursor
-      // screenshots produced false-positive matches at iPad UI
-      // elements (live-bench: 9/10 trials were undetected without
-      // this nudge).
-      await wakeupCursor(client);
-      const shot = await decodeScreenshot((await client.screenshot()).buffer);
-      await saveDebug('origin-shot-postWakeup', shot.buffer);
-      const found = findCursorByTemplateSet(shot, tmplSet, {
-        verbose: options.verbose,
-      });
-      if (found) {
-        if (options.verbose) {
-          console.error(
-            `[move-to] template-match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)} (template #${found.templateIndex} of ${tmplSet.length}) — using as origin (skipped probe-and-diff)`,
-          );
-        }
-        return { point: found.position, method: 'detect-then-move' };
-      }
-      if (options.verbose) {
-        console.error(`[move-to] template-match below threshold across ${tmplSet.length} cached template(s); falling through to probe-and-diff`);
-      }
-    }
-    // FALLBACK: locateCursor probe-and-diff. Used when no template is
-    // cached yet (first-run) or the template scored below threshold
-    // (different wallpaper, very different lighting, etc.).
+    // Phase 19: locateCursor (probe-and-diff) is now PRIMARY for origin
+    // discovery. Pre-Phase-13, template-match was preferred because
+    // locateCursor was unreliable (failed ~60% of trials). With the
+    // latency fix in place, locateCursor reliably finds real cursor
+    // pairs — and crucially returns probeMeasurement that Phase 14
+    // uses as live-context calibration. Template-match-as-origin
+    // skipped that path entirely, so plans used profile defaults
+    // (3.04, 5.28) that are 4× off in the current iPad context.
+    //
+    // Live trace 2026-04-26 click(1027,825): template-match origin
+    // → planRatio (3.0, 3.72) → emit (-14, -3) mickeys → cursor
+    // landed 154 px east of target. Same trial with probe-based
+    // origin would have measured ratio ~0.85 and emitted enough
+    // mickeys to actually reach target. Template-match is now a
+    // FALLBACK for when locateCursor fails.
     const located = await locateCursor(client, {
       probeDelta: 20,
       // settleMs default (300) is now derived from PiKVM streamer
@@ -557,8 +536,28 @@ async function discoverOrigin(
         },
       };
     }
+    // Phase 19: locateCursor failed — try template-match as fallback.
+    // Without a probe measurement we lose the live-context calibration,
+    // but at least we can plan from the matched origin.
+    const tmplSet = await getCachedTemplates();
+    if (tmplSet.length > 0) {
+      await wakeupCursor(client);
+      const shot = await decodeScreenshot((await client.screenshot()).buffer);
+      await saveDebug('origin-shot-postWakeup-fallback', shot.buffer);
+      const found = findCursorByTemplateSet(shot, tmplSet, {
+        verbose: options.verbose,
+      });
+      if (found) {
+        if (options.verbose) {
+          console.error(
+            `[move-to] locateCursor failed; template-match fallback found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
+          );
+        }
+        return { point: found.position, method: 'detect-then-move' };
+      }
+    }
     if (options.verbose) {
-      console.error('[move-to] template-match AND locateCursor both failed');
+      console.error('[move-to] locateCursor AND template-match both failed');
     }
     if (options.forbidSlamFallback) {
       throw new Error(
