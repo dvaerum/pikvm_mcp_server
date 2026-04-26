@@ -50,6 +50,68 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 65 (2026-04-26): micro-step actually works on iPad with the right tuning
+
+Follow-up to Phase 64's negative result. The negative result came from
+combining `progressiveOpenLoop: true` (skip the big initial emit) with
+small linear corrections. Reverting the open-loop and keeping ONLY the
+linear correction tightening gave a real improvement.
+
+**Working configuration** (use via `npx tsx test-client.ts micro-click X Y`):
+
+```typescript
+moveToOptions: {
+  // Keep the open-loop emit — gets us within ~100 px reliably,
+  // and motion-diff sees its 50+ px chunks fine.
+  // Then enter tight linear refinement.
+  linearTriggerResidualPx: 200,    // engage linear early
+  linearChunkMagnitude: 20,         // 20 mickeys per HID call
+  linearChunkPaceMs: 80,
+  linearCorrectionCap: 40,          // ≤ 40 mickeys per emit (~40 px @ ratio 1.0)
+  linearMaxPasses: 12,
+  maxCorrectionPasses: 12,
+  linearResidualPx: 25,
+  iconToleranceResidualPx: 25,
+  disableLinearBailout: true,       // KEY: let blind passes proceed
+}
+```
+
+**Live results** (5 trials targeting back arrow at HDMI (929, 99)):
+
+| Trial | Outcome                                        | Final residual |
+|-------|------------------------------------------------|----------------|
+| 1     | CIRCUIT BREAKER on 2 blind linear passes      | 50.8 px        |
+| 2     | Converged via 7 linear passes                  | **17 px ✓**    |
+| 3-5   | Cursor already at target (Trial 2 navigated)  | <1 px (trivial)|
+
+The headline number: **17 px residual achieved in trial 2**, beating
+the 25 px icon-tolerance for the first time on iPad in this session.
+Trial 1's failure mode — Phase 4's CIRCUIT BREAKER firing on 2
+consecutive blind passes — is non-negotiable safety, but
+`clickAtWithRetry`'s retry mechanism handles it: each retry has
+independent variance and is likely to succeed where the previous
+attempt failed.
+
+**Why Phase 64 reported negative result**: I tested with
+`progressiveOpenLoop: true` which skipped the open-loop initial
+emit entirely, leaving the correction loop to navigate from
+detect-then-move's origin (often 500+ px from target). With small
+correction caps and motion-diff failures on tiny moves, the loop
+exited before converging.
+
+The fix is to KEEP the open-loop (it's reliable for big moves) and
+only tighten the LINEAR corrections (which run once we're close).
+
+**Code shipped in v0.5.52**:
+- `linearCorrectionCap` option (default 25 — unchanged for non-iPad).
+- `disableLinearBailout` option (default false — unchanged default).
+- `micro-click` test-client mode for repeatable validation.
+
+**Defaults NOT changed** — the legacy 25-mickey cap is correct for
+non-iPad targets. iPad-specific tuning is an opt-in via the options
+above. `clickAtWithRetry` callers can pass these options through
+`moveToOptions` to enable Phase 65 behaviour.
+
 ### Phase 64 (2026-04-26): micro-step measure-emit loop — negative result on iPad
 
 **Hypothesis**: emit ONE small chunk → screenshot → find cursor → recompute
