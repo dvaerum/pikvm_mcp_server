@@ -287,6 +287,42 @@ Next attack vector: a `moveToPixelFromCorner` flow that:
 The fresh-from-slam template should be MUCH better than the
 motion-diff-captured cache that's been poisoning matches.
 
+### Phase 30 cont. (2026-04-26, 09:53): same emit, different result
+
+Ran two identical-looking trials of corner-click(1027, 832, ratioX=3, ratioY=variable):
+
+- Trial A: emit (-54, -11). Y moved 225 px. Cursor landed at App Store row.
+- Trial B: emit (-54, -4). Y moved 95 px (DOWN, not up!). Cursor landed below dock.
+
+Both trials: same slam pattern, same 500ms settle, same emit ordering.
+Different mickey counts in Y, but the per-mickey ratio is wildly
+different — and Trial B's emit even reversed direction (cursor moved
+DOWN despite -4 mickeys = up command).
+
+This is the fundamental iPadOS variance that makes single-shot
+cursor positioning unreliable. The same input pattern produces
+different outputs run-to-run.
+
+**Conclusion**: single-shot precise positioning on iPad with USB
+HID mouse is not achievable. Reliability MUST come from iteration:
+1. Slam → known approximate position
+2. Emit toward target (variable result)
+3. Take screenshot, find cursor
+4. If close enough, click; else iterate
+5. After click, verify via Phase 23
+6. If wrong app, dismiss + retry
+
+The architecture exists. The remaining hard problem: corrective
+emits FROM a settled cursor produce near-zero displacement, so
+each iteration's correction needs to either re-warm the cursor
+(another slam) or use chained-rapid emits to overcome damping.
+
+The most pragmatic approach: PHASE 25 RETRY at the click_at level
+(slam + emit + click as one trial; if Phase 23 detects wrong
+app, dismiss + retry with adjusted parameters). Each retry is an
+independent trial with iPadOS-fresh state. Cumulative success
+rate over multiple retries is acceptable.
+
 ### Phase 30 cont. (2026-04-26, 09:39): iPadOS damps SETTLED cursor
 
 Built `burst-chain-test` mode: emits N rapid bursts after the cursor
