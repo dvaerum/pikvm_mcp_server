@@ -199,6 +199,37 @@ Y-dominant — only skip it when the X-probe-axis matches the
 warmup-axis. Live verified Phase 15 measures both ratios cleanly:
 X 0.85 from locateCursor probe + Y 0.811 from calibration probe.
 
+### Phase 22 — progressiveOpenLoop reproducibility check (0/5 hit)
+
+After Phase 22 commit, ran 5 click trials at Settings (1027, 825)
+in progressive mode. Algorithm reported residuals of (41, 139) =
+145 px in 4 of 5 trials — an identical "stuck" position
+suggesting template-match was recovering at a stable FP at
+(1068, 964), not the real cursor.
+
+Visually inspected the post-click screenshot of trial 1: cursor
+landed at ~(1080, 800), top-right of Settings icon, just
+outside the hit area. None of the 5 trials opened Settings.
+
+So the earlier 34.8 px progressive trials were measured against
+an unreliable internal tracking — the algorithm thought the
+cursor was close to target while it was actually at a
+predictable FP location, and ALSO the visible cursor at
+~(1080, 800) was just outside the icon hit area regardless.
+
+Phase 22's progressive mode is real architectural improvement on
+the planning math, but the click-on-icon failure rate hasn't
+changed. The remaining issue isn't planning — it's that:
+1. iPad icon hit areas are tighter than our typical 35-50 px
+   residual band.
+2. Algorithm's `finalDetectedPosition` doesn't always match the
+   cursor's true position when template-FPs are involved.
+
+The honest fix path is at the MCP-tool layer: click + post-click
+screenshot diff + retry. Continue clicking until the screen
+visibly changes (app launched / modal popped), or surface the
+unreliability to the caller.
+
 ### Phase 22 — progressiveOpenLoop (opt-in wake-emit-verify)
 
 Phase 17 attempted "zero out the open-loop, let the correction
