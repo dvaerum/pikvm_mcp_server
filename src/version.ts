@@ -10,4 +10,4 @@
  * be detected by querying the running server instead of having to inspect
  * its filesystem.
  */
-export const VERSION = '0.3.0';
+export const VERSION = '0.4.0';

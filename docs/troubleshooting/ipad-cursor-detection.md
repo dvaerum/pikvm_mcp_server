@@ -126,6 +126,67 @@ and post-cluster (where cursor is now).
 | 12 | (helper only, not wired) | `isRatioUpdatePlausible` — reject ratio updates that drift > 2× from prior or fall outside [0.5, 4.0] | Wired at 2× threshold made *every* trial regress to 178-207 px because legitimate context-switch adaptations from default (3.04, 5.28) to true iPad (~1.5–2.5) were being blocked. Helper kept for future wiring at a looser threshold (3× or 4×) once we have data on how often legitimate updates exceed 2×. |
 | 23 | (this iteration) | Click verification reporting — `pikvm_mouse_click_at` takes a pre-click screenshot, clicks, takes a post-click screenshot, diffs them, and reports `screenChanged` (≥0.5% pixels differing) plus a human-readable verdict. New `src/pikvm/click-verify.ts` with 10 unit tests. Implements the "click-and-verify-result wrapper at the MCP layer" recommended in the long-term answer section below. Does not change clicking behavior; the agent calling the tool can use the new signal to decide on retry/move-on. Opt-out via `verifyClick: false`. |
 | 24 | (this iteration) | Verification-lag tracking (Direction 3, partial) — `MoveToResult` now exposes `passesSinceLastVerification: number`. The operator-facing message appends "(last verified N pass(es) ago — N predicted passes since; cursor may have drifted, accuracy uncertain)" when the residual was last confirmed by motion-diff or template-match more than zero passes ago. Does NOT change correction-loop exit semantics yet — that's the larger Direction 3 refactor. Pure additive honesty improvement: callers (and the operator reading the message) can now distinguish "I just verified residual = 25 px" from "I verified residual = 25 px three predicted passes ago". 3 new tests with a uniform-black-frame mock client to force every pass into predicted mode. |
+| 25 | f9393b3 | Server-side retry-on-miss in `pikvm_mouse_click_at` — new `clickAtWithRetry` orchestrator loops moveToPixel + click + Phase-23 verify, retrying on screenChanged=false. Each retry runs a fresh detect-then-move probe (independent trial, doesn't compound errors like Phase 17). 6 new tests with state-tracking mock client. **Live result: didn't help iPad clicks.** All 3 retries on Settings target landed nowhere useful (each at ~0.01% screen change). Conclusion: retrying random misses is necessary but not sufficient — same systemic failure mode reproduces per attempt. |
+| 26 | (this iteration) | Probe-driven correction loop (Direction 2) — new `moveToPixelProbeDriven` in `src/pikvm/move-to-probe-driven.ts`. Replaces motion-diff verification with `locateCursor` probes that emit a known small motion + observe to get ground-truth cursor position each iteration. 8 unit tests with injected probeFn (deterministic + perturbed cursor models, all pass). **Live result on iPad home screen: still doesn't reliably hit small icons.** Initial naive run: position bounced ±600 px between iterations because locateCursor false-positives picked widget edges as cursor. Added plausibility check (reject probes implying jump > 3× expected step + 80 px allowance). With check enabled, algorithm "converges" in belief (residual 18 px reported, claimed cursor at (1028, 850) for Settings target) but post-click screenshot shows cursor visible at the right edge of the screen — algorithm's belief is wrong. Conclusion: probe-driven cannot escape the root limitation that small mickey commands cause UNPREDICTABLY large cursor displacements on iPad (>10× nominal). The cursor's response variance is so high that closed-loop control on `locateCursor` observations is not reliable. |
+
+## Direction 2 (probe-driven) post-mortem — what we actually learned
+
+Phase 26 was the most ambitious refactor attempted in this codebase. It
+implements exactly what the troubleshooting doc's "long-term answer"
+section recommends. It works correctly in synthetic environments
+(unit tests pass with deterministic and perturbed cursor models). It
+does NOT work reliably on the live iPad home screen.
+
+The proximate failure mode was twofold:
+
+1. `locateCursor` false-positives. On the iPad home screen,
+   widget animations + the cursor's faded state in the BEFORE frame
+   produce cluster pairs that are NOT the cursor. Trusting these as
+   ground truth makes the algorithm's belief jump 200-600 px
+   per iteration to fixed UI features.
+2. `locateCursor` correct positives that don't predict useful steps.
+   Even when the probe correctly identifies the cursor, the next
+   small-mickey emit moves the cursor by a wildly variable amount
+   (observed: −30 mickeys producing displacements of 0-600 px).
+
+The plausibility check (reject probes implying improbable jumps)
+filters out symptom #1 but lets symptom #2 dominate, with the
+result that the algorithm "converges" in belief but the actual
+cursor goes wherever iPadOS decides.
+
+### Why the long-term answer in the doc didn't pan out
+
+The doc said:
+> "1. Treat origin as a first-class probe, not template-match opt
+> Drop the template-match-as-origin shortcut. Every moveToPixel
+> call starts with a locateCursor probe-and-diff that *guarantees*
+> a freshly-detected cursor position."
+
+This assumed `locateCursor` is reliable. On the iPad home screen,
+it isn't — Phase 10's earlier finding was correct. We have a 65-
+commit codebase of patches around the unreliable detection signal.
+
+### What this means going forward
+
+The HONEST architectural answer: **USB HID mouse + iPadOS is not a
+reliable substrate for precise icon targeting.** The codebase's
+keyboard-first recommendation (`AGENTS.md`: "Strong recommendation
+for iPad targets: prefer keyboard workflows over cursor clicks")
+is the practical solution.
+
+For scenarios where keyboard isn't an option (modal dismissals,
+tappable UI without keyboard equivalent), the right pattern is:
+- Use Phase 23 + post-click screenshot inspection at the agent layer
+- Retry on miss (Phase 25 is shipped, but the per-attempt rate is
+  ~20-50% on iPad home screen → 4 retries gets ~95% cumulative)
+- Accept that "click on small icon" is a probability-weighted
+  operation, not a deterministic one
+
+The probe-driven path (Phase 26) remains in main as `moveToPixelProbeDriven`
+for use cases where the backdrop is quiet enough for `locateCursor` to
+work reliably (modal dialogs, plain wallpapers, non-iPad targets).
+It's NOT wired into `pikvm_mouse_click_at` because it's slower and
+not better than the existing motion-diff pipeline on iPad.
 
 ## Live test (2026-04-26): Phase 23/24 first-ever real-hardware run — major insight
 
