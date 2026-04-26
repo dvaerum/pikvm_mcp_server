@@ -50,6 +50,47 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 51 (v0.5.41, 2026-04-26): two-stage pre-click cursor verification
+
+Phase 42 introduced a full-frame "lie-detector" search to catch the case
+where motion-diff produces a false-positive cursor pair, the algorithm
+believes the cursor is somewhere it isn't, and `clickAtWithRetry` would
+otherwise emit the click anyway.
+
+**Live failure that motivated Phase 51:** the bench harness on the iPad
+home screen showed Phase 42 *aggressively* rejecting valid attempts. The
+diagnostic logs revealed the cause — iPad status-bar icons (battery,
+signal, time) at HDMI ~(1284, 164) score 0.85–0.86 against cursor
+templates because they share the same achromatic, anti-aliased,
+small-glyph profile. On many frames they outrank the actual cursor in
+the *global* full-frame ranking. Phase 42 then declared "best match is
+N px from the claimed cursor — algorithm lied" and skipped the click,
+even though the algorithm was correct.
+
+**Fix — two-stage check** (`src/pikvm/click-verify.ts`):
+
+- **Stage A (primary)**: narrow-window search (`searchCentre: claimed,
+  searchWindow: 100`). If a confident template match is found within
+  100 px of the algorithm's claim, trust it and proceed with the click.
+- **Stage B (fallback)**: only runs if Stage A fails. Full-frame search
+  to detect when the cursor really *isn't* near the claim — the
+  original Phase 42 lie-detector behaviour, but no longer triggered by
+  status-bar icons because Stage A already accepted the genuine local
+  match.
+
+The 100 px Stage-A window is wider than the icon tolerance (25 px
+post-Phase-44) on purpose — Phase 51 is verifying *where the cursor is*
+before clicking, not whether it's at pixel-perfect target. The motion-
+diff residual is allowed to be up to ~30 px on iPad (architectural
+limit); Stage A only needs to confirm the cursor is somewhere in that
+neighbourhood.
+
+This change keeps Phase 42's protection against motion-diff false-
+positives intact while removing its false-rejection on UI elements that
+happen to look cursor-like. Phase 51 is the natural progression: Phase
+41 (narrow window only) → Phase 42 (replaced by full-frame lie-detector)
+→ Phase 51 (narrow first, full-frame fallback).
+
 ### Phase 47 (v0.5.34+, 2026-04-26): SSH+HID mouse navigation as a deploy-independent fallback
 
 When the deployed MCP is stale (lacks Phase 32 slam guard) and cursor

@@ -477,28 +477,60 @@ export async function clickAtWithRetry(
       lastMoveResult.finalDetectedPosition
     ) {
       const preDecoded = await decodeScreenshot(preShot.buffer);
-      // Full-frame search: no searchCentre / searchWindow → scan all pixels.
-      const bestMatch = findCursorByTemplateSet(preDecoded, sessionTemplates, {
+      const claimed = lastMoveResult.finalDetectedPosition;
+
+      // Phase 51 (v0.5.41): two-stage check.
+      //
+      // Stage A — narrow-window search around algorithm's claim. If a
+      // confident cursor match is found there, trust the algorithm.
+      // (This is Phase 41's narrow check, restored as the primary gate.)
+      //
+      // Stage B — full-frame search ONLY runs if stage A fails. This is
+      // the Phase 42 lie-detector: catches cases where the cursor really
+      // ISN'T near the claim (motion-diff false-positive on widget
+      // animation). When stage A would have caught a true cursor match,
+      // stage B can't be misled by status-bar icons that score similarly.
+      //
+      // Live failure that motivated this: bench showed Phase 42 alone
+      // rejecting valid attempts because iPad status-bar icons at
+      // (1284, 164) score 0.85-0.86 against cursor templates — they
+      // outrank the actual cursor in the global best, so Phase 42
+      // declared "algorithm lied" and skipped the click. Stage A now
+      // verifies the cursor is at the claim FIRST; only if it isn't
+      // do we run the lie-detector.
+      const narrowMatch = findCursorByTemplateSet(preDecoded, sessionTemplates, {
+        searchCentre: claimed,
+        searchWindow: 100,
         minScore: 0,
       });
-      const claimed = lastMoveResult.finalDetectedPosition;
       let agree = false;
       let disagreementReason = '';
-      if (!bestMatch) {
-        disagreementReason = 'no template match anywhere in frame';
-      } else if (bestMatch.score < minPreClickTemplateScore) {
-        disagreementReason = `best match score ${bestMatch.score.toFixed(3)} < ${minPreClickTemplateScore}`;
+      if (narrowMatch && narrowMatch.score >= minPreClickTemplateScore) {
+        // Stage A passed — algorithm's claim is verified locally.
+        agree = true;
       } else {
-        const dx = bestMatch.position.x - claimed.x;
-        const dy = bestMatch.position.y - claimed.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > 100) {
-          disagreementReason =
-            `best match (score=${bestMatch.score.toFixed(3)}) at ` +
-            `(${bestMatch.position.x},${bestMatch.position.y}) is ${dist.toFixed(0)} px ` +
-            `from claimed cursor (${claimed.x},${claimed.y}) — algorithm lied`;
+        // Stage B: full-frame lie-detector.
+        const bestMatch = findCursorByTemplateSet(preDecoded, sessionTemplates, {
+          minScore: 0,
+        });
+        if (!bestMatch) {
+          disagreementReason = 'no template match anywhere in frame';
+        } else if (bestMatch.score < minPreClickTemplateScore) {
+          disagreementReason = `best match score ${bestMatch.score.toFixed(3)} < ${minPreClickTemplateScore}`;
         } else {
-          agree = true;
+          const dx = bestMatch.position.x - claimed.x;
+          const dy = bestMatch.position.y - claimed.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > 100) {
+            disagreementReason =
+              `narrow window had no match; best full-frame match (score=${bestMatch.score.toFixed(3)}) at ` +
+              `(${bestMatch.position.x},${bestMatch.position.y}) is ${dist.toFixed(0)} px ` +
+              `from claimed cursor (${claimed.x},${claimed.y}) — algorithm lied`;
+          } else {
+            // Best match outside narrow window but within 100 px — still
+            // close enough to count as agreement.
+            agree = true;
+          }
         }
       }
       if (!agree) {
