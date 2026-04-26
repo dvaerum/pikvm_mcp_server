@@ -199,6 +199,48 @@ Y-dominant — only skip it when the X-probe-axis matches the
 warmup-axis. Live verified Phase 15 measures both ratios cleanly:
 X 0.85 from locateCursor probe + Y 0.811 from calibration probe.
 
+### Phase 22 — progressiveOpenLoop (opt-in wake-emit-verify)
+
+Phase 17 attempted "zero out the open-loop, let the correction
+loop carry the move" before Phases 20-21 were in place. Live
+test then showed worse results because correction-pass
+motion-diff was failing silently and 5+ blind passes compounded
+error.
+
+With Phase 20's tighter template-FP rejection and Phase 21's
+looser ratio sanity bounds, retried the architectural change as
+opt-in `progressiveOpenLoop` option (default false; user picks
+in via test-client moveto/click third arg `progressive`).
+
+Live data, click(1027, 825) target on iPad home screen:
+
+| Mode | Trial | Residual | Settings opened? |
+|------|-------|----------|------------------|
+| Default (single-shot) | 1 | 96.8 px | NO |
+| Default (single-shot) | 2 | (n/a) | NO |
+| Default (single-shot) | 3 | (n/a) | NO |
+| Progressive | 1 | 141.2 px | NO |
+| Progressive | 2 | **34.8 px** | NO (just outside) |
+| Progressive | 3 | 96.8 px | NO |
+| Progressive | 4 (click) | 35.1 px | NO (cursor at edge of icon) |
+
+Progressive's BEST trials (34.8, 35.1 px) are noticeably tighter
+than default's (96, 141, 178 px). The cursor on those trials
+landed just outside the icon hit area — visually inspecting the
+post-click screenshots showed the cursor at (985, 855) when the
+icon's left edge is around X=990.
+
+So Phase 22 is real measurable improvement on the planning
+accuracy, but click-on-icon reliability still requires either:
+1. Hitting the centre of the icon (within ~30 px) — possible
+   with progressive but not consistent.
+2. Larger hit areas — out of our control on iPad.
+3. Click-and-verify-result wrapper at the MCP layer.
+
+Kept as opt-in default-false because it adds latency (more
+correction passes) and isn't strictly better than single-shot
+when single-shot happens to luck into a close residual.
+
 ### Phase 21 reproducibility — 1/4 success rate
 
 Marked Phase 21 as "END-TO-END SUCCESS" too early based on a
