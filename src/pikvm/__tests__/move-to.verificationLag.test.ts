@@ -51,6 +51,7 @@ describe('moveToPixel verification lag', () => {
     const result = await moveToPixel(client as unknown as PiKVMClient, { x: 500, y: 500 }, {
       strategy: 'slam-then-move', // skip detect-origin; we want the open-loop + corrections path
       forbidSlamFallback: false,
+      forbidSlamOnIpad: false, // Phase 32a: synthetic black frame is ambiguous; opt out
       warmupMickeys: 0,
       calibrationProbeMickeys: 0,
       postMoveSettleMs: 0,
@@ -66,6 +67,7 @@ describe('moveToPixel verification lag', () => {
     const result = await moveToPixel(client as unknown as PiKVMClient, { x: 500, y: 500 }, {
       strategy: 'slam-then-move',
       forbidSlamFallback: false,
+      forbidSlamOnIpad: false, // Phase 32a: synthetic black frame is ambiguous; opt out
       warmupMickeys: 0,
       calibrationProbeMickeys: 0,
       postMoveSettleMs: 0,
@@ -82,6 +84,7 @@ describe('moveToPixel verification lag', () => {
     const result = await moveToPixel(client as unknown as PiKVMClient, { x: 500, y: 500 }, {
       strategy: 'slam-then-move',
       forbidSlamFallback: false,
+      forbidSlamOnIpad: false, // Phase 32a: synthetic black frame is ambiguous; opt out
       warmupMickeys: 0,
       calibrationProbeMickeys: 0,
       postMoveSettleMs: 0,

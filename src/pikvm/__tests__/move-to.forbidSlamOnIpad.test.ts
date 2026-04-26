@@ -85,4 +85,68 @@ describe('moveToPixel forbidSlamOnIpad', () => {
     expect(result.strategy).toBe('slam-then-move');
     expect(client.slamCalls).toBeGreaterThan(0);
   }, 30000);
+
+  // Phase 32a: fail-safe when bounds detection can't determine the target.
+  it('refuses slam-then-move when bounds detection fails (target type unknown)', async () => {
+    clearOrientationCache();
+    // All-black frame: bounds detector finds no content → returns null →
+    // we have no idea if this is iPad-portrait or something else. The
+    // strengthened guard refuses by default rather than risk a hot-corner
+    // lock if the unknown target turns out to be iPad-dark-mode.
+    class BlackFrameClient {
+      resolution: ScreenResolution = { width: 1920, height: 1080 };
+      slamCalls = 0;
+      async getResolution() { return this.resolution; }
+      async screenshot() {
+        const buf = await sharp(
+          Buffer.alloc(1920 * 1080 * 3, 0),
+          { raw: { width: 1920, height: 1080, channels: 3 } },
+        ).jpeg().toBuffer();
+        return { buffer: buf, screenshotWidth: 1920, screenshotHeight: 1080 };
+      }
+      async mouseMoveRelative(dx: number, _dy: number) {
+        if (dx <= -100) this.slamCalls++;
+      }
+    }
+    const client = new BlackFrameClient();
+    await expect(
+      moveToPixel(client as unknown as PiKVMClient, { x: 1000, y: 800 }, {
+        strategy: 'slam-then-move',
+        warmupMickeys: 0,
+        calibrationProbeMickeys: 0,
+      }),
+    ).rejects.toThrow(/target type undetermined|hot-corner|iPad/i);
+    expect(client.slamCalls).toBe(0);
+  }, 30000);
+
+  // Phase 32a: when caller explicitly passes slamOriginPx, the guard yields
+  // — the caller has decided where to slam to and is taking responsibility.
+  it('allows slam-then-move when caller explicitly passes slamOriginPx', async () => {
+    clearOrientationCache();
+    class BlackFrameClient {
+      resolution: ScreenResolution = { width: 1920, height: 1080 };
+      slamCalls = 0;
+      async getResolution() { return this.resolution; }
+      async screenshot() {
+        const buf = await sharp(
+          Buffer.alloc(1920 * 1080 * 3, 0),
+          { raw: { width: 1920, height: 1080, channels: 3 } },
+        ).jpeg().toBuffer();
+        return { buffer: buf, screenshotWidth: 1920, screenshotHeight: 1080 };
+      }
+      async mouseMoveRelative(dx: number, _dy: number) {
+        if (dx <= -100) this.slamCalls++;
+      }
+    }
+    const client = new BlackFrameClient();
+    const result = await moveToPixel(client as unknown as PiKVMClient, { x: 1000, y: 800 }, {
+      strategy: 'slam-then-move',
+      slamOriginPx: { x: 50, y: 50 },
+      warmupMickeys: 0,
+      calibrationProbeMickeys: 0,
+      postMoveSettleMs: 0,
+    });
+    expect(result.strategy).toBe('slam-then-move');
+    expect(client.slamCalls).toBeGreaterThan(0);
+  }, 30000);
 });

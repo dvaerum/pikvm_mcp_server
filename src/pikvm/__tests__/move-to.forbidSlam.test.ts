@@ -63,10 +63,15 @@ describe('moveToPixel forbidSlamFallback', () => {
     // Default behaviour preserved: detect-then-move failure → slam fallback,
     // which on a uniform-black frame still proceeds (slam emits but the
     // diff produces no clusters, so we land at predicted). No throw.
+    // Phase 32a: explicitly opt out of forbidSlamOnIpad — the all-black
+    // synthetic frame gives ambiguous bounds, which the strengthened guard
+    // would refuse by default. The unit under test here is the slam
+    // FALLBACK path, not the iPad safety guard.
     const r = await moveToPixel(client as unknown as PiKVMClient, { x: 500, y: 500 }, {
       strategy: 'detect-then-move',
       warmupMickeys: 0,
       calibrationProbeMickeys: 0,
+      forbidSlamOnIpad: false,
       // Reduce settle/sleep so test isn't slow.
       postMoveSettleMs: 0,
     });
