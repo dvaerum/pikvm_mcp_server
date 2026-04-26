@@ -115,3 +115,75 @@ iPadOS pointer acceleration on relative-mouse input. The path
 forward is multi-trial probabilistic clicks (Phase 23 verification +
 Phase 25 retry-on-miss + post-click screenshot inspection),
 already shipped in the MCP server.
+
+Refinement (2026-04-26 by user): the "gestures going crazy" failure
+mode requires the mouse boot-interface patch (`protocol=2,
+subclass=1`) to be applied. WITHOUT the patch + absolute mode,
+the cursor moves but clicks don't register. WITH the patch +
+absolute mode, clicks register but as touch events that iPadOS
+interprets as conflicting with cursor motion → "gestures going
+crazy". The current relative-mode + boot-interface-patch is the
+only mouse combo where clicks register normally on iPad.
+
+### 2026-04-26 10:50 UTC — Phase 31: touchscreen HID experiment + revert
+
+Action: hot-added a third HID gadget function (`hid.usb2`) to the
+PiKVM USB composite gadget, configured as a single-touch digitizer:
+
+```
+GADGET=/sys/kernel/config/usb_gadget/kvmd
+echo "" > $GADGET/UDC          # unbind
+mkdir $GADGET/functions/hid.usb2
+echo 0 > $GADGET/functions/hid.usb2/protocol
+echo 0 > $GADGET/functions/hid.usb2/subclass
+echo 5 > $GADGET/functions/hid.usb2/report_length
+# Write 45-byte single-touch digitizer descriptor to report_desc
+ln -s functions/hid.usb2 configs/c.1/hid.usb2
+echo "fe980000.usb" > $GADGET/UDC   # rebind
+```
+
+Hypothesis: a separate USB digitizer device (Usage Page 0x0D, Usage
+0x04 Touch Screen) is fundamentally different from "mouse with
+absolute coordinates". A real digitizer descriptor unambiguously
+declares itself as a touchscreen, so iPadOS would NOT have the
+"gestures going crazy" interpretation conflict that absolute-mouse
+mode produces. If iPadOS recognised the device as a touchscreen,
+we would gain deterministic absolute-coordinate input (no pointer
+acceleration variance).
+
+Test: wrote tap reports to `/dev/hidg2` at touchscreen logical
+coordinates (16383, 16383) center, then at (19660, 25274) which
+maps to the on-screen Settings icon at HDMI (1027, 833). Observed
+no response on the iPad — no touch indicators, no app launch, no
+visible state change.
+
+Conclusion: **CLOSED — iPadOS does not act on USB HID touchscreen
+input.** This aligns with Apple's documented architecture: pointer
+support added in iPadOS 13.4 is for mice and trackpads only. There
+is no documented USB-touchscreen API surface in iPadOS, presumably
+to prevent this exact attack-vector for spoofing touch events from
+peripherals. The descriptor was accepted by the USB stack
+(`/dev/hidg2` was created and writeable) but the iPad's input
+subsystem did not surface the touches to UIKit.
+
+Action (revert):
+```
+echo "" > $GADGET/UDC
+rm -f $GADGET/configs/c.1/hid.usb2
+rmdir $GADGET/functions/hid.usb2
+echo "fe980000.usb" > $GADGET/UDC
+```
+
+Verification:
+- Functions list back to {hid.usb0, hid.usb1, mass_storage.usb0}
+- /dev/hidg2 gone; /dev/hidg0 + /dev/hidg1 present
+- Mouse boot patch intact (`protocol=2, subclass=1` at all four sites)
+- Root mount still `ro`
+- Live mouse_move and key sends work post-revert (iPad responsive)
+
+**Net effect: ZERO permanent changes to PiKVM. The system is in
+the same state it was before this experiment.**
+
+See `docs/troubleshooting/ipad-touchscreen-hid-dead-end.md` for the
+full technical write-up of the descriptor design and why iPadOS
+ignored it.
