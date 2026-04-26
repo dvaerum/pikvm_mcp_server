@@ -15,13 +15,14 @@
  * keeps it pure and testable without any client/network mock.
  */
 
-import { decodeScreenshot, diffPixels } from './cursor-detect.js';
+import { decodeScreenshot, diffPixels, findCursorByTemplateSet } from './cursor-detect.js';
 import type { DecodedScreenshot } from './cursor-detect.js';
 import { moveToPixel } from './move-to.js';
 import type { MoveToOptions, MoveToResult } from './move-to.js';
 import type { PiKVMClient, MouseButton } from './client.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
 import { detectIpadBoundsFromBuffer } from './orientation.js';
+import { loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './template-set.js';
 
 export interface ClickVerification {
   /** Pixels that changed between the pre and post screenshots within
@@ -185,6 +186,20 @@ export interface ClickAtWithRetryOptions {
    *  VERY_DIM_THRESHOLD (50) — matches the threshold below which
    *  cursor detection has reliably failed in tests. */
   minBrightness?: number;
+  /** Phase 41: minimum NCC template-match score required to accept
+   *  moveToPixel's claimed cursor position as ground truth. Live-verified
+   *  2026-04-26: a 5-trial bench had moveToPixel report verified cursor
+   *  at residual 28-32 px on every trial, but ALL clicks missed the
+   *  target. Hypothesis confirmed: motion-diff/template-match inside
+   *  moveToPixel was false-positive-verifying widget-animation clusters
+   *  as the cursor. Adding a tight pre-click template re-check in a
+   *  ±50 px window around the claimed position catches the lie before
+   *  we waste a click. Requires cached cursor templates (./data/cursor-
+   *  templates/); if the set is empty the check is a no-op. Set 0 to
+   *  disable. Default 0.5 — loose enough to admit cursor matches across
+   *  varied wallpaper backdrops, strict enough to reject "cursor at
+   *  arbitrary widget" false positives. */
+  minPreClickTemplateScore?: number;
 }
 
 export interface ClickAtWithRetryResult {
@@ -235,6 +250,10 @@ export async function clickAtWithRetry(
   const verifyOptions: ClickVerifyOptions = options.verifyOptions ?? {};
   const requireVerifiedCursor = options.requireVerifiedCursor ?? true;
   const minBrightness = options.minBrightness ?? VERY_DIM_THRESHOLD;
+  const minPreClickTemplateScore = options.minPreClickTemplateScore ?? 0.5;
+  // Load cursor templates ONCE outside the retry loop. Empty set →
+  // pre-click template check is a no-op (graceful degradation).
+  const sessionTemplates = await loadTemplateSet(DEFAULT_TEMPLATE_DIR).catch(() => []);
 
   // Phase 38: brightness precheck — fail fast on a dim screen. Live-verified
   // 2026-04-26: cursor detection reliably fails when iPad display brightness
@@ -350,6 +369,49 @@ export async function clickAtWithRetry(
     // Pre-click screenshot taken AFTER cursor settles, so the diff
     // isolates the click's UI effect from cursor motion during move-to.
     const preShot = await client.screenshot();
+
+    // Phase 41: ground-truth cursor verification before click. moveToPixel's
+    // motion-diff and template-match can both false-positive-verify widget
+    // animation clusters as cursor. Live bench 2026-04-26: 4/5 trials had
+    // verified cursor at 28-32 px residual but ALL 5 clicks missed —
+    // suggesting the verification was a lie. Re-check by running
+    // template-match on the pre-click screenshot in a ±50 px window around
+    // the claimed cursor position; if it doesn't agree, skip the click.
+    if (
+      minPreClickTemplateScore > 0 &&
+      sessionTemplates.length > 0 &&
+      lastMoveResult.finalDetectedPosition
+    ) {
+      const preDecoded = await decodeScreenshot(preShot.buffer);
+      const found = findCursorByTemplateSet(preDecoded, sessionTemplates, {
+        searchCentre: lastMoveResult.finalDetectedPosition,
+        searchWindow: 50,
+        minScore: 0,
+      });
+      if (!found || found.score < minPreClickTemplateScore) {
+        const claimedScore = found ? found.score.toFixed(3) : 'no match';
+        lastVerification = {
+          changedPixels: 0,
+          totalPixels: 0,
+          changedFraction: 0,
+          screenChanged: false,
+          message:
+            `Click skipped: pre-click template re-check disagreed with ` +
+            `moveToPixel's claimed cursor position (template score=` +
+            `${claimedScore} < ${minPreClickTemplateScore} threshold). ` +
+            `The motion-diff verification was likely a false positive on ` +
+            `a widget-animation cluster.`,
+        };
+        attemptHistory.push({
+          attempt,
+          screenChanged: false,
+          changedFraction: 0,
+          cursorVerified: false,
+          skippedClickReason: `pre-click template score ${claimedScore} < ${minPreClickTemplateScore}`,
+        });
+        continue;
+      }
+    }
 
     await client.mouseClick(button);
 
