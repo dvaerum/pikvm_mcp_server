@@ -50,67 +50,63 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
-### Phase 65 (2026-04-26): micro-step actually works on iPad with the right tuning
+### Phase 65 (2026-04-26): micro-step config — marginal improvement, NOT a breakthrough
 
-Follow-up to Phase 64's negative result. The negative result came from
-combining `progressiveOpenLoop: true` (skip the big initial emit) with
-small linear corrections. Reverting the open-loop and keeping ONLY the
-linear correction tightening gave a real improvement.
+I initially claimed Phase 65 as a breakthrough based on a single 17 px
+residual result. A rigorous bench (5 trials per config, iPad unlocked
+on Settings/Wi-Fi page) walks that back:
 
-**Working configuration** (use via `npx tsx test-client.ts micro-click X Y`):
+| Config       | ≤25 px | Median | p95   | Detect failures |
+|--------------|--------|--------|-------|-----------------|
+| Baseline     | 0/5    | 109 px | 934 px | 1/5            |
+| Phase 65     | 1/5    | 109 px | 934 px | 2/5            |
+
+**Honest assessment**:
+- Phase 65 had ONE success (≤25 px) out of 5 trials. Baseline had
+  zero. Sample size is too small to claim statistical significance.
+- Median residual is **identical** between configs (109 px).
+- Phase 65 had MORE detect-then-move failures (2/5 vs 1/5), possibly
+  because the cursor's resting state varied between trials.
+- The single 17/20 px hits in earlier ad-hoc runs were one-offs:
+  trials where iPad happened to be quiet enough for motion-diff to
+  succeed every pass.
+
+**What's real**: when motion-diff DOES succeed every pass, Phase 65's
+tight linear correction (40-mickey cap, bailout disabled) does
+converge below 25 px. But the 80% of trials where motion-diff fails
+on at least one pass produce no improvement over baseline.
+
+**Bottom line**: the `linearCorrectionCap` and `disableLinearBailout`
+options shipped in v0.5.52 still serve a purpose — they let the
+correction loop continue when iPad happens to be quiet — but they do
+not solve the underlying motion-diff reliability problem on iPad's
+animated UI. The architectural ceiling remains.
+
+**Working configuration** (still useful as opt-in via `moveToOptions`):
 
 ```typescript
 moveToOptions: {
-  // Keep the open-loop emit — gets us within ~100 px reliably,
-  // and motion-diff sees its 50+ px chunks fine.
-  // Then enter tight linear refinement.
-  linearTriggerResidualPx: 200,    // engage linear early
-  linearChunkMagnitude: 20,         // 20 mickeys per HID call
+  linearTriggerResidualPx: 200,
+  linearChunkMagnitude: 20,
   linearChunkPaceMs: 80,
-  linearCorrectionCap: 40,          // ≤ 40 mickeys per emit (~40 px @ ratio 1.0)
+  linearCorrectionCap: 40,
   linearMaxPasses: 12,
   maxCorrectionPasses: 12,
   linearResidualPx: 25,
   iconToleranceResidualPx: 25,
-  disableLinearBailout: true,       // KEY: let blind passes proceed
+  disableLinearBailout: true,
 }
 ```
 
-**Live results** (5 trials targeting back arrow at HDMI (929, 99)):
-
-| Trial | Outcome                                        | Final residual |
-|-------|------------------------------------------------|----------------|
-| 1     | CIRCUIT BREAKER on 2 blind linear passes      | 50.8 px        |
-| 2     | Converged via 7 linear passes                  | **17 px ✓**    |
-| 3-5   | Cursor already at target (Trial 2 navigated)  | <1 px (trivial)|
-
-The headline number: **17 px residual achieved in trial 2**, beating
-the 25 px icon-tolerance for the first time on iPad in this session.
-Trial 1's failure mode — Phase 4's CIRCUIT BREAKER firing on 2
-consecutive blind passes — is non-negotiable safety, but
-`clickAtWithRetry`'s retry mechanism handles it: each retry has
-independent variance and is likely to succeed where the previous
-attempt failed.
-
-**Why Phase 64 reported negative result**: I tested with
-`progressiveOpenLoop: true` which skipped the open-loop initial
-emit entirely, leaving the correction loop to navigate from
-detect-then-move's origin (often 500+ px from target). With small
-correction caps and motion-diff failures on tiny moves, the loop
-exited before converging.
-
-The fix is to KEEP the open-loop (it's reliable for big moves) and
-only tighten the LINEAR corrections (which run once we're close).
-
 **Code shipped in v0.5.52**:
-- `linearCorrectionCap` option (default 25 — unchanged for non-iPad).
+- `linearCorrectionCap` option (default 25 — unchanged).
 - `disableLinearBailout` option (default false — unchanged default).
-- `micro-click` test-client mode for repeatable validation.
+- `micro-click` test-client mode for repeatable bench (`bench-micro.ts`).
 
-**Defaults NOT changed** — the legacy 25-mickey cap is correct for
-non-iPad targets. iPad-specific tuning is an opt-in via the options
-above. `clickAtWithRetry` callers can pass these options through
-`moveToOptions` to enable Phase 65 behaviour.
+**For honest reproducibility**: see `bench-micro.ts` (gitignored — runs
+the side-by-side comparison and prints residual stats). The harness
+is the right way to validate any future correction-loop change before
+declaring victory.
 
 ### Phase 64 (2026-04-26): micro-step measure-emit loop — negative result on iPad
 
