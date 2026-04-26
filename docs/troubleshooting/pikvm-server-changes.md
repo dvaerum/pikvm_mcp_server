@@ -5,22 +5,61 @@ This document records EVERY change made to the live PiKVM at
 
 PiKVM hardware/OS:
 - Raspberry Pi 4 Model B Rev 1.1, model "v2", HDMI capture
-- Arch Linux ARM, kernel 6.12.56-1-rpi (as of 2025-11-08 build)
-- Root filesystem is read-only by default; `rw` to remount (PiKVM helper)
-- `ro` to remount read-only (not yet observed; may be implicit on reboot)
+- Arch Linux ARM, kernel 6.12.56-1-rpi
+- Root filesystem is read-only by default; `rw` to remount, `ro` to
+  remount read-only (PiKVM helpers)
 
 Access:
-- HTTPS web UI: `https://pikvm01.bb.vcamp.dk` (admin/<password>)
+- HTTPS web UI: `https://pikvm01.bb.vcamp.dk` (admin / <password>)
 - SSH: `root@pikvm01.bb.vcamp.dk` (key-based, georg's id_ed25519 added)
 
-Config files of interest:
-- `/etc/kvmd/override.yaml` — YAML overrides applied on top of defaults
-- `/etc/kvmd/override.d/` — drop-in directory (currently empty)
-- `/usr/share/kvmd/configs.default/` — defaults (do NOT edit)
+Authoritative reference for the user's existing iPad-targeted
+configuration, including required HID patches and rationale:
+**`~/pikvm-configured-for-ipad.md`** (on georg's Mac).
 
-## Change log
+## Existing config (NOT changed by this project)
 
-### 2026-04-26 — backup of override.yaml prior to dual-mode investigation
+Per the user's `pikvm-configured-for-ipad.md`, the current PiKVM
+config is the WORKING setup for iPad and should not be changed:
+
+- `/etc/kvmd/override.yaml` sets `mouse.absolute: false` and
+  `mouse_alt.device: ''`. iPad needs relative-mouse mode; absolute
+  mode causes "gestures going crazy" because iPadOS interprets
+  absolute HID position reports as touch events.
+
+- `/usr/lib/python3.13/site-packages/kvmd/apps/otg/hid/mouse.py`
+  has been MANUALLY PATCHED to set `protocol=2, subclass=1`
+  (USB boot-mouse-interface descriptor). Without this patch,
+  iPadOS won't accept clicks (mouse movement still works, but
+  click events are dropped). The patch is persisted by a pacman
+  hook at `/etc/pacman.d/hooks/kvmd-mouse-patch.hook` so it
+  reapplies after `pacman -Syu`.
+
+- USB capture card (MS2109) must be in the LOWER black USB 2.0
+  port on the Pi 4 — verified by `/dev/kvmd-video` symlink.
+
+## Observation: patch path version note
+
+The user's `pikvm-configured-for-ipad.md` references the patch at
+`/usr/lib/python3.14/site-packages/...`. The actual path on the
+running PiKVM is `python3.13` (verified 2026-04-26):
+```
+grep -n "protocol\|subclass" /usr/lib/python3.13/site-packages/kvmd/apps/otg/hid/mouse.py
+# 45:    protocol=2,
+# 46:    subclass=1,
+# 109:   protocol=2,
+# 110:   subclass=1,
+```
+
+The patch is currently applied (values are 2/1) and clicks are
+working. **No action needed — the user's policy is "we do not
+update the pikvm".** Recording this purely as an observation in
+case the patch path becomes relevant in the future. This MCP
+project does not modify the PiKVM.
+
+## Change log (this session)
+
+### 2026-04-26 10:24 UTC — investigated config, made one transient change
 
 Action:
 ```
@@ -29,61 +68,50 @@ rw                                  # remount root read-write
 cp /etc/kvmd/override.yaml /etc/kvmd/override.yaml.bak-pre-dualmode
 ```
 
-Why: investigating whether enabling `mouse_alt` (dual-mode mouse,
-adds an absolute-coordinate HID device alongside the relative one)
-makes iPad cursor positioning deterministic, by exposing absolute
-coordinates the iPad accepts as touch-like input.
+Why: was investigating whether enabling dual-mode mouse (`mouse_alt`
++ absolute as alt device) could solve iPad cursor positioning
+variance. Created backup as a precaution before any edit.
 
-The user reports prior attempts had problems:
-- Pure absolute-mode: clicks didn't register on iPad
-- Absolute-mode + "the patch" (unspecified what patch): cursor
-  jumped around the screen randomly
+### 2026-04-26 10:38 UTC — REVERTED (no behavior change)
 
-These prior findings are documented here:
-- (User's notes file `/tmp/pikvm-configured-for-ipad.md` — file
-  not present at the documented path when investigated; awaiting
-  user to re-share or relocate.)
+Discovered via the user's `pikvm-configured-for-ipad.md` notes that
+absolute mouse mode is INCOMPATIBLE with iPad — produces "gestures
+going crazy" because iPadOS interprets absolute HID reports as
+touch events. The current relative-mode + boot-mouse-patch is the
+proven working setup.
 
-To revert this change:
+Action (revert):
 ```
-rw && cp /etc/kvmd/override.yaml.bak-pre-dualmode /etc/kvmd/override.yaml
-systemctl restart kvmd
-```
-The backup file is harmless on its own; just an extra file.
-
-Status: backup created. **NO config changes applied yet.** kvmd has
-NOT been restarted. The running config is the same as before this
-session.
-
-### Pending — awaiting user notes before any further change
-
-User said the file `/tmp/pikvm-configured-for-ipad.md` contains the
-context on prior config attempts and patches. That file isn't where
-it was supposed to be. NOT proceeding with any config change until
-that context is available — the prior "screen jumps around"
-behavior is exactly what we'd risk reproducing.
-
-## Reference: current config (snapshot 2026-04-26)
-
-Effective HID config from `kvmd -m`:
-```yaml
-hid:
-  type: otg
-  keymap: /usr/share/kvmd/keymaps/en-us
-  mouse:
-    device: /dev/kvmd-hid-mouse
-    absolute: false                # ← override.yaml sets this
-    horizontal_wheel: false        # ← override.yaml sets this
-  mouse_alt:
-    device: ''                     # ← override.yaml disables alt
-    horizontal_wheel: true
+ssh root@pikvm01.bb.vcamp.dk
+rm -f /etc/kvmd/override.yaml.bak-pre-dualmode
+ro                                  # remount root read-only
 ```
 
-Defaults would be `mouse.absolute: true` and
-`mouse_alt.device: /dev/kvmd-hid-mouse-alt` — the override here
-DEPARTS from defaults. The override comment doesn't explain why,
-but the user has stated above that prior absolute attempts
-produced bad iPad behavior.
+Verification:
+```
+mount | grep " / "
+# /dev/mmcblk0p3 on / type ext4 (ro,relatime)
+```
+Plus mouse boot-interface patch verified intact (protocol=2,
+subclass=1 at all four sites).
 
-`/api/hid` returns `mouse.outputs.available: []` — no alternative
-HID outputs currently available to the API.
+**Net effect: ZERO changes to PiKVM. The system is in the same
+state it was before this session's SSH access began.**
+
+## Closed avenue: dual-mode mouse on iPad
+
+The `mouse_alt` / dual-mode mouse approach IS NOT a path forward
+for iPad. Per the user's notes and confirmed via troubleshooting
+section of `pikvm-configured-for-ipad.md`:
+
+> "Gestures going crazy on iPad — This happens when using absolute
+> mouse mode. iPadOS interprets absolute HID position reports as
+> touch events. Stay in relative mouse mode."
+
+Future contributors: do NOT enable absolute or dual-mode on this
+PiKVM expecting it to fix iPad cursor positioning. The cursor
+variance documented in `ipad-cursor-detection.md` is INHERENT to
+iPadOS pointer acceleration on relative-mouse input. The path
+forward is multi-trial probabilistic clicks (Phase 23 verification +
+Phase 25 retry-on-miss + post-click screenshot inspection),
+already shipped in the MCP server.
