@@ -125,6 +125,45 @@ interprets as conflicting with cursor motion → "gestures going
 crazy". The current relative-mode + boot-interface-patch is the
 only mouse combo where clicks register normally on iPad.
 
+### 2026-04-26 14:40 UTC — Add `streamer.forever: true` to override.yaml
+
+Action:
+```
+ssh root@pikvm01.bb.vcamp.dk
+rw
+cp /etc/kvmd/override.yaml /etc/kvmd/override.yaml.bak-pre-stream-forever
+# Insert "    forever: true" under the existing "  streamer:" block.
+systemctl restart kvmd
+ro
+```
+
+Why: kvmd by default auto-stops the ustreamer subprocess ~10 seconds
+after the last live web/WS client disconnects, to save CPU. The MCP
+server's REST `pikvm_screenshot` calls go through `/api/streamer/snapshot`
+which does NOT auto-start the streamer if it's stopped — kvmd returns
+HTTP 503 `UnavailableError`. Live-verified 2026-04-26: a 30-minute
+gap between PiKVM web-UI sessions left the streamer stopped, all MCP
+screenshot calls returned 503, and click_at / move_to / health_check
+all became unusable until a manual web-UI session re-started it.
+
+`streamer.forever: true` makes kvmd keep ustreamer running
+permanently after first start. Cost: ~3% CPU continuous on Pi 4 +
+slightly higher idle wattage. Benefit: MCP REST calls work reliably
+without needing an active web-UI client.
+
+Verification:
+```
+ps -ef | grep ustream | grep -v grep
+# kvmd  300599  300554  3 11:40 ?  ... kvmd/streamer: /usr/bin/ustreamer
+curl -k -u admin:... https://pikvm01.bb.vcamp.dk/api/streamer/snapshot?save=0 -o /tmp/test.jpg
+file /tmp/test.jpg
+# /tmp/test.jpg: JPEG image data, baseline, precision 8, 1920x1080, components 3
+```
+
+Revert (if ever needed): remove the `forever: true` line from
+override.yaml and restart kvmd. The original behaviour is the kvmd
+default.
+
 ### 2026-04-26 10:50 UTC — Phase 31: touchscreen HID experiment + revert
 
 Action: hot-added a third HID gadget function (`hid.usb2`) to the
