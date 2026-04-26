@@ -6,7 +6,7 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
-## 📊 Current state (after Phases 65-76, v0.5.67)
+## 📊 Current state (post-Phase 65 onwards — see chronological log below for the full history)
 
 **Per-attempt accuracy** on iPad (clean state, unlocked, dark UI):
 - ~50% chance of residual ≤ 25 px (icon tolerance)
