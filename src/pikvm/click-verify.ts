@@ -158,6 +158,21 @@ export interface ClickAtWithRetryOptions {
   /** Options forwarded to moveToPixel for each attempt. Default uses
    *  detect-then-move with forbidSlamFallback=true (iPad-safe). */
   moveToOptions?: MoveToOptions;
+  /** Phase 35: when true (default), skip the click if moveToPixel
+   *  returned `finalDetectedPosition === null` — i.e. neither
+   *  motion-diff nor template-match could verify where the cursor
+   *  ended up after the open-loop emit. In that state the cursor is
+   *  somewhere within ±100s of pixels of the predicted landing and
+   *  clicking is a coin flip — risks hitting an adjacent app icon
+   *  instead of the intended target. Live-verified 2026-04-26: a
+   *  bench trial that clicked-anyway under this state opened
+   *  Calendar instead of Settings. With requireVerifiedCursor on,
+   *  the unverified attempt is recorded as a no-click failure and
+   *  the retry loop tries afresh. Set false to preserve the old
+   *  click-anyway behaviour (only useful for non-iPad targets where
+   *  detection is reliable enough that null finalDetectedPosition
+   *  is rare). Default true. */
+  requireVerifiedCursor?: boolean;
 }
 
 export interface ClickAtWithRetryResult {
@@ -171,8 +186,18 @@ export interface ClickAtWithRetryResult {
   finalVerification: ClickVerification;
   /** The screenshot captured AFTER the final attempt's click. */
   postClickScreenshot: Buffer;
-  /** Per-attempt verification verdicts in order, for diagnostics. */
-  attemptHistory: { attempt: number; screenChanged: boolean; changedFraction: number }[];
+  /** Per-attempt verification verdicts in order, for diagnostics.
+   *  Phase 35: `cursorVerified` indicates whether moveToPixel's
+   *  finalDetectedPosition was non-null going into the click; when
+   *  false, the click was either skipped (requireVerifiedCursor
+   *  default) or proceeded blind (requireVerifiedCursor=false). */
+  attemptHistory: {
+    attempt: number;
+    screenChanged: boolean;
+    changedFraction: number;
+    cursorVerified: boolean;
+    skippedClickReason?: string;
+  }[];
 }
 
 /**
@@ -196,6 +221,7 @@ export async function clickAtWithRetry(
     forbidSlamFallback: true,
   };
   const verifyOptions: ClickVerifyOptions = options.verifyOptions ?? {};
+  const requireVerifiedCursor = options.requireVerifiedCursor ?? true;
 
   const attemptHistory: ClickAtWithRetryResult['attemptHistory'] = [];
   let lastMoveResult: MoveToResult | null = null;
@@ -206,6 +232,37 @@ export async function clickAtWithRetry(
     // Fresh aim every attempt — moveToPixel runs detect-then-move probe
     // afresh so cursor position is rediscovered from scratch.
     lastMoveResult = await moveToPixel(client, target, moveToOptions);
+
+    // Phase 35: if cursor position couldn't be verified post-move,
+    // skip the click — clicking blind when residual is unknown
+    // risks hitting the wrong adjacent target (verified 2026-04-26).
+    const cursorVerified = lastMoveResult.finalDetectedPosition !== null;
+    if (requireVerifiedCursor && !cursorVerified) {
+      // Mark this attempt as a no-click failure. Don't take pre/post
+      // screenshots since there's nothing to compare. Synthesise a
+      // verification result so callers see the structure they expect.
+      lastVerification = {
+        changedPixels: 0,
+        totalPixels: 0,
+        changedFraction: 0,
+        screenChanged: false,
+        message:
+          `Click skipped: cursor position not verified after move ` +
+          `(motion-diff and template-match both failed). Predicted ` +
+          `landing alone is unreliable on busy screens; clicking blind ` +
+          `risks hitting the wrong adjacent target. Set ` +
+          `requireVerifiedCursor=false to override.`,
+      };
+      attemptHistory.push({
+        attempt,
+        screenChanged: false,
+        changedFraction: 0,
+        cursorVerified: false,
+        skippedClickReason: 'cursor not verified',
+      });
+      // Don't break — let the retry loop attempt fresh detection.
+      continue;
+    }
 
     if (preClickSettleMs > 0) await sleepMs(preClickSettleMs);
 
@@ -225,12 +282,20 @@ export async function clickAtWithRetry(
       attempt,
       screenChanged: lastVerification.screenChanged,
       changedFraction: lastVerification.changedFraction,
+      cursorVerified,
     });
 
     if (lastVerification.screenChanged) {
       // Success — stop retrying.
       break;
     }
+  }
+
+  // If every attempt was skipped (cursor never verified), there's no
+  // post-click screenshot to return. Use the LAST move's screenshot as
+  // a stand-in so callers always have an image to inspect.
+  if (lastPostShot === null) {
+    lastPostShot = lastMoveResult!.screenshot;
   }
 
   // Loop guarantees lastMoveResult, lastVerification, lastPostShot are set
