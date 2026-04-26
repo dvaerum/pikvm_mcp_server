@@ -160,6 +160,31 @@ describe('moveToPixelProbeDriven', () => {
     expect(client.emitHistory.length).toBe(0);
   });
 
+  it('passes lastKnown hint to probeFn (initially null, then current cursor belief)', async () => {
+    const client = new TrackingClient({ x: 100, y: 100 }, 1.5);
+    const lastKnownHistory: ({ x: number; y: number } | null)[] = [];
+    await moveToPixelProbeDriven(client as unknown as PiKVMClient, { x: 500, y: 500 }, {
+      probeFn: async (c, lastKnown) => {
+        lastKnownHistory.push(lastKnown);
+        return { position: (c as unknown as TrackingClient).cursor };
+      },
+      tolerance: 30,
+      maxIterations: 5,
+      pxPerMickeyEstimate: 1.5,
+      maxStepMickeys: 30,
+      settleMs: 0,
+    });
+    // First call should receive null (initial probe, no prior belief).
+    expect(lastKnownHistory[0]).toBeNull();
+    // Subsequent calls should receive the cursor belief from before the
+    // emit — i.e., a non-null point.
+    for (let i = 1; i < lastKnownHistory.length; i++) {
+      expect(lastKnownHistory[i]).not.toBeNull();
+      expect(typeof (lastKnownHistory[i] as { x: number; y: number }).x).toBe('number');
+      expect(typeof (lastKnownHistory[i] as { x: number; y: number }).y).toBe('number');
+    }
+  });
+
   it('handles per-iteration ratio variance (simulating iPadOS acceleration)', async () => {
     const client = new TrackingClient({ x: 100, y: 100 }, 1.5);
     let iter = 0;

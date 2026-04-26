@@ -128,6 +128,43 @@ and post-cluster (where cursor is now).
 | 24 | (this iteration) | Verification-lag tracking (Direction 3, partial) — `MoveToResult` now exposes `passesSinceLastVerification: number`. The operator-facing message appends "(last verified N pass(es) ago — N predicted passes since; cursor may have drifted, accuracy uncertain)" when the residual was last confirmed by motion-diff or template-match more than zero passes ago. Does NOT change correction-loop exit semantics yet — that's the larger Direction 3 refactor. Pure additive honesty improvement: callers (and the operator reading the message) can now distinguish "I just verified residual = 25 px" from "I verified residual = 25 px three predicted passes ago". 3 new tests with a uniform-black-frame mock client to force every pass into predicted mode. |
 | 25 | f9393b3 | Server-side retry-on-miss in `pikvm_mouse_click_at` — new `clickAtWithRetry` orchestrator loops moveToPixel + click + Phase-23 verify, retrying on screenChanged=false. Each retry runs a fresh detect-then-move probe (independent trial, doesn't compound errors like Phase 17). 6 new tests with state-tracking mock client. **Live result: didn't help iPad clicks.** All 3 retries on Settings target landed nowhere useful (each at ~0.01% screen change). Conclusion: retrying random misses is necessary but not sufficient — same systemic failure mode reproduces per attempt. |
 | 26 | (this iteration) | Probe-driven correction loop (Direction 2) — new `moveToPixelProbeDriven` in `src/pikvm/move-to-probe-driven.ts`. Replaces motion-diff verification with `locateCursor` probes that emit a known small motion + observe to get ground-truth cursor position each iteration. 8 unit tests with injected probeFn (deterministic + perturbed cursor models, all pass). **Live result on iPad home screen: still doesn't reliably hit small icons.** Initial naive run: position bounced ±600 px between iterations because locateCursor false-positives picked widget edges as cursor. Added plausibility check (reject probes implying jump > 3× expected step + 80 px allowance). With check enabled, algorithm "converges" in belief (residual 18 px reported, claimed cursor at (1028, 850) for Settings target) but post-click screenshot shows cursor visible at the right edge of the screen — algorithm's belief is wrong. Conclusion: probe-driven cannot escape the root limitation that small mickey commands cause UNPREDICTABLY large cursor displacements on iPad (>10× nominal). The cursor's response variance is so high that closed-loop control on `locateCursor` observations is not reliable. |
+| 27 | (this iteration) | `locateCursor.expectedNear` spatial hint — `locateCursor` now accepts `expectedNear: Point` + `expectedNearRadius` (default 200 px). When set, candidate cluster pairs whose post-centroid is far from the hint are HARD REJECTED at the pair-selection gate; remaining candidates get a tie-break score bonus for proximity. Same pattern as Phase 11's `findCursorByTemplateSet`. Wired into Phase 26's probe-driven loop so each iteration's probe is anchored to the previous iteration's known cursor position. **Live result on iPad home screen: did NOT fix it.** With locality filter at radius 250: probes lock onto a fixed widget false-positive (algorithm reported cursor stuck at (773, 387) for 8 iterations). The locality filter prevents the worst noise (Phase 26's ±600 px bouncing) but creates a feedback loop where one false positive becomes a stable anchor for subsequent probes. Useful as opt-in for quiet backdrops where locateCursor would otherwise drift between equally-plausible candidates; not useful on the iPad home screen. |
+
+## Architectural ceiling reached (2026-04-26 evening)
+
+After Phases 23–27, the codebase has explored every direction the
+troubleshooting doc identified as "the actual long-term answer", plus
+several refinements the doc didn't mention:
+
+- Phase 23: post-click screen-change verification — works as designed.
+- Phase 24: stale-verification flag — works as designed.
+- Phase 25: server-side retry-on-miss — works mechanically; per-attempt
+  hit rate on iPad home screen is too low for retries to help.
+- Phase 26: probe-driven correction (Direction 2) — works in synthetic
+  environments and on quiet backdrops; fails on iPad home because
+  `locateCursor` itself fails on busy widget backdrops.
+- Phase 27: `locateCursor` spatial hint (Direction 1 refinement) —
+  prevents catastrophic drift but creates a different failure mode
+  (false-positive lock-in).
+
+**The final architectural conclusion:** USB HID mouse + iPadOS + the
+animated home screen is a combination where the cursor cannot be
+reliably detected and cannot be reliably moved. No amount of
+algorithmic refinement on either side of the pipeline escapes this.
+
+### Practical recommendation hierarchy (what actually works)
+
+| Scenario | Reliability | Approach |
+|---|---|---|
+| Modal dismissal (OK button on dialog) | High | `pikvm_mouse_click_at` with default options. Backdrop is quiet, cursor visible, motion-diff and locateCursor both work. |
+| Button inside an opened app | Moderate-High | `pikvm_mouse_click_at`. Fewer animated distractors than home screen. Use `verifyClick: true` (default) to catch the occasional miss. |
+| iPad home screen icon | LOW (~20-50% per attempt) | Prefer keyboard launch via Spotlight: `pikvm_shortcut(["MetaLeft","Space"])` + `pikvm_type("Settings")` + `pikvm_key("Enter")`. Reserve `click_at` only for icons with no keyboard equivalent, and use `maxRetries: 3+` plus post-click screenshot inspection. |
+| Resolution change / known cursor location | High | `pikvm_calibrate` + `pikvm_set_calibration` for absolute-mouse devices; `pikvm_auto_calibrate` for vision-based. iPad doesn't support absolute-mouse, so this only helps non-iPad targets. |
+
+This matrix is the de-facto API contract for iPad scenarios. Future
+contributors: do not attempt to "fix" iPad home-screen icon clicks by
+patching the algorithm — every variant we've tried bottlemets on the
+same OS-level limitations, documented above.
 
 ## Direction 2 (probe-driven) post-mortem — what we actually learned
 
