@@ -653,14 +653,32 @@ async function discoverOrigin(
   // letterbox locks the screen via iPadOS hot-corner gesture. The
   // forbidSlamFallback option only protected the auto-fallback path; this
   // covers the explicit-strategy case too.
+  //
+  // Phase 32a: close the safety gap when bounds detection fails (e.g. dark-
+  // mode iPad with all-black canvas). The guard refuses unless EITHER:
+  //   - bounds were detected AND show landscape orientation (clearly not the
+  //     letterboxed-iPad case), OR
+  //   - the caller explicitly passed slamOriginPx (they've decided where to
+  //     slam to and are taking responsibility), OR
+  //   - the caller explicitly opted out via forbidSlamOnIpad=false.
+  // This is fail-safe: if we can't tell what the target is, we don't slam.
   const forbidSlamOnIpad = options.forbidSlamOnIpad ?? true;
-  if (forbidSlamOnIpad && detectedBounds && detectedBounds.orientation === 'portrait') {
+  const callerProvidedOrigin = options.slamOriginPx !== undefined;
+  const knownNonIpad =
+    detectedBounds !== null && detectedBounds.orientation === 'landscape';
+  if (forbidSlamOnIpad && !knownNonIpad && !callerProvidedOrigin) {
+    const reason = detectedBounds
+      ? `iPad-portrait letterbox detected (bounds ${detectedBounds.width}×${detectedBounds.height})`
+      : `target type undetermined (bounds detection failed — frame too dark or unrecognised) ` +
+        `and slam-origin defaulted to LEGACY_PORTRAIT, which presumes iPad`;
     throw new Error(
-      `moveToPixel: refusing slam-then-move because iPad-portrait letterbox detected ` +
-      `(bounds ${detectedBounds.width}×${detectedBounds.height}). Slam-to-corner triggers ` +
-      `iPadOS hot-corner gesture and re-locks the screen mid-session. ` +
-      `Use strategy='detect-then-move' instead, or pass forbidSlamOnIpad=false ` +
-      `to opt out of this guard (only safe if hot-corners are disabled).`,
+      `moveToPixel: refusing slam-then-move — ${reason}. ` +
+      `Slam-to-corner on an iPad triggers the iPadOS hot-corner gesture and ` +
+      `re-locks the screen mid-session. Options: ` +
+      `(1) use strategy='detect-then-move' (recommended for iPad), ` +
+      `(2) pass slamOriginPx explicitly if you know the target is non-iPad, ` +
+      `(3) pass forbidSlamOnIpad=false to opt out (only safe if iPad ` +
+      `hot-corners are disabled).`,
     );
   }
 
