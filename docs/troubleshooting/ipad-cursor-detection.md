@@ -287,6 +287,39 @@ Next attack vector: a `moveToPixelFromCorner` flow that:
 The fresh-from-slam template should be MUCH better than the
 motion-diff-captured cache that's been poisoning matches.
 
+### Phase 30 cont. (2026-04-26, 09:25): mid-screen template capture works
+
+Built `mid-screen-template` mode AND integrated into `slam-iterate-click`:
+1. Slam BR (cursor at corner ~1283, 1008)
+2. Take corner-shot
+3. Emit -80, -80 to move cursor away from edge
+4. Take mid-screen-shot
+5. Motion-diff between corner-shot and mid-screen-shot → produces
+   2 cursor clusters (corner + mid-screen)
+6. Pick cluster FURTHEST from corner = mid-screen cursor position
+7. Filter for achromatic + cursor-sized
+8. Extract clean template at mid-screen position
+
+**Live result**: motion-diff successfully found mid-screen cursor at
+(750, 152) with 38-px cluster. Captured clean 24×24 template from there.
+
+This unblocks the FRESH-template-from-known-position story. The corner
+template was contaminated by edge/dock pixels; the mid-screen template
+should be cleaner cursor + wallpaper context.
+
+But: in the iterate loop, subsequent bursts produced match scores that
+either fell below threshold or found false positives. Two new findings:
+- Single -80,-80 emit on slam-saturated cursor moved it ~700-900 px
+  (much more than typical 200 px estimate)
+- Subsequent +50,+50 emits from mid-screen position seemed to barely
+  move the cursor (template-match found same position)
+
+iPadOS ballistic curve depends on prior cursor STATE (saturated vs
+mid-screen) more than I realized. The "first burst from saturation"
+gives a different response than "Nth burst from mid-screen".
+
+Architectural piece is solid. Tuning remains.
+
 ### Phase 30 cont. (2026-04-26, 09:10): slam-iterate-click + strict locality reject
 
 Built `slam-iterate-click` test mode: slam BR → capture FRESH
