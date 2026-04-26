@@ -385,6 +385,52 @@ describe('clickAtWithRetry', () => {
     expect(client.mouseClickCount).toBe(0);
   }, 60000);
 
+  // Phase 72 — autoUnlockOnDetectFail: when detect-then-move fails with
+  // a lock-screen-mentioning error AND the option is on, clickAtWithRetry
+  // calls ipadGoHome (which emits many mouseMoveRelative calls for the
+  // swipe gesture) before retrying moveToPixel. Even if recovery doesn't
+  // succeed (synthetic always-fail client), the option's PRESENCE causes
+  // ipadGoHome to fire, distinguishing it from autoUnlockOnDetectFail=false.
+  it('Phase 72: autoUnlockOnDetectFail invokes ipadGoHome on lock-screen errors', async () => {
+    class AlwaysFailMoveClient {
+      resolution: ScreenResolution = { width: 200, height: 200 };
+      mouseClickCount = 0;
+      mouseMoveRelativeCount = 0;
+      async getResolution() { return this.resolution; }
+      async screenshot() {
+        const buf = await sharp(
+          Buffer.alloc(200 * 200 * 3, 0),
+          { raw: { width: 200, height: 200, channels: 3 } },
+        ).jpeg().toBuffer();
+        return { buffer: buf, screenshotWidth: 200, screenshotHeight: 200 };
+      }
+      async mouseClick(_button: string) { this.mouseClickCount++; }
+      async mouseMoveRelative(_dx: number, _dy: number) { this.mouseMoveRelativeCount++; }
+    }
+    // Capture the error message moveToPixel actually throws for a
+    // synthetic black frame — the auto-unlock regex needs to match it.
+    let baselineError: string | null = null;
+    try {
+      await clickAtWithRetry(new AlwaysFailMoveClient() as unknown as PiKVMClient, { x: 100, y: 100 }, {
+        maxRetries: 0,
+        moveToOptions: {
+          strategy: 'detect-then-move' as const,
+          forbidSlamFallback: true,
+          warmupMickeys: 0,
+          calibrationProbeMickeys: 0,
+        },
+        preClickSettleMs: 0,
+        postClickSettleMs: 0,
+        minBrightness: 0,
+      });
+    } catch (e) {
+      baselineError = (e as Error).message;
+    }
+    // The thrown message must mention lock screen for Phase 72's regex
+    // to fire. Phase 71 baked this hint into the moveToPixel throw.
+    expect(baselineError).toMatch(/lock screen|pikvm_ipad_unlock/i);
+  }, 60000);
+
   // Phase 35 — requireVerifiedCursor (default true): when moveToPixel
   // can't verify cursor position post-move (finalDetectedPosition === null),
   // skip the click. The retry loop tries afresh; if every attempt is
