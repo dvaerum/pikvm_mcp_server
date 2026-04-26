@@ -137,6 +137,37 @@ make a single coordinate-based click on the toggle. Worth doing once
 per device. (Operator action — out of scope for the MCP server, but
 recommended as a setup step in `docs/skills/ipad-setup.md`.)
 
+#### Phase 63 follow-up (2026-04-26): Settings search jumps to the parent section, not the leaf
+
+Tested whether Settings search could let an operator navigate
+**directly** to the Full Keyboard Access toggle via keyboard alone:
+
+1. From any Settings page: focus the sidebar search field
+   (`pikvm_key("Tab")` from a clean state, or `Cmd+Space` if Spotlight
+   is wanted instead).
+2. `pikvm_type("Full Keyboard Access")` — Settings shows a result
+   under "Settings" labelled "Full Keyboard Access — Accessibility
+   → Keyboards & Typing → Full Keyboard Access".
+3. `pikvm_key("ArrowDown")` × 7 — walks past Suggestions (3) and
+   Websites (3) to highlight the Settings result. The search field
+   shows "Full Keyboard Access - Open" (i.e. Enter will activate).
+4. `pikvm_key("Enter")` — navigates to the **Accessibility** section
+   (the right pane shows Vision / Physical and Motor / etc.), NOT
+   directly to the Full Keyboard Access leaf.
+
+This is an iPadOS quirk — Settings search treats deep-nested leaf
+results as "open the section that contains it" rather than "activate
+the specific control". To actually flip the FKA toggle the operator
+must still click into Keyboards & Typing → Full Keyboard Access via
+either a coordinate click or the sidebar arrow-key path through
+Accessibility's right-pane subcategories (which also requires either
+FKA already on, or a coordinate click).
+
+**So enabling FKA is unavoidably one coordinate-based action.** Best
+to do it once at iPad-setup time and keep FKA on persistently. After
+that, every subsequent automation action can be keyboard-only via the
+patterns Phase 61/62 verified.
+
 ### Phase 57 (2026-04-26): attempted Trackpad-Inertia disable via deployed MCP — confirmed deployed server is unsafe on iPad
 
 The user's mantra "be proactive — do not ask me to do things you can do
