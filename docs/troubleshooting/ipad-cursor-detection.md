@@ -50,6 +50,45 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 53 (v0.5.43, 2026-04-26): connected-components cohesion gate in `looksLikeCursor`
+
+Phase 52 mitigated a polluted template set manually (rm). Phase 53 adds
+the structural fix that prevents the pollution from happening in the
+first place.
+
+**Symptom**: `data/cursor-templates/` accumulated text fragments (e.g.
+`ript`, `ck`) over time on dark-mode UI. The pre-Phase-53 `looksLikeCursor`
+checked only:
+1. ≥4% of template pixels are bright achromatic (≥170 channel, sat ≤30).
+2. Mean saturation < 50.
+
+White text on dark background satisfies BOTH — text glyphs are bright/white
+(achromatic) and the surrounding dark area pulls mean saturation low. So
+text fragments passed and got persisted. Once persisted, they scored
+0.999 against themselves on later frames, fooling Phase 42/51 Stage B.
+
+**Fix**: add a connected-components cohesion check. Mark the bright-
+achromatic mask, run BFS to find the largest connected component, require
+that the largest component is ≥50% of all bright pixels. A real cursor
+is one cohesive blob (largest component = 100% or close); text is
+multiple disconnected glyphs (largest = 25–35% of total).
+
+**Implementation**: 4-connectivity BFS over a `Uint8Array` mask. Iterates
+once over the template (576 px for 24×24); negligible overhead.
+
+**Live observation**: with Phase 53 active, zero templates were captured
+during a click test where motion-diff had blind passes. This is desired
+behaviour — when motion-diff is wrong about where the cursor is, the
+extracted template is not actually the cursor, and Phase 53 correctly
+refuses to persist it. The trade-off: Phase 51 has nothing to verify
+against until a clean motion-diff success captures one good template.
+Better to operate with NO templates than with poisoned ones.
+
+**Tests added**:
+- `looksLikeCursor.test.ts` — REGRESSION rejecting multi-glyph fragment.
+- `looksLikeCursor.test.ts` — accept cursor with anti-alias satellites
+  (the cohesion threshold has slack for realistic anti-aliasing).
+
 ### Phase 52 (v0.5.42, 2026-04-26): widen Stage A radius from 100 → 200 px + template pollution discovery
 
 Live test of Phase 51 against `(1300, 600)` on the iPad Settings screen
