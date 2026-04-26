@@ -370,44 +370,69 @@ export async function clickAtWithRetry(
     // isolates the click's UI effect from cursor motion during move-to.
     const preShot = await client.screenshot();
 
-    // Phase 41: ground-truth cursor verification before click. moveToPixel's
-    // motion-diff and template-match can both false-positive-verify widget
-    // animation clusters as cursor. Live bench 2026-04-26: 4/5 trials had
-    // verified cursor at 28-32 px residual but ALL 5 clicks missed —
-    // suggesting the verification was a lie. Re-check by running
-    // template-match on the pre-click screenshot in a ±50 px window around
-    // the claimed cursor position; if it doesn't agree, skip the click.
+    // Phase 41 + Phase 42: ground-truth cursor verification before click.
+    // moveToPixel's motion-diff and template-match can both false-positive-
+    // verify widget-animation clusters as cursor.
+    //
+    // Phase 42 strengthens 41: instead of searching only a ±50 px window
+    // around the claimed position, search the FULL frame for the best
+    // template match. If the best match is FAR from the claimed position
+    // (>100 px), the algorithm lied — real cursor is elsewhere, click would
+    // hit the wrong target.
+    //
+    // Live-verified 2026-04-26: a Phase 41 click reported template score
+    // 0.977 within ±50 px of (1058, 823), but the click opened Apple Music
+    // (in the dock at ~(785, 985)) — meaning the REAL cursor was 250+ px
+    // away in the dock; Phase 41's narrow-window match had locked onto a
+    // cursor-like UI shadow within its window. Full-frame search would
+    // have picked the higher-scoring real cursor in the dock and aborted
+    // the click as "claimed position 250 px from best match".
     if (
       minPreClickTemplateScore > 0 &&
       sessionTemplates.length > 0 &&
       lastMoveResult.finalDetectedPosition
     ) {
       const preDecoded = await decodeScreenshot(preShot.buffer);
-      const found = findCursorByTemplateSet(preDecoded, sessionTemplates, {
-        searchCentre: lastMoveResult.finalDetectedPosition,
-        searchWindow: 50,
+      // Full-frame search: no searchCentre / searchWindow → scan all pixels.
+      const bestMatch = findCursorByTemplateSet(preDecoded, sessionTemplates, {
         minScore: 0,
       });
-      if (!found || found.score < minPreClickTemplateScore) {
-        const claimedScore = found ? found.score.toFixed(3) : 'no match';
+      const claimed = lastMoveResult.finalDetectedPosition;
+      let agree = false;
+      let disagreementReason = '';
+      if (!bestMatch) {
+        disagreementReason = 'no template match anywhere in frame';
+      } else if (bestMatch.score < minPreClickTemplateScore) {
+        disagreementReason = `best match score ${bestMatch.score.toFixed(3)} < ${minPreClickTemplateScore}`;
+      } else {
+        const dx = bestMatch.position.x - claimed.x;
+        const dy = bestMatch.position.y - claimed.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 100) {
+          disagreementReason =
+            `best match (score=${bestMatch.score.toFixed(3)}) at ` +
+            `(${bestMatch.position.x},${bestMatch.position.y}) is ${dist.toFixed(0)} px ` +
+            `from claimed cursor (${claimed.x},${claimed.y}) — algorithm lied`;
+        } else {
+          agree = true;
+        }
+      }
+      if (!agree) {
         lastVerification = {
           changedPixels: 0,
           totalPixels: 0,
           changedFraction: 0,
           screenChanged: false,
           message:
-            `Click skipped: pre-click template re-check disagreed with ` +
-            `moveToPixel's claimed cursor position (template score=` +
-            `${claimedScore} < ${minPreClickTemplateScore} threshold). ` +
-            `The motion-diff verification was likely a false positive on ` +
-            `a widget-animation cluster.`,
+            `Click skipped: pre-click full-frame template search disagreed ` +
+            `with moveToPixel's claimed cursor position. ${disagreementReason}.`,
         };
         attemptHistory.push({
           attempt,
           screenChanged: false,
           changedFraction: 0,
           cursorVerified: false,
-          skippedClickReason: `pre-click template score ${claimedScore} < ${minPreClickTemplateScore}`,
+          skippedClickReason: disagreementReason,
         });
         continue;
       }
