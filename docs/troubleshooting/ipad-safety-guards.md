@@ -69,7 +69,30 @@ If we can't tell what the target is, we don't slam. This trades a
 small false-positive rate (refusing slam on ambiguous non-iPad
 targets) for absolute safety against the iPad-lock failure mode.
 
-### Layer 4 (intentionally absent): `pikvm_ipad_unlock`
+### Layer 4: safe-by-default `mouseAbsoluteMode` (Phase 33, v0.5.18)
+
+`forbidSlamFallback` in the MCP tool layer is set as `!mouseAbsoluteMode`.
+The module-level `mouseAbsoluteMode` is refreshed at startup by calling
+`pikvm.getHidProfile()` to read the live `mouse.absolute` flag from the
+target. Pre-Phase-33 this defaulted to `true` — meaning if startup
+detection failed (network blip, slow PiKVM HTTP, malformed response),
+`mouseAbsoluteMode` STAYED true → `forbidSlamFallback` was false → slam
+proceeded → iPad locked.
+
+Live-verified 2026-04-26: a click_at against an iPad after a deployment
+where startup HID-profile detection had silently failed slammed and
+locked the screen. The `WARNING: detect-origin fell back to slam` text
+in the error message confirmed the failure mode.
+
+**Phase 33 flips the default to `false`** (treat target as iPad until
+proven otherwise). Failure mode: a non-iPad target where startup
+detection fails will refuse absolute-mode tools (`pikvm_calibrate`,
+`pikvm_auto_calibrate`, `pikvm_mouse_move` without `relative:true`,
+`pikvm_mouse_click` with x/y) until the user restarts the server with
+a working PiKVM connection. That's a much better trade-off than
+locking the iPad.
+
+### Layer 5 (intentionally absent): `pikvm_ipad_unlock`
 
 `ipad-unlock.ts` calls `slamToCorner(top-left)` directly. This
 bypasses all the above layers BY DESIGN: when the iPad is locked,
