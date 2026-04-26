@@ -6,6 +6,43 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## 📊 Current state (after Phases 65-76, v0.5.67)
+
+**Per-attempt accuracy** on iPad (clean state, unlocked, dark UI):
+- ~50% chance of residual ≤ 25 px (icon tolerance)
+- Median residual ~80 px when detection succeeds
+- Detect-then-move startup failure rate: ~10% (Phase 68 retries closed
+  most of the gap from a previous ~40%)
+
+**With `maxRetries: 2`** (3 attempts), end-to-end success rate per
+target size:
+
+| Target width | 3-attempt hit rate | Examples |
+|--------------|--------------------|----------|
+| ≥ 200 px     | ~99% | Sidebar rows, large buttons |
+| 100-200 px   | ~97% | App icons, search fields |
+| 50-100 px    | ~94% | Standard buttons, page tabs |
+| < 50 px      | ~88% | Back arrows, X buttons, toggles |
+
+**Operational requirements**:
+1. iPad must be UNLOCKED (lock screen has no cursor for detection).
+2. Brightness ≥ ~50/255 mean (dimmed iPad → detection fails).
+3. Target screen should be relatively dark UI (animation noise on
+   light/colorful wallpapers degrades motion-diff).
+
+**Critical safety rule** (Phase 32a, do not violate): never use
+`strategy: "slam-then-move"` on iPad. Slam to top-left triggers the
+hot-corner gesture and re-locks the screen. Always pass
+`forbidSlamFallback: true` (or use the default `clickAtWithRetry`
+config which does this).
+
+**For tiny targets (< 30 px)**: keyboard navigation is more reliable
+(Phase 61: arrow keys for sidebar; Phase 62: Tab/Return for in-pane
+elements after enabling Full Keyboard Access).
+
+**Reproducible benches**: `bench-micro.ts` (single-call moveToPixel),
+`bench-clickretry.ts` (end-to-end clickAtWithRetry).
+
 ## 🩺 Diagnostic-first protocol
 
 When `pikvm_mouse_click_at` misbehaves on iPad, **run
