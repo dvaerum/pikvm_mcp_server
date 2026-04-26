@@ -670,24 +670,46 @@ async function discoverOrigin(
         },
       };
     }
-    // Phase 19: locateCursor failed — try template-match as fallback.
+    // Phase 19/68: locateCursor failed — try template-match as fallback.
     // Without a probe measurement we lose the live-context calibration,
     // but at least we can plan from the matched origin.
+    //
+    // Phase 68 (2026-04-26): the original implementation tried template-
+    // match ONCE after a small wakeupCursor. If the cursor was in a
+    // transient faded state, this single attempt missed and the entire
+    // detect-then-move flow failed. The bench showed this happening
+    // 20-40% of the time on iPad. Progressive retries with bigger wake
+    // nudges cover the transient-invisibility case at low cost.
     const tmplSet = await getCachedTemplates();
     if (tmplSet.length > 0) {
-      await wakeupCursor(client);
-      const shot = await decodeScreenshot((await client.screenshot()).buffer);
-      await saveDebug('origin-shot-postWakeup-fallback', shot.buffer);
-      const found = findCursorByTemplateSet(shot, tmplSet, {
-        verbose: options.verbose,
-      });
-      if (found) {
-        if (options.verbose) {
-          console.error(
-            `[move-to] locateCursor failed; template-match fallback found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
-          );
+      const wakeAttempts: { dx: number; settleMs: number; label: string }[] = [
+        { dx: 30, settleMs: 300, label: 'small-wake' },
+        { dx: 60, settleMs: 400, label: 'medium-wake' },
+        { dx: 100, settleMs: 500, label: 'large-wake' },
+      ];
+      for (const attempt of wakeAttempts) {
+        // Round-trip nudge so net displacement is zero; iPadOS sees motion
+        // (cursor wakes) but the cursor ends up where it started.
+        await client.mouseMoveRelative(attempt.dx, 0);
+        await sleep(80);
+        await client.mouseMoveRelative(-attempt.dx, 0);
+        await sleep(attempt.settleMs);
+        const shot = await decodeScreenshot((await client.screenshot()).buffer);
+        await saveDebug(`origin-shot-${attempt.label}`, shot.buffer);
+        const found = findCursorByTemplateSet(shot, tmplSet, {
+          verbose: options.verbose,
+        });
+        if (found) {
+          if (options.verbose) {
+            console.error(
+              `[move-to] locateCursor failed; ${attempt.label} template-match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
+            );
+          }
+          return { point: found.position, method: 'detect-then-move' };
         }
-        return { point: found.position, method: 'detect-then-move' };
+        if (options.verbose) {
+          console.error(`[move-to] ${attempt.label} template-match returned no cursor; retrying with bigger nudge`);
+        }
       }
     }
     if (options.verbose) {
