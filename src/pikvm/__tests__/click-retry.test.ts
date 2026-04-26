@@ -111,6 +111,10 @@ describe('clickAtWithRetry', () => {
       // the retry orchestration, not the cursor-verification gate, so opt
       // out of requireVerifiedCursor.
       requireVerifiedCursor: false,
+      // Phase 38: synthetic uniform frames are dim (mean=128, just above
+      // VERY_DIM_THRESHOLD=50, so most should pass — but this opt-out
+      // keeps the test stable even if thresholds change).
+      minBrightness: 0,
     });
 
     expect(result.success).toBe(true);
@@ -136,6 +140,10 @@ describe('clickAtWithRetry', () => {
       // verify, so finalDetectedPosition is null. The unit under test is
       // retry orchestration, not the cursor-verification gate.
       requireVerifiedCursor: false,
+      // Phase 38: synthetic uniform frames are dim (mean=128, just above
+      // VERY_DIM_THRESHOLD=50, so most should pass — but this opt-out
+      // keeps the test stable even if thresholds change).
+      minBrightness: 0,
     });
 
     expect(result.success).toBe(true);
@@ -158,6 +166,10 @@ describe('clickAtWithRetry', () => {
       // verify, so finalDetectedPosition is null. The unit under test is
       // retry orchestration, not the cursor-verification gate.
       requireVerifiedCursor: false,
+      // Phase 38: synthetic uniform frames are dim (mean=128, just above
+      // VERY_DIM_THRESHOLD=50, so most should pass — but this opt-out
+      // keeps the test stable even if thresholds change).
+      minBrightness: 0,
     });
 
     expect(result.success).toBe(false);
@@ -180,6 +192,10 @@ describe('clickAtWithRetry', () => {
       // verify, so finalDetectedPosition is null. The unit under test is
       // retry orchestration, not the cursor-verification gate.
       requireVerifiedCursor: false,
+      // Phase 38: synthetic uniform frames are dim (mean=128, just above
+      // VERY_DIM_THRESHOLD=50, so most should pass — but this opt-out
+      // keeps the test stable even if thresholds change).
+      minBrightness: 0,
     });
 
     expect(result.attempts).toBe(1);
@@ -201,6 +217,10 @@ describe('clickAtWithRetry', () => {
       // verify, so finalDetectedPosition is null. The unit under test is
       // retry orchestration, not the cursor-verification gate.
       requireVerifiedCursor: false,
+      // Phase 38: synthetic uniform frames are dim (mean=128, just above
+      // VERY_DIM_THRESHOLD=50, so most should pass — but this opt-out
+      // keeps the test stable even if thresholds change).
+      minBrightness: 0,
     });
 
     expect(result.postClickScreenshot).toBeInstanceOf(Buffer);
@@ -223,6 +243,10 @@ describe('clickAtWithRetry', () => {
       // verify, so finalDetectedPosition is null. The unit under test is
       // retry orchestration, not the cursor-verification gate.
       requireVerifiedCursor: false,
+      // Phase 38: synthetic uniform frames are dim (mean=128, just above
+      // VERY_DIM_THRESHOLD=50, so most should pass — but this opt-out
+      // keeps the test stable even if thresholds change).
+      minBrightness: 0,
     });
 
     expect(result.success).toBe(true);
@@ -231,6 +255,85 @@ describe('clickAtWithRetry', () => {
     expect(result.attemptHistory[0].screenChanged).toBe(false);
     expect(result.attemptHistory[1].screenChanged).toBe(false);
     expect(result.attemptHistory[2].screenChanged).toBe(true);
+  }, 30000);
+
+  // Phase 38 — brightness precheck. When the screen is too dim for cursor
+  // detection (live-verified mean<50 reliably fails), throw fast with
+  // actionable error rather than wasting maxRetries+1 attempts.
+  it('Phase 38: throws fast when screen brightness below threshold', async () => {
+    // Uniform black frame (mean=0, well below VERY_DIM_THRESHOLD=50).
+    class DimFrameClient {
+      resolution: ScreenResolution = { width: 200, height: 200 };
+      mouseClickCount = 0;
+      mouseMoveRelativeCount = 0;
+      async getResolution() { return this.resolution; }
+      async screenshot() {
+        const buf = await sharp(
+          Buffer.alloc(200 * 200 * 3, 0),
+          { raw: { width: 200, height: 200, channels: 3 } },
+        ).jpeg().toBuffer();
+        return { buffer: buf, screenshotWidth: 200, screenshotHeight: 200 };
+      }
+      async mouseClick(_button: string) { this.mouseClickCount++; }
+      async mouseMoveRelative(_dx: number, _dy: number) { this.mouseMoveRelativeCount++; }
+    }
+    const client = new DimFrameClient();
+    await expect(
+      clickAtWithRetry(client as unknown as PiKVMClient, { x: 100, y: 100 }, {
+        maxRetries: 2,
+        // Default minBrightness=VERY_DIM_THRESHOLD (50). All-black frame
+        // has mean=0 → precheck throws.
+      }),
+    ).rejects.toThrow(/screen too dim|wake the iPad/i);
+    // Precheck happens before any moveToPixel call → no clicks, no moves.
+    expect(client.mouseClickCount).toBe(0);
+    expect(client.mouseMoveRelativeCount).toBe(0);
+  }, 30000);
+
+  // Phase 38b — minBrightness=0 disables the precheck (escape hatch for
+  // tests using synthetic dim frames or for callers that know the target
+  // is intentionally dark, e.g. video playback).
+  it('Phase 38: minBrightness=0 disables the precheck', async () => {
+    class DimFrameClient {
+      resolution: ScreenResolution = { width: 200, height: 200 };
+      mouseClickCount = 0;
+      mouseMoveRelativeCount = 0;
+      async getResolution() { return this.resolution; }
+      async screenshot() {
+        const buf = await sharp(
+          Buffer.alloc(200 * 200 * 3, 0),
+          { raw: { width: 200, height: 200, channels: 3 } },
+        ).jpeg().toBuffer();
+        return { buffer: buf, screenshotWidth: 200, screenshotHeight: 200 };
+      }
+      async mouseClick(_button: string) { this.mouseClickCount++; }
+      async mouseMoveRelative(_dx: number, _dy: number) { this.mouseMoveRelativeCount++; }
+    }
+    const client = new DimFrameClient();
+    // Don't expect a brightness throw — but moveToPixel may still throw
+    // from forbidSlamFallback. Catch any error type.
+    let caught: Error | null = null;
+    try {
+      await clickAtWithRetry(client as unknown as PiKVMClient, { x: 100, y: 100 }, {
+        maxRetries: 0,
+        moveToOptions: {
+          strategy: 'detect-then-move',
+          forbidSlamFallback: true,
+          warmupMickeys: 0,
+          calibrationProbeMickeys: 0,
+        },
+        preClickSettleMs: 0,
+        postClickSettleMs: 0,
+        minBrightness: 0,
+      });
+    } catch (e) {
+      caught = e as Error;
+    }
+    // Whatever happens, the brightness precheck did NOT throw — the
+    // error must NOT mention "screen too dim".
+    if (caught) {
+      expect(caught.message).not.toMatch(/screen too dim/);
+    }
   }, 30000);
 
   // Phase 36 — moveToPixel throws (e.g. forbidSlamFallback when cursor
@@ -260,6 +363,10 @@ describe('clickAtWithRetry', () => {
     const client = new AlwaysFailMoveClient();
 
     // Every attempt throws (cursor cannot be located + forbidSlamFallback).
+    // Phase 38: skip the brightness precheck — the synthetic all-black
+    // frame would trip it (mean=0). The unit under test is the
+    // catch-and-rethrow flow when moveToPixel itself fails, NOT the
+    // brightness gate.
     await expect(
       clickAtWithRetry(client as unknown as PiKVMClient, { x: 100, y: 100 }, {
         maxRetries: 2,
@@ -271,6 +378,7 @@ describe('clickAtWithRetry', () => {
         },
         preClickSettleMs: 0,
         postClickSettleMs: 0,
+        minBrightness: 0,
       }),
     ).rejects.toThrow(/every attempt.*failed|cursor cannot be located|moveToPixel/i);
     // No clicks should have happened.
@@ -295,6 +403,7 @@ describe('clickAtWithRetry', () => {
       // requireVerifiedCursor defaults to true — the synthetic grey frame
       // gives no verifiable cursor position, so every attempt should be
       // skipped without ever clicking.
+      minBrightness: 0, // Phase 38: skip brightness precheck for synthetic frames
     });
 
     // No clicks should have been issued.
