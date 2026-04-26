@@ -13,6 +13,24 @@ better to avoid the lock-out in the first place.
 
 **How:** Settings → Display & Brightness → Auto-Lock → 5 Minutes (or Never).
 
+### Display brightness HIGH (and Auto-Brightness OFF)
+Phase 37/38 (v0.5.22+, live-verified 2026-04-26): if the iPad's
+display is dimmed (mean RGB brightness below ~50/255), cursor
+detection RELIABLY FAILS — every motion-diff probe returns no cursor
+pair. The MCP server now refuses click_at calls in this state
+(`pikvm_health_check` reports the brightness level).
+
+The iPad's auto-brightness reduces the display in low ambient light
+or after inactivity, and software-side gestures (swipe, key input)
+do NOT restore it. Manual adjustment is required.
+
+**How:**
+- Settings → Display & Brightness → drag Brightness slider to 75–100%.
+- Settings → Accessibility → Display & Text Size → Auto-Brightness → OFF.
+
+If `pikvm_mouse_click_at` returns "screen too dim for cursor
+detection (mean=X/255)", this is the setting to check first.
+
 ### Increase Contrast (Pointer)
 Makes the cursor visibly brighter against varied wallpapers; helps the
 brightness filter in motion-as-probe cursor detection.
@@ -62,13 +80,21 @@ cursor precision concerns.
 
 After making the changes, run a quick test:
 
-1. Lock the iPad (side button) and call `pikvm_ipad_unlock` — confirm
+1. Call `pikvm_health_check` (v0.5.19+) — verify:
+   - Server version matches `main` (redeploy if stale; older servers
+     lack the iPad safety guards).
+   - `mouseAbsoluteMode: false` (iPad is in relative-mouse mode).
+   - HID profile reports mouse + keyboard online.
+   - iPad bounds detected as `portrait`.
+   - Screen brightness ≥ 80 with no `⚠ DIM` warning. If you see
+     `⚠ VERY DIM`, fix the iPad brightness setting before going on.
+2. Lock the iPad (side button) and call `pikvm_ipad_unlock` — confirm
    home screen appears.
-2. Call `pikvm_shortcut` with `["MetaLeft", "Space"]` — Spotlight should
+3. Call `pikvm_shortcut` with `["MetaLeft", "Space"]` — Spotlight should
    open.
-3. Call `pikvm_type` with "Files" then `pikvm_key` with "Enter" — Files
+4. Call `pikvm_type` with "Files" then `pikvm_key` with "Enter" — Files
    app should open.
 
-If step 2 or 3 fails, the iPad may have keyboard input disabled for
+If step 3 or 4 fails, the iPad may have keyboard input disabled for
 external devices, or the PiKVM HID mouse profile is not correctly
 exposing a keyboard channel.
