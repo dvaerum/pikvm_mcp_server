@@ -512,6 +512,7 @@ const tools: Tool[] = [
         verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
         maxRetries: { type: 'number', description: 'When >0, retry the click up to N times if Phase 23 verification reports no screen change. Each retry runs a fresh detect-then-move probe (NOT compound corrections — independent trials). Recommended for iPad targets where per-attempt hit rate is low: maxRetries=2 typically gives ~88% cumulative hit rate from a 50% per-attempt baseline. Requires verifyClick=true. Default 0 (single-shot, pre-Phase-25 behavior).' },
         minBrightness: { type: 'number', description: 'Brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness AND stddev (Phase 48). The gate aborts with a "wake the iPad" error ONLY when the frame is uniformly dim (mean < threshold AND stddev < 3) — dark-mode UI passes the gate because the high stddev from text/icon contrast indicates cursor will still be detectable. Default 35 on iPad targets (Phase 39 calibrated against live data: 29 = popup overlay, 41 = bright iPad with dark wallpaper); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
+        autoUnlockOnDetectFail: { type: 'boolean', description: 'Phase 72: when an attempt fails because the iPad is on the lock screen (Phase 70 found this is the dominant detect-then-move failure mode), automatically call ipadGoHome to unlock and retry once before giving up on this attempt. SIDE EFFECT: if the iPad is INSIDE AN APP and detect-then-move fails for some other reason, this will exit the app to home — not what you want for in-app clicks. Default false (preserve manual control). Set true for fire-and-forget click_at on a fresh iPad target where you don\'t care about app state.' },
       },
       required: ['x', 'y'],
     },
@@ -1288,6 +1289,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               verifyOptions: verifyOpts,
               moveToOptions: moveOpts,
               minBrightness,
+              autoUnlockOnDetectFail: args.autoUnlockOnDetectFail === true,
             },
           );
           const attemptsText =
