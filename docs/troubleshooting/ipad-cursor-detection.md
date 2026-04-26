@@ -199,6 +199,60 @@ Y-dominant — only skip it when the X-probe-axis matches the
 warmup-axis. Live verified Phase 15 measures both ratios cleanly:
 X 0.85 from locateCursor probe + Y 0.811 from calibration probe.
 
+### Phase 18 — fresh ballistics profile (data, not code)
+
+The pre-existing `data/ballistics.json` was captured 2026-04-23
+when the latency-fix was not yet in place: screenshots were
+returning pre-emit frames, motion-diff failed silently, only a
+few samples at magnitude 127 were accepted. Result: a single-
+magnitude profile with X=2.0–3.2 px/mickey, Y=5.7 px/mickey.
+
+Re-ran `measureBallistics` (full sweep, callsPerCell=5) with the
+latency-fix in place. The new profile has clean medians at every
+magnitude:
+
+```
+'x:slow:5':   12.4   'y:slow:5':   --   (rejected at this size)
+'x:slow:10':  5.96   'y:slow:10':  --
+'x:slow:20':  3.0    'y:slow:20':  --
+'x:slow:40':  1.49   'y:slow:40':  3.72
+'x:slow:80':  0.75   'y:slow:80':  1.84
+'x:slow:127': 0.49   'y:slow:127': 1.02
+```
+
+**Per-call displacement is ~60 px regardless of magnitude.**
+Mag×ratio is constant: 5×12.4≈10×5.96≈20×3.0≈40×1.5≈80×0.75≈127×0.49 ≈ 60 px.
+
+That tells us iPadOS doesn't really "accelerate" — it caps the
+per-HID-call cursor displacement to ~60 px. Multiple HID calls
+accumulate (10 calls of 5 mickeys each ≈ 600 px), but a single
+giant emit still only moves ~60 px per call.
+
+Implication for the existing code: the per-chunk ratio at
+`chunkMag` IS the right lookup, and the existing
+`lookupPxPerMickey(profile, axis, chunkMag, 'slow')` is correct.
+What's wrong is when callers forget to chunk — then a single-
+emit big magnitude only moves ~60 px and the cursor "lags". The
+chunk loop (`emitChunked`) already handles this.
+
+But there's a wrinkle: the per-call displacement of ~60 px is
+**callsPerCell × pace dependent**. With `callsPerCell=5` at
+`paceMs=30` (the profile's measurement regime), each call = 60 px.
+At a different pace or different number of consecutive calls,
+displacement per call changes.
+
+**Phase 18 attempted a fixed-point lookup helper** that would
+plan total mickeys based on planned-magnitude ratio. This was
+misguided — the existing per-chunk lookup at chunkMag is already
+correct. Helper deleted, revert clean.
+
+The real next step is verifying the chunked-emit really produces
+the expected cumulative displacement at moveToPixel's
+chunkMag/chunkPaceMs settings. The profile's measurement regime
+(callsPerCell=5, pace=30ms) closely matches Phase 16's defaults
+(chunkMag=20, chunkPaceMs=30ms), so they should agree — but a
+direct A/B test would confirm.
+
 ### Phase 17 — capping open-loop burst (REVERTED)
 
 The Phase 16 doc said the next architectural step is wake-emit-
