@@ -233,6 +233,50 @@ describe('clickAtWithRetry', () => {
     expect(result.attemptHistory[2].screenChanged).toBe(true);
   }, 30000);
 
+  // Phase 36 — moveToPixel throws (e.g. forbidSlamFallback when cursor
+  // can't be located) are caught and treated as a failed attempt rather
+  // than aborting the whole retry sequence. If every attempt throws, the
+  // final error is re-thrown so the caller sees the root cause.
+  it('Phase 36: catches moveToPixel throws and continues retrying', async () => {
+    // Construct a client whose screenshot ALWAYS yields a uniform black
+    // frame too tiny for the iPad-bounds detector. moveToPixel's
+    // detect-then-move with forbidSlamFallback=true will throw on every
+    // attempt (no cursor can be found, no fallback allowed).
+    class AlwaysFailMoveClient {
+      resolution: ScreenResolution = { width: 200, height: 200 };
+      mouseClickCount = 0;
+      mouseMoveRelativeCount = 0;
+      async getResolution() { return this.resolution; }
+      async screenshot() {
+        const buf = await sharp(
+          Buffer.alloc(200 * 200 * 3, 0),
+          { raw: { width: 200, height: 200, channels: 3 } },
+        ).jpeg().toBuffer();
+        return { buffer: buf, screenshotWidth: 200, screenshotHeight: 200 };
+      }
+      async mouseClick(_button: string) { this.mouseClickCount++; }
+      async mouseMoveRelative(_dx: number, _dy: number) { this.mouseMoveRelativeCount++; }
+    }
+    const client = new AlwaysFailMoveClient();
+
+    // Every attempt throws (cursor cannot be located + forbidSlamFallback).
+    await expect(
+      clickAtWithRetry(client as unknown as PiKVMClient, { x: 100, y: 100 }, {
+        maxRetries: 2,
+        moveToOptions: {
+          strategy: 'detect-then-move',
+          forbidSlamFallback: true,
+          warmupMickeys: 0,
+          calibrationProbeMickeys: 0,
+        },
+        preClickSettleMs: 0,
+        postClickSettleMs: 0,
+      }),
+    ).rejects.toThrow(/every attempt.*failed|cursor cannot be located|moveToPixel/i);
+    // No clicks should have happened.
+    expect(client.mouseClickCount).toBe(0);
+  }, 60000);
+
   // Phase 35 — requireVerifiedCursor (default true): when moveToPixel
   // can't verify cursor position post-move (finalDetectedPosition === null),
   // skip the click. The retry loop tries afresh; if every attempt is
