@@ -11,11 +11,17 @@ import path from 'path';
 import { toolGuidePrompts } from '../tool-guides.js';
 import { workflowPrompts } from '../workflows.js';
 
-async function readAgentsMd(): Promise<string> {
-  // Resolve relative to this test file → up to repo root.
+function repoRoot(): string {
   const here = path.dirname(new URL(import.meta.url).pathname);
-  const repoRoot = path.resolve(here, '..', '..', '..');
-  return fs.readFile(path.join(repoRoot, 'AGENTS.md'), 'utf8');
+  return path.resolve(here, '..', '..', '..');
+}
+
+async function readAgentsMd(): Promise<string> {
+  return fs.readFile(path.join(repoRoot(), 'AGENTS.md'), 'utf8');
+}
+
+async function readReadmeMd(): Promise<string> {
+  return fs.readFile(path.join(repoRoot(), 'README.md'), 'utf8');
 }
 
 describe('AGENTS.md freshness', () => {
@@ -46,6 +52,30 @@ describe('AGENTS.md freshness', () => {
     const doc = await readAgentsMd();
     for (const p of workflowPrompts) {
       expect(doc).toContain(`\`${p.name}\``);
+    }
+  });
+});
+
+describe('README.md freshness', () => {
+  it('Skills table includes every tool-guide prompt name', async () => {
+    const doc = await readReadmeMd();
+    for (const p of toolGuidePrompts) {
+      expect(doc).toContain(`\`${p.name}\``);
+    }
+  });
+
+  it('Skills table includes every workflow prompt name', async () => {
+    const doc = await readReadmeMd();
+    for (const p of workflowPrompts) {
+      expect(doc).toContain(`\`${p.name}\``);
+    }
+  });
+
+  it('every prompt name has its skill_<snake_case> tool-name companion in README', async () => {
+    const doc = await readReadmeMd();
+    for (const p of [...toolGuidePrompts, ...workflowPrompts]) {
+      const toolName = `skill_${p.name.replace(/-/g, '_')}`;
+      expect(doc).toContain(toolName);
     }
   });
 });
