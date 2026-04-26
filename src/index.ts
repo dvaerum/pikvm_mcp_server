@@ -510,7 +510,7 @@ const tools: Tool[] = [
         verifyRegionHalfPx: { type: 'number', description: 'When set, the verification diff is restricted to a square window of ±N HDMI px around the click target. Useful when the expected effect is a small/local UI change (button highlight, focus indicator) and a full-frame diff would be diluted by background animations. Default: full-frame.' },
         verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
         maxRetries: { type: 'number', description: 'When >0, retry the click up to N times if Phase 23 verification reports no screen change. Each retry runs a fresh detect-then-move probe (NOT compound corrections — independent trials). Recommended for iPad targets where per-attempt hit rate is low: maxRetries=2 typically gives ~88% cumulative hit rate from a 50% per-attempt baseline. Requires verifyClick=true. Default 0 (single-shot, pre-Phase-25 behavior).' },
-        minBrightness: { type: 'number', description: 'Phase 38 brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness. If below this threshold, abort with a "wake the iPad" error instead of attempting a known-failure click. Default 50 on iPad targets (live-verified threshold below which cursor detection fails); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
+        minBrightness: { type: 'number', description: 'Brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness AND stddev (Phase 48). The gate aborts with a "wake the iPad" error ONLY when the frame is uniformly dim (mean < threshold AND stddev < 3) — dark-mode UI passes the gate because the high stddev from text/icon contrast indicates cursor will still be detectable. Default 35 on iPad targets (Phase 39 calibrated against live data: 29 = popup overlay, 41 = bright iPad with dark wallpaper); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
       },
       required: ['x', 'y'],
     },
@@ -1182,7 +1182,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const verifyMinChangeFraction = validateNumber(args.verifyMinChangeFraction, 0.0001, 1);
         const maxRetries = validateNumber(args.maxRetries, 0, 10) ?? 0;
         // Phase 38 / v0.5.26: explicit MCP parameter for the brightness gate.
-        // Default mirrors the auto-policy: VERY_DIM_THRESHOLD=50 on iPad
+        // Default mirrors the auto-policy: VERY_DIM_THRESHOLD on iPad
         // targets (relative-mouse), 0 elsewhere. Pass 0 explicitly to disable.
         const minBrightnessArg = validateNumber(args.minBrightness, 0, 255);
         const minBrightness = minBrightnessArg !== undefined
