@@ -89,7 +89,7 @@ The server is configured via environment variables or a config file:
 ### Relative-Mouse Targets (iPad, etc. — `mouse.absolute=false`)
 14. **`pikvm_ipad_unlock`** - Unlock iPad via USB HID swipe-up gesture (800 px default). Verified on iPad portrait in 1920x1080 HDMI frame.
 15. **`pikvm_mouse_move_to`** - Approximate move-to-pixel via slam-to-corner + delta emission. Returns screenshot for visual verification.
-16. **`pikvm_mouse_click_at`** - `pikvm_mouse_move_to` + `mouseClick`.
+16. **`pikvm_mouse_click_at`** - `pikvm_mouse_move_to` + `mouseClick` + click verification (pre/post screenshot diff; returns `screenChanged: true|false`). Use the verdict to detect missed clicks instead of eyeballing screenshots; opt out via `verifyClick: false`.
 17. **`pikvm_measure_ballistics`** - Characterise relative-mouse px/mickey via screenshot-diff sampling. Writes profile to `./data/ballistics.json`. Best-effort on iPad — fragile on the home screen due to animated widgets.
 
 **Important on relative-mouse targets**: the absolute-mouse tools (`pikvm_mouse_move`, `pikvm_mouse_click` with x/y, all `pikvm_calibrate*`, `pikvm_auto_calibrate`) do NOT move the iPad pointer because iPadOS only accepts USB boot-mouse descriptor (relative deltas). Agents targeting an iPad should use the relative-mouse tools above.
