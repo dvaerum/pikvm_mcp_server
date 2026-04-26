@@ -50,6 +50,41 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 72 live verification (2026-04-26): auto-unlock recovery works partially
+
+Verified Phase 72's `autoUnlockOnDetectFail: true` against an iPad
+that started on lock screen.
+
+**Result trace** (test ran from local source, not deployed MCP):
+
+```
+moveToPixel attempt #1 (iPad locked):
+  → locateCursor probe: failed (cursor invisible against lock-screen wallpaper)
+  → progressive template-match: failed across 4 templates
+  → throws "lock screen" error
+clickAtWithRetry catches error, autoUnlockOnDetectFail=true:
+  → ipadGoHome() (swipe-up gesture)
+  → 500 ms settle
+  → moveToPixel retry: SUCCEEDED, "Origin via detect-then-move at (831,98)"
+```
+
+So the recovery path engages and moveToPixel completes the second
+attempt successfully. **However**, post-test screenshot shows the
+iPad is STILL on lock screen — `ipadGoHome`'s swipe-up gesture wakes
+the cursor (making it detectable to motion-diff) but doesn't actually
+transition the iPad past lock-screen wallpaper.
+
+**Conclusion**: Phase 72 helps when the failure mode is "cursor
+faded/unreachable on lock screen" but not when the failure mode is
+"app behind lock screen requires actual unlock". Workflows that need
+to interact with apps should explicitly call `pikvm_ipad_unlock`
+before `pikvm_mouse_click_at`. Workflows that just need to get a
+click registered somewhere benefit from `autoUnlockOnDetectFail`.
+
+This is consistent with iPadOS behaviour: a swipe gesture from the
+home indicator on a passcode-locked iPad reveals the passcode
+prompt; the same gesture on a no-passcode iPad goes to home.
+
 ### Phase 70 (2026-04-26): clean-state bench reveals real ~50% per-attempt accuracy
 
 Re-running the bench AFTER explicitly unlocking the iPad (was on lock
