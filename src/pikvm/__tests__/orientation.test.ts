@@ -136,3 +136,40 @@ describe('legacy fallback constants', () => {
     expect(LEGACY_PORTRAIT_UNLOCK_START).toEqual({ x: 955, y: 1035 });
   });
 });
+
+describe('orientation cache lifecycle', () => {
+  it('getLastGoodBounds is null on a fresh process (cache cleared)', () => {
+    clearOrientationCache();
+    expect(getLastGoodBounds()).toBeNull();
+  });
+
+  it('successful detection populates the cache', async () => {
+    clearOrientationCache();
+    const frame = await makeFrame(1920, 1080, 600, 0, 720, 1080);
+    await detectIpadBoundsFromBuffer(frame);
+    const cached = getLastGoodBounds();
+    expect(cached).not.toBeNull();
+    expect(cached!.width).toBe(720);
+    expect(cached!.height).toBe(1080);
+  });
+
+  it('clearOrientationCache resets to null after a successful detection', async () => {
+    const frame = await makeFrame(1920, 1080, 600, 0, 720, 1080);
+    await detectIpadBoundsFromBuffer(frame);
+    expect(getLastGoodBounds()).not.toBeNull();
+    clearOrientationCache();
+    expect(getLastGoodBounds()).toBeNull();
+  });
+
+  it('cache value comes from a successful detection (not legacy constants)', async () => {
+    clearOrientationCache();
+    await detectIpadBoundsFromBuffer(await makeFrame(1920, 1080, 600, 0, 720, 1080));
+    const cached = getLastGoodBounds();
+    // The legacy constants would say origin (625, 65); a real detection
+    // would set origin near (600+8, 0+8) = (608, 8). Cache must reflect
+    // the detected, not the legacy fallback.
+    expect(cached).not.toBeNull();
+    expect(cached!.x).toBe(600);
+    expect(cached!.y).toBe(0);
+  });
+});
