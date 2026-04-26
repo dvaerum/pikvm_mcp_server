@@ -75,4 +75,77 @@ describe('lookupPxPerMickey', () => {
     // profileIsFreshFor check is what actually protects against this.
     expect(result).not.toBeNull();
   });
+
+  // Phase 18: rich multi-magnitude profile from fresh ballistics.
+  function multiMagnitude(): BallisticsProfile {
+    return {
+      measuredAt: new Date().toISOString(),
+      resolution: { width: 1920, height: 1080 },
+      samples: [],
+      medians: {
+        'x:slow:5':   12.4,
+        'x:slow:10':  6.0,
+        'x:slow:20':  3.0,
+        'x:slow:40':  1.5,
+        'x:slow:80':  0.75,
+        'x:slow:127': 0.49,
+        'y:slow:40':  3.7,
+        'y:slow:80':  1.8,
+        'y:slow:127': 1.0,
+      },
+      notes: 'multi-magnitude',
+    } as unknown as BallisticsProfile;
+  }
+
+  it('returns the exact value when magnitude matches a sampled point', () => {
+    const p = multiMagnitude();
+    expect(lookupPxPerMickey(p, 'x', 20, 'slow')).toBe(3.0);
+    expect(lookupPxPerMickey(p, 'x', 80, 'slow')).toBe(0.75);
+    expect(lookupPxPerMickey(p, 'y', 40, 'slow')).toBe(3.7);
+  });
+
+  it('clamps to the smallest sampled magnitude when asked below the range', () => {
+    const p = multiMagnitude();
+    // Smallest x:slow sample is at mag 5 → 12.4. Asked for mag 1.
+    expect(lookupPxPerMickey(p, 'x', 1, 'slow')).toBe(12.4);
+    // Smallest y:slow sample is at mag 40 → 3.7. Asked for mag 10.
+    expect(lookupPxPerMickey(p, 'y', 10, 'slow')).toBe(3.7);
+  });
+
+  it('clamps to the largest sampled magnitude when asked above the range', () => {
+    const p = multiMagnitude();
+    // Largest x:slow sample is at mag 127 → 0.49. Asked for mag 200.
+    expect(lookupPxPerMickey(p, 'x', 200, 'slow')).toBe(0.49);
+    expect(lookupPxPerMickey(p, 'y', 250, 'slow')).toBe(1.0);
+  });
+
+  it('linearly interpolates between two adjacent sampled magnitudes', () => {
+    const p = multiMagnitude();
+    // Mag 30 sits halfway between 20 (ratio 3.0) and 40 (ratio 1.5).
+    // Interpolated: 3.0 + 0.5 * (1.5 - 3.0) = 2.25.
+    const r = lookupPxPerMickey(p, 'x', 30, 'slow');
+    expect(r).toBeCloseTo(2.25, 5);
+  });
+
+  it('does not mix axes — y request returns null if y:slow is empty', () => {
+    const p: BallisticsProfile = {
+      measuredAt: new Date().toISOString(),
+      resolution: { width: 1920, height: 1080 },
+      samples: [],
+      medians: { 'x:slow:20': 3.0, 'x:slow:40': 1.5 },
+    } as unknown as BallisticsProfile;
+    expect(lookupPxPerMickey(p, 'y', 30, 'slow')).toBeNull();
+  });
+
+  it('does not mix paces — slow request does not see fast samples', () => {
+    const p: BallisticsProfile = {
+      measuredAt: new Date().toISOString(),
+      resolution: { width: 1920, height: 1080 },
+      samples: [],
+      medians: { 'x:fast:20': 3.0, 'x:fast:40': 1.5 },
+    } as unknown as BallisticsProfile;
+    expect(lookupPxPerMickey(p, 'x', 30, 'slow')).toBeNull();
+    // But the same magnitude on the matching pace returns interpolation.
+    expect(lookupPxPerMickey(p, 'x', 30, 'fast')).toBeCloseTo(2.25, 5);
+  });
 });
