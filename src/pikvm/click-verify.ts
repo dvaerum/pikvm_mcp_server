@@ -479,7 +479,7 @@ export async function clickAtWithRetry(
       const preDecoded = await decodeScreenshot(preShot.buffer);
       const claimed = lastMoveResult.finalDetectedPosition;
 
-      // Phase 51 (v0.5.41): two-stage check.
+      // Phase 51/52 (v0.5.41+): two-stage check.
       //
       // Stage A — narrow-window search around algorithm's claim. If a
       // confident cursor match is found there, trust the algorithm.
@@ -491,16 +491,22 @@ export async function clickAtWithRetry(
       // animation). When stage A would have caught a true cursor match,
       // stage B can't be misled by status-bar icons that score similarly.
       //
-      // Live failure that motivated this: bench showed Phase 42 alone
-      // rejecting valid attempts because iPad status-bar icons at
-      // (1284, 164) score 0.85-0.86 against cursor templates — they
-      // outrank the actual cursor in the global best, so Phase 42
-      // declared "algorithm lied" and skipped the click. Stage A now
-      // verifies the cursor is at the claim FIRST; only if it isn't
-      // do we run the lie-detector.
+      // Phase 52 (v0.5.42, live-test follow-up): Stage A radius bumped
+      // from 100 → 200 px. Live failure: cursor at (1295, 535), motion-
+      // diff claimed (1296, 699) — only 164 px Y-off. Stage A's 100 px
+      // window missed the real cursor; Stage B locked onto a Settings
+      // list icon at (800, 524) score 0.861 and falsely declared the
+      // algorithm was lying. The algorithm was actually less wrong than
+      // it thought (cursor was 65 px from target, not 99 px). 200 px
+      // covers iPad's worst-case motion-diff Y-residual while still
+      // catching genuinely bad algorithm claims (>200 px off).
+      //
+      // Live failure that motivated Phase 51 originally: bench showed
+      // Phase 42 alone rejecting valid attempts because iPad status-bar
+      // icons at (1284, 164) score 0.85-0.86 against cursor templates.
       const narrowMatch = findCursorByTemplateSet(preDecoded, sessionTemplates, {
         searchCentre: claimed,
-        searchWindow: 100,
+        searchWindow: 200,
         minScore: 0,
       });
       let agree = false;
@@ -521,14 +527,14 @@ export async function clickAtWithRetry(
           const dx = bestMatch.position.x - claimed.x;
           const dy = bestMatch.position.y - claimed.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist > 100) {
+          if (dist > 200) {
             disagreementReason =
               `narrow window had no match; best full-frame match (score=${bestMatch.score.toFixed(3)}) at ` +
               `(${bestMatch.position.x},${bestMatch.position.y}) is ${dist.toFixed(0)} px ` +
               `from claimed cursor (${claimed.x},${claimed.y}) — algorithm lied`;
           } else {
-            // Best match outside narrow window but within 100 px — still
-            // close enough to count as agreement.
+            // Best match outside narrow window but within 200 px — still
+            // close enough to count as agreement (matches Stage A radius).
             agree = true;
           }
         }

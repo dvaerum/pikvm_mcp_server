@@ -50,6 +50,42 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 52 (v0.5.42, 2026-04-26): widen Stage A radius from 100 → 200 px + template pollution discovery
+
+Live test of Phase 51 against `(1300, 600)` on the iPad Settings screen
+exposed a Phase 51 false-positive AND a separate (worse) data-quality
+issue with the cursor template set.
+
+**Phase 51 false-positive**: motion-diff claimed cursor at `(1296, 699)`,
+the real cursor was at `(1295, 535)` — only 164 px Y-off. Phase 51's
+100 px Stage A window missed the cursor (164 > 100), so Stage B
+fell through to the full-frame lie-detector. Stage B locked onto a
+match at `(800, 524)` with score 0.861 — a Settings list icon — and
+declared the algorithm had lied. The algorithm was actually closer
+to the truth than Phase 51 was.
+
+**Fix in Phase 52**: bump Stage A radius from 100 → 200 px. Empirically
+matches iPad's worst-case motion-diff Y-residual. Stage B's "close
+enough" tolerance also bumped from 100 → 200 to match.
+
+**Template pollution — separate critical finding**: while debugging
+Phase 51, inspected `data/cursor-templates/` and found that recent
+templates contained **text fragments** (`ript`, `ck`, etc.), NOT
+cursor shapes. `looksLikeCursor` accepts any region with ≥4% bright-
+achromatic pixels and mean saturation < 50 — both true of dark-mode
+white-text Settings UI. Once a text-fragment template gets into the
+set, it scores 0.999 against itself when the same UI renders again,
+and Phase 42/51 Stage B locks onto the false match.
+
+**Immediate mitigation**: cleared `data/cursor-templates/` manually.
+After clean restart, Phase 51 stopped false-rejecting clicks.
+
+**Phase 53 (planned)**: tighten `looksLikeCursor` with a connected-
+components check. A real cursor is one cohesive bright region; text
+fragments are multiple disconnected character glyphs. Reject any
+template where the largest connected bright component is < ~50% of
+total bright pixels.
+
 ### Phase 51 (v0.5.41, 2026-04-26): two-stage pre-click cursor verification
 
 Phase 42 introduced a full-frame "lie-detector" search to catch the case
