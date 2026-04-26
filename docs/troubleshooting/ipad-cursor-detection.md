@@ -50,6 +50,49 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 40 attempt + revert (v0.5.28, 2026-04-26): the icon-tolerance ceiling
+
+Live 5-trial bench against Settings (1027, 832) on a clean, bright iPad
+home screen with v0.5.27:
+
+```
+Trial 1: verified=false, residual=185.5, mode=predicted, screenChanged=false
+Trial 2: verified=true,  residual=32.3,  mode=motion,    screenChanged=false
+Trial 3: verified=true,  residual=29.0,  mode=motion,    screenChanged=false
+Trial 4: verified=true,  residual=28.5,  mode=template,  screenChanged=false
+Trial 5: verified=true,  residual=28.4,  mode=template,  screenChanged=false
+```
+
+4/5 trials had cursor verified at residual 28-32 px. ALL 5 clicks
+missed the Settings icon — `screenChanged: false` across the board.
+The default `iconToleranceResidualPx=40` lets the algorithm exit at
+~30 px residual, but iPadOS's icon hit-area / pointer-snap radius is
+TIGHTER than 30 px. The cursor lands in the gap BETWEEN icons.
+
+Phase 40 attempt: tightened `iconToleranceResidualPx` from 40 → 20.
+Re-ran the bench; result was WORSE:
+
+```
+Trial 2: residual=33.0,  mode=template, screenChanged=false (missed)
+Trial 3: residual=156.9, mode=motion,   screenChanged=true  (WRONG TARGET — Calendar opened)
+Trial 4: residual=32.0,  mode=template, screenChanged=false (missed)
+Trial 5: residual=149.1, mode=motion,   screenChanged=true  (WRONG TARGET — Calendar opened)
+```
+
+The tighter tolerance caused more correction passes that compounded
+acceleration variance. Motion-diff started false-positive-verifying
+widget-animation clusters as cursor at residuals 149-157 px. Clicks
+landed on the calendar widget instead of Settings.
+
+REVERTED to `iconToleranceResidualPx=40`. The 30 px residual gap to
+the icon hit area is a HARD CEILING on iPad with this approach —
+not a tunable. Conclusion documented as a closed avenue.
+
+**Real path forward: keyboard-first via `pikvm_ipad_launch_app`.**
+Verified 100% reliable across many launches this session. Cursor
+clicks should be reserved for UI elements that have no keyboard
+equivalent (modal dialogs, custom controls).
+
 ### Phase 37 (v0.5.22, 2026-04-26): dim screen → detection failure
 
 Live test 2026-04-26: cursor detection failed in `clickAtWithRetry`

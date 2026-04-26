@@ -1056,6 +1056,21 @@ export async function moveToPixel(
   // turns small linear emits into wild jumps that move the cursor
   // OFF the icon. Set to 0 to disable (fall back to the tighter
   // linResidualPx / minResidualPx exits).
+  //
+  // Phase 40 attempt (2026-04-26): tightening from 40 to 20 made
+  // things WORSE in a follow-up 5-trial bench. With tolerance=20,
+  // the correction loop emitted more linear-region attempts that
+  // compounded acceleration variance, and motion-diff started
+  // returning false-positive verifications (residual=149-157 px
+  // claimed "verified" when cursor was actually near a widget
+  // animation cluster, not on Settings). Trials that "succeeded"
+  // by screenChanged=true were WRONG-TARGET hits (Calendar opened
+  // instead of Settings). REVERTED to 40, which at least produces
+  // honest "verified at 28-30 residual, click missed empty space"
+  // outcomes that Phase 35's requireVerifiedCursor and Phase 25's
+  // retry-on-miss can act on. The 30 px residual gap to the icon
+  // hit area is a hard ceiling on iPad — keyboard-first via
+  // pikvm_ipad_launch_app is the reliable path.
   const iconToleranceResidualPx = options.iconToleranceResidualPx ?? 40;
   // Cursor cluster size range (Phase B): widened from 10-60 to 8-90.
   // The iPad cursor at top of screen against the wallpaper's
