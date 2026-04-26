@@ -106,6 +106,11 @@ describe('clickAtWithRetry', () => {
       moveToOptions: FAST_MOVE_OPTS,
       preClickSettleMs: 0,
       postClickSettleMs: 0,
+      // Phase 35: synthetic grey frames give moveToPixel no cursor pair to
+      // verify, so finalDetectedPosition is null. The unit under test is
+      // the retry orchestration, not the cursor-verification gate, so opt
+      // out of requireVerifiedCursor.
+      requireVerifiedCursor: false,
     });
 
     expect(result.success).toBe(true);
@@ -127,6 +132,10 @@ describe('clickAtWithRetry', () => {
       moveToOptions: FAST_MOVE_OPTS,
       preClickSettleMs: 0,
       postClickSettleMs: 0,
+      // Phase 35: synthetic frames give moveToPixel no cursor pair to
+      // verify, so finalDetectedPosition is null. The unit under test is
+      // retry orchestration, not the cursor-verification gate.
+      requireVerifiedCursor: false,
     });
 
     expect(result.success).toBe(true);
@@ -145,6 +154,10 @@ describe('clickAtWithRetry', () => {
       moveToOptions: FAST_MOVE_OPTS,
       preClickSettleMs: 0,
       postClickSettleMs: 0,
+      // Phase 35: synthetic frames give moveToPixel no cursor pair to
+      // verify, so finalDetectedPosition is null. The unit under test is
+      // retry orchestration, not the cursor-verification gate.
+      requireVerifiedCursor: false,
     });
 
     expect(result.success).toBe(false);
@@ -163,6 +176,10 @@ describe('clickAtWithRetry', () => {
       moveToOptions: FAST_MOVE_OPTS,
       preClickSettleMs: 0,
       postClickSettleMs: 0,
+      // Phase 35: synthetic frames give moveToPixel no cursor pair to
+      // verify, so finalDetectedPosition is null. The unit under test is
+      // retry orchestration, not the cursor-verification gate.
+      requireVerifiedCursor: false,
     });
 
     expect(result.attempts).toBe(1);
@@ -180,6 +197,10 @@ describe('clickAtWithRetry', () => {
       moveToOptions: FAST_MOVE_OPTS,
       preClickSettleMs: 0,
       postClickSettleMs: 0,
+      // Phase 35: synthetic frames give moveToPixel no cursor pair to
+      // verify, so finalDetectedPosition is null. The unit under test is
+      // retry orchestration, not the cursor-verification gate.
+      requireVerifiedCursor: false,
     });
 
     expect(result.postClickScreenshot).toBeInstanceOf(Buffer);
@@ -198,6 +219,10 @@ describe('clickAtWithRetry', () => {
       moveToOptions: FAST_MOVE_OPTS,
       preClickSettleMs: 0,
       postClickSettleMs: 0,
+      // Phase 35: synthetic frames give moveToPixel no cursor pair to
+      // verify, so finalDetectedPosition is null. The unit under test is
+      // retry orchestration, not the cursor-verification gate.
+      requireVerifiedCursor: false,
     });
 
     expect(result.success).toBe(true);
@@ -206,5 +231,39 @@ describe('clickAtWithRetry', () => {
     expect(result.attemptHistory[0].screenChanged).toBe(false);
     expect(result.attemptHistory[1].screenChanged).toBe(false);
     expect(result.attemptHistory[2].screenChanged).toBe(true);
+  }, 30000);
+
+  // Phase 35 — requireVerifiedCursor (default true): when moveToPixel
+  // can't verify cursor position post-move (finalDetectedPosition === null),
+  // skip the click. The retry loop tries afresh; if every attempt is
+  // unverified, no click is ever issued.
+  it('Phase 35: skips click when cursor not verified (default behaviour)', async () => {
+    const grey = await uniformPng(100, 100, 128);
+    const client = new ScriptedClient();
+    client.beforeClickFrame = grey;
+    client.postClickFrames = [grey];
+
+    const result = await clickAtWithRetry(client as unknown as PiKVMClient, { x: 50, y: 50 }, {
+      maxRetries: 2,
+      moveToOptions: FAST_MOVE_OPTS,
+      preClickSettleMs: 0,
+      postClickSettleMs: 0,
+      // requireVerifiedCursor defaults to true — the synthetic grey frame
+      // gives no verifiable cursor position, so every attempt should be
+      // skipped without ever clicking.
+    });
+
+    // No clicks should have been issued.
+    expect(client.mouseClickCount).toBe(0);
+    // Result reports failure with all attempts marked as skipped.
+    expect(result.success).toBe(false);
+    expect(result.attempts).toBe(3); // maxRetries+1 attempts, all skipped
+    expect(result.attemptHistory.every((a) => a.cursorVerified === false)).toBe(true);
+    expect(result.attemptHistory.every((a) => a.skippedClickReason !== undefined)).toBe(true);
+    // Final verification message must indicate the click was skipped.
+    expect(result.finalVerification.message).toMatch(/skipped|not verified/i);
+    // Stand-in screenshot is provided so callers always have an image.
+    expect(result.postClickScreenshot).toBeInstanceOf(Buffer);
+    expect(result.postClickScreenshot.length).toBeGreaterThan(0);
   }, 30000);
 });
