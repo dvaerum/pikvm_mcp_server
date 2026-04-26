@@ -127,6 +127,56 @@ and post-cluster (where cursor is now).
 | 23 | (this iteration) | Click verification reporting — `pikvm_mouse_click_at` takes a pre-click screenshot, clicks, takes a post-click screenshot, diffs them, and reports `screenChanged` (≥0.5% pixels differing) plus a human-readable verdict. New `src/pikvm/click-verify.ts` with 10 unit tests. Implements the "click-and-verify-result wrapper at the MCP layer" recommended in the long-term answer section below. Does not change clicking behavior; the agent calling the tool can use the new signal to decide on retry/move-on. Opt-out via `verifyClick: false`. |
 | 24 | (this iteration) | Verification-lag tracking (Direction 3, partial) — `MoveToResult` now exposes `passesSinceLastVerification: number`. The operator-facing message appends "(last verified N pass(es) ago — N predicted passes since; cursor may have drifted, accuracy uncertain)" when the residual was last confirmed by motion-diff or template-match more than zero passes ago. Does NOT change correction-loop exit semantics yet — that's the larger Direction 3 refactor. Pure additive honesty improvement: callers (and the operator reading the message) can now distinguish "I just verified residual = 25 px" from "I verified residual = 25 px three predicted passes ago". 3 new tests with a uniform-black-frame mock client to force every pass into predicted mode. |
 
+## Live test (2026-04-26): Phase 23/24 first-ever real-hardware run — major insight
+
+Ran the new `click-verify` mode in `test-client.ts` against the live PiKVM at `pikvm01.bb.vcamp.dk`. Target: Settings icon at HDMI (1027, 832), iPad portrait home screen, both screenshots captured.
+
+**Algorithm self-report:**
+- Origin via detect-then-move at (1150, 988)
+- Open-loop emitted 145X+2Y mickeys, motion-diff verified live ratio 0.731 px/mickey
+- 5 correction passes (5 gross, 0 linear); 2/5 used template/predicted fallback
+- Reported `Final cursor at (925, 568); residual = 283 px`
+- `passesSinceLastVerification = 0` (last update was claimed verified)
+
+**Phase 23 verification:**
+- 29.08% of screen pixels changed (602,996 / 2,073,600)
+- `screenChanged = true`
+
+**What actually happened (post-click screenshot inspection):**
+- The Files app's "Recents" view opened
+- Files icon position on the home screen is ~(1162, 470)
+- So the click landed near (1162, 470), NOT at the algorithm's claimed (925, 568)
+- Real-vs-claimed discrepancy: ~240 px in X, ~98 px in Y
+
+### Critical insight
+
+The algorithm's motion-diff verification produced a **false positive at (925, 568)** — likely a colored cluster on a wallpaper transition or weather-widget edge that scored well on motion-pair geometry. `passesSinceLastVerification = 0` because that pass was *claimed* verified, but the verification was wrong.
+
+**Phase 24's "last verified N pass(es) ago" qualifier does NOT catch this case.** The verification was recent — just incorrect. Phase 24 only flags staleness, not wrongness.
+
+**Phase 23's screen-change check, however, correctly identified that the click triggered a major UI transition.** It does not tell us *what* the transition was, but combined with a known-target screenshot it gives the calling agent a reliable "click had effect" signal independent of the algorithm's geometry.
+
+### Practical implication for the calling agent
+
+The robust pattern is:
+1. Take a screenshot before clicking — note what's at the target.
+2. Issue `pikvm_mouse_click_at(target)`.
+3. Read the algorithm's residual claim AND Phase 23's `screenChanged`.
+4. If `screenChanged === false` → click missed the UI element entirely (cursor on wallpaper or fade window). Retry.
+5. If `screenChanged === true` BUT post-click screenshot does not show the expected destination → click landed on the WRONG UI element. Retry with a corrected target, or back out.
+6. If post-click matches expected destination → success.
+
+The algorithm's `Final cursor at (X, Y)` line is not trustworthy on the iPad home screen. Treat it as a hint, not a fact.
+
+### What this means for fixing the algorithm
+
+Two improvements suggested by this finding:
+
+1. **Tighter motion-diff false-positive rejection.** The pair selected at (925, 568) wasn't the cursor — it was a widget or wallpaper artefact. Phase 1's achromatic filter should have rejected colored widgets, but evidently something slipped through (or the artefact was achromatic). Investigation: instrument detectMotion's diagnostic output to dump the rejected vs. selected pair details on every live trial; correlate with what's actually under the picked centroid.
+2. **Phase 23 region-scoped diff.** The current `verifyClickByDiff` runs full-frame. Adding `region: { x: tx, y: ty, halfWidth, halfHeight }` to the wired call (already supported by the helper) would give finer-grained signals: "did the click target area light up specifically?" — which is harder to spoof than "did the screen change anywhere".
+
+Both are concrete next-iteration candidates that don't require deep refactor.
+
 ## ROOT CAUSE FOUND (2026-04-26): PiKVM streamer + iPadOS render latency ~235 ms
 
 After the phantom-cursor finding (below), I instrumented a

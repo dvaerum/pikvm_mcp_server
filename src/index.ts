@@ -481,6 +481,8 @@ const tools: Tool[] = [
         assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
         verifyClick: { type: 'boolean', description: 'When true (default), capture pre and post screenshots and report whether the click visibly changed the screen. Set false to skip the extra screenshot round-trip.' },
         verifySettleMs: { type: 'number', description: 'Milliseconds to wait between click and post-click screenshot for the UI to render. Default 300.' },
+        verifyRegionHalfPx: { type: 'number', description: 'When set, the verification diff is restricted to a square window of ±N HDMI px around the click target. Useful when the expected effect is a small/local UI change (button highlight, focus indicator) and a full-frame diff would be diluted by background animations. Default: full-frame.' },
+        verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
       },
       required: ['x', 'y'],
     },
@@ -1035,6 +1037,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             : undefined;
         const verifyClick = validateBoolean(args.verifyClick) ?? true;
         const verifySettleMs = validateNumber(args.verifySettleMs, 0, 5000) ?? 300;
+        const verifyRegionHalfPx = validateNumber(args.verifyRegionHalfPx, 1, 1920);
+        const verifyMinChangeFraction = validateNumber(args.verifyMinChangeFraction, 0.0001, 1);
 
         const result = await moveToPixel(
           pikvm,
@@ -1059,7 +1063,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let verificationText = '';
         if (verifyClick && preShot) {
           try {
-            const verification = await verifyClickByDiff(preShot.buffer, shot.buffer);
+            const verification = await verifyClickByDiff(preShot.buffer, shot.buffer, {
+              ...(verifyRegionHalfPx !== undefined
+                ? { region: { x: tx, y: ty, halfWidth: verifyRegionHalfPx, halfHeight: verifyRegionHalfPx } }
+                : {}),
+              ...(verifyMinChangeFraction !== undefined
+                ? { minChangedFraction: verifyMinChangeFraction }
+                : {}),
+            });
             verificationText = `\n${verification.message}`;
           } catch (err) {
             verificationText = `\nClick verification skipped: ${err instanceof Error ? err.message : String(err)}.`;
