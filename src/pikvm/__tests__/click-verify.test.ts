@@ -15,8 +15,43 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { verifyClickByDecodedFrames } from '../click-verify.js';
+import sharp from 'sharp';
+import { verifyClickByDecodedFrames, verifyClickByDiff } from '../click-verify.js';
 import type { DecodedScreenshot } from '../cursor-detect.js';
+
+async function pngFromRgb(width: number, height: number, fillRgb: [number, number, number]): Promise<Buffer> {
+  const total = width * height;
+  const raw = Buffer.alloc(total * 3);
+  for (let i = 0; i < total; i++) {
+    raw[i * 3] = fillRgb[0];
+    raw[i * 3 + 1] = fillRgb[1];
+    raw[i * 3 + 2] = fillRgb[2];
+  }
+  return sharp(raw, { raw: { width, height, channels: 3 } }).png().toBuffer();
+}
+
+async function pngWithRect(
+  width: number,
+  height: number,
+  baseRgb: [number, number, number],
+  rect: { x: number; y: number; w: number; h: number; rgb: [number, number, number] },
+): Promise<Buffer> {
+  const raw = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < width * height; i++) {
+    raw[i * 3] = baseRgb[0];
+    raw[i * 3 + 1] = baseRgb[1];
+    raw[i * 3 + 2] = baseRgb[2];
+  }
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      const idx = (y * width + x) * 3;
+      raw[idx] = rect.rgb[0];
+      raw[idx + 1] = rect.rgb[1];
+      raw[idx + 2] = rect.rgb[2];
+    }
+  }
+  return sharp(raw, { raw: { width, height, channels: 3 } }).png().toBuffer();
+}
 
 function makeFrame(width: number, height: number, fillRgb: [number, number, number]): DecodedScreenshot {
   const rgb = Buffer.alloc(width * height * 3);
@@ -144,5 +179,52 @@ describe('verifyClickByDecodedFrames', () => {
     const result = verifyClickByDecodedFrames(pre, post);
     expect(result.screenChanged).toBe(false);
     expect(result.message).toMatch(/miss|no.*change|may have missed/i);
+  });
+});
+
+describe('verifyClickByDiff (async, end-to-end via PNG decode)', () => {
+  it('decodes PNG buffers and reports zero change for identical frames', async () => {
+    const pre = await pngFromRgb(50, 50, [128, 128, 128]);
+    const post = await pngFromRgb(50, 50, [128, 128, 128]);
+    const result = await verifyClickByDiff(pre, post);
+    expect(result.changedPixels).toBe(0);
+    expect(result.screenChanged).toBe(false);
+  });
+
+  it('decodes PNG buffers and detects screen change when post differs significantly', async () => {
+    const pre = await pngFromRgb(50, 50, [0, 0, 0]);
+    const post = await pngWithRect(50, 50, [0, 0, 0], {
+      x: 5,
+      y: 5,
+      w: 20,
+      h: 20,
+      rgb: [255, 255, 255],
+    });
+    const result = await verifyClickByDiff(pre, post);
+    expect(result.changedPixels).toBeGreaterThanOrEqual(400);
+    expect(result.screenChanged).toBe(true);
+  });
+
+  it('rejects mismatched PNG dimensions with a clear error', async () => {
+    const pre = await pngFromRgb(50, 50, [0, 0, 0]);
+    const post = await pngFromRgb(60, 50, [0, 0, 0]);
+    await expect(verifyClickByDiff(pre, post)).rejects.toThrow(/size|dimension|mismatch/i);
+  });
+
+  it('passes options through to the decoded-frame variant (region scoping)', async () => {
+    const pre = await pngFromRgb(50, 50, [0, 0, 0]);
+    const post = await pngWithRect(50, 50, [0, 0, 0], {
+      x: 0,
+      y: 0,
+      w: 20,
+      h: 20,
+      rgb: [255, 255, 255],
+    });
+    // Region centred far from the changed area — should not see any change.
+    const result = await verifyClickByDiff(pre, post, {
+      region: { x: 45, y: 45, halfWidth: 4, halfHeight: 4 },
+    });
+    expect(result.changedPixels).toBe(0);
+    expect(result.screenChanged).toBe(false);
   });
 });
