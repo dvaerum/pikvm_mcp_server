@@ -28,8 +28,8 @@ pikvm_mcp_server/
 │   │   └── lock.ts             # BusyLock for long-running ops
 │   └── prompts/        # MCP prompt definitions
 │       ├── types.ts    # PromptDefinition interface
-│       ├── tool-guides.ts  # 8 individual tool guide prompts
-│       ├── workflows.ts    # 5 multi-step workflow prompts
+│       ├── tool-guides.ts  # 14 individual tool guide prompts
+│       ├── workflows.ts    # 6 multi-step workflow prompts
 │       ├── skill-tools.ts  # Auto-generated skill_* tools from prompts
 │       └── index.ts    # Barrel export + lookup function
 ├── docs/skills/        # Human-readable skill guides (mirrors prompts)
@@ -98,9 +98,9 @@ The server is configured via environment variables or a config file:
 
 ## MCP Prompts & Skill Tools
 
-The server exposes 13 skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
+The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 34** (17 `pikvm_*` hardware tools + 17 `skill_*` guidance tools)
+**Total tools: 37** (17 `pikvm_*` hardware tools + 20 `skill_*` guidance tools = 14 tool-guide + 6 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
@@ -112,13 +112,20 @@ The server exposes 13 skills as both MCP prompts (`prompts/list` / `prompts/get`
 | `send-shortcut` | `skill_send_shortcut` | pikvm_shortcut |
 | `move-mouse` | `skill_move_mouse` | pikvm_mouse_move |
 | `click-element` | `skill_click_element` | pikvm_mouse_click |
+| `auto-calibrate` | `skill_auto_calibrate` | pikvm_auto_calibrate |
 | `scroll-page` | `skill_scroll_page` | pikvm_mouse_scroll |
+| `detect-orientation` | `skill_detect_orientation` | pikvm_detect_orientation |
+| `ipad-unlock` | `skill_ipad_unlock` | pikvm_ipad_unlock |
+| `measure-ballistics` | `skill_measure_ballistics` | pikvm_measure_ballistics |
+| `move-to` | `skill_move_to` | pikvm_mouse_move_to |
+| `click-at` | `skill_click_at` | pikvm_mouse_click_at |
 
 ### Workflow Recipes
 | Prompt | Skill Tool | Arguments | Description |
 |---|---|---|---|
 | `setup-session-workflow` | `skill_setup_session_workflow` | — | Initialize session: resolution, screenshot, calibrate |
 | `calibrate-mouse-workflow` | `skill_calibrate_mouse_workflow` | — | Full mouse calibration procedure |
+| `auto-calibrate-mouse-workflow` | `skill_auto_calibrate_mouse_workflow` | — | Vision-based auto-calibration |
 | `click-ui-element-workflow` | `skill_click_ui_element_workflow` | element_description (required) | Find and click a UI element |
 | `fill-form-workflow` | `skill_fill_form_workflow` | form_description (optional) | Fill in form fields |
 | `navigate-desktop-workflow` | `skill_navigate_desktop_workflow` | goal (required) | Navigate desktop with Observe-Plan-Act-Verify loop |
