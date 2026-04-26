@@ -23,6 +23,7 @@ import type { PiKVMClient, MouseButton } from './client.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
 import { detectIpadBoundsFromBuffer } from './orientation.js';
 import { loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './template-set.js';
+import { ipadGoHome } from './ipad-unlock.js';
 
 export interface ClickVerification {
   /** Pixels that changed between the pre and post screenshots within
@@ -237,6 +238,17 @@ export interface ClickAtWithRetryOptions {
    *  declares convergence. Default 8 — comfortably inside the iPadOS
    *  icon hit area (~70 px wide). */
   microConvergePx?: number;
+  /** Phase 72: when an attempt fails because the iPad is on the lock
+   *  screen (detect-then-move can't find the cursor), automatically
+   *  call ipadGoHome to wake/unlock and retry one more time. Phase 70
+   *  found this is the dominant failure mode; auto-recovery makes
+   *  click_at robust without requiring the operator to remember to
+   *  unlock first. SIDE EFFECT: if the iPad is INSIDE AN APP and
+   *  detect-then-move fails for some other reason, the auto-recovery
+   *  will exit the app to the home screen — undesired. Default false
+   *  (preserve existing behaviour). Set true for fire-and-forget
+   *  click_at on a fresh iPad target. */
+  autoUnlockOnDetectFail?: boolean;
 }
 
 export interface ClickAtWithRetryResult {
@@ -362,24 +374,49 @@ export async function clickAtWithRetry(
       lastMoveResult = await moveToPixel(client, target, moveToOptions);
       lastMoveError = null;
     } catch (err) {
-      lastMoveError = err as Error;
-      lastVerification = {
-        changedPixels: 0,
-        totalPixels: 0,
-        changedFraction: 0,
-        screenChanged: false,
-        message:
-          `Click skipped: moveToPixel threw — ${lastMoveError.message}`,
-      };
-      attemptHistory.push({
-        attempt,
-        screenChanged: false,
-        changedFraction: 0,
-        cursorVerified: false,
-        skippedClickReason: `moveToPixel threw: ${lastMoveError.message}`,
-      });
-      continue;
+      let recoveredErr: Error | null = err as Error;
+      // Phase 72: lock-screen recovery. If the throw mentions lock-screen
+      // (Phase 71 error message) AND autoUnlockOnDetectFail is on, call
+      // ipadGoHome to unlock and try moveToPixel one more time before
+      // giving up on this attempt. Phase 70 found lock-screen state is
+      // the dominant cause of detect-then-move failures.
+      if (
+        options.autoUnlockOnDetectFail &&
+        /lock screen|pikvm_ipad_unlock/i.test(recoveredErr.message)
+      ) {
+        try {
+          await ipadGoHome(client);
+          await new Promise(r => setTimeout(r, 500));
+          lastMoveResult = await moveToPixel(client, target, moveToOptions);
+          lastMoveError = null;
+          recoveredErr = null;
+        } catch (recoveryErr) {
+          recoveredErr = recoveryErr as Error;
+        }
+      }
+      if (recoveredErr) {
+        lastMoveError = recoveredErr;
+        lastVerification = {
+          changedPixels: 0,
+          totalPixels: 0,
+          changedFraction: 0,
+          screenChanged: false,
+          message:
+            `Click skipped: moveToPixel threw — ${recoveredErr.message}`,
+        };
+        attemptHistory.push({
+          attempt,
+          screenChanged: false,
+          changedFraction: 0,
+          cursorVerified: false,
+          skippedClickReason: `moveToPixel threw: ${recoveredErr.message}`,
+        });
+        continue;
+      }
     }
+    // After the try/catch: either moveToPixel succeeded (try) or recovery
+    // succeeded (catch's nested try). Either way lastMoveResult is set.
+    if (!lastMoveResult) continue; // unreachable, but narrows the type
 
     // Phase 50: detect iPadOS input rate-limiting via observed px/mickey.
     // Live-verified 2026-04-26: when iPadOS throttles USB HID input
