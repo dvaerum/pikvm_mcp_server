@@ -50,6 +50,34 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 56 (v0.5.45, 2026-04-26): lower `looksLikeCursor` brightness floor 170 → 100
+
+After Phase 53 shipped (cohesion gate), live `wake-and-capture` produced
+a visually-clean cursor template. But `looksLikeCursor` still rejected
+it. Inspection of the captured 24×24 template:
+
+  - Maximum cMin (per-channel min) across all 576 pixels: **143**.
+  - 0 pixels at or above the pre-Phase-56 threshold of 170.
+  - Histogram concentrated in the 100-143 range for cursor body pixels.
+
+iPadOS's pointer is rendered as a **soft grey** shape, not bright white.
+The 170 threshold (which had been carried over from desktop-cursor
+heuristics) was simply too high for iPad targets. Lowering to 100
+allowed the genuine soft cursor through.
+
+Defence against false positives at the lower threshold:
+  - Cohesion gate (Phase 53) — text fragments still rejected (multi-glyph).
+  - Saturation gate (`meanSat < 50`) — colored UI elements still rejected.
+  - 4% bright-pixel ratio — fully-dark regions still rejected.
+
+**End-to-end live verification**: after `wake-and-capture` seeded an
+initial cursor template, a subsequent `click-retry` run captured a SECOND
+clean cursor template via the normal motion-diff path
+(`maybePersistTemplate` accepted it post-Phase-56). Both templates are
+clearly recognisable arrow shapes; both are persisted in
+`data/cursor-templates/`. Phase 51's pre-click two-stage check now has
+real templates to verify against on every subsequent click.
+
 ### Phase 53 (v0.5.43, 2026-04-26): connected-components cohesion gate in `looksLikeCursor`
 
 Phase 52 mitigated a polluted template set manually (rm). Phase 53 adds
