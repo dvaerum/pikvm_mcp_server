@@ -307,10 +307,14 @@ export async function clickAtWithRetry(
         // No bounds → analyse full frame (non-iPad target or dark screen).
       }
       const brightness = await analyzeBrightness(shot.buffer, { region });
-      if (brightness.mean < minBrightness) {
+      // Phase 48: only fail-fast on uniform dark frames. Dark-mode UI has
+      // low mean but high stddev (text/icon contrast against dark bg) and
+      // cursor detection works fine. Gate fires only when severity is
+      // explicitly 'very-dim' (low mean AND low stddev).
+      if (brightness.mean < minBrightness && brightness.severity === 'very-dim') {
         throw new Error(
           `clickAtWithRetry: screen too dim for cursor detection ` +
-          `(mean brightness=${brightness.mean.toFixed(0)}/255, threshold=${minBrightness}). ` +
+          `(mean=${brightness.mean.toFixed(0)}/255 stddev=${brightness.stddev.toFixed(1)}, threshold=mean<${minBrightness}+stddev<3). ` +
           `Possible causes: (1) iPad display brightness too low — adjust manually ` +
           `(software wakes don't restore it); (2) a security/permission popup is open — ` +
           `it may be positioned off the HDMI capture frame but is still interactive, ` +
