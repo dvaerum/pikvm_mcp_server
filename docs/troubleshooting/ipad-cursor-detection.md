@@ -287,6 +287,46 @@ Next attack vector: a `moveToPixelFromCorner` flow that:
 The fresh-from-slam template should be MUCH better than the
 motion-diff-captured cache that's been poisoning matches.
 
+### Phase 30 cont. (2026-04-26, 09:39): iPadOS damps SETTLED cursor
+
+Built `burst-chain-test` mode: emits N rapid bursts after the cursor
+is in mid-screen settled state. Tested:
+- 5× (30, 30) at 30ms gaps from settled cursor: 0 px movement.
+- 5× (-30, -30) at 5ms gaps from settled cursor: 0 px movement.
+
+Even rapid (5ms) gaps don't help. **iPadOS truly damps small inputs
+to a settled cursor.**
+
+What's different about the corner-click trials that DID move cursor:
+- Slam (saturated cursor) + small wake + immediate single fast emit
+  while the cursor's ballistic state was still warm from the slam
+- Specifically: slam → 200ms → -20,-20 wake → 280ms settle → emit
+
+The 280ms settle is SHORT enough that the cursor isn't fully damped.
+A subsequent (-54, -29) single emit then moves cursor 165, 225 px.
+
+vs. burst-chain-test:
+- slam → wake → 280ms → take shot → emit -80,-80 → 350ms → take shot
+- Then emit chained bursts. By this point cursor has had 350ms+ to
+  settle, and small bursts get fully damped.
+
+**Working hypothesis (refined)**: iPadOS pointer input has a "warm
+window" right after the cursor is in motion. Inputs during this
+window get amplified by the existing ballistic state. After the
+cursor settles (~200-300ms post-motion), small inputs are damped
+to near-zero.
+
+To get reliable cursor positioning:
+- Each move must START with a "warming" motion (single big emit
+  while cursor is moving from a previous emit, OR slam-saturation)
+- Then the actual positioning emit happens during the warm window
+- The cursor then lands somewhere proportional to total emit
+  velocity, not just mickey count
+
+This explains why progressive open-loop didn't help (Phase 22):
+each progressive chunk lets cursor settle, then small chunks get
+damped.
+
 ### Phase 30 cont. (2026-04-26, 09:25): mid-screen template capture works
 
 Built `mid-screen-template` mode AND integrated into `slam-iterate-click`:
