@@ -287,6 +287,70 @@ Next attack vector: a `moveToPixelFromCorner` flow that:
 The fresh-from-slam template should be MUCH better than the
 motion-diff-captured cache that's been poisoning matches.
 
+### Phase 30 cont. (2026-04-26, 10:08): PiKVM dual-mode mouse discovery
+
+After 30 phases of iteration on the relative-mouse positioning
+problem, found a configuration angle worth investigating.
+
+**PiKVM docs** (https://docs.pikvm.org/mouse/) state PiKVM supports
+TWO mouse modes:
+1. **Absolute mode**: "the input device transmits the exact
+   coordinates (X,Y) where the cursor should be moved. Works like
+   touchscreens or drawing tablets."
+2. **Relative mode** (current config on this PiKVM): standard
+   mouse offsets.
+
+For V2+ platforms (this PiKVM is v2 per `/api/info`: "Raspberry
+Pi 4 Model B Rev 1.1, model: v2"), DUAL MODE is supported —
+switch between absolute and relative without reloading.
+
+**Live API check** (2026-04-26, 10:08):
+```
+curl /api/hid → mouse.outputs.available: []
+```
+Empty `outputs.available` means dual-mode is NOT currently enabled
+in this PiKVM's `/etc/kvmd/override.yaml`. `mouse.absolute: false`
+is hardcoded.
+
+**The hypothesis worth testing**: if PiKVM were configured for
+absolute mode, iPad might accept the HID descriptor as
+touchscreen-like input. iPadOS handles touchscreen input
+deterministically (no pointer-acceleration variance). This would
+bypass EVERY problem documented in this doc.
+
+**Required to test (server-side config, NOT MCP code)**:
+1. SSH or web-terminal into the PiKVM (https://pikvm01.bb.vcamp.dk/extras/webterm)
+2. Edit `/etc/kvmd/override.yaml`. Add:
+   ```yaml
+   otg:
+     devices:
+       hid:
+         mouse:
+           absolute: true
+   ```
+   OR enable dual-mode (per PiKVM docs):
+   ```yaml
+   kvmd:
+     hid:
+       mouse:
+         absolute: true
+   ```
+3. `systemctl restart kvmd`
+4. Re-test `pikvm_mouse_move(x, y)` (relative=false). The MCP
+   server's existing absolute-mode guardrail will permit it once
+   `/api/hid` reports `mouse.absolute: true`.
+
+If this works, ALL the iteration documented in this troubleshooting
+doc becomes obsolete — absolute coordinates means deterministic
+positioning, no variance, single-shot precision.
+
+If it doesn't work (iPad refuses the absolute HID descriptor), we
+fall back to the multi-trial retry approach with Phase 23 feedback
+that's already shipped.
+
+This is the single biggest unknown remaining. **Recommend the user
+attempt this config change before more cursor algorithm work.**
+
 ### Phase 30 cont. (2026-04-26, 09:53): same emit, different result
 
 Ran two identical-looking trials of corner-click(1027, 832, ratioX=3, ratioY=variable):
