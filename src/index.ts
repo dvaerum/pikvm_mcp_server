@@ -742,13 +742,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           lines.push(`Screenshot: FAILED (${(err as Error).message}). Cannot run bounds or brightness checks.`);
         }
 
-        // Attempt iPad bounds detection — informative on portrait/landscape.
+        // Attempt iPad bounds detection — informative on portrait/landscape,
+        // AND used to scope the Phase 37 brightness measurement to actual
+        // display content (avoids the letterbox-false-positive bug where
+        // black bars dragged the full-frame mean below the dim threshold
+        // even on a fully-bright iPad).
+        let detectedBounds: Awaited<ReturnType<typeof detectIpadBoundsFromBuffer>> | null = null;
         if (healthShot) {
           try {
-            const bounds = await detectIpadBoundsFromBuffer(healthShot.buffer, { verbose: false });
+            detectedBounds = await detectIpadBoundsFromBuffer(healthShot.buffer, { verbose: false });
             lines.push(
-              `iPad bounds detection: ${bounds.orientation} ${bounds.width}×${bounds.height} ` +
-              `at HDMI (${bounds.x},${bounds.y}). The Phase 32 slam guard treats portrait ` +
+              `iPad bounds detection: ${detectedBounds.orientation} ${detectedBounds.width}×${detectedBounds.height} ` +
+              `at HDMI (${detectedBounds.x},${detectedBounds.y}). The Phase 32 slam guard treats portrait ` +
               `bounds as iPad-letterbox.`,
             );
           } catch (err) {
@@ -768,9 +773,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // notice this BEFORE wasting time debugging click failures.
           // Computation lives in pikvm/brightness.ts so the threshold logic
           // is unit-tested without needing the MCP handler.
+          //
+          // Phase 38b (v0.5.27): pass detected iPad bounds as the analysis
+          // region so letterbox bars don't drag the mean down (false positive
+          // verified live 2026-04-26: bright home screen reported mean=41/255
+          // because ~67% of the HDMI frame was black letterbox).
           try {
-            const report = await analyzeBrightness(healthShot.buffer);
+            const region = detectedBounds
+              ? { x: detectedBounds.x, y: detectedBounds.y, width: detectedBounds.width, height: detectedBounds.height }
+              : undefined;
+            const report = await analyzeBrightness(healthShot.buffer, { region });
             lines.push(formatBrightnessReport(report));
+            if (region) {
+              lines.push(
+                `  (brightness measured over iPad-content region only, ` +
+                `not the full HDMI frame — letterbox bars excluded.)`,
+              );
+            }
           } catch (err) {
             lines.push(`Screen brightness: FAILED to compute (${(err as Error).message}).`);
           }
@@ -1188,10 +1207,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Phase 38: brightness precheck. The retry path (maxRetries>0) does
         // this inside clickAtWithRetry (we pass minBrightness through). On
         // the single-shot path (maxRetries=0) we run the gate here.
+        // Phase 38b (v0.5.27): scope the brightness measurement to detected
+        // iPad bounds so letterbox bars don't trigger false-positive dim
+        // verdicts on a bright iPad-portrait screen.
         if (minBrightness > 0 && maxRetries === 0) {
           try {
             const shot0 = await pikvm.screenshot();
-            const brightness = await analyzeBrightness(shot0.buffer);
+            let region: { x: number; y: number; width: number; height: number } | undefined;
+            try {
+              const bounds = await detectIpadBoundsFromBuffer(shot0.buffer, { verbose: false });
+              region = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+            } catch {
+              // No bounds detected — analyse full frame. On a non-iPad target
+              // there's no letterbox to confuse, so the full-frame mean is
+              // accurate.
+            }
+            const brightness = await analyzeBrightness(shot0.buffer, { region });
             if (brightness.mean < minBrightness) {
               return {
                 content: [{

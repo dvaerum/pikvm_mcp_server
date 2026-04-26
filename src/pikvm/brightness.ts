@@ -31,10 +31,23 @@ export interface BrightnessReport {
   hint: string;
 }
 
-/** Threshold below which cursor detection has reliably failed in live tests. */
-export const VERY_DIM_THRESHOLD = 50;
+/**
+ * Threshold below which cursor detection has reliably failed in live tests.
+ *
+ * Calibration data points (2026-04-26, iPad-content region only — full-frame
+ * means are dragged down by ~67% letterbox bars):
+ *  - 29/255: hidden security popup with darkening modal overlay → cursor
+ *    detection failed every probe.
+ *  - 41/255: bright iPad home screen with DARK wallpaper (blue/teal gradient,
+ *    mostly low-luminance pixels with a few bright widgets) → cursor
+ *    detection works. False-positive at threshold=50.
+ *
+ * Threshold of 35 separates these two regimes: catches the popup case
+ * (29) without flagging dark-wallpaper iPads (41) as unworkable.
+ */
+export const VERY_DIM_THRESHOLD = 35;
 /** Threshold below which cursor detection is intermittently unreliable. */
-export const DIM_THRESHOLD = 80;
+export const DIM_THRESHOLD = 60;
 
 /**
  * Bucket the brightness mean into normal / dim / very-dim. Pure function;
@@ -48,8 +61,15 @@ export function classifyBrightness(mean: number): {
     return {
       severity: 'very-dim',
       hint:
-        ' ⚠ VERY DIM — cursor detection will likely fail. Check iPad brightness setting; ' +
-        'wake the screen via pikvm_ipad_unlock or Cmd+H.',
+        ' ⚠ VERY DIM — cursor detection will likely fail. Possible causes: ' +
+        '(1) iPad brightness setting too low (Settings → Display & Brightness, ' +
+        'turn Auto-Brightness OFF — software wakes do NOT restore brightness), ' +
+        '(2) a security/permission popup is open with a darkening modal overlay. ' +
+        'The popup may be positioned off the HDMI capture frame (only the dim ' +
+        'shadow shows) but is STILL INTERACTIVE — try sending Escape via ' +
+        'pikvm_key, then Enter, then Cmd+Period via pikvm_shortcut to dismiss ' +
+        'it without needing a visible target. Look at the iPad screen ' +
+        'directly to confirm.',
     };
   }
   if (mean < DIM_THRESHOLD) {
@@ -57,18 +77,46 @@ export function classifyBrightness(mean: number): {
       severity: 'dim',
       hint:
         ' ⚠ DIM — cursor detection may fail intermittently. iPad auto-brightness ' +
-        'may be reducing the display.',
+        'may be reducing the display, or a partially-transparent overlay may be ' +
+        'in front of the home screen.',
     };
   }
   return { severity: 'normal', hint: '' };
 }
 
+export interface AnalyzeBrightnessOptions {
+  /** Restrict the brightness calculation to a region of the frame. Critical
+   *  on iPad-portrait deployments where the HDMI frame includes ~67% black
+   *  letterbox bars — computing mean over the full frame misclassifies a
+   *  fully-bright iPad as VERY DIM (live-verified 2026-04-26: iPad on
+   *  bright home screen still reported mean=41/255 over the full 1920×1080
+   *  frame because the letterbox dragged the mean down).
+   *
+   *  Pass the detected iPad bounds here so the report reflects actual
+   *  display brightness, not the geometric framing of the capture. */
+  region?: { x: number; y: number; width: number; height: number };
+}
+
 /**
  * Compute brightness report for a JPEG/PNG buffer. Uses sharp.stats() which
  * is fast (~5 ms on a 1920x1080 frame).
+ *
+ * When `options.region` is supplied, the calculation is restricted to that
+ * rectangle (sharp.extract). Without it, the full frame is analysed.
  */
-export async function analyzeBrightness(buffer: Buffer): Promise<BrightnessReport> {
-  const stats = await sharp(buffer).stats();
+export async function analyzeBrightness(
+  buffer: Buffer,
+  options: AnalyzeBrightnessOptions = {},
+): Promise<BrightnessReport> {
+  const pipeline = options.region
+    ? sharp(buffer).extract({
+        left: options.region.x,
+        top: options.region.y,
+        width: options.region.width,
+        height: options.region.height,
+      })
+    : sharp(buffer);
+  const stats = await pipeline.stats();
   if (stats.channels.length < 3) {
     throw new Error(`brightness: expected ≥3 channels, got ${stats.channels.length}`);
   }

@@ -26,7 +26,10 @@ describe('classifyBrightness', () => {
     const r = classifyBrightness(VERY_DIM_THRESHOLD - 10);
     expect(r.severity).toBe('very-dim');
     expect(r.hint).toMatch(/VERY DIM/);
-    expect(r.hint).toMatch(/wake the screen/i);
+    // v0.5.27: hint enumerates two possible causes — brightness setting OR
+    // hidden security overlay. Match either recovery action.
+    expect(r.hint).toMatch(/brightness setting|security\/permission popup/i);
+    expect(r.hint).toMatch(/Escape|Auto-Brightness/i);
   });
 
   it('classifies dim between VERY_DIM_THRESHOLD and DIM_THRESHOLD', () => {
@@ -62,8 +65,10 @@ describe('analyzeBrightness', () => {
     expect(report.hint).toMatch(/VERY DIM/);
   });
 
-  it('reports dim severity for a mid-low-luminance frame (gray=65)', async () => {
-    const buf = await uniformJpeg(200, 200, 65);
+  it('reports dim severity for a mid-low-luminance frame (gray=45)', async () => {
+    // Updated for v0.5.27 thresholds: VERY_DIM=35, DIM=60. gray=45 falls
+    // squarely in the dim band.
+    const buf = await uniformJpeg(200, 200, 45);
     const report = await analyzeBrightness(buf);
     expect(report.severity).toBe('dim');
     expect(report.hint).toMatch(/⚠ DIM/);
