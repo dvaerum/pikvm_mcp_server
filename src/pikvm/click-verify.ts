@@ -200,6 +200,13 @@ export interface ClickAtWithRetryOptions {
    *  varied wallpaper backdrops, strict enough to reject "cursor at
    *  arbitrary widget" false positives. */
   minPreClickTemplateScore?: number;
+  /** Phase 43: pre-click wiggle magnitude in mickeys. iPadOS's
+   *  pointer-effect snaps the cursor to interactive elements when the
+   *  cursor is MOVING near them — a stationary cursor 30 px from an
+   *  icon does NOT snap. A small +N/-N round-trip wiggle right before
+   *  the click triggers the snap without significantly displacing the
+   *  cursor. Default 5. Set 0 to disable. */
+  preClickWiggleMickeys?: number;
 }
 
 export interface ClickAtWithRetryResult {
@@ -251,6 +258,7 @@ export async function clickAtWithRetry(
   const requireVerifiedCursor = options.requireVerifiedCursor ?? true;
   const minBrightness = options.minBrightness ?? VERY_DIM_THRESHOLD;
   const minPreClickTemplateScore = options.minPreClickTemplateScore ?? 0.5;
+  const preClickWiggleMickeys = options.preClickWiggleMickeys ?? 5;
   // Load cursor templates ONCE outside the retry loop. Empty set →
   // pre-click template check is a no-op (graceful degradation).
   const sessionTemplates = await loadTemplateSet(DEFAULT_TEMPLATE_DIR).catch(() => []);
@@ -436,6 +444,20 @@ export async function clickAtWithRetry(
         });
         continue;
       }
+    }
+
+    // Phase 43: wiggle to trigger iPadOS pointer-snap. iPadOS's
+    // pointer-effect snaps the cursor to nearby interactive UI elements
+    // ONLY when the cursor is in motion. A stationary cursor 30 px from
+    // an icon does NOT snap. A tiny +N/-N round-trip motion (net zero
+    // displacement) gives iPadOS the motion event it needs to apply
+    // pointer-effect, which can pull the cursor INTO the target icon's
+    // hit area.
+    if (preClickWiggleMickeys > 0) {
+      await client.mouseMoveRelative(preClickWiggleMickeys, 0);
+      await sleepMs(30);
+      await client.mouseMoveRelative(-preClickWiggleMickeys, 0);
+      await sleepMs(50); // give iPadOS time to apply pointer-effect snap
     }
 
     await client.mouseClick(button);
