@@ -1467,6 +1467,17 @@ export async function moveToPixel(
             // locations far away. Anchor selection there.
             expectedNear: prevPos,
             expectedNearRadius: 100,
+            // Phase 20: tighter minScore for CORRECTION-PASS template
+            // fallback. Live trace 2026-04-26 caught 0.92-0.99 FPs on
+            // iPad UI elements being trusted as cursor recovery,
+            // poisoning currentPos. The default 0.83 is fine for
+            // origin discovery where we have no prior position to
+            // anchor against, but in correction passes we DO have a
+            // prior — anything claiming to be the cursor at a low
+            // score is more likely the wallpaper-FP than the real
+            // cursor. Below 0.95 → null → trust prediction → circuit
+            // breaker can fire after 2 predicted passes.
+            minScore: 0.95,
             verbose,
           });
           if (found) {

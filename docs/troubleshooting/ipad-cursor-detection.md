@@ -199,6 +199,36 @@ Y-dominant — only skip it when the X-probe-axis matches the
 warmup-axis. Live verified Phase 15 measures both ratios cleanly:
 X 0.85 from locateCursor probe + Y 0.811 from calibration probe.
 
+### Phase 20 — tighter correction-pass template-match threshold
+
+Default `findCursorByTemplateSet` minScore is 0.83. Live data
+showed correction-pass template-match returns FPs at score
+0.92-0.99 on iPad UI elements (clock area, icon corners). When
+those FPs were trusted as cursor recovery after motion-diff
+failed, `currentPos` got poisoned and the next correction emitted
+in the wrong direction.
+
+Phase 20 raises the threshold to 0.95 specifically for the
+correction-pass fallback (open-loop and origin discovery keep
+the looser default since they don't have a confirmed prior
+position to anchor against). Below 0.95 → null → trust
+prediction → circuit breaker fires after 2 predicted passes.
+
+Live trade-off observed:
+- Pre-Phase-20: 7+ correction passes, 7/7 used template
+  recovery, residual reported 550 px (visible 180 px miss).
+- Post-Phase-20: 1 correction pass, then template-match fell
+  below threshold → null → predicted-residual exit. Visible
+  residual ~130 px.
+
+Smaller residual visually but the algorithm's "Final cursor"
+report is now from PREDICTION, not detection — `finalDetectedPosition`
+is null in this trial. The algorithm is more honest about its
+uncertainty (good) but still doesn't know where the cursor
+really is when motion-diff fails. Threshold-only doesn't solve
+the underlying detection blindness — it just prevents one
+specific failure mode (FP poisoning currentPos).
+
 ### Phase 19 — locateCursor PRIMARY for origin (template-match fallback)
 
 The pre-Phase-19 ordering put template-match first and only used
