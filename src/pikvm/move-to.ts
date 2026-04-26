@@ -1058,20 +1058,19 @@ export async function moveToPixel(
   // linResidualPx / minResidualPx exits).
   //
   // Phase 40 attempt (2026-04-26): tightening from 40 to 20 made
-  // things WORSE in a follow-up 5-trial bench. With tolerance=20,
-  // the correction loop emitted more linear-region attempts that
-  // compounded acceleration variance, and motion-diff started
-  // returning false-positive verifications (residual=149-157 px
-  // claimed "verified" when cursor was actually near a widget
-  // animation cluster, not on Settings). Trials that "succeeded"
-  // by screenChanged=true were WRONG-TARGET hits (Calendar opened
-  // instead of Settings). REVERTED to 40, which at least produces
-  // honest "verified at 28-30 residual, click missed empty space"
-  // outcomes that Phase 35's requireVerifiedCursor and Phase 25's
-  // retry-on-miss can act on. The 30 px residual gap to the icon
-  // hit area is a hard ceiling on iPad — keyboard-first via
-  // pikvm_ipad_launch_app is the reliable path.
-  const iconToleranceResidualPx = options.iconToleranceResidualPx ?? 40;
+  // things WORSE in a 5-trial bench because motion-diff
+  // false-positive-verified widget clusters at residuals 149-157 px
+  // and clicks landed on the Calendar widget (wrong target).
+  //
+  // Phase 44 (v0.5.32, 2026-04-26): retry tightening to 25 NOW that
+  // Phase 42's full-frame ground-truth template-match safety net is in
+  // place. The wrong-target failure mode is caught at click-time even
+  // if motion-diff lies. Live data showed the linear-region approach
+  // can reach 3-4 px residual when it engages — but it only engages
+  // when residual > iconTolerance. Setting tolerance=25 forces linear
+  // engagement on borderline cases (28-32 px from target) where
+  // tolerance=40 stopped early in the gap between icons.
+  const iconToleranceResidualPx = options.iconToleranceResidualPx ?? 25;
   // Cursor cluster size range (Phase B): widened from 10-60 to 8-90.
   // The iPad cursor at top of screen against the wallpaper's
   // brightness ranges produces a cluster of just ~4-7 bright pixels
