@@ -205,13 +205,63 @@ returned widget false positives — but density-based selection
 correctly identifies the true cursor.
 
 **End-to-end click_at via test-client `click-verify`**: locateCursor
-now successfully detects the origin (was failing before). The full
-click_at pipeline still misses iPad icons because `detectMotion`'s
-post-window (default 600 px) filters out the actual cursor when
-iPadOS amplification puts it >600 px from predicted landing. That's
-the NEXT thing to fix.
+now successfully detects the origin (was failing before).
 
-330 tests still green. Version bumped 0.5.1 → 0.5.2.
+### v0.5.3 — three more wins (2026-04-26 evening)
+
+After locateCursor was fixed, three follow-up bugs surfaced and got
+fixed in turn:
+
+- **detectMotion postWindow EXPAND-FALLBACK**: when no post candidate
+  within 600 px of predicted landing, expand to all sized clusters.
+  Mirrors the pre-window fallback that was already there. Live: open-
+  loop motion-diff went from 100% failure to successfully picking
+  cursor pairs (live ratio 2.881 verified).
+- **LINEAR-PHASE PREDICTED-MODE BAILOUT**: when a small linear
+  correction can't verify, REVERT currentPos to last verified
+  position instead of trusting prediction. Was actively poisoning:
+  33 px verified residual → "refined" to 1 px believed via predicted
+  → click missed because actual cursor was elsewhere.
+- **OSCILLATION GUARD**: if a verified correction makes residual
+  1.5× worse than previous verified, revert to better previous
+  position and exit. Live-observed: 5 motion-verified passes
+  oscillating between (900, 732) and (1132, 973) for target
+  (1027, 832).
+
+### v0.5.4 — icon-tolerance early exit + looser template threshold (2026-04-26 evening)
+
+- **ICON-TOLERANCE EARLY EXIT** (move-to.ts): new option
+  `iconToleranceResidualPx` (default 40 px). When the cursor is
+  VERIFIED (motion or template) within this radius of the target,
+  STOP — further correction risks over-correction. iPad icons
+  are ~80 px wide; a click within 40 px of centre registers on
+  the icon.
+- **TEMPLATE-MATCH THRESHOLD LOOSENED**: correction-pass minScore
+  0.95 → 0.88. Live trial 4 caught a real cursor match at
+  score 0.947 being rejected. Real iPad cursor matches typically
+  score 0.85-0.97; 0.95 was rejecting too many legitimate matches.
+  Locality filter (expectedNear, radius 150 px — also widened
+  from 100) is the primary FP defense; with locality enforced,
+  0.88 is a safe threshold.
+
+**Live trial 5 result (2026-04-26, 08:18)**:
+```
+Origin via detect-then-move at (886, 435).
+Open-loop emitted 47X+67Y mickeys.
+Motion-diff failed → template-match recovered cursor at (1058, 816)
+  score=0.915 (would have been rejected at 0.95)
+ICON-TOLERANCE EXIT: verified residual 34.9 px ≤ 40 px tolerance;
+  click should land on icon hit area. Skipping further correction.
+Phase 23: 26.88% screen change → click triggered an app launch.
+```
+
+This is the first live trial where the **algorithm correctly
+exited at icon-tolerance with a verified position** and the click
+triggered an app open. The pipeline of locateCursor → motion-diff
+or template-fallback → icon-tolerance exit → click is now
+demonstrably working end-to-end on the iPad.
+
+330 tests still green across all the v0.5.x changes.
 
 ## Architectural ceiling reached (2026-04-26 evening)
 
