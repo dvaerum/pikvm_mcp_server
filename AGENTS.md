@@ -68,7 +68,7 @@ The server is configured via environment variables or a config file:
 ### Diagnostics
 0. **`pikvm_version`** - Return the running pikvm-mcp-server version. Use to detect a stale deployment: query this and compare against the version on `main` (currently 0.5.40). If they differ, redeploy before trusting any iPad behavior — older servers lack critical iPad-safety fixes (e.g. `forbidSlamFallback`).
 
-Current version on `main`: 0.5.46 (Phase 58 — pikvm_seed_cursor_template MCP tool for bootstrapping cursor templates. Phase 51-56 chain: pre-click two-stage cursor verification, cohesion-gated `looksLikeCursor`, and brightness floor calibrated for iPadOS soft-grey cursor).
+Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt with bench-backed reliability matrix. Phase 65-72 chain: tighter linear correction config, progressive-wake template-match retries, removed legacy probeDelta override, opt-in lock-screen auto-recovery via `autoUnlockOnDetectFail`).
 0a. **`pikvm_health_check`** - One-call deployment health report: server version, mouseAbsoluteMode + safety-guard implication, live HID profile, iPad bounds detection. Run FIRST after deployment to verify safety guards are active and the target is what you think it is. Surfaces stale deployments (version mismatch), failed startup detection (mouseAbsoluteMode at safe default), and target type (iPad portrait/landscape vs other).
 
 ### Display
@@ -124,7 +124,7 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 41** (20 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
+**Total tools: 45** (24 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
