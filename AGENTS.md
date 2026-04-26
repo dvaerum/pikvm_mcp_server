@@ -29,7 +29,7 @@ pikvm_mcp_server/
 │   └── prompts/        # MCP prompt definitions
 │       ├── types.ts    # PromptDefinition interface
 │       ├── tool-guides.ts  # 14 individual tool guide prompts
-│       ├── workflows.ts    # 6 multi-step workflow prompts
+│       ├── workflows.ts    # 7 multi-step workflow prompts
 │       ├── skill-tools.ts  # Auto-generated skill_* tools from prompts
 │       └── index.ts    # Barrel export + lookup function
 ├── docs/skills/        # Human-readable skill guides (mirrors prompts)
@@ -66,7 +66,7 @@ The server is configured via environment variables or a config file:
 ## MCP Tools Provided
 
 ### Diagnostics
-0. **`pikvm_version`** - Return the running pikvm-mcp-server version. Use to detect a stale deployment: query this and compare against the version on `main` (currently 0.4.1). If they differ, redeploy before trusting any iPad behavior — older servers lack critical iPad-safety fixes (e.g. `forbidSlamFallback`).
+0. **`pikvm_version`** - Return the running pikvm-mcp-server version. Use to detect a stale deployment: query this and compare against the version on `main` (currently 0.5.0). If they differ, redeploy before trusting any iPad behavior — older servers lack critical iPad-safety fixes (e.g. `forbidSlamFallback`).
 
 ### Display
 1. **`pikvm_screenshot`** - Capture current screen as JPEG
@@ -103,7 +103,7 @@ The server is configured via environment variables or a config file:
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 38** (18 `pikvm_*` hardware/diagnostic tools + 20 `skill_*` guidance tools = 14 tool-guide + 6 workflow).
+**Total tools: 39** (18 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
@@ -131,6 +131,7 @@ The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) a
 | `auto-calibrate-mouse-workflow` | `skill_auto_calibrate_mouse_workflow` | — | Vision-based auto-calibration |
 | `click-ui-element-workflow` | `skill_click_ui_element_workflow` | element_description (required) | Find and click a UI element |
 | `fill-form-workflow` | `skill_fill_form_workflow` | form_description (optional) | Fill in form fields |
+| `ipad-keyboard-first-workflow` | `skill_ipad_keyboard_first_workflow` | goal (required) | Reliable keyboard-first iPad workflow that bypasses cursor positioning |
 | `navigate-desktop-workflow` | `skill_navigate_desktop_workflow` | goal (required) | Navigate desktop with Observe-Plan-Act-Verify loop |
 
 Implementation: `src/prompts/` (types.ts, tool-guides.ts, workflows.ts, skill-tools.ts, index.ts). Human-readable guides: `docs/skills/`.

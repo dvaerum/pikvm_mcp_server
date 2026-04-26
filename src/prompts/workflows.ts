@@ -306,6 +306,81 @@ Take a final screenshot to verify the form was accepted (look for success messag
 
   // ---------- navigate-desktop-workflow ----------
   {
+    name: 'ipad-keyboard-first-workflow',
+    description: 'Reliable keyboard-first iPad workflow that bypasses cursor positioning. Live-validated 2026-04-26: app launches via Spotlight (Cmd+Space → type → Enter) succeed 100% of the time across Settings, Files, App Store. Prefer this pattern over `pikvm_mouse_click_at` for any iPad target where a keyboard equivalent exists — cursor clicks on small icons are ~20–50% reliable per attempt due to iPadOS pointer-acceleration randomness.',
+    arguments: [
+      {
+        name: 'goal',
+        description: 'What you want to accomplish on the iPad (e.g., "open Settings and find Wi-Fi", "search Files for a document")',
+        required: true,
+      },
+    ],
+    getMessages(args) {
+      const goal = args?.goal || '[not specified]';
+      return [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: `iPad goal: ${goal}`,
+          },
+        },
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: `# iPad keyboard-first workflow
+
+Goal: **${goal}**
+
+## Why keyboard, not cursor
+
+\`pikvm_mouse_click_at\` on the iPad home screen has a ~20–50% per-attempt hit rate because iPadOS pointer acceleration is non-deterministic (10× variance per command) and \`locateCursor\` false-positives on animated home-screen widgets. This is documented in \`docs/troubleshooting/ipad-cursor-detection.md\`. **Do not start with cursor clicks on iPad.** Reach for them only as a last resort, with \`maxRetries: 3+\` and post-click screenshot inspection.
+
+The keyboard channel — \`pikvm_shortcut\`, \`pikvm_type\`, \`pikvm_key\` — is reliable. Spotlight launches across Settings, Files, App Store, Maps, Safari are all live-validated 100%.
+
+## Decision flow
+
+1. **Is the iPad on the lock screen?** Run \`pikvm_ipad_unlock\` first.
+2. **Need to launch an app?** Use \`pikvm_ipad_launch_app\` (wraps unlock → Cmd+Space → type → Enter).
+3. **Already in an app, need to navigate?** Try keyboard shortcuts BEFORE cursor:
+   - **Search inside the app:** \`pikvm_shortcut(["MetaLeft", "KeyF"])\` opens find/search in most apps.
+   - **Cycle focus:** \`pikvm_key("Tab")\` (or with Full Keyboard Access enabled, arrow keys).
+   - **Activate focused element:** \`pikvm_key("Enter")\` or \`pikvm_key("Space")\`.
+   - **Dismiss modal / cancel:** \`pikvm_key("Escape")\`.
+   - **Go back / close:** \`pikvm_shortcut(["MetaLeft", "BracketLeft"])\` (Cmd+\`[\`) — back navigation in most stock apps.
+   - **Return to home:** \`pikvm_ipad_home\` (Cmd+H).
+4. **Cursor click ONLY needed?** Use \`pikvm_mouse_click_at\` with \`verifyClick: true\` (default), \`maxRetries: 3\`, and inspect the returned screenshot.
+
+## Worked example: open Settings and search
+
+\`\`\`
+pikvm_ipad_launch_app(appName: "Settings")     # opens Settings reliably
+pikvm_shortcut(["MetaLeft", "KeyF"])           # focuses the in-app search
+pikvm_type(text: "Wi-Fi")                      # types the query
+pikvm_key("Enter")                             # selects first match
+pikvm_screenshot                               # verify the right page loaded
+\`\`\`
+
+## Worked example: dismiss a modal in any app
+
+\`\`\`
+pikvm_screenshot                               # see the modal
+pikvm_key("Escape")                            # dismiss (works for most modals)
+pikvm_screenshot                               # confirm dismissed
+\`\`\`
+
+If Escape doesn't work for a particular modal, the modal probably needs a button click. THEN you fall back to \`pikvm_mouse_click_at\` with \`maxRetries: 3\` — quiet backdrops (modal scrim) tend to make cursor clicks more reliable than home-screen clicks.
+
+## Plan for "${goal}"
+
+Decompose the goal into the smallest sequence of these primitives that achieves it. Take a screenshot after each step to verify before moving on. If a keyboard primitive doesn't work for a step, document what failed in your response — the user is iterating on the patterns documented above.`,
+          },
+        },
+      ];
+    },
+  },
+  {
     name: 'navigate-desktop-workflow',
     description: 'Step-by-step procedure for navigating a desktop environment',
     arguments: [

@@ -35,5 +35,6 @@ Multi-step workflow recipes:
 | `calibrate-mouse-workflow` | [calibrate-mouse-workflow.md](calibrate-mouse-workflow.md) | None | Calibrate mouse coordinates |
 | `click-ui-element-workflow` | [click-ui-element-workflow.md](click-ui-element-workflow.md) | `element_description` (required) | Find and click a UI element |
 | `fill-form-workflow` | [fill-form-workflow.md](fill-form-workflow.md) | `form_description` (optional) | Fill in a form on screen |
+| `ipad-keyboard-first-workflow` | [ipad-keyboard-first-workflow.md](ipad-keyboard-first-workflow.md) | `goal` (required) | Reliable keyboard-first iPad workflow that bypasses cursor positioning |
 | `navigate-desktop-workflow` | [navigate-desktop-workflow.md](navigate-desktop-workflow.md) | `goal` (required) | Navigate a desktop environment |
 | `auto-calibrate-mouse-workflow` | [auto-calibrate-mouse-workflow.md](auto-calibrate-mouse-workflow.md) | None | Automatic mouse calibration |
