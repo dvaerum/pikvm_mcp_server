@@ -98,6 +98,45 @@ with no keyboard equivalent.
 for the recommended pattern and Phase 28 / Phase 76 for prior
 keyboard-first work.
 
+#### Phase 62 follow-up (2026-04-26): in-pane focus requires Full Keyboard Access
+
+Phase 61's sidebar navigation works without any iPadOS configuration.
+But verifying whether the SAME pattern extends *into* the right pane
+(e.g. tabbing onto the Bluetooth toggle, the connected-device row,
+the "Other Devices" list) revealed a limitation:
+
+- `pikvm_key("Tab")` from a sidebar-focused state moves focus to the
+  Settings **search field** at the top of the sidebar — it does NOT
+  cross into the right pane.
+- `pikvm_key("ArrowDown")` from the search field opens the search
+  Suggestions popup and navigates between Wi-Fi / General / About /
+  ...; arrows still don't enter the right pane.
+- The right pane has no visible focus ring, so its rows / toggles
+  are not keyboard-reachable by default.
+
+This is consistent with iPadOS's default behaviour: only the search
+field is a Tab-stop. To navigate INTO the right pane via Tab+arrow,
+the user must first enable **Full Keyboard Access** at
+*Settings → Accessibility → Keyboards → Full Keyboard Access*. Once
+on, ALL UI elements become Tab-stops with a yellow focus ring,
+matching the macOS keyboard-navigation experience.
+
+**Implication for the project**: keyboard navigation of the iPad
+SIDEBAR is universal (works on any iPad without setup). Keyboard
+navigation of the RIGHT PANE requires Full Keyboard Access to be
+enabled by the operator. Until then, in-pane interactions still
+need `pikvm_mouse_click_at` (with the residual ceiling) or
+keyboard primitives that are independent of focus (Spotlight launch,
+Cmd+F find, etc.).
+
+**Future enablement**: Full Keyboard Access can be enabled with one
+deliberate `pikvm_mouse_click_at` after navigating to it via the
+sidebar (Accessibility → Keyboards → Full Keyboard Access toggle) —
+because the sidebar IS keyboard-reachable, the cursor only needs to
+make a single coordinate-based click on the toggle. Worth doing once
+per device. (Operator action — out of scope for the MCP server, but
+recommended as a setup step in `docs/skills/ipad-setup.md`.)
+
 ### Phase 57 (2026-04-26): attempted Trackpad-Inertia disable via deployed MCP — confirmed deployed server is unsafe on iPad
 
 The user's mantra "be proactive — do not ask me to do things you can do
