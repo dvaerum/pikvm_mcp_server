@@ -154,6 +154,9 @@ Or if using the .env file:
 - **`pikvm_mouse_move_to`** - Approximate move-to-pixel on a relative-mouse target. Combines slam-to-origin (auto-detected per orientation), open-loop chunked deltas, motion-as-probe diff for live px/mickey, multi-pass closed-loop correction, and template-match fallback when motion-diff fails (required: x, y).
 - **`pikvm_mouse_click_at`** - Approximate move + click on a relative-mouse target (required: x, y; optional: button).
 - **`pikvm_measure_ballistics`** - Characterise the relative-mouse acceleration curve by slamming to a corner and sweeping (axis × magnitude × pace). Writes a JSON profile used by the move-to tools. *Best-effort on iPad home screen — use a quiet screen (Settings, lock screen) for cleaner data.*
+- **`pikvm_seed_cursor_template`** - Bootstrap an initial cursor template for Phase 51 pre-click verification (Phase 58, v0.5.46+). Wakes the cursor with a small relative motion, diffs before/after to find it, persists a 24×24 template gated by `looksLikeCursor` (cohesion + brightness + saturation). Use ONCE after a fresh deployment or after clearing `data/cursor-templates/`. Subsequent clicks accumulate templates automatically.
+
+**iPad click-accuracy expectations** (post-Phases 65-77, v0.5.68): with `maxRetries: 2`, end-to-end hit rates are ~99% for sidebar rows, ~97% for app icons, ~94% for standard buttons, ~88% for tiny back-arrows / X buttons / toggles. The iPad must be unlocked — call `pikvm_ipad_unlock` first or pass `autoUnlockOnDetectFail: true` for opt-in self-recovery. See `docs/troubleshooting/ipad-cursor-detection.md` § "Current state" for the full reliability matrix.
 
 ### Absolute-Mouse Calibration (not applicable to iPad/relative-mouse targets)
 - **`pikvm_auto_calibrate`** - Automatically detect cursor and compute calibration factors *(preferred)*
