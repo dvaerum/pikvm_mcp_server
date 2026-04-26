@@ -37,6 +37,7 @@ import {
   ipadOpenAppSwitcher,
 } from './pikvm/ipad-unlock.js';
 import { detectIpadBounds, detectIpadBoundsFromBuffer } from './pikvm/orientation.js';
+import { analyzeBrightness, formatBrightnessReport } from './pikvm/brightness.js';
 
 // Defer initialization to main() for proper error handling
 let pikvm: PiKVMClient;
@@ -764,27 +765,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // 2026-04-26: a dim home screen made every locateCursor probe
           // fail. Reporting the mean brightness here lets the operator
           // notice this BEFORE wasting time debugging click failures.
+          // Computation lives in pikvm/brightness.ts so the threshold logic
+          // is unit-tested without needing the MCP handler.
           try {
-            const sharp = (await import('sharp')).default;
-            const stats = await sharp(healthShot.buffer).stats();
-            // stats.channels = [R, G, B]; mean of each channel's mean =
-            // approximate luminance.
-            const meanBrightness =
-              (stats.channels[0].mean + stats.channels[1].mean + stats.channels[2].mean) / 3;
-            const brightnessHint =
-              meanBrightness < 50
-                ? ' ⚠ VERY DIM — cursor detection will likely fail. Check iPad brightness setting; ' +
-                  'wake the screen via pikvm_ipad_unlock or Cmd+H.'
-                : meanBrightness < 80
-                  ? ' ⚠ DIM — cursor detection may fail intermittently. iPad auto-brightness ' +
-                    'may be reducing the display.'
-                  : '';
-            lines.push(
-              `Screen brightness: mean=${meanBrightness.toFixed(0)}/255 ` +
-              `(R=${stats.channels[0].mean.toFixed(0)}, ` +
-              `G=${stats.channels[1].mean.toFixed(0)}, ` +
-              `B=${stats.channels[2].mean.toFixed(0)}).${brightnessHint}`,
-            );
+            const report = await analyzeBrightness(healthShot.buffer);
+            lines.push(formatBrightnessReport(report));
           } catch (err) {
             lines.push(`Screen brightness: FAILED to compute (${(err as Error).message}).`);
           }
