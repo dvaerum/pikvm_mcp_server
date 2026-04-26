@@ -56,6 +56,40 @@ describe('AGENTS.md freshness', () => {
   });
 });
 
+describe('docs/skills/ companion files', () => {
+  it('every prompt has a matching docs/skills/<name>.md file', async () => {
+    for (const p of [...toolGuidePrompts, ...workflowPrompts]) {
+      const skillFile = path.join(repoRoot(), 'docs', 'skills', `${p.name}.md`);
+      await expect(fs.access(skillFile)).resolves.toBeUndefined();
+    }
+  });
+
+  it('every skill .md is non-empty', async () => {
+    for (const p of [...toolGuidePrompts, ...workflowPrompts]) {
+      const skillFile = path.join(repoRoot(), 'docs', 'skills', `${p.name}.md`);
+      const content = await fs.readFile(skillFile, 'utf8');
+      expect(content.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('docs/skills/README.md lists every prompt', async () => {
+    const readmePath = path.join(repoRoot(), 'docs', 'skills', 'README.md');
+    const doc = await fs.readFile(readmePath, 'utf8');
+    for (const p of [...toolGuidePrompts, ...workflowPrompts]) {
+      expect(doc).toContain(`\`${p.name}\``);
+    }
+  });
+
+  it('docs/skills/README.md links to every skill .md file', async () => {
+    const readmePath = path.join(repoRoot(), 'docs', 'skills', 'README.md');
+    const doc = await fs.readFile(readmePath, 'utf8');
+    for (const p of [...toolGuidePrompts, ...workflowPrompts]) {
+      // Markdown link like [name](name.md) — assert the .md filename appears.
+      expect(doc).toContain(`${p.name}.md`);
+    }
+  });
+});
+
 describe('README.md freshness', () => {
   it('Skills table includes every tool-guide prompt name', async () => {
     const doc = await readReadmeMd();
