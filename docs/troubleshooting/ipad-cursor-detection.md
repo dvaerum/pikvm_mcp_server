@@ -287,6 +287,41 @@ Next attack vector: a `moveToPixelFromCorner` flow that:
 The fresh-from-slam template should be MUCH better than the
 motion-diff-captured cache that's been poisoning matches.
 
+### Phase 30 cont. (2026-04-26, 09:10): slam-iterate-click + strict locality reject
+
+Built `slam-iterate-click` test mode: slam BR → capture FRESH
+template at corner → loop {emit fast burst → screenshot → template-
+match cursor with strict locality reject → click when within
+tolerance}. Added strict locality reject in caller (the existing
+findCursorByTemplateSet only PREFERS within-radius, falls back to
+best-score far match if none qualify).
+
+**Live trial result**: first burst (-50, -44) mickeys moved cursor
+from (1283, 1008) to ~(1245, 953) (live screenshot inspection).
+Template-match found a high-scoring (0.74) FALSE POSITIVE at
+(1028, 312), 741 px from cursor's actual position. Strict locality
+reject correctly aborted (was far beyond 300 px radius from belief).
+
+So the architecture is right (slam → template → burst → re-find →
+click), but the CAPTURED TEMPLATE itself doesn't reliably re-find
+the cursor in subsequent positions. The 24×24 region captured at
+extreme BR corner (1283, 1008) is on the screen edge — it includes
+edge/dock pixels, not just cursor. When cursor moves AWAY from
+edge, its appearance in the new context doesn't correlate well
+with the edge-clipped template, so a UI feature elsewhere wins.
+
+Next iteration: capture template AFTER first move (not at corner),
+when cursor is in mid-screen with consistent backdrop. The flow:
+1. Slam BR (known position)
+2. Emit small move to pull cursor away from edge
+3. Take screenshot
+4. Use slam-anchor's known mickey-to-displacement OR pick the
+   nearest cursor-shaped cluster via motion-diff between slam-shot
+   and post-move-shot
+5. Capture template from that mid-screen position
+6. NOW iterate: emit move, find via fresh-mid-screen-template,
+   click when close.
+
 ### Phase 30 cont. (2026-04-26, 09:00): slow-chunked emit is NEARLY NO-OP
 
 `slam-aim-click` mode: slam BR (cursor at ~1283, 1008) → capture
