@@ -199,7 +199,41 @@ Y-dominant — only skip it when the X-probe-axis matches the
 warmup-axis. Live verified Phase 15 measures both ratios cleanly:
 X 0.85 from locateCursor probe + Y 0.811 from calibration probe.
 
-### Phase 21 — bumped detectMotion ratio sanity max from 4 to 6 (END-TO-END SUCCESS)
+### Phase 21 reproducibility — 1/4 success rate
+
+Marked Phase 21 as "END-TO-END SUCCESS" too early based on a
+single trial. Subsequent reproducibility check on the home screen
+ran 3 more trials at the same target (1027, 825):
+
+| Trial | Open-loop ratio measured | Final cursor | Settings opened? |
+|---|---|---|---|
+| First (the "success") | (not captured) | (1023, 833) approx | YES |
+| Trial 1 | 4.607 | (1004, 731) | NO |
+| Trial 2 | 5.152 | (1168, 836) | NO |
+| Trial 3 | 0.561 | (966, 808) | NO |
+
+**Open-loop ratio variance across 3 consecutive identical
+commands: 0.56–5.15, a 9× spread.** Same iPad, same target,
+same code path — iPadOS's pointer acceleration is genuinely
+non-deterministic at this magnitude.
+
+Phase 21's looser sanity range (admit ratios up to 6) lets the
+algorithm record what it's measuring instead of rejecting some
+trials' pairs. That's more honest reporting but it doesn't
+change the fundamental problem: with 9× ratio variance, single-
+shot planning + a few correction passes can't converge to <30 px
+residual.
+
+The **only way forward** that the data supports is to make each
+correction pass close the loop incrementally with verification
+between every emit — and even that has to handle the per-pass
+motion-diff failures we've documented elsewhere. The session's
+phases addressed the foundation (latency, cluster filter,
+calibration source, FP rejection); they don't change the iPad
+acceleration randomness that makes click-on-target a stochastic
+process.
+
+### Phase 21 — bumped detectMotion ratio sanity max from 4 to 6
 
 `detectMotion`'s pair-selection rejected any candidate pair whose
 implied px/mickey ratio was outside [0.3, 4]. Live ballistics
