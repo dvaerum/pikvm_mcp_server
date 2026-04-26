@@ -116,6 +116,28 @@ export interface MoveToOptions {
   /** Max linear-regime passes (independent of `maxCorrectionPasses`).
    *  Default 4. */
   linearMaxPasses?: number;
+  /** Phase 64 — per-pass mickey cap during linear-regime corrections.
+   *  The legacy default is 25 (matched the linear chunk magnitude for
+   *  early Phase C runs). On iPad with high px/mickey variance, a
+   *  25-mickey emit can land anywhere from 13 to 80 px — well over
+   *  the typical icon-tolerance budget. Setting this to a small value
+   *  (e.g. 8) forces a true micro-step measure-emit loop where each
+   *  correction is small enough to stay in iPad's linear regime AND
+   *  small enough that overshooting the target is impossible.
+   *  Default 25 (unchanged behaviour). */
+  linearCorrectionCap?: number;
+  /** Phase 64 — disable the LINEAR BAILOUT safety mechanism. The
+   *  default behaviour is: if a linear-pass goes blind (motion-diff
+   *  failed AND template-match unavailable), revert currentPos to
+   *  last-verified and exit linear refinement. This protects against
+   *  stale-ratio runaway over many predicted passes.
+   *
+   *  Micro-step mode (`linearCorrectionCap` ≤ 8) makes runaway
+   *  impossible (each emit ≤ 8 mickeys → ≤ ~25 px), so the bailout's
+   *  protection is unneeded and it actively prevents the loop from
+   *  converging. Set this to true to disable. Default false (keep
+   *  the safety check). */
+  disableLinearBailout?: boolean;
   /** Phase 29: residual at which a verified position is "good enough"
    *  to click on (e.g. cursor within an icon's hit area). When the
    *  algorithm has a verified cursor position with residual ≤ this,
@@ -1606,7 +1628,7 @@ export async function moveToPixel(
       // can't run away. Live data: 1/3 trials emitted (-13, +105) Y
       // mickeys → 553 px overshoot when motion-diff was blind. Cap is
       // tighter in linear mode (small careful steps) than gross.
-      const correctionCap = useLinear ? 25 : 80;
+      const correctionCap = useLinear ? (options.linearCorrectionCap ?? 25) : 80;
       const capped = capCorrectionMickeys(rawCorrX, rawCorrY, correctionCap);
       const corrMickeysX = capped.x;
       const corrMickeysY = capped.y;
@@ -1768,7 +1790,7 @@ export async function moveToPixel(
       // open-loop's verified residual (e.g. 33 px) is GOOD ENOUGH for
       // most icon-sized targets; trying to refine further blindly is
       // strictly worse.
-      if (useLinear && passMode === 'predicted') {
+      if (useLinear && passMode === 'predicted' && !options.disableLinearBailout) {
         if (verbose) {
           console.error(
             `[move-to] LINEAR BAILOUT: pass ${totalPasses + 1} went predicted; reverting currentPos to last verified (${prevPos.x},${prevPos.y}) and exiting linear phase. Open-loop verified residual is more trustworthy than blind linear refinement.`,
