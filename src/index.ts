@@ -731,22 +731,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           );
         }
 
-        // Attempt iPad bounds detection — informative on portrait/landscape.
+        // Capture one screenshot and reuse it for bounds + brightness so we
+        // don't pay two screenshots' worth of streamer latency.
+        let healthShot: { buffer: Buffer; screenshotWidth: number; screenshotHeight: number } | null = null;
         try {
-          const shot = await pikvm.screenshot();
-          const bounds = await detectIpadBoundsFromBuffer(shot.buffer, { verbose: false });
-          lines.push(
-            `iPad bounds detection: ${bounds.orientation} ${bounds.width}×${bounds.height} ` +
-            `at HDMI (${bounds.x},${bounds.y}). The Phase 32 slam guard treats portrait ` +
-            `bounds as iPad-letterbox.`,
-          );
+          healthShot = await pikvm.screenshot();
         } catch (err) {
-          lines.push(
-            `iPad bounds detection: FAILED (${(err as Error).message}). ` +
-            `Either the target isn't an iPad in letterbox, OR the screen is currently ` +
-            `dark/uniform (e.g. lock screen, all-black canvas). Phase 32a's fail-safe ` +
-            `still refuses slam in this state.`,
-          );
+          lines.push(`Screenshot: FAILED (${(err as Error).message}). Cannot run bounds or brightness checks.`);
+        }
+
+        // Attempt iPad bounds detection — informative on portrait/landscape.
+        if (healthShot) {
+          try {
+            const bounds = await detectIpadBoundsFromBuffer(healthShot.buffer, { verbose: false });
+            lines.push(
+              `iPad bounds detection: ${bounds.orientation} ${bounds.width}×${bounds.height} ` +
+              `at HDMI (${bounds.x},${bounds.y}). The Phase 32 slam guard treats portrait ` +
+              `bounds as iPad-letterbox.`,
+            );
+          } catch (err) {
+            lines.push(
+              `iPad bounds detection: FAILED (${(err as Error).message}). ` +
+              `Either the target isn't an iPad in letterbox, OR the screen is currently ` +
+              `dark/uniform (e.g. lock screen, all-black canvas). Phase 32a's fail-safe ` +
+              `still refuses slam in this state.`,
+            );
+          }
+
+          // Phase 37: report mean brightness. iPadOS auto-dims the display
+          // after inactivity; on a dim frame, cursor pixels can fall below
+          // the cursor-detection brightness floor (100). Live-verified
+          // 2026-04-26: a dim home screen made every locateCursor probe
+          // fail. Reporting the mean brightness here lets the operator
+          // notice this BEFORE wasting time debugging click failures.
+          try {
+            const sharp = (await import('sharp')).default;
+            const stats = await sharp(healthShot.buffer).stats();
+            // stats.channels = [R, G, B]; mean of each channel's mean =
+            // approximate luminance.
+            const meanBrightness =
+              (stats.channels[0].mean + stats.channels[1].mean + stats.channels[2].mean) / 3;
+            const brightnessHint =
+              meanBrightness < 50
+                ? ' ⚠ VERY DIM — cursor detection will likely fail. Check iPad brightness setting; ' +
+                  'wake the screen via pikvm_ipad_unlock or Cmd+H.'
+                : meanBrightness < 80
+                  ? ' ⚠ DIM — cursor detection may fail intermittently. iPad auto-brightness ' +
+                    'may be reducing the display.'
+                  : '';
+            lines.push(
+              `Screen brightness: mean=${meanBrightness.toFixed(0)}/255 ` +
+              `(R=${stats.channels[0].mean.toFixed(0)}, ` +
+              `G=${stats.channels[1].mean.toFixed(0)}, ` +
+              `B=${stats.channels[2].mean.toFixed(0)}).${brightnessHint}`,
+            );
+          } catch (err) {
+            lines.push(`Screen brightness: FAILED to compute (${(err as Error).message}).`);
+          }
         }
 
         return {

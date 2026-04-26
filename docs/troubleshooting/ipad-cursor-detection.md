@@ -26,6 +26,33 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 37 (v0.5.22, 2026-04-26): dim screen → detection failure
+
+Live test 2026-04-26: cursor detection failed in `clickAtWithRetry`
+across 3 retries on the iPad home screen. The screenshot showed the
+iPad display in a visibly dimmed state — overall pixel brightness was
+~30-50/255 across the frame. The cursor's bright pixels (~150-200)
+were ABOVE the brightness floor of 100, but the motion-diff signal
+(post-emit position) was contaminated by the dim background where many
+pixel deltas fell into the JPEG-noise-vs-cursor ambiguous range.
+
+Symptom: `moveToPixel: detect-then-move failed (motion-diff and
+template-match both returned no cursor)`. The probe ran (cursor moved)
+but the motion-diff didn't find a clean cluster pair.
+
+Workaround: wake the iPad display before clicking. Options:
+- `pikvm_ipad_unlock` (also works on already-unlocked iPad — the swipe
+  gesture wakes the screen).
+- Send any keyboard input (Cmd+H, Escape) — but verified that this
+  does NOT necessarily restore display brightness on iPadOS 26.
+- Manually adjust iPad brightness via Settings.
+
+Phase 37 surfaces this in `pikvm_health_check`: the report now
+includes mean RGB brightness with `⚠ VERY DIM` (mean < 50) or
+`⚠ DIM` (mean < 80) warnings. Run `pikvm_health_check` whenever
+click_at calls start mysteriously failing — the brightness report
+will tell you whether to debug the algorithm or the environment.
+
 ### Phase 32 (v0.5.16, 2026-04-26): explicit-strategy slam guard
 
 Live-verified again 2026-04-26: even with `forbidSlamFallback`
