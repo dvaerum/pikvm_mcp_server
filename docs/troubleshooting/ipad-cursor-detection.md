@@ -6,6 +6,26 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## ⚠️ DEPLOYMENT FRESHNESS — IMPORTANT
+
+This codebase has shipped many critical iPad-safety fixes since
+`da3a434` (2026-04-25, the introduction of `forbidSlamFallback`).
+A deployed server older than that commit will silently fall back to
+slam-to-corner on iPad targets when detect-then-move fails — and
+slam triggers the iPadOS hot-corner gesture, which **re-locks the
+iPad mid-session**.
+
+Live-verified on 2026-04-26: a deployed server lacking
+`forbidSlamFallback` enforcement re-locked the iPad on the first
+`pikvm_mouse_click_at` against the home screen. Symptom in the
+algorithm message: `WARNING: detect-origin fell back to slam; iPad
+may have re-locked via hot corner.` Post-click screenshot: lock
+screen, not Settings.
+
+**Always confirm the deployed server is at least at commit
+`da3a434` before live-testing on iPad.** Rebuild + restart the
+MCP server after pulling main if you see the slam-fallback warning.
+
 ## Symptom
 
 `pikvm_mouse_click_at(x, y)` against an iPad displayed in a 1920×1080
