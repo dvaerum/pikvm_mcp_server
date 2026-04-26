@@ -278,9 +278,10 @@ export async function clickAtWithRetry(
   const minBrightness = options.minBrightness ?? VERY_DIM_THRESHOLD;
   const minPreClickTemplateScore = options.minPreClickTemplateScore ?? 0.5;
   const preClickWiggleMickeys = options.preClickWiggleMickeys ?? 5;
-  // Phase 45 reverted: default disabled (0). See the implementation site
-  // below for the live failure-mode that motivated the revert.
-  const microCorrectionIterations = options.microCorrectionIterations ?? 0;
+  // Phase 49: re-enabled with edge-aware safety + 350ms settle. Default
+  // 3 iterations max — conservative; loop self-terminates when residual
+  // is small or when emitting would push cursor into an iPad gesture zone.
+  const microCorrectionIterations = options.microCorrectionIterations ?? 3;
   const microConvergePx = options.microConvergePx ?? 8;
   // Load cursor templates ONCE outside the retry loop. Empty set →
   // pre-click template check is a no-op (graceful degradation).
@@ -473,28 +474,79 @@ export async function clickAtWithRetry(
       }
     }
 
-    // Phase 45 attempt + revert (2026-04-26): post-move template-driven
-    // micro-correction caused the iPad APP SWITCHER to open. The
-    // correction emits pushed cursor down to the iPad's bottom edge,
-    // triggering iPadOS's swipe-up-from-bottom gesture. The 80 ms
-    // inter-iteration settle was also too short — the streamer's
-    // ~235 ms latency meant subsequent screenshots showed stale cursor
-    // positions, leading the loop to emit additional motion thinking
-    // the cursor hadn't moved yet, compounding the drift.
+    // Phase 49 (v0.5.37): bounds-aware post-move template-driven
+    // micro-correction. Phase 45 (reverted) failed because:
+    //   - 80 ms inter-iteration settle < streamer's 235 ms latency →
+    //     stale cursor in subsequent screenshots → loop kept emitting
+    //   - No edge-bounds safety → cursor pushed to iPad bottom edge
+    //     triggered iPadOS's swipe-up-from-bottom gesture (app switcher)
+    //   - Per-iteration emit cap of 5 mickeys was high enough to
+    //     overshoot small targets when iPadOS acceleration variance
+    //     amplified the emit
     //
-    // Disabled by default. The architectural acceleration variance is
-    // a real ceiling; trying to correct beyond it causes destructive
-    // gestures (Phase 32-style hot-corner on the bottom edge instead
-    // of the top-left). Keyboard-first via pikvm_ipad_launch_app
-    // remains the reliable path. The microCorrectionIterations option
-    // remains in the type for future opt-in experimentation but
-    // defaults to 0.
+    // Phase 49 fixes:
+    //   - Settle 350 ms (well above 235 ms streamer latency)
+    //   - Cap each emit at 2 mickeys per axis (kept tight; iPadOS
+    //     near-1:1 in linear regime at slow pace)
+    //   - Refuse to emit if it would push cursor within MARGIN px of
+    //     iPad bounds edges (avoids hot-corner / bottom-edge gestures)
     if (
       microCorrectionIterations > 0 &&
       sessionTemplates.length > 0 &&
       lastMoveResult.finalDetectedPosition
     ) {
-      // Intentionally not implemented after live revert. See above.
+      const EDGE_MARGIN_PX = 50;
+      const PER_ITER_CAP_MICKEYS = 2;
+      const SETTLE_MS = 350;
+      const ratioX = lastMoveResult.usedPxPerMickey?.x && lastMoveResult.usedPxPerMickey.x > 0.5
+        ? lastMoveResult.usedPxPerMickey.x : 3;
+      const ratioY = lastMoveResult.usedPxPerMickey?.y && lastMoveResult.usedPxPerMickey.y > 0.5
+        ? lastMoveResult.usedPxPerMickey.y : 3.7;
+      // Detect iPad bounds for edge-safety check; full-frame fallback if
+      // bounds detection fails (treat full HDMI frame as the safe area —
+      // less safe but at least allows progress on non-iPad targets).
+      let safeBounds: { x: number; y: number; width: number; height: number };
+      try {
+        const shot0 = await client.screenshot();
+        const ipadBounds = await detectIpadBoundsFromBuffer(shot0.buffer, { verbose: false });
+        safeBounds = { x: ipadBounds.x, y: ipadBounds.y, width: ipadBounds.width, height: ipadBounds.height };
+      } catch {
+        const res = await client.getResolution();
+        safeBounds = { x: 0, y: 0, width: res.width, height: res.height };
+      }
+      const edgeMinX = safeBounds.x + EDGE_MARGIN_PX;
+      const edgeMaxX = safeBounds.x + safeBounds.width - EDGE_MARGIN_PX;
+      const edgeMinY = safeBounds.y + EDGE_MARGIN_PX;
+      const edgeMaxY = safeBounds.y + safeBounds.height - EDGE_MARGIN_PX;
+      for (let iter = 0; iter < microCorrectionIterations; iter++) {
+        const microShot = await client.screenshot();
+        const microDecoded = await decodeScreenshot(microShot.buffer);
+        const found = findCursorByTemplateSet(microDecoded, sessionTemplates, {
+          minScore: minPreClickTemplateScore,
+        });
+        if (!found) break; // can't verify, stop here (Phase 41/42 will catch)
+        const dx = target.x - found.position.x;
+        const dy = target.y - found.position.y;
+        const residual = Math.sqrt(dx * dx + dy * dy);
+        if (residual <= microConvergePx) break; // converged
+        // Cap raw delta in mickeys.
+        const mxRaw = dx / ratioX;
+        const myRaw = dy / ratioY;
+        const mx = Math.sign(mxRaw) * Math.min(Math.ceil(Math.abs(mxRaw)), PER_ITER_CAP_MICKEYS);
+        const my = Math.sign(myRaw) * Math.min(Math.ceil(Math.abs(myRaw)), PER_ITER_CAP_MICKEYS);
+        if (mx === 0 && my === 0) break; // would be a no-op
+        // Edge-safety: predict cursor's next position and refuse if it
+        // would exit the safe-bounds margin. This is the Phase 49 fix
+        // for the Phase 45 app-switcher failure mode.
+        const predX = found.position.x + mx * ratioX;
+        const predY = found.position.y + my * ratioY;
+        if (predX < edgeMinX || predX > edgeMaxX || predY < edgeMinY || predY > edgeMaxY) {
+          // Stop the loop rather than push toward an iPad gesture zone.
+          break;
+        }
+        await client.mouseMoveRelative(mx, my);
+        await sleepMs(SETTLE_MS);
+      }
     }
 
     // Phase 43: wiggle to trigger iPadOS pointer-snap. iPadOS's
