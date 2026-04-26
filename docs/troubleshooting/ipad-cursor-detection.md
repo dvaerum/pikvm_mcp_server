@@ -244,6 +244,49 @@ fixed in turn:
   from 100) is the primary FP defense; with locality enforced,
   0.88 is a safe threshold.
 
+### v0.5.4 reliability bench (2026-04-26, 08:23): MIXED
+
+After v0.5.4 trial 5 succeeded, I ran a 5-trial bench. Result: 5/5
+reported "verified position" with residual 30-34 px (within icon
+tolerance), but **0/5 actually changed the screen via Phase 23**.
+
+Root cause: the cached `data/cursor-templates/` had FALSE-POSITIVE
+templates. The looser 0.88 minScore threshold accepted
+template-matches at consistent UI features (NOT the actual cursor),
+and the icon-tolerance early exit then exited at a "verified"
+position that wasn't really the cursor's position.
+
+The trial 5 success was a fluke where the cursor happened to be
+genuinely near (1058, 816). Subsequent trials all hit the FP.
+
+The icon-tolerance exit is only as good as the verification beneath
+it. Bad templates → false verifications → false-good early exits.
+
+### v0.5.5 — slam-bottom-right anchor primitive (2026-04-26, 08:26)
+
+LIVE-VALIDATED FINDING: saturating the cursor to the bottom-right
+corner of the iPad screen via 30 repeated `mouseMoveRelative(127, 127)`
+is **SAFE**. No hot-corner gesture triggered (top-left re-locks),
+no app launched, no Control Center opened (top-right would). Cursor
+reliably ends at ~(1190, 920) in the HDMI portrait frame.
+
+This is a **known-position primitive** that bypasses the broken
+`locateCursor` probe. From a known cursor position, we can compute
+precise relative moves and capture FRESH templates from the actual
+cursor (not from motion-diff false positives).
+
+Next attack vector: a `moveToPixelFromCorner` flow that:
+1. Slams cursor to bottom-right (known position)
+2. Captures a fresh cursor template at that location (no
+   motion-diff guesswork)
+3. Emits relative move toward target
+4. Template-matches the FRESH template (high score expected
+   since the same cursor was just captured)
+5. Verifies position; clicks when within icon-tolerance
+
+The fresh-from-slam template should be MUCH better than the
+motion-diff-captured cache that's been poisoning matches.
+
 **Live trial 5 result (2026-04-26, 08:18)**:
 ```
 Origin via detect-then-move at (886, 435).
