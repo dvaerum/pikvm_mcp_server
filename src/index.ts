@@ -28,6 +28,7 @@ import {
   BallisticsProfile,
 } from './pikvm/ballistics.js';
 import { moveToPixel } from './pikvm/move-to.js';
+import { verifyClickByDiff } from './pikvm/click-verify.js';
 import {
   unlockIpad,
   launchIpadApp,
@@ -464,7 +465,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_click_at',
-    description: 'Move the mouse to an approximate target pixel (via pikvm_mouse_move_to) and then click. Returns a post-click screenshot. Inherits pikvm_mouse_move_to\'s detection/correction pipeline.',
+    description: 'Move the mouse to an approximate target pixel (via pikvm_mouse_move_to) and then click. Returns a post-click screenshot. Inherits pikvm_mouse_move_to\'s detection/correction pipeline. With verifyClick=true (default), also takes a pre-click screenshot and reports whether the click triggered a visible screen change — use this signal to detect a missed click rather than relying on screenshot inspection alone.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -478,6 +479,8 @@ const tools: Tool[] = [
         },
         assumeCursorAtX: { type: 'number', description: 'With strategy="assume-at", HDMI X where cursor currently is.' },
         assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
+        verifyClick: { type: 'boolean', description: 'When true (default), capture pre and post screenshots and report whether the click visibly changed the screen. Set false to skip the extra screenshot round-trip.' },
+        verifySettleMs: { type: 'number', description: 'Milliseconds to wait between click and post-click screenshot for the UI to render. Default 300.' },
       },
       required: ['x', 'y'],
     },
@@ -1030,6 +1033,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           assumeX !== undefined && assumeY !== undefined
             ? { x: assumeX, y: assumeY }
             : undefined;
+        const verifyClick = validateBoolean(args.verifyClick) ?? true;
+        const verifySettleMs = validateNumber(args.verifySettleMs, 0, 5000) ?? 300;
+
         const result = await moveToPixel(
           pikvm,
           { x: tx, y: ty },
@@ -1042,16 +1048,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
         // Brief pause so iPadOS registers the cursor as stationary before click
         await new Promise((r) => setTimeout(r, 80));
+        // Pre-click screenshot AFTER cursor has settled at target, so the
+        // pre→post diff isolates the click's UI effect from cursor motion.
+        const preShot = verifyClick ? await pikvm.screenshot() : null;
         await pikvm.mouseClick(button);
-        // Post-click screenshot
+        // Wait for the UI to render before capturing the post-click frame.
+        await new Promise((r) => setTimeout(r, verifySettleMs));
         const shot = await pikvm.screenshot();
+
+        let verificationText = '';
+        if (verifyClick && preShot) {
+          try {
+            const verification = await verifyClickByDiff(preShot.buffer, shot.buffer);
+            verificationText = `\n${verification.message}`;
+          } catch (err) {
+            verificationText = `\nClick verification skipped: ${err instanceof Error ? err.message : String(err)}.`;
+          }
+        }
+
         return {
           content: [
             {
               type: 'text',
               text:
                 result.message +
-                `\nClicked ${button} at approximate position. Post-click screenshot attached.`,
+                `\nClicked ${button} at approximate position. Post-click screenshot attached.` +
+                verificationText,
             },
             { type: 'image', data: shot.buffer.toString('base64'), mimeType: 'image/jpeg' },
           ],
