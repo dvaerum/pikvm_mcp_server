@@ -105,14 +105,16 @@ Current version on `main`: 0.5.46 (Phase 58 — pikvm_seed_cursor_template MCP t
 
 **Phase 61/62 finding (2026-04-26)** — iPad Settings sidebar IS keyboard-navigable: `pikvm_key("Escape")` walks UP the navigation stack (sub-page → category → root); `pikvm_key("ArrowDown"/"ArrowUp")` walks the sidebar list; the right pane updates automatically as selection moves. **Caveat (Phase 62)**: in-pane Tab/Return navigation requires iPadOS's *Full Keyboard Access* to be enabled (one-time setup at Settings → Accessibility → Keyboards → Full Keyboard Access — needs ONE coordinate-based click to flip). Without FKA, only the sidebar is keyboard-reachable. See `docs/troubleshooting/ipad-cursor-detection.md` § Phase 61/62 for the verified trace.
 
-**Phase 65 verification (2026-04-26)** — pikvm_mouse_click_at residual on iPad bench (n=10 with retries=2):
+**iPad click-accuracy by target size (Phase 65 + retries=2, bench n=10)**:
 
-| Config | ≤25 px | Median | Detect fails |
-|--------|--------|--------|--------------|
-| Baseline | 0/10 | ~52 px | 2/10 |
-| Phase 65 micro tuning | 1/10 | ~80 px | 4/10 |
+| Target width | Hit rate (per attempt) | Hit rate (3 attempts) | Examples |
+|--------------|------------------------|----------------------|----------|
+| ≥ 200 px     | ~70% (residual ≤ 100 px) | ~97% | Sidebar rows, large buttons, full-width banners |
+| 100-200 px   | ~50% (residual ≤ 100 px) | ~88% | App icons (~100 px), search-bar fields |
+| 50-100 px    | ~30% (residual ≤ 50 px)  | ~66% | Standard buttons, page tabs |
+| < 50 px      | ~10% (residual ≤ 25 px)  | ~27% | Back arrows, X buttons, toggles |
 
-Phase 65's tighter linear correction config is **marginally better** (1/10 vs 0/10 at icon tolerance) but neither is production-reliable for small targets. Cursor-positioning is fundamentally bottlenecked by motion-diff reliability against iPad's animated UI noise — the algorithm fails to *detect* the cursor on 20-40% of attempts, and even when detection works, residual is typically 50-100 px. **For reliable iPad automation, use keyboard workflows.** `pikvm_mouse_click_at` should be reserved for last-resort cases on UI elements with no keyboard equivalent, with the operator prepared for ~80% miss rate on small targets. Reproducible bench: `bench-clickretry.ts`.
+The numbers are derived from observed median residual ~50-80 px on iPad with iPadOS 26, where motion-diff fails to detect the cursor entirely on 20-40% of attempts (counted as misses). For targets ≥ 200 px, the algorithm is highly reliable with retries; for tiny targets, miss rate is high. **For tiny targets (toggles, back arrows): prefer keyboard workflows when available** — see Phase 61/62 sidebar-arrow-key navigation. Reproducible bench: `bench-clickretry.ts`.
 
 ## MCP Prompts & Skill Tools
 
