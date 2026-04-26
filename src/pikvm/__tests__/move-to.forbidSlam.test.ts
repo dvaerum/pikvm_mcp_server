@@ -48,6 +48,11 @@ describe('moveToPixel forbidSlamFallback', () => {
     const client = new FakeClient();
     // detect-then-move will fail on a uniform black frame (no clusters).
     // With forbidSlamFallback=true, expect a throw.
+    //
+    // Phase 68 added 3 progressive-wake retries (300+400+500 ms settles)
+    // to the template-match fallback before giving up. Plus locateCursor's
+    // own probe retries and settles. The overall failure path now takes
+    // up to ~5 seconds before it gives up — bumped timeout to 15s.
     await expect(
       moveToPixel(client as unknown as PiKVMClient, { x: 500, y: 500 }, {
         strategy: 'detect-then-move',
@@ -56,7 +61,7 @@ describe('moveToPixel forbidSlamFallback', () => {
         calibrationProbeMickeys: 0,
       }),
     ).rejects.toThrow(/slam fallback forbidden|cursor cannot be located|detect-then-move failed/i);
-  });
+  }, 15000);
 
   it('default (forbidSlamFallback=false) falls back to slam silently', async () => {
     const client = new FakeClient();
