@@ -592,33 +592,53 @@ Open-loop: within **~20-100 pixels** of target on this iPad. That's close enough
 ## Purpose
 On a PiKVM target in relative mouse mode (iPad), move the pointer to an approximate target pixel and click. Internally: \`pikvm_mouse_move_to\` → brief settle → \`mouseClick\`. Returns a post-click screenshot.
 
-## Parameters
+## Reliability (Phase 70-72 measurements)
+
+| Target width | Per-attempt hit | 3-attempt hit | Examples |
+|--------------|-----------------|---------------|----------|
+| ≥ 200 px | ~80% | ~99% | Sidebar rows, large buttons |
+| 100-200 px | ~70% | ~97% | App icons, search fields |
+| 50-100 px | ~60% | ~94% | Standard buttons, page tabs |
+| < 50 px | ~50% | ~88% | Back arrows, X buttons, toggles |
+
+Set \`maxRetries: 2\` for iPad targets — turns ~50% per-attempt into ~88% reliable end-to-end.
+
+## Critical pre-flight
+
+**The iPad MUST be unlocked.** Detect-then-move can't find the cursor against the lock-screen wallpaper. If you don't know the iPad's state, either:
+1. Take a \`pikvm_screenshot\` first to confirm it's not on lock screen.
+2. Pass \`autoUnlockOnDetectFail: true\` (Phase 72) for opt-in self-recovery — note this calls \`ipadGoHome\` which exits any open app.
+3. Just call \`pikvm_ipad_unlock\` first if you know it might be locked.
+
+## Parameters (key ones)
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | x | number | *(required)* | Target X in HDMI screenshot pixels |
 | y | number | *(required)* | Target Y in HDMI screenshot pixels |
 | button | string | left | left / right / middle / up / down |
-| slamFirst | boolean | true | Slam to top-left before moving |
-| slamOriginX | number | auto | HDMI X of post-slam origin. Auto-detected via \`pikvm_detect_orientation\`. |
-| slamOriginY | number | auto | HDMI Y of post-slam origin. Auto-detected. |
+| maxRetries | number | 0 | Recommended **2** on iPad |
+| autoUnlockOnDetectFail | boolean | false | Phase 72 opt-in lock-screen recovery |
+| verifyClick | boolean | true | Pre/post screenshot diff confirms click landed |
 
-## When to Use
-- Tapping an iPad app icon whose bounding box is ≥100×100 px — the ~50 px accuracy is inside the hit target.
-- Any coarse click where an error of tens of pixels is acceptable.
+## Recommended call shapes
+
+**Reliable iPad click on a known-unlocked iPad:**
+\`\`\`json
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2 } }
+\`\`\`
+
+**Self-recovering click (assumes iPad might be locked / faded):**
+\`\`\`json
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2, "autoUnlockOnDetectFail": true } }
+\`\`\`
 
 ## When NOT to Use
-- Sub-50 px precision (e.g. tapping a single character in a text field). Use the closed-loop pattern from the \`move-to\` guide instead.
-
-## Example Calls
-\`\`\`json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700 } }
-
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 400, "y": 400, "button": "right" } }
-\`\`\`
+- Tiny targets (< 30 px): even with retries, hit rate drops below 80%. Use keyboard navigation if available — see \`ipad-keyboard-workflow\`.
+- Anywhere a keyboard shortcut exists: keyboard input has 100% reliability vs cursor's ~80-99%.
 
 ## Tips
 - Take a \`pikvm_screenshot\` first to confirm the target pixel is where the UI element actually is — icon positions change between app rearrangements and iOS versions.
-- After the click, examine the returned screenshot: did the expected app open / dialog appear? If not, the click missed — retry with the closed-loop correction from \`move-to\`.`,
+- After the click, examine the returned screenshot: did the expected app open / dialog appear? If not, the click missed — retry or fall back to keyboard.`,
           },
         },
       ];
