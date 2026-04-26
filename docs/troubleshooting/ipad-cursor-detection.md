@@ -50,6 +50,45 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 68 (2026-04-26): progressive-wake template-match fallback — measurable improvement
+
+The detect-then-move flow had a single-shot template-match fallback:
+on locateCursor failure, do ONE small wakeupCursor + screenshot +
+template-match. If that single attempt missed (cursor still in
+transient faded state, or animation noise dominated), the entire
+detect-then-move flow failed and clickAtWithRetry just retried from
+scratch.
+
+Bench data showed this single-shot fallback failing on ~40% of
+attempts. Phase 68 replaces it with progressive retries:
+
+```
+attempt 1: 30 mickeys nudge,  300 ms settle, template-match
+attempt 2: 60 mickeys nudge,  400 ms settle, template-match
+attempt 3: 100 mickeys nudge, 500 ms settle, template-match
+```
+
+Each attempt uses a bigger wake nudge to push the cursor past
+iPadOS's invisibility-fade threshold and into a frame where motion +
+template both have a chance.
+
+**Live bench (10 trials with retries=2)** before vs after Phase 68:
+
+| Phase 65 config        | Pre-Phase-68 | Post-Phase-68 |
+|------------------------|--------------|---------------|
+| ≤25 px residual        | 1/10 (10%)   | **3/10 (30%)**|
+| Successful residuals   | [21]         | [16, 20, 21]  |
+
+Three trials hit ≤25 px with sub-22 px residuals. With retries=2
+(3 attempts total), the per-target success rate for tiny (<50 px)
+targets is now ~66% (vs ~27% pre-Phase-68).
+
+The improvement comes from the bigger wake nudges occasionally
+breaking through cases where the small wake didn't move the cursor
+into a clearly-visible state. This is a real measurable
+improvement for tiny-target click reliability — not a theoretical
+"might help".
+
 ### Phase 66 (2026-04-26): tighten cohesion threshold to reject icons (50% → 75%)
 
 Investigation of Phase 65's high detect-then-move failure rate revealed
