@@ -50,6 +50,32 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 70 (2026-04-26): clean-state bench reveals real ~50% per-attempt accuracy
+
+Re-running the bench AFTER explicitly unlocking the iPad (was on lock
+screen during prior runs — invisible cursor → 60% detect failures):
+
+| Config           | ≤25 px | Sample residuals (px)                                |
+|------------------|--------|------------------------------------------------------|
+| Baseline         | 0/10   | 192, 49, 51, 28, 46, 38, 48, 50, 49, 42              |
+| Phase 65 + 68+69 | **5/10** ✓ | 35, **8**, 57, 36, **20**, 36, **11**, **7**, 934, **11** |
+
+Five hits at 7, 8, 11, 11, 20 px — all genuinely tight. Per-attempt
+50% hit rate at icon tolerance. With retries=2 (3 attempts) that's
+**~88% success rate for tiny (<50 px) targets**.
+
+The earlier 10-30% numbers I reported were measuring a different
+thing entirely — they were measuring the algorithm against a
+partially-locked iPad. Once the iPad is reliably unlocked at bench
+start, the real accuracy story emerges.
+
+**Operational requirement**: any iPad-target click_at workflow must
+ensure the iPad is unlocked first (via pikvm_ipad_unlock or
+pikvm_ipad_launch_app). On lock screen, click_at will deterministically
+fail at detect-then-move because the cursor isn't visible against the
+lock-screen wallpaper. Future enhancement: have clickAtWithRetry detect
+lock-screen state and auto-call pikvm_ipad_unlock before attempting.
+
 ### Phase 69 (2026-04-26): remove legacy probeDelta=20 override — tighter residuals
 
 `move-to.ts` line ~648 was passing `probeDelta: 20` to `locateCursor`,

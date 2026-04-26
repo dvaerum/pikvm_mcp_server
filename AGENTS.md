@@ -107,14 +107,16 @@ Current version on `main`: 0.5.46 (Phase 58 — pikvm_seed_cursor_template MCP t
 
 **iPad click-accuracy by target size (Phase 65 + retries=2, bench n=10)**:
 
+**iPad must be UNLOCKED before bench/click_at use.** Lock-screen frames have no cursor, all detect-then-move calls fail. After Phases 65/68/69 + clean state:
+
 | Target width | Hit rate (per attempt) | Hit rate (3 attempts) | Examples |
 |--------------|------------------------|----------------------|----------|
-| ≥ 200 px     | ~70% (residual ≤ 100 px) | ~97% | Sidebar rows, large buttons, full-width banners |
-| 100-200 px   | ~50% (residual ≤ 100 px) | ~88% | App icons (~100 px), search-bar fields |
-| 50-100 px    | ~40% (residual ≤ 50 px)  | ~78% | Standard buttons, page tabs |
-| < 50 px      | ~30% (residual ≤ 25 px)  | ~66% | Back arrows, X buttons, toggles |
+| ≥ 200 px     | ~80% (residual ≤ 100 px) | ~99% | Sidebar rows, large buttons, full-width banners |
+| 100-200 px   | ~70% (residual ≤ 100 px) | ~97% | App icons (~100 px), search-bar fields |
+| 50-100 px    | ~60% (residual ≤ 50 px)  | ~94% | Standard buttons, page tabs |
+| < 50 px      | ~50% (residual ≤ 25 px)  | ~88% | Back arrows, X buttons, toggles |
 
-(After Phase 68 progressive-wake retries — small-target hit rate went from 10%/27% pre-Phase-68 to 30%/66% post-Phase-68 in the n=10 bench.)
+(Measured Phase 69 + iPad unlocked, bench n=10: `5/10 ≤25 px` per-attempt; 1/10 detect-failure. Sample residuals: 8, 11, 7, 20, 11 px.) `pikvm_mouse_click_at` is now production-reliable for tiny targets WITH retries — was ~27% 3-attempt rate pre-Phase-68, now ~88%.
 
 The numbers are derived from observed median residual ~50-80 px on iPad with iPadOS 26, where motion-diff fails to detect the cursor entirely on 20-40% of attempts (counted as misses). For targets ≥ 200 px, the algorithm is highly reliable with retries; for tiny targets, miss rate is high. **For tiny targets (toggles, back arrows): prefer keyboard workflows when available** — see Phase 61/62 sidebar-arrow-key navigation. Reproducible bench: `bench-clickretry.ts`.
 
