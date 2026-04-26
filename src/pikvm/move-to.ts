@@ -143,6 +143,25 @@ export interface MoveToOptions {
    *  false (preserves existing behaviour for non-iPad targets). */
   forbidSlamFallback?: boolean;
 
+  /** Phase 22: when true, the big open-loop emit is zeroed out; the
+   *  correction loop emits the full distance via small verifiable
+   *  chunks. Each chunk's emit (capped by Phase 9's per-pass cap)
+   *  produces motion-diff input the algorithm can verify before
+   *  emitting the next chunk — so iPadOS's per-command ratio
+   *  variance (live data: 9× spread on identical commands) gets
+   *  averaged out across multiple short emissions instead of
+   *  amplified by a single large open-loop guess.
+   *
+   *  Phase 17 attempted this before Phases 20-21 were in place and
+   *  got worse results because correction-pass motion-diff failed
+   *  silently (resulting in 5+ blind passes compounding error).
+   *  With Phase 20's tighter template-FP rejection and Phase 21's
+   *  looser ratio sanity bounds, per-pass detection should now be
+   *  reliable enough for this approach to converge.
+   *
+   *  Default false (preserves single-shot open-loop behaviour). */
+  progressiveOpenLoop?: boolean;
+
 }
 
 export interface CorrectionPass {
@@ -935,7 +954,12 @@ export async function moveToPixel(
   // post candidate within 600 px of expected end".
   const postSettleMs = options.postMoveSettleMs ?? 300;
   const doCorrect = options.correct !== false;
-  const maxPasses = options.maxCorrectionPasses ?? 5;
+  // Phase 22: when progressiveOpenLoop is on, the correction loop
+  // carries the full move (no big initial open-loop). 5 passes was
+  // sufficient for the open-loop-then-refine model; in progressive
+  // mode each pass moves only ~80*ratio px, so a 600 px move needs
+  // 8-12 passes. Bump the gross budget when progressive is enabled.
+  const maxPasses = options.maxCorrectionPasses ?? (options.progressiveOpenLoop ? 12 : 5);
   const minResidualPx = options.minResidualPx ?? 8;
   const warmupMickeys = options.warmupMickeys ?? 8;
   const preWindow = options.preWindow ?? 120;
@@ -1159,8 +1183,11 @@ export async function moveToPixel(
     planRatioY,
     { width: resolution.width, height: resolution.height },
   );
-  const openMickeysX = clampedOpen.x;
-  const openMickeysY = clampedOpen.y;
+  // Phase 22: progressiveOpenLoop zeros the open-loop emit so the
+  // correction loop carries the entire move via small chunks with
+  // motion-diff verification between each.
+  const openMickeysX = options.progressiveOpenLoop ? 0 : clampedOpen.x;
+  const openMickeysY = options.progressiveOpenLoop ? 0 : clampedOpen.y;
   const predictedPostOpen = {
     x: postCalibPos.x + openMickeysX * planRatioX,
     y: postCalibPos.y + openMickeysY * planRatioY,
