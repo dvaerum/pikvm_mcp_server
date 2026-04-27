@@ -675,10 +675,24 @@ export async function clickAtWithRetry(
       // zero movement), so each iter actually moves the cursor.
       const PER_ITER_CAP_MICKEYS = 5;
       const SETTLE_MS = 350;
-      const ratioX = lastMoveResult.usedPxPerMickey?.x && lastMoveResult.usedPxPerMickey.x > 0.5
-        ? lastMoveResult.usedPxPerMickey.x : 3;
-      const ratioY = lastMoveResult.usedPxPerMickey?.y && lastMoveResult.usedPxPerMickey.y > 0.5
-        ? lastMoveResult.usedPxPerMickey.y : 3.7;
+      // Phase 127 (v0.5.120): sanity-clamp the live px/mickey
+      // ratio. moveToPixel sometimes reports asymmetric/pathological
+      // ratios (e.g. live trace: usedPxPerMickey={0.73, 1.48} on
+      // iPad — the X axis is way outside the empirical 0.9-2.0
+      // range for small emits). Using such a low ratio causes the
+      // micro-correction loop to under-estimate cursor movement,
+      // emit extra mickeys, and oscillate around target. Clamp to
+      // the empirically-validated iPad-small-emit range; if the
+      // live value is outside, fall back to the fleet default 1.3.
+      const RATIO_MIN = 0.9;
+      const RATIO_MAX = 2.5;
+      const FLEET_DEFAULT = 1.3;
+      const liveX = lastMoveResult.usedPxPerMickey?.x;
+      const liveY = lastMoveResult.usedPxPerMickey?.y;
+      const ratioX = liveX !== undefined && liveX >= RATIO_MIN && liveX <= RATIO_MAX
+        ? liveX : FLEET_DEFAULT;
+      const ratioY = liveY !== undefined && liveY >= RATIO_MIN && liveY <= RATIO_MAX
+        ? liveY : FLEET_DEFAULT;
       // Detect iPad bounds for edge-safety check; full-frame fallback if
       // bounds detection fails (treat full HDMI frame as the safe area —
       // less safe but at least allows progress on non-iPad targets).
@@ -770,10 +784,14 @@ export async function clickAtWithRetry(
       const apDy = target.y - cursorAtClick.y;
       const apResidual = Math.hypot(apDx, apDy);
       if (apResidual >= 3) {
-        const apRatioX = lastMoveResult.usedPxPerMickey?.x && lastMoveResult.usedPxPerMickey.x > 0.5
-          ? lastMoveResult.usedPxPerMickey.x : 1.3;
-        const apRatioY = lastMoveResult.usedPxPerMickey?.y && lastMoveResult.usedPxPerMickey.y > 0.5
-          ? lastMoveResult.usedPxPerMickey.y : 1.3;
+        // Phase 127: same sanity-clamp as the micro-correction
+        // loop — pathological ratios cause overshoot/undershoot.
+        const apLiveX = lastMoveResult.usedPxPerMickey?.x;
+        const apLiveY = lastMoveResult.usedPxPerMickey?.y;
+        const apRatioX = apLiveX !== undefined && apLiveX >= 0.9 && apLiveX <= 2.5
+          ? apLiveX : 1.3;
+        const apRatioY = apLiveY !== undefined && apLiveY >= 0.9 && apLiveY <= 2.5
+          ? apLiveY : 1.3;
         const apxRaw = apDx / apRatioX;
         const apyRaw = apDy / apRatioY;
         const apx = Math.sign(apxRaw) * Math.min(Math.ceil(Math.abs(apxRaw)), preClickApproachMickeys);

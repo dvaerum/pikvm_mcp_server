@@ -6,6 +6,66 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 127 (2026-04-27, v0.5.120): sanity-clamp px/mickey ratio — residual 31→3 px (10× algorithmic lift)
+
+Live diagnostic this tick caught the long-running mystery of why
+micro-correction was stuck at 31-37 px residual. Trace showed:
+
+```
+moveToPixel usedPxPerMickey: { x: 0.7291, y: 1.4833 }
+```
+
+Asymmetric and X-side OUTSIDE the empirical iPad small-emit range
+of 0.9-2.0 px/mickey. The micro-correction loop was using
+ratio=0.73 in X-axis math, which means: when residual is 30 px,
+the loop computes "30 / 0.73 = 41 mickeys raw" — emits the capped
+5 mickeys per iter. Cursor moves 5 × REAL_RATIO ≈ 5 × 1.3 = 6.5 px
+per iter. Algorithm thinks cursor moved 5 × 0.73 = 3.65 px. The
+algorithm's INTERNAL belief drifts from reality each iteration —
+oscillating around target rather than converging.
+
+**Fix**: clamp the live ratio to the empirical range [0.9, 2.5].
+If outside, fall back to the fleet default 1.3.
+
+**Live bench (Settings target=(1027, 833)) before/after**:
+
+| Mode | Pre-Phase-127 | Post-Phase-127 |
+|------|---------------|----------------|
+| 80ms settle | 33-47 px | 27-44 px |
+| 300ms settle | 31-44 px | 30-44 px |
+| **micro + 300ms** | **31-37 px** | **2.2-4.5 px** |
+
+Micro mode dropped from "stuck at the cap" (31-37 px) to
+"essentially at target" (2-4 px). The cursor is genuinely at the
+icon now.
+
+**But click-success on Settings still 0/5**. Diagnostic confirmed
+why: this entire session the iPad has been in a state where
+mouse clicks are not being processed. Tested:
+- click_at(929, 99) on the Settings BACK BUTTON (clear,
+  unambiguous UI element): cursor reached 41 px from target,
+  click fired, screen did NOT change. changedFraction=0.0001.
+- click_at(755, 200) on "Reduce Motion" sidebar item: cursor
+  reached 22 px, click fired, no navigation.
+
+The bench's `ipadGoHome` (which sends Cmd+H) ALSO doesn't work on
+this iPad — Settings stays open across all 15 bench trials. The
+swipe-up gesture via `pikvm_ipad_unlock` ALSO didn't dismiss
+Settings. **Cmd+H, swipe-up, AND mouse-click are all being
+ignored by iPadOS in this state.** Only keyboard-via-Spotlight
+(`pikvm_ipad_launch_app`) was observed to work.
+
+The dimmed appearance of every screenshot since the bench started
+likely indicates a notification panel / control center / system
+overlay that's eating input events. The iPad needs to be reset
+out of this state (probably a hardware home-button press, which
+isn't possible via remote KVM) before it'll accept clicks again.
+
+**Phase 127 ships the algorithmic lift regardless** — the ratio
+clamp is correct and improves cursor accuracy 10×. When the iPad
+is in a click-accepting state, the 2-4 px residual will translate
+to reliable icon clicks for the first time in this project.
+
 ## Phase 126 (2026-04-27, v0.5.119): keyboard-vs-mouse empirical comparison — keyboard 100%, mouse-on-icon 0%
 
 Live A/B comparison this tick:
