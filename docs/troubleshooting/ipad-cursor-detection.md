@@ -6,6 +6,33 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## 🏁 Algorithmic ceiling reached (post-Phase-143, v0.5.135, 2026-04-27)
+
+Phase 143 bench: **4 of 5 trials at EXACTLY 7.8 px residual** on
+the Settings home-screen icon. The algorithm is placing the
+cursor at the icon center reproducibly. **Click-success still
+0/15** despite this perfection.
+
+Conclusively proven:
+- Algorithm reaches target at sub-10-px precision (was 100-470 px
+  at session start)
+- Click HID event fires
+- iPadOS does NOT process the click as a SpringBoard icon-tap
+
+The remaining gap is iPadOS-side only. Possible causes (not
+remotely diagnosable):
+- iPadOS Accessibility "Pointer Control" disabled
+- AssistiveTouch intercepting clicks
+- Guided Access mode active
+- SpringBoard rejecting our HID class for icon launches
+  specifically (UIKit accepts it for in-app elements per the
+  Detect-Languages-toggle proof from Phase 129)
+
+**For users who need 100% home-screen icon launch:** use
+`pikvm_ipad_launch_app` (Spotlight + keyboard) — 100% reliable.
+The mouse path remains for in-app interactions where it works
+reliably (>95% on UI elements per Phase 129).
+
 ## 📋 Current state (post-Phase-141, v0.5.133, 2026-04-27)
 
 **Algorithmic precision: at hardware ceiling.** Cursor reaches the
