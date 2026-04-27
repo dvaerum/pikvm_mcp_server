@@ -328,7 +328,14 @@ export async function clickAtWithRetry(
   // Phase 49: re-enabled with edge-aware safety + 350ms settle. Default
   // 3 iterations max — conservative; loop self-terminates when residual
   // is small or when emitting would push cursor into an iPad gesture zone.
-  const microCorrectionIterations = options.microCorrectionIterations ?? 3;
+  // Phase 122 (v0.5.116): bumped default from 3 to 5. With
+  // PER_ITER_CAP_MICKEYS=5 and ratio≈1.3, 3 iters caps total
+  // correction at 19.5 px — observed live residuals start at 30-40
+  // px so a 3-iter loop can't bridge the gap. 5 iters × 6.5 px/iter
+  // = 32.5 px headroom, enough for the typical case. Per-iter
+  // SETTLE_MS=350 means 5 iters adds 1.75 s latency vs 3 iters'
+  // 1.05 s — acceptable for the click-precision win.
+  const microCorrectionIterations = options.microCorrectionIterations ?? 5;
   const microConvergePx = options.microConvergePx ?? 8;
   const minLivePxPerMickey = options.minLivePxPerMickey ?? 0.4;
   // Load cursor templates ONCE outside the retry loop. Empty set →
@@ -625,7 +632,21 @@ export async function clickAtWithRetry(
       lastMoveResult.finalDetectedPosition
     ) {
       const EDGE_MARGIN_PX = 50;
-      const PER_ITER_CAP_MICKEYS = 2;
+      // Phase 122 (v0.5.116): bumped from 2 to 5. The original
+      // Phase 49 cap of 2 mickeys/iter (with default 3 iterations
+      // and ratio 1.3 px/mickey) gave a max total correction of
+      // 7.8 px — leaving residuals stuck around 30-40 px against
+      // iPad icons whenever moveToPixel's linear loop converged
+      // outside that range. Phase 49's safety motivation was
+      // avoiding the iPad bottom-edge gesture zone; the
+      // bounds-aware refusal below (wouldExceedSafeBounds) now
+      // prevents that regardless of the per-iter magnitude, so
+      // the tight cap is pure over-conservatism. 5 mickeys at
+      // ratio 1.3 = 6.5 px/iter × 3 iters = 19.5 px max — enough
+      // to bridge the typical residual gap. Also above iPadOS's
+      // empirical rate-limit floor (small emits get quantised to
+      // zero movement), so each iter actually moves the cursor.
+      const PER_ITER_CAP_MICKEYS = 5;
       const SETTLE_MS = 350;
       const ratioX = lastMoveResult.usedPxPerMickey?.x && lastMoveResult.usedPxPerMickey.x > 0.5
         ? lastMoveResult.usedPxPerMickey.x : 3;
