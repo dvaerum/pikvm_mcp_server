@@ -105,6 +105,64 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 102 (2026-04-27): cursor-template cache 87.5% contaminated — root cause + fix
+
+Live-investigated under user pressure (the user — correctly — called
+out my "cursor can't be tracked" framing as an excuse). Visually
+inspected `data/cursor-templates/` on the running iPad-paired host.
+Found:
+
+| Filename | Visual content | Is cursor? |
+|----------|---------------|------------|
+| 7234061890.jpg | Small dark arrow on darker background | YES |
+| 7248337007.jpg | "Ger" text glyphs | NO |
+| 7248359101.jpg | "al" letters with bottom partial | NO |
+| 7267252327.jpg | "G" letter | NO |
+| 7267270220.jpg | "Ar" letters | NO |
+| 7267279337.jpg | "rch" letters (probably from "Search") | NO |
+| 7267292169.jpg | "G" letter alone | NO |
+| 7267337481.jpg | "G" with dark area | NO |
+
+7 of 8 cached "cursor" templates were single-letter glyphs from the
+iPad Settings → Apple Account "GS" avatar and surrounding labels.
+Every template-match call was therefore comparing the screen against
+~7 letter templates and 1 cursor template; the "best match" usually
+hit a letter on screen. This explains:
+
+- Why pre-click template re-check disagrees with motion-diff so often
+- Why moveToPixel reports verified positions that are wrong
+- Why click-skipped messages cite stale templates as a likely cause
+
+**Why looksLikeCursor accepted letter glyphs**: every existing gate
+passed. A single white letter on dark background is achromatic, has
+low mean saturation, and is one connected blob (Phase 66's cohesion
+gate of 75% applies to multi-glyph fragments, not single letters).
+
+**Phase 102 fix** (in `move-to.ts:looksLikeCursor`): add an
+upper-bound on bright pixel count. Real iPad cursors occupy 30-50 px
+(5-9% of 24×24=576). Letter glyphs occupy 80-150 px (14-26%). A 12%
+cap (~70 bright pixels) discriminates without false-rejecting larger
+cursor shapes (I-beam in landscape ~50 px, large-pointer mode).
+
+**Pinned**: regression test `REGRESSION (Phase 102): rejects a
+single-letter glyph` simulates a "G" at ~16% bright and asserts
+rejection. Existing `seedCursorTemplate` happy-path test had to be
+updated to use a 6×6 cluster (realistic iPad-cursor size, ~6%) — the
+old test used a 12×12 cluster (25%, which Phase 102 correctly now
+rejects as letter-sized).
+
+**Quarantined the contaminated cache** to
+`data/cursor-templates.contaminated-2026-04-27/` for forensic
+reference. Fresh cache will accumulate clean templates from real
+clicks under the new gate.
+
+**Strategic implication**: this is the kind of bug that explains
+why "cursor verification" failed 30-40% in benches — most "verified"
+positions were FALSE POSITIVES against contaminated templates. The
+clean cache + tighter gate should materially improve the verified-
+position accuracy. Need a fresh bench run after re-seeding to
+quantify the improvement.
+
 ### Phase 98–99 bench (2026-04-27, v0.5.89): empirical accuracy + diagnostic gate, with bench bug correction
 
 Ran `bench-clickretry.ts` (10 trials × 2 modes, target `(929, 99)` —
