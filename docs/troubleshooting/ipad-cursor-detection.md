@@ -161,6 +161,49 @@ pre-click verification chain (Phase 51) can do its job without
 producing wrong-element-hit reports. This should materially improve
 the cursor-verification rate that was 30-40% failure in past benches.
 
+### Phase 114 experiment (2026-04-27, v0.5.107): explicit dither pattern — also doesn't help
+
+Tested whether explicit dithering (try clicks at small offsets around
+the target on miss) catches the iPadOS snap zone better than the
+algorithm's implicit retry-with-variance.
+
+Pattern: 5 positions per trial (centre, +8/-8 X, +8/-8 Y). N=5 trials.
+
+```
+trial 1: MISS — none of 5 offsets opened Settings
+trial 2: ERROR (iPad locked mid-bench, infrastructure issue)
+trial 3: HIT on attempt 4/5 (offset (0,+8))
+trial 4: MISS — none of 5 offsets opened Settings
+trial 5: HIT on attempt 2/5 (offset (+8,0))
+```
+
+Effective rate: 2/4 = 50%. Same as Phase 109-111 baseline (~50%).
+
+**Honest finding**: dither doesn't materially improve hit rate. Trials
+1 and 4 had ALL 5 different positions miss — that's not consistent
+with "iPadOS snap zone is at one specific position we keep missing."
+It suggests:
+
+- **Hypothesis A**: iPadOS click debounce. After ≥1 rapid clicks
+  fail, subsequent ones in the burst are ignored. Each dither attempt
+  is a click, so 5 in rapid succession may be partly debounced.
+- **Hypothesis B**: iPadOS pointer-effect requires a HOVER period
+  before snap activates — the dither moves cursor between positions
+  too fast, defeating snap.
+
+Either way: dither isn't the lever. The 50% ceiling is more
+fundamental than position-offset can break.
+
+**Strategic conclusion**: Phase 102-106 fixed everything fixable on
+the algorithm side (cursor verification 60-70% → 100%). The
+remaining 50% click-success ceiling on icon-sized iPad targets is
+genuinely architectural — iPadOS's pointer-effect heuristic doesn't
+register synthetic-mouse clicks the same way as touch or
+Apple-trackpad input. **The keyboard-first workflow remains the
+right answer for tiny iPad targets.** Continued algorithm work would
+be diminishing-returns relative to documenting + recommending the
+keyboard path.
+
 ### Phase 111 bench (2026-04-27, v0.5.104): preClickSettleMs sweep — settle time isn't the lever
 
 Tested if the 80ms preClickSettleMs default is too short. Bumped to
