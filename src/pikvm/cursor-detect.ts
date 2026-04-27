@@ -923,6 +923,67 @@ export function findCursorByTemplateSet(
 }
 
 /**
+ * Phase 120 — pure helper: given a candidate cursor position from one
+ * frame and a re-found candidate position from a second frame after a
+ * known emit, decide whether the candidate is the real cursor (it
+ * moved as expected) or a static wallpaper false-positive (it didn't
+ * move).
+ *
+ * Returns true iff the candidate moved by approximately `expectedDx`
+ * pixels in the X axis and `expectedDy` in the Y axis, within a
+ * tolerance of `toleranceFraction` of the expected magnitude (default
+ * 50% — iPad acceleration variance + JPEG re-quantisation easily
+ * shifts the matched position by 50% of a small emit).
+ *
+ * The "approximately" matters: iPad pointer acceleration applied to a
+ * 10-mickey emit may produce 5-30 px of movement depending on
+ * recent-velocity context. Asking for "did the cursor move at all in
+ * roughly the right direction" catches false positives while still
+ * accepting real cursors with variance.
+ *
+ * Live-discovered failure mode (Phase 119): with this gate absent,
+ * `findCursorByTemplateSet` returned position (952, 916) at score
+ * 0.71 against an EMPTY iPad wallpaper region for 30 consecutive
+ * iterations of a visual-servo loop. The "cursor" never moved
+ * because it wasn't a cursor — it was a wallpaper gradient feature
+ * that happened to NCC-correlate with the cursor template.
+ *
+ * Pure: no I/O, deterministic.
+ */
+export function cursorMovedAsExpected(
+  before: Point,
+  after: Point,
+  expectedDx: number,
+  expectedDy: number,
+  toleranceFraction = 0.5,
+): boolean {
+  const actualDx = after.x - before.x;
+  const actualDy = after.y - before.y;
+  // Define expected magnitude. If both axes are zero, the test is
+  // ill-defined — return true (no expected motion to verify).
+  const expectedMagnitude = Math.hypot(expectedDx, expectedDy);
+  if (expectedMagnitude < 1) return true;
+  // Per-axis tolerance: at least 3 px (handle JPEG / detection
+  // quantisation noise even for very small emits) and at most
+  // toleranceFraction × |expected|.
+  const tolX = Math.max(3, Math.abs(expectedDx) * toleranceFraction);
+  const tolY = Math.max(3, Math.abs(expectedDy) * toleranceFraction);
+  // The cursor must move in the right DIRECTION on each non-zero axis
+  // (sign matches) AND the magnitude must be within tolerance of the
+  // expected magnitude (between expected/2 and expected*2 ish, but
+  // clamped per axis above).
+  if (Math.abs(expectedDx) >= 1) {
+    if (Math.sign(actualDx) !== Math.sign(expectedDx)) return false;
+    if (Math.abs(actualDx - expectedDx) > tolX && Math.abs(actualDx) < Math.abs(expectedDx) - tolX) return false;
+  }
+  if (Math.abs(expectedDy) >= 1) {
+    if (Math.sign(actualDy) !== Math.sign(expectedDy)) return false;
+    if (Math.abs(actualDy - expectedDy) > tolY && Math.abs(actualDy) < Math.abs(expectedDy) - tolY) return false;
+  }
+  return true;
+}
+
+/**
  * Persist a cursor template to disk for reuse across invocations.
  */
 export async function saveCursorTemplate(

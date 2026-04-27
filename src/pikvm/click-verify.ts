@@ -15,7 +15,12 @@
  * keeps it pure and testable without any client/network mock.
  */
 
-import { decodeScreenshot, diffPixels, findCursorByTemplateSet } from './cursor-detect.js';
+import {
+  cursorMovedAsExpected,
+  decodeScreenshot,
+  diffPixels,
+  findCursorByTemplateSet,
+} from './cursor-detect.js';
 import type { DecodedScreenshot } from './cursor-detect.js';
 import { moveToPixel } from './move-to.js';
 import type { MoveToOptions, MoveToResult } from './move-to.js';
@@ -638,6 +643,8 @@ export async function clickAtWithRetry(
         const res = await client.getResolution();
         safeBounds = { x: 0, y: 0, width: res.width, height: res.height };
       }
+      let prevFound: { x: number; y: number } | null = null;
+      let prevEmit: { mx: number; my: number } | null = null;
       for (let iter = 0; iter < microCorrectionIterations; iter++) {
         const microShot = await client.screenshot();
         const microDecoded = await decodeScreenshot(microShot.buffer);
@@ -645,6 +652,20 @@ export async function clickAtWithRetry(
           minScore: minPreClickTemplateScore,
         });
         if (!found) break; // can't verify, stop here (Phase 41/42 will catch)
+        // Phase 120: motion-confirmation gate. If the previous iteration
+        // emitted a non-zero move and the "cursor" did NOT move
+        // accordingly, this match is a wallpaper false-positive (a
+        // template matched a static gradient feature that NCC-correlates
+        // with the cursor template, e.g. (952, 916) at score 0.71 in the
+        // Phase 119 trace). Stop micro-correcting against a phantom.
+        if (prevFound && prevEmit && (prevEmit.mx !== 0 || prevEmit.my !== 0)) {
+          const expectedDx = prevEmit.mx * ratioX;
+          const expectedDy = prevEmit.my * ratioY;
+          if (!cursorMovedAsExpected(prevFound, found.position, expectedDx, expectedDy)) {
+            break;
+          }
+        }
+        prevFound = found.position;
         const dx = target.x - found.position.x;
         const dy = target.y - found.position.y;
         const residual = Math.sqrt(dx * dx + dy * dy);
@@ -665,6 +686,7 @@ export async function clickAtWithRetry(
           break;
         }
         await client.mouseMoveRelative(mx, my);
+        prevEmit = { mx, my };
         await sleepMs(SETTLE_MS);
       }
     }

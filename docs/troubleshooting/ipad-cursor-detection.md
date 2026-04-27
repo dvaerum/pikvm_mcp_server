@@ -6,6 +6,45 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 120 (2026-04-27, v0.5.114): motion-confirmation gate — reject Phase 119 wallpaper false-positives
+
+Phase 119 found that `findCursorByTemplateSet` returned (952, 916) at
+score 0.71 against EMPTY iPad wallpaper for 30 consecutive iterations
+of a visual-servo loop. The "cursor" never moved despite emits going
+out, because the match was a wallpaper gradient feature, not the
+cursor.
+
+Phase 120 adds the most direct fix: **motion-confirmation**. Pure
+helper `cursorMovedAsExpected(before, after, expectedDx, expectedDy)`
+in `cursor-detect.ts:953`:
+
+- Returns `true` if the candidate moved by approximately the
+  expected delta (within 50% tolerance per axis, floored at 3 px to
+  handle JPEG / detection noise).
+- Returns `false` if the candidate didn't move, moved in the wrong
+  direction, or moved much less than expected.
+- Returns `true` for the degenerate "no expected motion" case.
+
+Wired into `click-verify.ts` micro-correction loop (the most
+impact-per-line site): each iteration tracks the previous found
+position and the previous emit. On the next iteration, if the new
+match didn't move as expected from the previous match given the
+previous emit, the loop breaks rather than chasing a phantom
+template-match against wallpaper.
+
+**Why this is the right gate, not raising minScore**: a high score
+(say 0.85+) on wallpaper gradients still happens — JPEG-encoded
+wallpaper has features that NCC-correlate with cursor templates.
+What CAN'T happen: a wallpaper feature pretending to "move" when we
+emit a mouse delta. Wallpaper is static. The cursor moves. Motion-
+confirmation is an axis-orthogonal signal to template score,
+catching the failure mode that score alone misses.
+
+Tests: `__tests__/cursorMovedAsExpected.test.ts` pins 9 cases
+including the Phase 119 regression (static candidate at (952, 916)
+across emit (10, 0) → rejected). Full suite: 426 passing (was 417;
++9 new).
+
 ## ⚠️ Phase 119 (2026-04-27, v0.5.113): Phase 107 "100% verification" claim was WRONG — template-match false-positives on wallpaper gradients
 
 User pushed back on the "ceiling is architectural" framing. Built a
