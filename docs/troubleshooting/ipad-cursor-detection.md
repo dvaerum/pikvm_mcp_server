@@ -6,6 +6,45 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 121 (2026-04-27, v0.5.115): hotspot offset — report cursor TIP, not bbox-centre
+
+`findCursorByTemplate` had been returning the bounding-box CENTRE
+of the matched cursor template as the "cursor position" (cursor-
+detect.ts:846 pre-fix). But the iPadOS arrow cursor's clickable
+HOTSPOT is the arrow TIP, which sits in the upper-left of the
+template — typically 6-12 px upper-left of bbox-centre. That
+systematic offset caused the algorithm to report "the cursor is
+HERE" when the actual click point (the tip) was 6-12 px elsewhere.
+
+**Fix**: new pure helper `computeTemplateHotspot(template)` finds
+the topmost bright pixel cluster in the template (the arrow tip
+for iPadOS arrows; the upper edge of a dot for circular cursors).
+Stored as an optional `hotspot` field on `CursorTemplate`. When
+present, `findCursorByTemplate` returns `topLeft + hotspot`
+instead of `topLeft + (width/2, height/2)`.
+
+**Threshold tuning**: first attempt used a fixed 150-luminance
+floor; live inspection of 8 captured templates showed iPadOS soft
+cursors peak at 99-130 luminance with backgrounds at 30-50, so the
+fixed floor missed the cursor entirely and picked up isolated noise
+pixels (one template found hotspot at (18, 14) — far from the real
+tip near (10, 6)). Switched to an adaptive threshold of
+`mean + (max - mean) * 0.7` which scales with the template's
+contrast. Re-inspection: 7 of 8 templates report hotspot at (9-10,
+6) — consistent and matching visual inspection of the cursor tip.
+
+**Live bench impact (Settings icon, target=(1027, 833))**: median
+residual unchanged at 33-35 px in micro mode; click-success still
+0/5. The 35 px floor is from PER_ITER_CAP_MICKEYS=2 × 3
+iterations × 1.3 px/mickey = 7.8 px max correction in micro-
+correction; the bottleneck is the cap, not the hotspot. Phase 121
+ships the foundational fix; Phase 122 will explore relaxing the
+cap now that safe-bounds guards prevent edge gestures.
+
+Tests: 431 passing (+5 new). See
+`__tests__/computeTemplateHotspot.test.ts` for the Phase 121
+regression pin.
+
 ## Phase 120 (2026-04-27, v0.5.114): motion-confirmation gate — reject Phase 119 wallpaper false-positives
 
 Phase 119 found that `findCursorByTemplateSet` returned (952, 916) at
