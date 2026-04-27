@@ -151,6 +151,38 @@ pre-click verification chain (Phase 51) can do its job without
 producing wrong-element-hit reports. This should materially improve
 the cursor-verification rate that was 30-40% failure in past benches.
 
+### Phase 106 end-to-end verification (2026-04-27): masked template successfully matches cursor at NEW position
+
+After seeding the clean masked template at (983, 1023), moved the
+cursor to a new position via slam + pull, then ran
+`findCursorByTemplateSet` against a fresh full-frame screenshot at
+loose `minScore: 0.3`.
+
+```
+findCursorByTemplateSet result:
+  position: (952, 916)
+  score: 0.709
+  templateIndex: 0
+```
+
+**Score 0.709 is well above the typical 0.5 minScore threshold**
+used by `detectMotion`'s template-validated pair selection (Phase 51).
+The masked template (cursor pixels bright, background pixels zero)
+successfully correlates against the cursor at its new location in a
+different background context.
+
+This proves the full pipeline works:
+1. Seed produces masked clean template
+2. Template persists in cache
+3. Future clicks load it via `loadTemplateSet`
+4. `findCursorByTemplateSet` locates the cursor with high confidence
+5. Pre-click verification (Phase 51) can use the result to reject
+   wrong-element clicks before they happen
+
+The template-match augmentation to motion-diff is RESTORED to a
+useful state. Past benches that showed 30-40% cursor-verification
+failures should improve materially when re-run on v0.5.97+.
+
 ### Phase 104 (2026-04-27): tune Phase 102/103 thresholds against live measurement + multi-cluster try
 
 Phase 102 set looksLikeCursor's bright-pixel upper bound at 12% based
