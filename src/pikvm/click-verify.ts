@@ -731,6 +731,15 @@ export async function clickAtWithRetry(
       }
       let prevFound: { x: number; y: number } | null = null;
       let prevEmit: { mx: number; my: number } | null = null;
+      // Phase 133 (v0.5.125): divergence detection. Track residual
+      // between iterations; if it GROWS by more than 10 px, the
+      // micro-correction loop is pushing the cursor in the wrong
+      // direction (false-positive template-match feeding bad
+      // residual → bad emit). Bail out before making things worse.
+      // Phase 132 bench observed micro-mode trial 5 reach residual
+      // 200 px while no-micro-mode reached 23 px on the same target;
+      // micro was diverging.
+      let prevResidual: number | null = null;
       // Phase 123 (v0.5.117): bias template-match search toward the
       // cursor's last-known position (from moveToPixel's motion-
       // diff). Without this hint, template-match against busy
@@ -768,6 +777,16 @@ export async function clickAtWithRetry(
         const dy = target.y - found.position.y;
         const residual = Math.sqrt(dx * dx + dy * dy);
         if (residual <= microConvergePx) break; // converged
+        // Phase 133: divergence guard. If the new residual is
+        // significantly worse than the previous, break rather than
+        // continue pushing the cursor away from target. 10 px slack
+        // tolerates iPadOS acceleration variance + JPEG noise without
+        // letting genuine divergence (e.g. a 30→200 px run-away) bleed
+        // through.
+        if (prevResidual !== null && residual > prevResidual + 10) {
+          break;
+        }
+        prevResidual = residual;
         // Cap raw delta in mickeys.
         const mxRaw = dx / ratioX;
         const myRaw = dy / ratioY;
