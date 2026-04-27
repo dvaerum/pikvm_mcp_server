@@ -138,6 +138,53 @@ describe('seedCursorTemplate', () => {
     expect(result.cursorPosition).not.toBeNull();
   });
 
+  it("REGRESSION (Phase 104): tries multiple candidate clusters until one passes looksLikeCursor", async () => {
+    // Motion-diff produces TWO clusters per cursor move:
+    //   - BEFORE-position cluster (cursor pixels disappeared from this
+    //     spot — extract here yields a dark template that fails
+    //     looksLikeCursor's brightness lower bound)
+    //   - AFTER-position cluster (cursor pixels appeared here —
+    //     extract here yields a bright template that passes)
+    //
+    // Pre-Phase-104 the seed function picked the largest cluster (or
+    // first sorted). When the largest happened to be the BEFORE cluster
+    // (sizes are often near-identical, e.g. 89 vs 83 in live data), the
+    // function returned failure even though the AFTER cluster would
+    // have succeeded.
+    //
+    // Phase 104's multi-cluster try iterates candidates until one
+    // produces a template passing looksLikeCursor.
+    //
+    // Frame setup: BEFORE has cluster at (50, 100). AFTER has cluster
+    // at (150, 100). Diff sees both as "changed" — two cluster
+    // candidates.
+    const before = await pngWithCluster(50, 100);
+    const after = await pngWithCluster(150, 100);
+    const client = new ScriptedClient();
+    client.shots = [before, after];
+
+    let persistCalled = false;
+    let persistedAtPos: { x: number; y: number } | null = null;
+    const result = await seedCursorTemplate(client, {
+      sleep: async () => {},
+      loadExisting: async () => [],
+      persist: async (_dir, t, _existing) => {
+        persistCalled = true;
+        return { kept: [t], decision: 'added' };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(persistCalled).toBe(true);
+    // The chosen cursor position must be the AFTER cluster (150, 100),
+    // because extracting at the BEFORE cluster would give a dark
+    // template that looksLikeCursor rejects. Phase 104 forces the
+    // function to fall through to the AFTER cluster.
+    expect(result.cursorPosition).not.toBeNull();
+    expect(result.cursorPosition!.x).toBeGreaterThanOrEqual(145);
+    expect(result.cursorPosition!.x).toBeLessThanOrEqual(155);
+  });
+
   it('returns ok=false on duplicate but reports the cursor position', async () => {
     const before = await pngWithCluster(null, null);
     const after = await pngWithCluster(100, 100);
