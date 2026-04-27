@@ -6,6 +6,46 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 125 (2026-04-27, v0.5.118): in-motion click + diagnostic — click event is no-op'd by iPad in dimmed state
+
+Phase 122/123 brought cursor convergence to 22 px (visually on
+Settings icon) but click-success on Settings stayed 0/5. Phase 125
+hypothesised that iPadOS pointer-effect needs the cursor IN
+MOTION at button-down time, not stationary on the icon.
+
+**Implementation**: new `preClickApproachMickeys` option (default
+5). Replaces Phase 43's net-zero wiggle with a directional
+approach toward target: emit `min(approachCap, residual_in_mickeys)`
+mickeys in the residual direction, then click WITHOUT settling.
+Cursor's last-known position is tracked across the moveToPixel +
+micro-correction pipeline so the approach has the right
+direction.
+
+**Live result**: residual stable 30-37 px (slight reduction in
+variance vs Phase 122/123). Click-success still 0/5.
+
+**Diagnostic**: built `inspect-click.ts` — moveToPixel + raw
+mouseClick + before/mid/after screenshots. Result: visually
+identical screenshots before and after click. Pixel-diff said
+100% changed but that was streamer-compression noise; the
+visible content is the same iPad home screen with no app launch
+or interaction.
+
+**The click HID event is being delivered but the iPad is not
+reacting**. Three screenshots all show a SLIGHTLY DIMMED home
+screen — possibly:
+- Notification panel partial pull-down
+- Control center half-open
+- AssistiveTouch overlay
+- Bench's prior `ipadGoHome` left iPad in a screen-edge gesture
+  state that's eating subsequent inputs
+
+The Phase 125 click-success bottleneck is therefore NOT the
+algorithm's cursor positioning (now correct to ~22 px) but the
+iPad-side input-acceptance state. Next phase: investigate the
+dimmed-screen state, or detect-and-recover from it before
+clicking.
+
 ## Phase 123 (2026-04-27, v0.5.117): expectedNear hint kills the dock false-positive
 
 Visual diagnostic confirmed Phase 119's class is alive and well in

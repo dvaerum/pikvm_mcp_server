@@ -211,8 +211,28 @@ export interface ClickAtWithRetryOptions {
    *  cursor is MOVING near them — a stationary cursor 30 px from an
    *  icon does NOT snap. A small +N/-N round-trip wiggle right before
    *  the click triggers the snap without significantly displacing the
-   *  cursor. Default 5. Set 0 to disable. */
+   *  cursor. Default 5. Set 0 to disable.
+   *
+   *  Phase 125 (v0.5.118) deprioritises this in favour of a directional
+   *  APPROACH (see `preClickApproachMickeys`) when a recent cursor
+   *  position is available — the approach puts the cursor in active
+   *  motion TOWARDS the icon at button-down time, which is what
+   *  pointer-effect actually wants. Wiggle remains as the fallback
+   *  when the cursor position is unknown (e.g. all detection failed). */
   preClickWiggleMickeys?: number;
+  /** Phase 125: pre-click directional approach magnitude in mickeys.
+   *  Replaces Phase 43's net-zero wiggle when a recent cursor
+   *  position is known. Sends one final emit TOWARDS the target in
+   *  the residual direction, then clicks IMMEDIATELY (no settle) so
+   *  the button-down event arrives while the cursor is still in
+   *  motion. iPadOS pointer-effect uses cursor velocity to apply
+   *  icon snap; a converged-but-stationary cursor (Phase 122-123
+   *  reaches 22 px residual) is NOT sufficient for snap-on-click,
+   *  but a converging-into-icon cursor is. The emit magnitude is
+   *  capped by both this option AND the residual-in-mickeys, so
+   *  small residuals don't over-shoot. Default 5; set 0 to fall
+   *  back to Phase 43 wiggle behaviour. */
+  preClickApproachMickeys?: number;
   /** Phase 50: minimum live-measured px/mickey ratio for an attempt to
    *  be considered worth retrying. Live-verified 2026-04-26: when iPadOS
    *  is rate-limiting USB HID input (could be due to a popup, low-power
@@ -325,6 +345,7 @@ export async function clickAtWithRetry(
   const minBrightness = options.minBrightness ?? VERY_DIM_THRESHOLD;
   const minPreClickTemplateScore = options.minPreClickTemplateScore ?? 0.5;
   const preClickWiggleMickeys = options.preClickWiggleMickeys ?? 5;
+  const preClickApproachMickeys = options.preClickApproachMickeys ?? 5;
   // Phase 49: re-enabled with edge-aware safety + 350ms settle. Default
   // 3 iterations max — conservative; loop self-terminates when residual
   // is small or when emitting would push cursor into an iPad gesture zone.
@@ -610,6 +631,12 @@ export async function clickAtWithRetry(
       }
     }
 
+    // Phase 125: track the cursor's position across the post-
+    // moveToPixel pipeline so the in-motion click (below) can use
+    // the most recent observation. Initially null; the micro-
+    // correction loop sets it from its template-match results.
+    let lastKnownCursor: { x: number; y: number } | null = null;
+
     // Phase 49 (v0.5.37): bounds-aware post-move template-driven
     // micro-correction. Phase 45 (reverted) failed because:
     //   - 80 ms inter-iteration settle < streamer's 235 ms latency →
@@ -722,16 +749,44 @@ export async function clickAtWithRetry(
         prevEmit = { mx, my };
         await sleepMs(SETTLE_MS);
       }
+      // Carry the last known cursor position out of the micro-
+      // correction scope so Phase 125 can compute a directional
+      // approach.
+      lastKnownCursor = prevFound;
     }
 
-    // Phase 43: wiggle to trigger iPadOS pointer-snap. iPadOS's
-    // pointer-effect snaps the cursor to nearby interactive UI elements
-    // ONLY when the cursor is in motion. A stationary cursor 30 px from
-    // an icon does NOT snap. A tiny +N/-N round-trip motion (net zero
-    // displacement) gives iPadOS the motion event it needs to apply
-    // pointer-effect, which can pull the cursor INTO the target icon's
-    // hit area.
-    if (preClickWiggleMickeys > 0) {
+    // Phase 125: in-motion click. When we know the cursor's position
+    // (post-micro-correction or post-moveToPixel), send one final
+    // directional emit toward the target and click WITHOUT settling.
+    // iPadOS pointer-effect snaps the cursor to nearby interactive UI
+    // elements only while the cursor is moving towards them; a
+    // stationary cursor 22 px from an icon (Phase 123 visual
+    // diagnostic) does NOT register clicks on the icon, but a moving-
+    // into-icon cursor does. Falls back to Phase 43's net-zero wiggle
+    // when the cursor position is unknown.
+    const cursorAtClick = lastKnownCursor ?? lastMoveResult.finalDetectedPosition;
+    if (preClickApproachMickeys > 0 && cursorAtClick) {
+      const apDx = target.x - cursorAtClick.x;
+      const apDy = target.y - cursorAtClick.y;
+      const apResidual = Math.hypot(apDx, apDy);
+      if (apResidual >= 3) {
+        const apRatioX = lastMoveResult.usedPxPerMickey?.x && lastMoveResult.usedPxPerMickey.x > 0.5
+          ? lastMoveResult.usedPxPerMickey.x : 1.3;
+        const apRatioY = lastMoveResult.usedPxPerMickey?.y && lastMoveResult.usedPxPerMickey.y > 0.5
+          ? lastMoveResult.usedPxPerMickey.y : 1.3;
+        const apxRaw = apDx / apRatioX;
+        const apyRaw = apDy / apRatioY;
+        const apx = Math.sign(apxRaw) * Math.min(Math.ceil(Math.abs(apxRaw)), preClickApproachMickeys);
+        const apy = Math.sign(apyRaw) * Math.min(Math.ceil(Math.abs(apyRaw)), preClickApproachMickeys);
+        if (apx !== 0 || apy !== 0) {
+          await client.mouseMoveRelative(apx, apy);
+          // NO settle here — the click below fires while the cursor
+          // is still mid-motion.
+        }
+      }
+    } else if (preClickWiggleMickeys > 0) {
+      // Phase 43 fallback: net-zero wiggle when cursor position
+      // unknown. Triggers iPadOS pointer-effect via motion alone.
       await client.mouseMoveRelative(preClickWiggleMickeys, 0);
       await sleepMs(30);
       await client.mouseMoveRelative(-preClickWiggleMickeys, 0);
