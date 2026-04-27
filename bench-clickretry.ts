@@ -20,9 +20,10 @@ const TRIALS = 10;
 
 interface Trial {
   attempts: number;
-  success: boolean;       // screenChanged was true
-  finalResidual: number;  // residual from finalMoveResult
-  withinIcon: boolean;    // residual ≤ 25
+  success: boolean;          // screenChanged was true
+  finalResidual: number | null;  // residual from finalMoveResult; null when cursor not verified
+  withinIcon: boolean;       // residual ≤ 25 — false when cursor unverified
+  cursorVerified: boolean;   // Phase 99 fix: distinguish unverified-cursor from far-residual
 }
 
 async function runTrial(useMicro: boolean): Promise<Trial> {
@@ -52,15 +53,24 @@ async function runTrial(useMicro: boolean): Promise<Trial> {
     },
   });
 
+  // Phase 99: distinguish "cursor not verified" (finalDetectedPosition is
+  // null because motion-diff + template-match both failed) from "cursor
+  // verified but landed far from target". Earlier bench versions used
+  // `(cursor?.x ?? 0) - TARGET.x` which produced a misleading residual of
+  // sqrt(929^2 + 99^2) ≈ 934 px on the (929, 99) target whenever the
+  // cursor was unverified — that residual was an artifact of the (0,0)
+  // fallback, NOT a real cursor landing position.
   const cursor = r.finalMoveResult.finalDetectedPosition;
-  const dx = (cursor?.x ?? 0) - TARGET.x;
-  const dy = (cursor?.y ?? 0) - TARGET.y;
-  const residual = Math.sqrt(dx * dx + dy * dy);
+  const cursorVerified = cursor !== null;
+  const residual = cursorVerified
+    ? Math.sqrt((cursor!.x - TARGET.x) ** 2 + (cursor!.y - TARGET.y) ** 2)
+    : null;
   return {
     attempts: r.attempts,
     success: r.success,
     finalResidual: residual,
-    withinIcon: residual <= 25,
+    withinIcon: residual !== null && residual <= 25,
+    cursorVerified,
   };
 }
 
@@ -71,19 +81,32 @@ async function bench(label: string, useMicro: boolean) {
     try {
       const t = await runTrial(useMicro);
       trials.push(t);
-      console.error(`  trial ${i+1}: success=${t.success} attempts=${t.attempts} residual=${t.finalResidual.toFixed(1)}px withinIcon=${t.withinIcon}`);
+      const residStr = t.finalResidual !== null
+        ? `${t.finalResidual.toFixed(1)}px`
+        : 'UNVERIFIED';
+      console.error(`  trial ${i+1}: success=${t.success} attempts=${t.attempts} residual=${residStr} withinIcon=${t.withinIcon}`);
     } catch (e) {
       console.error(`  trial ${i+1}: ERROR ${(e as Error).message}`);
     }
   }
   const successCount = trials.filter(t => t.success).length;
   const withinIconCount = trials.filter(t => t.withinIcon).length;
-  console.error(`  --- ${label}: screenChanged ${successCount}/${trials.length}, withinIcon ${withinIconCount}/${trials.length}`);
+  const verifiedCount = trials.filter(t => t.cursorVerified).length;
+  const verifiedResiduals = trials
+    .filter(t => t.cursorVerified && t.finalResidual !== null)
+    .map(t => t.finalResidual!);
+  const medianVerifiedResidual = verifiedResiduals.length > 0
+    ? [...verifiedResiduals].sort((a, b) => a - b)[Math.floor(verifiedResiduals.length / 2)]
+    : null;
+  console.error(`  --- ${label}: screenChanged ${successCount}/${trials.length}, withinIcon ${withinIconCount}/${trials.length}, cursorVerified ${verifiedCount}/${trials.length}, medianResidual(verified)=${medianVerifiedResidual?.toFixed(1) ?? 'N/A'}px`);
   return { label, trials, successCount, withinIconCount };
 }
 
 const baseline = await bench('BASELINE', false);
 const micro    = await bench('PHASE 65', true);
+console.error(`\n=== END-TO-END SUMMARY ===`);
+console.error(`baseline: screenChanged ${baseline.successCount}/${TRIALS}, withinIcon ${baseline.withinIconCount}/${TRIALS}`);
+console.error(`phase 65: screenChanged ${micro.successCount}/${TRIALS}, withinIcon ${micro.withinIconCount}/${TRIALS}`);
 
 console.error('\n=== END-TO-END SUMMARY ===');
 console.error(`baseline: screenChanged ${baseline.successCount}/${TRIALS}, withinIcon ${baseline.withinIconCount}/${TRIALS}`);
