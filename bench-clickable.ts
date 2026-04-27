@@ -35,7 +35,7 @@ interface Trial {
   cursorVerified: boolean;
 }
 
-async function runTrial(maxRetries: number, useMicro = false): Promise<Trial> {
+async function runTrial(maxRetries: number, useMicro = false, preClickSettleMs = 80): Promise<Trial> {
   // Return to home screen
   await ipadGoHome(client);
   await new Promise(r => setTimeout(r, 800));
@@ -54,6 +54,7 @@ async function runTrial(maxRetries: number, useMicro = false): Promise<Trial> {
 
   const r = await clickAtWithRetry(client, TARGET, {
     maxRetries,
+    preClickSettleMs,
     moveToOptions: {
       strategy: 'detect-then-move',
       forbidSlamFallback: true,
@@ -77,12 +78,12 @@ async function runTrial(maxRetries: number, useMicro = false): Promise<Trial> {
   };
 }
 
-async function bench(label: string, maxRetries: number, useMicro = false) {
-  console.error(`\n=== ${label} (maxRetries=${maxRetries}, micro=${useMicro}, ${TRIALS} trials, target=(${TARGET.x},${TARGET.y})) ===`);
+async function bench(label: string, maxRetries: number, useMicro = false, preClickSettleMs = 80) {
+  console.error(`\n=== ${label} (maxRetries=${maxRetries}, micro=${useMicro}, settleMs=${preClickSettleMs}, ${TRIALS} trials, target=(${TARGET.x},${TARGET.y})) ===`);
   const trials: Trial[] = [];
   for (let i = 0; i < TRIALS; i++) {
     try {
-      const t = await runTrial(maxRetries, useMicro);
+      const t = await runTrial(maxRetries, useMicro, preClickSettleMs);
       t.attempt = i + 1;
       trials.push(t);
       const residStr = t.residual !== null ? `${t.residual.toFixed(1)}px` : 'UNVERIFIED';
@@ -102,14 +103,14 @@ async function bench(label: string, maxRetries: number, useMicro = false) {
   return { label, trials, successCount, verifiedCount };
 }
 
-const single = await bench('SINGLE-SHOT (maxRetries=0)', 0);
-const retried = await bench('WITH RETRIES (maxRetries=2)', 2);
-const micro = await bench('WITH RETRIES + PHASE 65 MICRO', 2, true);
+const retriedDefault = await bench('RETRIES default settle 80ms', 2, false, 80);
+const retriedSlow = await bench('RETRIES + 300ms settle', 2, false, 300);
+const microSlow = await bench('RETRIES + MICRO + 300ms settle', 2, true, 300);
 
 console.error('\n=== END-TO-END SUMMARY (Settings-icon target, ~70 px) ===');
-console.error(`single-shot:           opened ${single.successCount}/${TRIALS}, verified ${single.verifiedCount}/${TRIALS}`);
-console.error(`with retries:          opened ${retried.successCount}/${TRIALS}, verified ${retried.verifiedCount}/${TRIALS}`);
-console.error(`retries + micro:       opened ${micro.successCount}/${TRIALS}, verified ${micro.verifiedCount}/${TRIALS}`);
+console.error(`80ms settle:           opened ${retriedDefault.successCount}/${TRIALS}, verified ${retriedDefault.verifiedCount}/${TRIALS}`);
+console.error(`300ms settle:          opened ${retriedSlow.successCount}/${TRIALS}, verified ${retriedSlow.verifiedCount}/${TRIALS}`);
+console.error(`micro + 300ms settle:  opened ${microSlow.successCount}/${TRIALS}, verified ${microSlow.verifiedCount}/${TRIALS}`);
 
 // Final return to home so we leave the iPad in a known state.
 await ipadGoHome(client);
