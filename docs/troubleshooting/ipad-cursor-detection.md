@@ -151,6 +151,56 @@ pre-click verification chain (Phase 51) can do its job without
 producing wrong-element-hit reports. This should materially improve
 the cursor-verification rate that was 30-40% failure in past benches.
 
+### Phase 107 bench (2026-04-27, v0.5.100): MASSIVE empirical lift from Phase 102-106 chain
+
+Re-ran `bench-clickretry.ts` (10 trials × 2 modes, target `(929, 99)`)
+on the iPad in Settings to measure the actual lift from the Phase
+102-106 cursor-template breakthrough. Compare to Phase 98 baseline
+(v0.5.88, before the breakthrough):
+
+```
+=== v0.5.88 (contaminated cache) — Phase 98 ===
+BASELINE: cursorVerified 7/10, withinIcon 0/10
+PHASE 65: cursorVerified 6/10, withinIcon 3/10, median ≈ 36 px
+
+=== v0.5.100 (clean masked template) — Phase 107 ===
+BASELINE: cursorVerified 10/10, withinIcon 2/10, medianResidual 103 px
+PHASE 65: cursorVerified 10/10, withinIcon 9/10, medianResidual  6 px
+```
+
+**Key changes**:
+
+1. **Cursor verification rate: 60-70% → 100%**. Every single trial in
+   v0.5.100 produced a verified cursor position. Past 30-40%
+   "cursor-verification failure" was caused by the contaminated cache
+   producing false-positive matches that the algorithm correctly
+   rejected as untrustworthy. With clean templates, every attempt's
+   cursor is reliably located.
+
+2. **Phase 65 withinIcon: 30% → 90%**. Three-fold improvement in
+   precision. The micro-step config + clean template-match
+   verification + reliable cursor-locating produces residuals
+   consistently in single digits (5/10 trials at exactly 6 px).
+
+3. **Phase 65 median residual: 36 px → 6 px**. 6× tighter precision.
+
+4. **Baseline withinIcon improved 0/10 → 2/10**. Modest baseline
+   lift; the major win is in Phase 65 micro-step mode where the
+   improved verification chain compounds with the precision config.
+
+**Important caveat**: screenChanged is still 0-5/10 because target
+`(929, 99)` is a non-clickable status-bar pixel. Withhold judgment on
+"end-to-end click success" until a bench is run against a real
+clickable target. The withinIcon metric is what matters for cursor-
+positioning accuracy.
+
+**Strategic implication**: the Phase 102-106 chain delivered the most
+significant empirical improvement of the entire 107-phase iteration.
+For users on v0.5.100+, click_at on tiny iPad targets should be
+materially more reliable than the documented matrix's ~50% per-
+attempt rate. A fresh measurement against a clickable target is
+warranted to update the matrix numbers.
+
 ### Phase 106 end-to-end verification (2026-04-27): masked template successfully matches cursor at NEW position
 
 After seeding the clean masked template at (983, 1023), moved the
