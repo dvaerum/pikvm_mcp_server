@@ -1,9 +1,20 @@
 /**
- * Phase 65v: bench end-to-end clickAtWithRetry success rate. Measures
- * what the USER actually experiences: with maxRetries=2 (default), how
- * often does click_at get the cursor within 25 px of target?
+ * Phase 65v + Phase 100: bench end-to-end clickAtWithRetry success rate.
+ * Measures what the USER actually experiences: with maxRetries=2 (the
+ * Phase 94 iPad default), how often does click_at get the cursor within
+ * 25 px of target?
  *
- * 5 trials each, baseline vs Phase 65 micro config.
+ * Default: 10 trials × 2 modes (baseline vs Phase 65 micro), target
+ * `(929, 99)` (status bar — non-clickable, residual-only).
+ *
+ * Phase 100 made target + trial count overridable via CLI args:
+ *   npx tsx bench-clickretry.ts                  # defaults
+ *   npx tsx bench-clickretry.ts 1060 700         # custom target, default trials
+ *   npx tsx bench-clickretry.ts 1060 700 20      # custom target, 20 trials
+ *
+ * For meaningful screenChanged numbers, use a clickable target (an app
+ * icon, sidebar row, or button) — the status-bar default only exercises
+ * residual/cursor-verification metrics.
  */
 
 import { loadConfig } from './src/config.js';
@@ -15,8 +26,24 @@ const cfg = loadConfig();
 const client = new PiKVMClient(cfg.pikvm);
 const profile = await loadProfile('./data/ballistics.json');
 
-const TARGET = { x: 929, y: 99 };
-const TRIALS = 10;
+// Phase 100: parse CLI args [x] [y] [trials]. Default: status-bar target,
+// 10 trials. Each arg is optional but positional.
+const argv = process.argv.slice(2);
+const TARGET = {
+  x: argv[0] !== undefined ? Number(argv[0]) : 929,
+  y: argv[1] !== undefined ? Number(argv[1]) : 99,
+};
+const TRIALS = argv[2] !== undefined ? Number(argv[2]) : 10;
+if (
+  !Number.isFinite(TARGET.x) || !Number.isFinite(TARGET.y) ||
+  !Number.isInteger(TRIALS) || TRIALS < 1
+) {
+  console.error(`usage: npx tsx bench-clickretry.ts [x] [y] [trials]`);
+  console.error(`  x, y     target HDMI pixel (default 929, 99)`);
+  console.error(`  trials   trials per mode (default 10, must be ≥ 1)`);
+  process.exit(2);
+}
+console.error(`Bench target: (${TARGET.x}, ${TARGET.y}), trials per mode: ${TRIALS}`);
 
 interface Trial {
   attempts: number;
