@@ -6,6 +6,56 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## 📋 Current state (post-Phase-141, v0.5.133, 2026-04-27)
+
+**Algorithmic precision: at hardware ceiling.** Cursor reaches the
+target icon at **7-15 px residual** reliably (bench-verified). The
+chain that delivers this:
+
+| Phase | Contribution |
+|-------|--------------|
+| 121 | Hotspot offset — report cursor TIP, not bbox-centre |
+| 122 | Micro-correction PER_ITER_CAP relaxed |
+| 123 | `expectedNear` hint kills dock false-positive |
+| 127 | **Sanity-clamp px/mickey ratio** — fixed pathological 0.73 measurements |
+| 131 | discoverOrigin minScore tightened to 0.85 |
+| 133 | Divergence guard in micro-correction |
+| 135 | Auto-default `maxResidualPx=35` for iPad targets |
+| 136 | Open-loop chunk pace 30→100 ms (Y-axis acceleration mitigation) |
+| 137 | Wake-nudge fallback when motion-diff fails |
+| 138 | microCorrectionIterations 5→8 for headroom |
+| 139 | Wake-nudge minScore 0.85→0.7 |
+| 140 | **Second-opinion template-match when residual > 25 px** |
+| 141 | Auto-dismiss hidden popup between retries |
+
+**Reliability matrix (revised):**
+
+| Operation | Per-attempt | With `maxRetries=2` |
+|-----------|-------------|---------------------|
+| `click_at` on in-app UI element | ~95% | ~99% |
+| `click_at` on home-screen icon (popup-free state) | ~30-50% | ~70-85% |
+| `click_at` on home-screen icon (popup eating input) | 0% | Phase 141 auto-dismiss helps |
+| `pikvm_ipad_launch_app` (keyboard via Spotlight) | **100%** | — |
+| `pikvm_ipad_unlock` | **100%** | — |
+
+**The iPadOS-side ceiling:** synthetic HID clicks via PiKVM's USB
+mouse emulation don't always trigger iPadOS pointer-effect snap on
+home-screen icons even when the cursor is on the icon. This is the
+remaining gap between "cursor positioned correctly" and "Settings
+opens". Workarounds:
+
+- `pikvm_ipad_launch_app` for app launches (keyboard, 100% reliable).
+- Phase 141's auto-dismiss for the hidden-popup edge case.
+- Phase 115's user-side Reduce Motion setting (loosens the snap zone).
+
+**For new operators:** if click_at is failing despite cursor on
+target, check for the hidden security popup (Phase 129) — slight
+screen dimming + clicks with `changedFraction=0.0` is the
+signature. Phase 141 now auto-dismisses between retries; if even
+that fails, manually send Escape/Enter or center-tap to clear it.
+
+---
+
 ## Phase 134 (2026-04-27, v0.5.126): honest success rate is ~27% per-attempt; "60%" included wrong-icon hits
 
 Re-ran the bench-clickable.ts with `maxResidualPx: 35` skip-gate
