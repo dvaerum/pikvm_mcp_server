@@ -6,16 +6,19 @@ Reliable keyboard-first iPad workflow that bypasses cursor positioning.
 
 Live-validated 2026-04-26: app launches via Spotlight (`Cmd+Space` →
 type app name → Enter) succeed 100% of the time across Settings,
-Files, App Store. By contrast, `pikvm_mouse_click_at` on the iPad
-home screen has a ~20–50% per-attempt hit rate because iPadOS
-pointer acceleration is non-deterministic (10× variance per
-command) and `locateCursor` false-positives on animated home-screen
-widgets. Documented in `docs/troubleshooting/ipad-cursor-detection.md`.
+Files, App Store. By contrast, `pikvm_mouse_click_at` on iPad has a
+per-attempt hit rate of ~50% at icon tolerance (≤25 px residual) for
+tiny targets and ~70-80% for large rows/buttons (Phase 70 bench,
+post-Phase 65/68/69 improvements). With `maxRetries: 2` (3 attempts)
+the cumulative hit rate climbs to ~88% for tiny targets and ~99% for
+large ones. iPadOS pointer-acceleration variance (~6× run-to-run)
+and motion-diff noise on animated UI are the underlying limits — see
+`docs/troubleshooting/ipad-cursor-detection.md` § "Current state".
 
 **Prefer this pattern over `pikvm_mouse_click_at` for any iPad
-target where a keyboard equivalent exists.** Reach for cursor
-clicks only as a last resort, with `maxRetries: 3+` and post-click
-screenshot inspection.
+target where a keyboard equivalent exists.** Reach for cursor clicks
+only when no keyboard equivalent exists, and use `maxRetries: 2`
+plus post-click screenshot inspection.
 
 ## Primitives (live-validated)
 
