@@ -122,6 +122,8 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 
 The numbers are derived from observed median residual ~50-80 px on iPad with iPadOS 26, where motion-diff fails to detect the cursor entirely on 20-40% of attempts (counted as misses). For targets ≥ 200 px, the algorithm is highly reliable with retries; for tiny targets, miss rate is high. **For tiny targets (toggles, back arrows): prefer keyboard workflows when available** — see Phase 61/62 sidebar-arrow-key navigation. Reproducible bench: `bench-clickretry.ts`.
 
+**v0.5.97+ cursor-verification update** (Phase 102-107 chain): the cursor-template cache was found to be 87.5% contaminated with letter glyphs from the iPad's "GS" Apple Account avatar — every `findCursorByTemplateSet` call had been mostly false-positive matching letters on screen. Phase 106 architectural fix (mask-based template extraction) restored template-match to a useful state. Post-Phase-107 bench (n=10 on iPad Settings): cursor-verification rate jumped from 60-70% to 100%; Phase 65 micro-step config achieves 9/10 trials within 25 px (median residual 6 px). The Phase 87 "Important nuance" wrong-element-hit risk specifically due to false-positive template matches is materially reduced — `maxResidualPx: 25` becomes more useful because cursor positions are now reliably verified before the gate fires.
+
 ## MCP Prompts & Skill Tools
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
