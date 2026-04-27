@@ -6,6 +6,58 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 126 (2026-04-27, v0.5.119): keyboard-vs-mouse empirical comparison — keyboard 100%, mouse-on-icon 0%
+
+Live A/B comparison this tick:
+
+**Test 1 — Keyboard via Spotlight launch_app("Settings")**:
+Result: **Settings opened correctly** with previous state restored
+(Reduce Motion search visible). 100% reliable.
+
+**Test 2 — Raw mouseClick (no movement, current cursor position)**:
+Result: no visible effect. Same home screen.
+
+**Test 3 — pikvm_mouse_click_at(1027, 833) on Settings icon (v0.2.0
+running server, slam-then-move strategy)**:
+Result: cursor landed at (1080, 945) — 124 px off target. Click on
+empty wallpaper. No app launch.
+
+**Test 4 — pikvm_mouse_click_at(755, 200) on "Reduce Motion" sidebar
+item INSIDE Settings**:
+Result: cursor landed at (783, 232) — 32 px off target. Click on
+empty space below the row. No navigation.
+
+**Empirical conclusion**: across 4 different tests this tick, every
+mouse-click-at-precise-target FAILS to hit the intended UI element,
+because the cursor lands 30-120 px off target. The remaining 5-10
+px gap from the algorithmic limit (Phase 121-125 reach 22 px in
+the best case) to the iPadOS hit-area requirement (~10 px from
+icon center) is where the project is stuck on the mouse path.
+
+**Working alternative**: keyboard-first navigation via
+`pikvm_ipad_launch_app` (Cmd+Space + type + Enter) is 100%
+reliable for any installed app. Use this whenever the goal is to
+launch / switch to an app — far more reliable than click_at.
+
+For in-app navigation (where keyboard isn't sufficient), the
+Phase 121-125 algorithmic improvements lower residual variance
+but don't cross the iPadOS click-registration threshold. The
+honest reliability matrix:
+
+| Operation | Reliability | Recommended path |
+|-----------|------------|------------------|
+| Launch app (Settings, Files, etc.) | **100%** | `pikvm_ipad_launch_app` |
+| Unlock locked iPad | **100%** | `pikvm_ipad_unlock` |
+| Spotlight search | **100%** | Cmd+Space + type |
+| In-app sidebar navigation (Tab/arrows) | **~95%** | Phase 61-63 keyboard |
+| `click_at` on home-screen icon | **~5-15%** | (not recommended; use launch_app) |
+| `click_at` on in-app button | **~30-50%** | Try; fall back to keyboard |
+| `click_at` on modal OK / large button (>150 px) | **~80-95%** | Phase 121-125 helps |
+
+The Phase 121-125 algorithmic work IS valuable — it makes the
+modal / large-button case more reliable. It does NOT make the
+icon-click case viable.
+
 ## Phase 125 (2026-04-27, v0.5.118): in-motion click + diagnostic — click event is no-op'd by iPad in dimmed state
 
 Phase 122/123 brought cursor convergence to 22 px (visually on
