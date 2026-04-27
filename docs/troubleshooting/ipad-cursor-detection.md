@@ -6,6 +6,26 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## 🎯 TL;DR — operational reliability post-Phase 117
+
+| Operation | Reliability |
+|-----------|------------|
+| Algorithm cursor verification | **100%** (post-Phase 106) |
+| `pikvm_ipad_launch_app` (keyboard via Spotlight) | **100%** |
+| `click_at` on sidebar rows / large buttons (≥150 px) | ~99% |
+| `click_at` on app icons / mid-size targets (~100 px) | ~70-90% |
+| `click_at` on icon-sized targets (~70 px) | **~50-60%** |
+| `click_at` on toggle switches / tiny icons (<50 px) | **<50%** |
+| Multi-step iPad UI nav via click_at | **~17%** per attempt (compound) |
+
+**For users**: prefer `pikvm_ipad_launch_app` for app launches. Use
+`click_at` for sidebar rows and large buttons. For tiny iPad targets
+(icons, toggles), the snap-zone behavior in iPadOS caps reliability
+~50% and there is no software-side fix. **Manually enabling
+Settings → Accessibility → Motion → Reduce Motion** plausibly
+removes the snap-zone ceiling but cannot be done from within the
+project (chicken-and-egg verified Phase 116/117).
+
 ## 📊 Current state (post-Phase 65 onwards — see chronological log below for the full history)
 
 **Per-attempt accuracy** on iPad (clean state, unlocked, dark UI):
