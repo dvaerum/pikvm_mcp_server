@@ -6,6 +6,44 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## ✅ Phase 144 (2026-04-27, v0.5.135): in-app click confirmed broken too — iPad input-block is global, not SpringBoard-specific
+
+Hypothesis test this tick: if mouse-click is broken specifically
+on home-screen icons (SpringBoard) but works in-app (UIKit), the
+fix path involves a different HID class for icons. If both are
+broken, the iPad's current state has a global input block.
+
+**Live test:** launched Settings via `pikvm_ipad_launch_app`
+(keyboard, 100% reliable), then ran `clickAtWithRetry({x: 1242,
+y: 593})` against Detect Languages toggle (the same target
+Phase 129 verified live earlier this session).
+
+**Result:**
+- Cursor reached (1236, 594) — residual 6.4 px from target ✓
+- changedFraction: 0.0001 (zero pixel change) ✗
+- Toggle did NOT flip from ON → OFF (Phase 129 verified this DOES
+  work when iPad is in a clean state)
+
+**Conclusion:** the input-block is GLOBAL, not SpringBoard-
+specific. The same toggle that flipped reliably in Phase 129 now
+doesn't respond to clicks. The iPad has a persistent popup or
+state we can't dismiss remotely (Phase 141's Escape+Enter recipe
+doesn't clear it; the dimming signature persists).
+
+**Remote-recovery options exhausted.** Operator must physically
+interact with iPad to clear whatever dialog/state is blocking
+input. Possible candidates (none verifiable from HDMI):
+- Apple ID password prompt (needs typing actual password)
+- Storage-full / iCloud-sync confirmation
+- App update / software update prompt
+- Restart-required dialog
+- AssistiveTouch / Guided Access mode
+
+**Algorithmic side has done its job:** 7.8-page-px residual
+reproducibly, click HID event fires. When iPad accepts input, the
+click lands. Phase 119-143 chain delivers what's possible from
+the PiKVM USB HID emulation surface.
+
 ## 🏁 Algorithmic ceiling reached (post-Phase-143, v0.5.135, 2026-04-27)
 
 Phase 143 bench: **4 of 5 trials at EXACTLY 7.8 px residual** on
