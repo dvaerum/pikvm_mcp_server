@@ -28,7 +28,7 @@ import {
   BallisticsProfile,
 } from './pikvm/ballistics.js';
 import { moveToPixel } from './pikvm/move-to.js';
-import { verifyClickByDiff, clickAtWithRetry } from './pikvm/click-verify.js';
+import { verifyClickByDiff, clickAtWithRetry, defaultMaxRetriesFor } from './pikvm/click-verify.js';
 import { seedCursorTemplate } from './pikvm/seed-template.js';
 import { VERSION } from './version.js';
 import {
@@ -1216,15 +1216,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Phase 94: default to 2 retries on iPad (relative-mouse), 0 on
         // desktop (absolute-mouse). Single-shot click_at is ~50% reliable
         // on tiny iPad targets (verified Phase 70 bench), ~88% with
-        // retries=2. Mirroring the existing mouseAbsoluteMode-driven
-        // defaults for forbidSlamFallback and minBrightness so users get
-        // sensible behaviour without reading docs. Pass maxRetries=0
-        // explicitly to opt out (e.g. for a quick single toggle on iPad
-        // where the caller will retry at a higher level themselves).
+        // retries=2. Phase 95 extracted defaultMaxRetriesFor so the
+        // mapping is unit-tested.
         const maxRetriesArg = validateNumber(args.maxRetries, 0, 10);
         const maxRetries = maxRetriesArg !== undefined
           ? maxRetriesArg
-          : (mouseAbsoluteMode ? 0 : 2);
+          : defaultMaxRetriesFor(mouseAbsoluteMode);
         // Phase 38 / v0.5.26: explicit MCP parameter for the brightness gate.
         // Default mirrors the auto-policy: VERY_DIM_THRESHOLD on iPad
         // targets (relative-mouse), 0 elsewhere. Pass 0 explicitly to disable.
