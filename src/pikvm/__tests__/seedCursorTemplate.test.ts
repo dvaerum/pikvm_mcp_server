@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { seedCursorTemplate, extractMaskedTemplate } from '../seed-template.js';
 import type { CursorTemplate, DecodedScreenshot } from '../cursor-detect.js';
+import { findCursorByTemplateSet } from '../cursor-detect.js';
 
 /** Build a 256×256 PNG with optional bright cluster at (cx, cy). The
  *  cluster is a `size`×`size` square at brightness `gray`. Default size
@@ -280,5 +281,56 @@ describe('extractMaskedTemplate', () => {
       if (tpl.rgb[i * 3] > 100) bright++;
     }
     expect(bright).toBe(36);
+  });
+
+  it("E2E (Phase 106): masked template successfully matches the same cursor shape at a NEW position", () => {
+    // The whole point of mask-based extraction: the template captures
+    // ONLY the cursor pattern, so future template-match works regardless
+    // of the cursor's background context. This test pins that contract:
+    // - Build a frame with a cursor-like 6×6 cluster at (25, 25)
+    // - Mask isolates just the cluster
+    // - Extract masked template
+    // - Build a NEW frame with the same cluster shape at a DIFFERENT
+    //   position (40, 30), with COMPLETELY DIFFERENT background
+    // - findCursorByTemplateSet should locate the cursor at (40, 30)
+    //   with high confidence
+    const seedFrame = frame(80, 80, (i) => {
+      const x = i % 80, y = Math.floor(i / 80);
+      // Cursor-like cluster at (25, 25): 6×6 bright square.
+      const inCluster = Math.abs(x - 25) < 3 && Math.abs(y - 25) < 3;
+      // Background: medium grey (different from search frame's
+      // background to prove masking really isolates the cursor).
+      return inCluster ? [240, 240, 240] : [80, 80, 80];
+    });
+    // Mask flagged for the 6×6 cluster pixels only.
+    const seedMask = new Array(80 * 80).fill(false);
+    for (let y = 22; y < 28; y++) {
+      for (let x = 22; x < 28; x++) {
+        seedMask[y * 80 + x] = true;
+      }
+    }
+    const maskedTemplate = extractMaskedTemplate(seedFrame, { x: 25, y: 25 }, 24, seedMask);
+
+    // Search frame: same cursor shape (6×6 bright at (40, 30)) on a
+    // DIFFERENT background (dark, almost black).
+    const searchFrame = frame(80, 80, (i) => {
+      const x = i % 80, y = Math.floor(i / 80);
+      const inCursor = Math.abs(x - 40) < 3 && Math.abs(y - 30) < 3;
+      return inCursor ? [240, 240, 240] : [20, 20, 20];
+    });
+
+    // Run template-match. Loose minScore so we get a result; the
+    // assertion is on the position.
+    const found = findCursorByTemplateSet(searchFrame, [maskedTemplate], {
+      minScore: 0.1,
+    });
+    expect(found).not.toBeNull();
+    // Allow ±2 px wiggle (NCC may centre on a slightly-shifted
+    // best-match position when search step is non-1).
+    expect(Math.abs(found!.position.x - 40)).toBeLessThanOrEqual(2);
+    expect(Math.abs(found!.position.y - 30)).toBeLessThanOrEqual(2);
+    // Score should be reasonably high (the cursor pattern matches
+    // exactly, only background differs).
+    expect(found!.score).toBeGreaterThan(0.3);
   });
 });
