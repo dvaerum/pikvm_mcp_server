@@ -547,7 +547,42 @@ export async function clickAtWithRetry(
     // Phase 35: if cursor position couldn't be verified post-move,
     // skip the click — clicking blind when residual is unknown
     // risks hitting the wrong adjacent target (verified 2026-04-26).
-    const cursorVerified = lastMoveResult.finalDetectedPosition !== null;
+    let cursorVerified = lastMoveResult.finalDetectedPosition !== null;
+
+    // Phase 137 (v0.5.129): wake-nudge fallback. When moveToPixel's
+    // motion-diff AND template-match both failed (finalDetectedPosition
+    // is null), the cursor may have AUTO-HIDDEN between moveToPixel's
+    // last verification attempt and here — iPadOS fades the cursor
+    // after ~1-2 s of no input. Send a tiny 1-mickey wake nudge
+    // (visually 1-2 px, not enough to displace), wait for the cursor
+    // to render, and try template-match one more time with a strict
+    // 0.85 minScore. If found, monkey-patch the move result so the
+    // rest of the pipeline (residual gate, micro-correction) runs
+    // with the cursor's real position. Costs ~150 ms when the nudge
+    // path fires; saves the retry attempt that would otherwise burn.
+    if (!cursorVerified && sessionTemplates.length > 0) {
+      try {
+        await client.mouseMoveRelative(1, 0);
+        await sleepMs(50);
+        await client.mouseMoveRelative(-1, 0);
+        await sleepMs(80);
+        const wakeShot = await client.screenshot();
+        const wakeDecoded = await decodeScreenshot(wakeShot.buffer);
+        const woken = findCursorByTemplateSet(wakeDecoded, sessionTemplates, {
+          minScore: 0.85,
+          expectedNear: target,
+          expectedNearRadius: 200,
+        });
+        if (woken) {
+          (lastMoveResult as { finalDetectedPosition: { x: number; y: number } | null })
+            .finalDetectedPosition = woken.position;
+          cursorVerified = true;
+        }
+      } catch {
+        // Fall through; we'll skip the click as before.
+      }
+    }
+
     if (requireVerifiedCursor && !cursorVerified) {
       // Mark this attempt as a no-click failure. Don't take pre/post
       // screenshots since there's nothing to compare. Synthesise a
