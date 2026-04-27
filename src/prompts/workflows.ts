@@ -307,7 +307,7 @@ Take a final screenshot to verify the form was accepted (look for success messag
   // ---------- navigate-desktop-workflow ----------
   {
     name: 'ipad-keyboard-first-workflow',
-    description: 'Reliable keyboard-first iPad workflow that bypasses cursor positioning. Live-validated 2026-04-26: app launches via Spotlight (Cmd+Space → type → Enter) succeed 100% of the time across Settings, Files, App Store. Prefer this pattern over `pikvm_mouse_click_at` for any iPad target where a keyboard equivalent exists — cursor clicks on small icons are ~20–50% reliable per attempt due to iPadOS pointer-acceleration randomness.',
+    description: 'Reliable keyboard-first iPad workflow that bypasses cursor positioning. Live-validated 2026-04-26: app launches via Spotlight (Cmd+Space → type → Enter) succeed 100% of the time across Settings, Files, App Store. Prefer this pattern over `pikvm_mouse_click_at` for any iPad target where a keyboard equivalent exists — cursor clicks on tiny (<50 px) targets are ~50% reliable per attempt due to iPadOS pointer-acceleration variance, and even with retries=2 only ~88% reliable (Phase 70 bench).',
     arguments: [
       {
         name: 'goal',
@@ -335,7 +335,7 @@ Goal: **${goal}**
 
 ## Why keyboard, not cursor
 
-\`pikvm_mouse_click_at\` on the iPad home screen has a ~20–50% per-attempt hit rate because iPadOS pointer acceleration is non-deterministic (10× variance per command) and \`locateCursor\` false-positives on animated home-screen widgets. This is documented in \`docs/troubleshooting/ipad-cursor-detection.md\`. **Do not start with cursor clicks on iPad.** Reach for them only as a last resort, with \`maxRetries: 3+\` and post-click screenshot inspection.
+\`pikvm_mouse_click_at\` on iPad has a per-attempt hit rate of ~50% at icon tolerance (≤25 px residual) on small targets and ~70-80% on large rows/buttons (Phase 70 bench, post-Phase 65/68/69 improvements). With \`maxRetries: 2\` (3 attempts) the cumulative hit rate climbs to ~88% for tiny targets and ~99% for large ones. iPadOS pointer-acceleration variance and motion-diff noise on animated UI are the underlying limits — see \`docs/troubleshooting/ipad-cursor-detection.md\` § "Current state". **Start with keyboard wherever possible.** Reach for cursor clicks for elements with no keyboard equivalent.
 
 The keyboard channel — \`pikvm_shortcut\`, \`pikvm_type\`, \`pikvm_key\` — is reliable. Spotlight launches across Settings, Files, App Store, Maps, Safari are all live-validated 100%.
 
@@ -345,12 +345,12 @@ The keyboard channel — \`pikvm_shortcut\`, \`pikvm_type\`, \`pikvm_key\` — i
 2. **Need to launch an app?** Use \`pikvm_ipad_launch_app\` (wraps unlock → Cmd+Space → type → Enter).
 3. **Already in an app, need to navigate?** Try keyboard shortcuts BEFORE cursor:
    - **Search inside the app:** \`pikvm_shortcut(["MetaLeft", "KeyF"])\` opens find/search in most apps.
-   - **Cycle focus:** \`pikvm_key("Tab")\` (or with Full Keyboard Access enabled, arrow keys).
-   - **Activate focused element:** \`pikvm_key("Enter")\` or \`pikvm_key("Space")\`.
+   - **Settings sidebar (Phase 61):** \`pikvm_key("Escape")\` walks UP the nav stack; \`pikvm_key("ArrowDown"/"ArrowUp")\` walks the sidebar list. Right pane updates automatically. Works on any iPad — no Full Keyboard Access required.
+   - **In-pane focus (with FKA on, Phase 62):** \`pikvm_key("Tab")\` cycles focus, \`pikvm_key("Enter")\`/\`pikvm_key("Space")\` activates / toggles. Without FKA only the sidebar is keyboard-reachable.
    - **Dismiss modal / cancel:** \`pikvm_key("Escape")\`.
    - **Go back / close:** \`pikvm_shortcut(["MetaLeft", "BracketLeft"])\` (Cmd+\`[\`) — back navigation in most stock apps.
    - **Return to home:** \`pikvm_ipad_home\` (Cmd+H).
-4. **Cursor click ONLY needed?** Use \`pikvm_mouse_click_at\` with \`verifyClick: true\` (default), \`maxRetries: 3\`, and inspect the returned screenshot.
+4. **Cursor click ONLY needed?** Use \`pikvm_mouse_click_at\` with \`verifyClick: true\` (default) and \`maxRetries: 2\`. For unknown lock-screen state, also pass \`autoUnlockOnDetectFail: true\` (Phase 72 opt-in self-recovery; note it calls \`ipadGoHome\` which exits any open app). Always inspect the returned screenshot.
 
 ## Worked example: open Settings and search
 
