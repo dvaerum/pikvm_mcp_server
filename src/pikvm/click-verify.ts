@@ -977,6 +977,31 @@ export function defaultMaxRetriesFor(mouseAbsoluteMode: boolean): number {
   return mouseAbsoluteMode ? 0 : 2;
 }
 
+/**
+ * Phase 135 — pure helper: pick the `maxResidualPx` default given the
+ * target's mouse mode. iPad targets benefit from a strict 35 px gate
+ * because the open-loop move sometimes overshoots Y by 60+ px due to
+ * pointer acceleration; without the gate, the click lands on an
+ * adjacent icon (Books instead of Settings, etc.) and silently
+ * succeeds the screen-changed test even though the wrong app
+ * launched. Phase 134's bench measured this directly: 4/15 trials
+ * had residuals 10-34 px (correct icon), 11/15 had residuals
+ * 36-200 px (wrong icon or empty area). 35 is the documented icon
+ * hit-area on a 70 px-wide iPad icon.
+ *
+ * Desktop targets (mouseAbsoluteMode=true) get `undefined` (no
+ * default gate) — absolute-mode positioning is precise so callers
+ * who want a click-success guarantee can opt in explicitly.
+ *
+ * Extracted so the contract is unit-testable and a regression
+ * (someone removing the iPad default and going back to flat
+ * `undefined`) fails a test instead of silently regressing
+ * click_at quality.
+ */
+export function defaultMaxResidualPxFor(mouseAbsoluteMode: boolean): number | undefined {
+  return mouseAbsoluteMode ? undefined : 35;
+}
+
 /** Phase 93 — discriminator for the click-skip reason classes recorded
  *  by clickAtWithRetry. Exposed so callers (the MCP handler, tests) can
  *  reason about *why* a class of attempts failed without parsing the
