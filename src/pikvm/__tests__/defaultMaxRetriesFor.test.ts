@@ -6,14 +6,18 @@
  * Single-shot click_at on iPad is ~50% reliable on tiny targets; with
  * retries=2 it's ~88%. A future revert to a flat default would silently
  * regress the iPad UX — these tests catch that.
+ *
+ * Phase 142 (v0.5.134) bumped the iPad default 2 → 3 to give Phase 141's
+ * popup-auto-dismiss-between-retries one additional round before the
+ * loop exits.
  */
 
 import { describe, expect, it } from 'vitest';
 import { defaultMaxRetriesFor } from '../click-verify.js';
 
 describe('defaultMaxRetriesFor', () => {
-  it('returns 2 for relative-mouse targets (iPad — mouseAbsoluteMode=false)', () => {
-    expect(defaultMaxRetriesFor(false)).toBe(2);
+  it('returns 3 for relative-mouse targets (iPad — mouseAbsoluteMode=false)', () => {
+    expect(defaultMaxRetriesFor(false)).toBe(3);
   });
 
   it('returns 0 for absolute-mouse targets (desktop — mouseAbsoluteMode=true)', () => {
