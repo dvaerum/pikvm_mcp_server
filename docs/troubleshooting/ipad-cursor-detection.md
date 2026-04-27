@@ -6,6 +6,27 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 146 (2026-04-27, v0.5.136): PiKVM HID reset doesn't clear iPad-side input-block
+
+Tested HID device reset via `client.resetHid()` (PiKVM's
+`/hid/reset` endpoint). Hypothesis: re-enumerating the USB HID
+mouse to iPadOS would reset whatever stuck input-handling state
+exists. Result: iPad time advanced by ~15 minutes (confirming the
+reset call was processed by PiKVM and time passed) but the iPad's
+UI was completely unchanged — same Settings page, same search-
+field text "Reduce Motion`", same dimming.
+
+The iPad-side state is **NOT bound to the HID device's USB
+enumeration**. It persists across HID resets. Possible causes:
+- iPadOS-side input handler in stuck state independent of the HID
+  device
+- A user-space modal that survives HID re-enumeration
+- AssistiveTouch / Guided Access mode active
+
+**No remaining HID-layer or algorithmic recovery possible.** The
+user must physically interact with the iPad screen to clear
+whatever state is blocking input.
+
 ## ✅ Phase 144 (2026-04-27, v0.5.135): in-app click confirmed broken too — iPad input-block is global, not SpringBoard-specific
 
 Hypothesis test this tick: if mouse-click is broken specifically
