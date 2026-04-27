@@ -6,6 +6,56 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 130 (2026-04-27, v0.5.122): home-screen icon-tour — calendar widget false-positives still bottleneck targeting
+
+User asked for extensive testing: move cursor over every home-
+screen icon in random order. Built `icon-tour.ts` — moveToPixel
+to each of 11 targets, screenshot, run template-match with
+expectedNear=target hint.
+
+Result: median residual **269 px** (way too high). 0/11 within
+25 px. Root cause:
+
+- 7/11 trials reported cursor at (758, 450) score 0.66 — that's
+  the **calendar widget's day-number text** being matched as the
+  cursor template. Same false-positive class as Phase 119
+  (wallpaper at 0.71) and Phase 123 (dock at 0.69).
+- Phase 127's micro-correction inside Settings reached **1 px**
+  residual reliably. The home screen's busy widgets defeat
+  motion-diff during the move itself, so the cursor never
+  arrives at the target.
+
+**Why home screen ≠ Settings**:
+- Settings UI is mostly empty negative space + occasional text
+  rows. Motion-diff cleanly tracks the cursor.
+- Home screen has a calendar widget (text grid 6-31), weather
+  widget, and grid of colored icons — all features that NCC-
+  correlate with the cursor template at score 0.6-0.7.
+
+**What DID work in the tour**:
+- Camera (0.85 score), Books (0.83), Games (0.89) had
+  reasonable template scores — these matches likely WERE the
+  real cursor at residuals of 54-160 px.
+- The remaining 7 fell to the calendar-widget false-positive.
+
+**What this means for click_at**:
+- In-app icon clicks (Detect Languages, Reduce Motion sidebar):
+  **reliable** post-Phase-127 (1 px residual demonstrated).
+- Home-screen icon clicks: **still problematic** because the
+  widget false-positives lead motion-diff astray.
+- Workaround: use `pikvm_ipad_launch_app` for home-screen apps
+  (keyboard-first via Spotlight is 100% reliable).
+
+**Next phase candidates**:
+- Tighten template-match minScore default in moveToPixel (not
+  just click-verify) to reject 0.6-0.7 false-positives during
+  the move itself.
+- Add "calendar widget" as a known-bad-region exclusion in
+  template search.
+- Train templates on the home screen specifically so the real
+  cursor-on-wallpaper has higher score than widget false-
+  positives.
+
 ## 🎉 Phase 129 (2026-04-27, v0.5.121): BREAKTHROUGH — clicks DO work; the "stuck iPad" was a hidden security popup
 
 After Phase 127 brought micro-correction residual to **2-4 px**
