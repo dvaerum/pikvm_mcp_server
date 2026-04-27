@@ -105,6 +105,52 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 104 (2026-04-27): tune Phase 102/103 thresholds against live measurement + multi-cluster try
+
+Phase 102 set looksLikeCursor's bright-pixel upper bound at 12% based
+on a wrong assumption that real iPad cursors occupy 4-10% of the 24×24
+template. Phase 103 set seedCursorTemplate's maxClusterSize at 70 px
+based on the same assumption. **Both were too tight.**
+
+Live measurement (debug-diff script in plain area):
+- Real iPad cursor diff cluster: 80-90 px
+- Real cursor template extract: 14-16% bright (anti-aliased edges +
+  soft shadow inflate the brightness count)
+
+Phase 104 fixes:
+1. seedCursorTemplate maxClusterSize: 70 → 120 px (admits real
+   cursors, still excludes pointer-effect halos at 200+ px).
+2. looksLikeCursor upper bound: 12% → 18% (admits anti-aliased
+   cursors, still excludes letter glyphs at 20%+).
+3. **Multi-cluster try**: motion-diff produces TWO clusters per
+   cursor move (BEFORE position now empty, AFTER position now
+   bright). Picking the largest doesn't reliably pick the AFTER
+   cluster (sizes 89 vs 83 in live data). New seed logic tries each
+   candidate and accepts the first that passes looksLikeCursor —
+   robust against the pick-wrong-cluster failure mode.
+
+**Live seeding still fails on Settings due to context contamination**:
+when the cursor lands over text ("Ipad vaskeri" row) or the home-
+indicator bar, the 24×24 extract captures the surrounding bright
+pixels along with the cursor. The looksLikeCursor gate correctly
+rejects these as too-bright (>18%). This is a SEED-TIME positioning
+problem, not an algorithm bug — successful seeding requires the
+cursor in a TRULY plain area (no text, no icons, no indicator bar)
+which is hard to find on busy screens like Settings.
+
+**Strategic call**: empty cache is BETTER than contaminated cache.
+With empty `data/cursor-templates/`, template-match degrades to a
+no-op (graceful) and motion-diff carries the click_at workload
+unsupervised. With contaminated cache (Phase 102's discovery), every
+template-match call reports false-positive "verified" positions that
+mislead the algorithm into wrong-element clicks. The contaminated
+cache from before Phase 102 is quarantined to
+`data/cursor-templates.contaminated-2026-04-27/`.
+
+For deployments that want template-match's ~30 px residual benefit:
+seed manually from the iPad home screen (more plain-wallpaper area)
+or from a full-screen image viewer with a black background.
+
 ### Phase 102 (2026-04-27): cursor-template cache 87.5% contaminated — root cause + fix
 
 Live-investigated under user pressure (the user — correctly — called

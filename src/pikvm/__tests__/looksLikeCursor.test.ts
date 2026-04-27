@@ -108,7 +108,7 @@ describe('looksLikeCursor', () => {
     expect(looksLikeCursor(t)).toBe(true);
   });
 
-  it("REGRESSION (Phase 102): rejects a single-letter glyph (e.g. 'G') even though it's one connected blob", () => {
+  it("REGRESSION (Phase 102 + 104): rejects a heavy single-letter glyph (e.g. 'G' at >18% bright)", () => {
     // Live failure 2026-04-27: the cursor-templates cache had 7/8
     // entries that were single-letter glyphs ('G', 'a', 'r' etc.) from
     // the iPad Settings → Apple Account "GS" avatar and surrounding
@@ -117,20 +117,22 @@ describe('looksLikeCursor', () => {
     //   - low mean saturation: yes
     //   - cohesion (single connected blob): yes (one letter is one blob)
     //
-    // Phase 102 added an upper-bound on bright pixel count: real iPad
-    // cursors occupy 30-50 px (5-9% of 24×24=576), letters occupy
-    // 80-150 px (14-26%). A 12% cap (~70 px) discriminates.
+    // Phase 102 added an upper-bound on bright pixel count. Phase 104
+    // (an hour later) tuned the threshold from 12% to 18% after live
+    // measurement showed real iPad cursors sometimes reach 14-16%
+    // brightness due to anti-aliased edges. Letters in iPad UI typically
+    // occupy ≥20% (heavier strokes than my first test estimated).
     //
-    // Template here simulates a "G" letter at ~16% bright.
+    // Template here simulates a thick "G" at ~22% bright (~127 px).
     const t = template(24, 24, (i) => {
       const x = i % 24, y = Math.floor(i / 24);
-      // Outer ring forming a "G" shape: top-bottom strokes + left side
-      // + bottom-right serif. ~92 bright pixels (16%).
-      const onTopOrBottom = (y >= 6 && y <= 7) || (y >= 16 && y <= 17);
-      const onLeftSide = (x >= 6 && x <= 7) && (y >= 6 && y <= 17);
-      const onRightLower = (x >= 16 && x <= 17) && (y >= 12 && y <= 17);
-      const onSerif = (y === 12) && (x >= 13 && x <= 17);
-      const isLetter = onTopOrBottom && (x >= 6 && x <= 17)
+      // Outer ring forming a "G" shape: 3-px-thick strokes top + bottom +
+      // left + right-lower + serif. ~127 bright pixels (22%).
+      const onTopOrBottom = (y >= 5 && y <= 7) || (y >= 16 && y <= 18);
+      const onLeftSide = (x >= 5 && x <= 7) && (y >= 5 && y <= 18);
+      const onRightLower = (x >= 16 && x <= 18) && (y >= 12 && y <= 18);
+      const onSerif = (y >= 11 && y <= 13) && (x >= 13 && x <= 18);
+      const isLetter = onTopOrBottom && (x >= 5 && x <= 18)
         || onLeftSide
         || onRightLower
         || onSerif;
