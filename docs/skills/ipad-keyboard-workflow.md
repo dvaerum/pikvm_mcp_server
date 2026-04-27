@@ -71,6 +71,31 @@ pikvm_shortcut(["MetaLeft", "Tab"])            # App Switcher
 # Then arrow keys + Enter, or release MetaLeft to dismiss.
 ```
 
+### Navigate the Settings sidebar with arrow keys (Phase 61)
+
+The iPad Settings sidebar IS keyboard-navigable on any iPad — no
+Full Keyboard Access required. The right pane updates automatically
+as the sidebar selection moves.
+
+```
+# Start anywhere in Settings (sub-page or category):
+pikvm_key("Escape")                            # walk UP the nav stack
+pikvm_key("Escape")                            # repeat until at root
+pikvm_key("ArrowDown")                         # next sidebar row
+pikvm_key("ArrowDown")
+# ... arrow until target category is highlighted; right pane updates live
+pikvm_screenshot                               # verify
+```
+
+**For deeper-than-sidebar interaction** (toggling a switch, tapping a
+sub-row in the right pane): iPadOS's Full Keyboard Access must be ON
+(Settings → Accessibility → Keyboards → Full Keyboard Access — one-
+time setup). With FKA on, `pikvm_key("Tab")` walks in-pane focus and
+`pikvm_key("Enter")` activates / toggles. Without FKA, only the
+sidebar is keyboard-reachable; in-pane interactions still need
+`pikvm_mouse_click_at`. See `docs/troubleshooting/ipad-cursor-detection.md`
+§ Phase 61/62/63 for the full finding.
+
 ### Lock the iPad
 
 iPadOS doesn't expose a "lock" keyboard shortcut over USB HID; the
