@@ -105,6 +105,42 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 96 live verification (2026-04-27): iPadOS 26 exposes NO pointer-acceleration toggle for our HID profile
+
+Used the keyboard-first workflow (Cmd+Space → Settings → Cmd+F →
+search) to enumerate every Settings hit for "Pointer", "Mouse",
+"Tracking Speed", and "Trackpad" on iPadOS 26 (live, this iPad).
+
+**Result**:
+- "Pointer" / "Pointer Control" → No Results.
+- "Mouse" → only Mouse Keys (Accessibility → Touch → AssistiveTouch
+  → Mouse Keys), which is keyboard-arrows-as-mouse, NOT pointer
+  acceleration for an external HID device.
+- "Tracking Speed" → only Accessibility → Touch → AssistiveTouch
+  → Virtual Trackpad (a separate on-screen control feature, not the
+  external mouse pointer).
+- "Trackpad" → all results route to Virtual Trackpad under
+  AssistiveTouch.
+
+**Conclusion**: iPadOS 26 surfaces tracking-speed / pointer
+controls only when the OS recognises the connected device as a
+"trackpad" or "mouse" with Apple-specific descriptors. The PiKVM HID
+gadget presents as a generic relative-mouse, which iPadOS treats as
+a "pointer-style" input WITHOUT exposing the speed/acceleration UI
+that would normally appear under General → Trackpad & Mouse on iOS.
+There is no user-facing knob.
+
+This confirms architectural constraint #1 below ("iPadOS pointer
+acceleration is non-disableable") with a 2026 live data point — not
+just inference from older iPadOS docs.
+
+**Implication for the click-accuracy strategy**: the per-attempt
+~50% icon-tolerance ceiling on tiny targets is a genuine architectural
+limit, not a software bug we haven't fixed yet. The retry-and-verify
+approach (Phase 25 + Phase 94 default `maxRetries: 2`) and the
+keyboard-first workflow (Phase 61–63, 76) are the correct strategic
+responses. Stop expecting a settings-toggle silver bullet.
+
 ### Phase 72 live verification (2026-04-26): auto-unlock recovery works partially
 
 Verified Phase 72's `autoUnlockOnDetectFail: true` against an iPad
@@ -830,7 +866,12 @@ with animated widgets is where everything falls apart.
 
 1. **iPadOS pointer acceleration** is non-disableable. It varies
    1.0–2.0× per move and is asymmetric (+x and −x have different
-   effective ratios in the same context).
+   effective ratios in the same context). Live-verified 2026-04-27
+   (Phase 96): iPadOS 26 Settings exposes NO pointer-speed or
+   tracking-speed toggle for a generic relative-mouse HID device —
+   only AssistiveTouch's Virtual Trackpad has a tracking-speed
+   slider, and that's a separate feature, not the external mouse
+   pointer.
 2. **PiKVM HID descriptor is 8-bit relative**. Each emission is a
    signed byte in mickeys; iPadOS applies its own ballistic curve on
    top.
