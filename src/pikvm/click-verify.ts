@@ -375,7 +375,16 @@ export async function clickAtWithRetry(
   const minBrightness = options.minBrightness ?? VERY_DIM_THRESHOLD;
   const minPreClickTemplateScore = options.minPreClickTemplateScore ?? 0.5;
   const preClickWiggleMickeys = options.preClickWiggleMickeys ?? 5;
-  const preClickApproachMickeys = options.preClickApproachMickeys ?? 5;
+  // Phase 143 (v0.5.135): bumped default 5 → 10 mickeys. Phase 142
+  // bench showed cursor reaching 10.6 px residual on home-screen
+  // Settings icon yet click did not register; the iPadOS pointer-
+  // effect snap zone needs the cursor moving INTO the icon at
+  // button-down time, and 5 mickeys (≈6.5 px at ratio 1.3) may be
+  // too small a velocity for snap to trigger. 10 mickeys (≈13 px)
+  // gives the cursor a clearer "moving toward the icon" trajectory.
+  // Magnitude is still capped per-axis by the residual-in-mickeys,
+  // so small residuals don't over-shoot.
+  const preClickApproachMickeys = options.preClickApproachMickeys ?? 10;
   // Phase 49: re-enabled with edge-aware safety + 350ms settle. Default
   // 3 iterations max — conservative; loop self-terminates when residual
   // is small or when emitting would push cursor into an iPad gesture zone.
