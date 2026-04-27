@@ -105,53 +105,65 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
-### Phase 98 bench (2026-04-27, v0.5.88): empirical residual distribution at the iPad status-bar target
+### Phase 98–99 bench (2026-04-27, v0.5.89): empirical accuracy + diagnostic gate, with bench bug correction
 
 Ran `bench-clickretry.ts` (10 trials × 2 modes, target `(929, 99)` —
-top status-bar area, non-clickable so screenChanged is N/A) against
+top status-bar area, non-clickable so `screenChanged` is N/A) against
 the live iPad in Settings → Apple Account. v0.5.88 local code,
-maxRetries: 2 in both modes.
+maxRetries: 2 in both modes. Raw output:
 
 ```
 === BASELINE (default chunk-60) ===
-  residuals: 73, 168, 177, 63, 163, 934, 53, 934, 58, 934
+  raw "residuals": 73, 168, 177, 63, 163, 934, 53, 934, 58, 934
   withinIcon (≤25 px): 0/10
 
 === PHASE 65 micro (chunk-20, slow pace, 12 passes, disableLinearBailout) ===
-  residuals: 5, 6, 37, 934, 934, 934, 36, 934, 24, 39
+  raw "residuals": 5, 6, 37, 934, 934, 934, 36, 934, 24, 39
   withinIcon (≤25 px): 3/10
 ```
 
-**Findings**:
+**Phase 99 bench bug — corrected interpretation**: the `934` values
+are NOT cursor landings. They are the bench's null-cursor sentinel:
+when `finalDetectedPosition` is null (Phase 35 cursor-not-verified
+gate fired), the original bench computed
+`(cursor?.x ?? 0) - TARGET.x`, producing a meaningless residual of
+`sqrt(929² + 99²) ≈ 934 px` for any unverified attempt. The bench
+has been fixed (Phase 99) to surface unverified attempts as
+`UNVERIFIED` and exclude them from residual stats — see
+`bench-clickretry.ts` for the corrected output format.
 
-1. **Phase 65 micro is decisively more precise WHEN tracking succeeds**.
-   Baseline best non-edge residual: 53 px. Phase 65 micro best: 5 px.
-   Excluding the four 934 px detection-failure trials, Phase 65 micro
-   achieved 3/6 ≤ 25 px (50%) and 6/6 ≤ 50 px.
-2. **Both modes hit a ~30–40% detection-failure rate** at this target,
-   manifesting as `residual=934.3` px — that's the cursor parking at
-   HDMI X ~986 (iPad's right-edge region; the target is X=929 in the
-   status bar, within ~60 px of the right edge). Hypothesis: `+/-40
-   px` wake motion at the edge clamps to no movement → motion-diff
-   sees no displacement → fallback emits stale open-loop deltas →
-   cursor ends up far from target. Edge-of-letterbox targets are
-   harder for detect-then-move than the docs reflect.
-3. **screenChanged is not a useful metric for non-clickable targets**.
-   Both modes scored 0–3/10 here because the status bar isn't an
-   active button. The withinIcon (residual) metric is the right
-   signal for accuracy benches.
+**Real findings, with the 934 trials reinterpreted as
+"cursor not verified"**:
+
+1. **30–40% per-trial cursor-verification failure** at `(929, 99)`.
+   3/10 baseline trials and 4/10 Phase 65 micro trials had every
+   attempt's `finalDetectedPosition` come back null — motion-diff
+   AND template-match both failed to confirm where the cursor
+   actually went after the open-loop emit. This is the same Phase 35
+   `requireVerifiedCursor` gate firing that's documented elsewhere,
+   not a new edge-target failure mode.
+2. **Phase 65 micro is decisively more precise WHEN cursor IS
+   verified**. Baseline best verified residual: 53 px (4 verified
+   trials, residuals 53, 63, 73, 168, 177 — well, 5 of 7). Phase 65
+   micro verified residuals: 5, 6, 24, 36, 37, 39 — 3/6 ≤ 25 px,
+   6/6 ≤ 50 px. The micro-step config genuinely tightens the
+   landing distribution.
+3. **`screenChanged` is not a useful metric for non-clickable
+   targets**. Both modes scored low (0–3/10) here because the status
+   bar isn't interactive. `withinIcon` (residual ≤ 25 px) and
+   `cursorVerified` are the right signals.
 
 **Action items surfaced by this bench**:
 
-- Targets within ~50 px of the iPad letterbox edge produce a 30–40%
-  detection-failure tail — callers SHOULD avoid edge targets when a
-  more central alternative exists (e.g. for Settings, click the
-  search field at ~(740, 145) rather than the date display at the
-  status bar).
-- The Phase 65 micro config is the right default for precision-
-  sensitive iPad targets — confirmed empirically. The current code
-  applies micro-step settings via the existing `linearTriggerResidual`
-  / `linearMaxPasses` parameters.
+- The 30–40% cursor-verification failure rate at this target is
+  consistent with the documented matrix — it's not a regression.
+- The Phase 65 micro config materially reduces residual when
+  cursor IS verified — confirmed empirically.
+- For benches: prefer targets that are clickable (so `screenChanged`
+  is meaningful) AND in the iPad's central area (so cursor
+  verification has high signal). `(929, 99)` exercises the
+  cursor-verification gate hard, which surfaced the bench's null-
+  handling bug as a side-effect.
 
 ### Phase 96 live verification (2026-04-27): iPadOS 26 exposes NO pointer-acceleration toggle for our HID profile
 
