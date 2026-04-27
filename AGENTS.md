@@ -118,6 +118,8 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 
 (Measured Phase 69 + iPad unlocked, bench n=10: `5/10 ≤25 px` per-attempt; 1/10 detect-failure. Sample residuals: 8, 11, 7, 20, 11 px.) `pikvm_mouse_click_at` is now production-reliable for tiny targets WITH retries — was ~27% 3-attempt rate pre-Phase-68, now ~88%.
 
+**Important nuance**: `screenChanged: true` means a click happened SOMEWHERE clickable, not that the intended target was hit. Live verified 2026-04-27: a click 60 px off landed on a SIDEBAR row instead of the targeted right-pane row — both produce `screenChanged: true`. For automation that depends on hitting the RIGHT element, verify via post-click screenshot inspection, not just `screenChanged`.
+
 The numbers are derived from observed median residual ~50-80 px on iPad with iPadOS 26, where motion-diff fails to detect the cursor entirely on 20-40% of attempts (counted as misses). For targets ≥ 200 px, the algorithm is highly reliable with retries; for tiny targets, miss rate is high. **For tiny targets (toggles, back arrows): prefer keyboard workflows when available** — see Phase 61/62 sidebar-arrow-key navigation. Reproducible bench: `bench-clickretry.ts`.
 
 ## MCP Prompts & Skill Tools
