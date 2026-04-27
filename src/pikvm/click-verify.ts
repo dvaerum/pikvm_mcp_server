@@ -552,18 +552,33 @@ export async function clickAtWithRetry(
     // risks hitting the wrong adjacent target (verified 2026-04-26).
     let cursorVerified = lastMoveResult.finalDetectedPosition !== null;
 
-    // Phase 137 (v0.5.129): wake-nudge fallback. When moveToPixel's
-    // motion-diff AND template-match both failed (finalDetectedPosition
-    // is null), the cursor may have AUTO-HIDDEN between moveToPixel's
-    // last verification attempt and here — iPadOS fades the cursor
-    // after ~1-2 s of no input. Send a tiny 1-mickey wake nudge
-    // (visually 1-2 px, not enough to displace), wait for the cursor
-    // to render, and try template-match one more time with a strict
-    // 0.85 minScore. If found, monkey-patch the move result so the
-    // rest of the pipeline (residual gate, micro-correction) runs
-    // with the cursor's real position. Costs ~150 ms when the nudge
-    // path fires; saves the retry attempt that would otherwise burn.
-    if (!cursorVerified && sessionTemplates.length > 0) {
+    // Phase 137 (v0.5.129): wake-nudge fallback when motion-diff +
+    // template-match both failed (finalDetectedPosition=null).
+    //
+    // Phase 140 (v0.5.132): ALSO fire the second-opinion check
+    // when motion-diff DID return a position but the residual is
+    // suspiciously high (> 25 px). Live diagnostic on Settings
+    // home-screen icon caught moveToPixel reporting cursor at
+    // (996, 836) — residual 31 px — when the cursor's REAL
+    // position was (1010, 830) — residual 17 px. The motion-diff
+    // pair selection had picked the icon-LABEL feature (a static
+    // text region 30 px below the icon) as the post-cluster, so
+    // the reported residual was a lie. Without this Phase 140
+    // gate, the maxResidualPx=35 skip gate would let this through
+    // and the click would land at the wrong measured position.
+    // With the gate, we re-template-match with expectedNear=target
+    // hint and use the closer match if found.
+    const SECOND_OPINION_RESIDUAL_PX = 25;
+    const initialResidual = lastMoveResult.finalDetectedPosition
+      ? Math.hypot(
+          lastMoveResult.finalDetectedPosition.x - target.x,
+          lastMoveResult.finalDetectedPosition.y - target.y,
+        )
+      : Infinity;
+    if (
+      sessionTemplates.length > 0 &&
+      (!cursorVerified || initialResidual > SECOND_OPINION_RESIDUAL_PX)
+    ) {
       try {
         await client.mouseMoveRelative(1, 0);
         await sleepMs(50);
@@ -586,9 +601,18 @@ export async function clickAtWithRetry(
           expectedNearRadius: 200,
         });
         if (woken) {
-          (lastMoveResult as { finalDetectedPosition: { x: number; y: number } | null })
-            .finalDetectedPosition = woken.position;
-          cursorVerified = true;
+          // Phase 140: only adopt the second-opinion position if
+          // it's actually CLOSER to target than what moveToPixel
+          // reported. Avoid swapping a 17 px match for a 50 px one.
+          const wokenResidual = Math.hypot(
+            woken.position.x - target.x,
+            woken.position.y - target.y,
+          );
+          if (!cursorVerified || wokenResidual < initialResidual) {
+            (lastMoveResult as { finalDetectedPosition: { x: number; y: number } | null })
+              .finalDetectedPosition = woken.position;
+            cursorVerified = true;
+          }
         }
       } catch {
         // Fall through; we'll skip the click as before.
