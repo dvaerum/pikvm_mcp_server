@@ -113,7 +113,7 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 |--------------|------------------------|----------------------|----------|
 | ≥ 200 px     | ~80% (residual ≤ 100 px) | ~99% | Sidebar rows, large buttons, full-width banners |
 | 100-200 px   | ~70% (residual ≤ 100 px) | ~97% | App icons (~100 px), search-bar fields |
-| 50-100 px    | ~60% (residual ≤ 50 px)  | ~94% | Standard buttons, page tabs |
+| 50-100 px    | ~60% (residual ≤ 50 px)  | **~50-60%** | Standard buttons, page tabs, **~70 px icons (Phase 111 measured)** |
 | < 50 px      | ~50% (residual ≤ 25 px)  | ~88% | Back arrows, X buttons, toggles |
 
 (Measured Phase 69 + iPad unlocked, bench n=10: `5/10 ≤25 px` per-attempt; 1/10 detect-failure. Sample residuals: 8, 11, 7, 20, 11 px.) `pikvm_mouse_click_at` is now production-reliable for tiny targets WITH retries — was ~27% 3-attempt rate pre-Phase-68, now ~88%.

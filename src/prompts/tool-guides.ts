@@ -562,7 +562,7 @@ After Phases 65-77 (v0.5.68+):
 |--------------|------------------------------|------------------------------------|
 | ≥ 200 px     | ~80% (residual ≤ 100 px) | ~99% |
 | 100-200 px   | ~70% (residual ≤ 100 px) | ~97% |
-| 50-100 px    | ~60% (residual ≤ 50 px)  | ~94% |
+| 50-100 px    | ~60% (residual ≤ 50 px)  | **~50-60%** (Phase 111 N=15) |
 | < 50 px      | ~50% (residual ≤ 25 px)  | ~88% |
 
 Single-digit residuals are achievable when motion-diff succeeds (Phase 69 measured 6-9 px hits).
@@ -609,7 +609,7 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 |--------------|-----------------|---------------|----------|
 | ≥ 200 px | ~80% | ~99% | Sidebar rows, large buttons |
 | 100-200 px | ~70% | ~97% | App icons, search fields |
-| 50-100 px | ~60% | ~94% | Standard buttons, page tabs |
+| 50-100 px | ~60% | **~50-60%** | Standard buttons, page tabs, ~70 px iPad icons (Phase 111 measured) |
 | < 50 px | ~50% | ~88% | Back arrows, X buttons, toggles |
 
 **Phase 94 default**: \`maxRetries\` defaults to 2 on iPad (relative-mouse) targets — turns ~50% per-attempt into ~88% reliable end-to-end. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
