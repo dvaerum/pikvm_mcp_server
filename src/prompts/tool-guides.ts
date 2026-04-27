@@ -612,7 +612,7 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 | 50-100 px | ~60% | ~94% | Standard buttons, page tabs |
 | < 50 px | ~50% | ~88% | Back arrows, X buttons, toggles |
 
-Set \`maxRetries: 2\` for iPad targets — turns ~50% per-attempt into ~88% reliable end-to-end.
+**Phase 94 default**: \`maxRetries\` defaults to 2 on iPad (relative-mouse) targets — turns ~50% per-attempt into ~88% reliable end-to-end. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
 
 ## Critical pre-flight
 
@@ -627,7 +627,7 @@ Set \`maxRetries: 2\` for iPad targets — turns ~50% per-attempt into ~88% reli
 | x | number | *(required)* | Target X in HDMI screenshot pixels |
 | y | number | *(required)* | Target Y in HDMI screenshot pixels |
 | button | string | left | left / right / middle / up / down |
-| maxRetries | number | 0 | Recommended **2** on iPad |
+| maxRetries | number | 2 (iPad) / 0 (desktop) | Phase 94: auto-defaults to 2 on iPad (relative-mouse) / 0 on desktop. Pass 0 explicitly to opt out of retries on iPad. |
 | autoUnlockOnDetectFail | boolean | false | Phase 72 opt-in lock-screen recovery |
 | maxResidualPx | number | *(unset)* | Phase 88: skip the click if cursor lands more than N px from target. Set to 25 for strict icon-tolerance (refuses imprecise clicks that risk hitting adjacent UI elements); leave unset for permissive behaviour. |
 | verifyClick | boolean | true | Pre/post screenshot diff confirms click landed |
