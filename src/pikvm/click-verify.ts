@@ -379,14 +379,17 @@ export async function clickAtWithRetry(
   // Phase 49: re-enabled with edge-aware safety + 350ms settle. Default
   // 3 iterations max — conservative; loop self-terminates when residual
   // is small or when emitting would push cursor into an iPad gesture zone.
-  // Phase 122 (v0.5.116): bumped default from 3 to 5. With
-  // PER_ITER_CAP_MICKEYS=5 and ratio≈1.3, 3 iters caps total
-  // correction at 19.5 px — observed live residuals start at 30-40
-  // px so a 3-iter loop can't bridge the gap. 5 iters × 6.5 px/iter
-  // = 32.5 px headroom, enough for the typical case. Per-iter
-  // SETTLE_MS=350 means 5 iters adds 1.75 s latency vs 3 iters'
-  // 1.05 s — acceptable for the click-precision win.
-  const microCorrectionIterations = options.microCorrectionIterations ?? 5;
+  // Phase 122 (v0.5.116): bumped default from 3 to 5.
+  // Phase 138 (v0.5.130): bumped 5 → 8 after Phase 136/137 bench
+  // showed micro-mode residuals clustering at 29-36 px — exactly
+  // the cap of "5 iters × 5 mickeys × 1.3 px = 32 px max
+  // correction". Bumping to 8 iters gives 52 px headroom; even
+  // a 60 px open-loop overshoot now converges below the 35 px
+  // skip-click gate. Per-iter SETTLE_MS=350 means 8 iters adds
+  // 2.8 s latency vs 5 iters' 1.75 s — acceptable for click
+  // precision since the divergence guard (Phase 133) bails early
+  // when convergence stalls.
+  const microCorrectionIterations = options.microCorrectionIterations ?? 8;
   const microConvergePx = options.microConvergePx ?? 8;
   const minLivePxPerMickey = options.minLivePxPerMickey ?? 0.4;
   // Load cursor templates ONCE outside the retry loop. Empty set →
