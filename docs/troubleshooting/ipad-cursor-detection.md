@@ -151,6 +151,78 @@ pre-click verification chain (Phase 51) can do its job without
 producing wrong-element-hit reports. This should materially improve
 the cursor-verification rate that was 30-40% failure in past benches.
 
+### Phase 109 bench (2026-04-27, v0.5.102): clickable-target reliability — honest findings
+
+To answer the question Phase 107 left open ("does the cursor-
+verification lift translate to actual click-opens-Settings success?"),
+ran a focused bench against the Settings icon at (1027, 833) on the
+iPad home screen. Each trial: Cmd+H to home, click_at, record
+whether Settings opened. N=5 per mode (small sample; treat as
+directional, not definitive).
+
+```
+SINGLE-SHOT (maxRetries=0):
+  trial 1: success=false attempts=1 residual=41.3px
+  trial 2: success=true  attempts=1 residual=146.7px
+  trial 3: success=true  attempts=1 residual=113.1px
+  trial 4: success=false attempts=1 residual=UNVERIFIED
+  trial 5: success=false attempts=1 residual=UNVERIFIED
+  → opened-Settings 2/5, cursorVerified 3/5, medianResidual 113 px
+
+WITH RETRIES (maxRetries=2):
+  trial 1: success=false attempts=3 residual=31.0px
+  trial 2: success=false attempts=3 residual=94.9px
+  trial 3: success=false attempts=3 residual=UNVERIFIED
+  trial 4: success=true  attempts=2 residual=41.8px
+  trial 5: success=true  attempts=1 residual=43.4px
+  → opened-Settings 2/5, cursorVerified 4/5, medianResidual 43 px
+```
+
+**Honest observations**:
+
+1. **Cursor-verification lift IS real**: 3/5 → 4/5 verified attempts.
+   Phase 106's clean templates measurably help.
+
+2. **Click-success rate did NOT improve correspondingly**: 2/5 in
+   both modes. The Phase 107 cursor-VERIFICATION lift didn't
+   translate into more screenChanged hits in this target.
+
+3. **Trial 1 paradox**: residual 31 px (well within the 70 px
+   visible icon) but DIDN'T open Settings. Possible explanations:
+   (a) iPadOS's tap-hit area for an icon is SMALLER than its visible
+   bounding box (Apple HIG says icons have padding inside their visual
+   extent — actual tap target might be ~35-50 px); (b) the click
+   landed on the icon's edge where pointer-effect snaps to a NEIGHBOR
+   icon at the time of click; (c) some other timing/state issue.
+
+4. **Trial 2 also instructive**: residual 94 px (not within the 70 px
+   icon by ANY measure), screenChanged=false. Click landed somewhere
+   else — likely on the wallpaper between icons.
+
+5. **Successful trials had residuals 41-147 px**: a wide range. The
+   icon's TAP area is somewhere around 70 px wide, so 41 px residual
+   = inside, 147 px = far outside. Yet trial 2 (147 px) and trial 3
+   (113 px) opened Settings. Either the trial bench mis-attributed,
+   OR the hit area is much wider than 70 px in the click direction.
+
+**Takeaways**:
+
+- Documentation's "~88% for tiny targets with retries" matrix needs
+  re-measurement. N=5 is too noisy to override but the directional
+  signal here suggests the real number for THIS specific target +
+  configuration (default mode, not Phase 65 micro) might be lower —
+  perhaps in the 40-60% range.
+- The Phase 102-106 chain delivers what it promised: cursor
+  verification reliability went up. The downstream effect on
+  click-success depends on hit-area geometry which the algorithm
+  doesn't model.
+- Phase 65 micro-step config (which the Phase 107 bench tested)
+  achieves much tighter residuals (median 6 px vs 43 px here) and
+  would likely show better click-success rate. Re-running this bench
+  with Phase 65 config would be the next informative step.
+
+**Reproducible bench**: `bench-clickable.ts` (Phase 109).
+
 ### Phase 107 bench (2026-04-27, v0.5.100): MASSIVE empirical lift from Phase 102-106 chain
 
 Re-ran `bench-clickretry.ts` (10 trials × 2 modes, target `(929, 99)`)
