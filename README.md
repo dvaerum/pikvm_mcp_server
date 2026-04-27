@@ -158,6 +158,8 @@ Or if using the .env file:
 
 **iPad click-accuracy expectations** (post-Phases 65-77): with `maxRetries: 2` (Phase 94 default on iPad — no explicit opt-in needed), end-to-end hit rates are ~99% for sidebar rows, ~97% for app icons, ~94% for standard buttons, ~88% for tiny back-arrows / X buttons / toggles. The iPad must be unlocked — call `pikvm_ipad_unlock` first or pass `autoUnlockOnDetectFail: true` for opt-in self-recovery. See `docs/troubleshooting/ipad-cursor-detection.md` § "Current state" for the full reliability matrix.
 
+**v0.5.97+ template-match upgrade** (Phase 102-107): the cursor-template cache was 87.5% contaminated with letter-glyph false positives. Phase 106 fixed this with mask-based template extraction. Post-fix bench: cursor-verification rate 60-70% → **100%**, Phase 65 micro-step within-25-px hit rate **3/10 → 9/10** with median residual **6 px** (previously 36 px). Wrong-element-hit risk from stale template matches is materially reduced. **Restart your MCP client to activate** — see `docs/troubleshooting/ipad-cursor-detection.md` § "Phase 107 bench" for measurements.
+
 ### Absolute-Mouse Calibration (not applicable to iPad/relative-mouse targets)
 - **`pikvm_auto_calibrate`** - Automatically detect cursor and compute calibration factors *(preferred)*
 - **`pikvm_calibrate`** - Start manual calibration by moving cursor to screen center for visual verification
