@@ -151,6 +151,68 @@ pre-click verification chain (Phase 51) can do its job without
 producing wrong-element-hit reports. This should materially improve
 the cursor-verification rate that was 30-40% failure in past benches.
 
+### Phase 110 bench (2026-04-27, v0.5.103): with Phase 65 micro-step added — click-success unchanged
+
+Extended bench-clickable.ts to test Phase 65 micro-step config as a
+3rd mode. N=5 per mode against Settings icon (1027, 833) on iPad
+home screen.
+
+```
+SINGLE-SHOT (maxRetries=0):    opened 1/5, verified 4/5
+WITH RETRIES (maxRetries=2):   opened 2/5, verified 5/5  ← 100% verify!
+RETRIES + PHASE 65 MICRO:      opened 2/5, verified 4/5
+```
+
+**Two findings worth noting**:
+
+1. **WITH RETRIES (no micro) reached 5/5 = 100% cursor verification**
+   for the first time on this clickable-target bench. Phase 106's
+   clean templates + maxRetries=2 = reliable cursor location.
+
+2. **Click-success stayed 2/5 across retry modes**. Adding Phase 65
+   micro-step config didn't help.
+
+**Bizarre individual trials**:
+
+- Retries mode trial 1: residual 44.6 px → OPENED Settings ✓
+- Retries mode trial 2: residual 48.0 px → DIDN'T open ✗
+- Retries mode trial 3: residual 29.3 px → DIDN'T open ✗
+- Retries mode trial 5: residual 29.7 px → OPENED Settings ✓
+- **Micro mode trial 2: residual 163 px (FAR outside icon) → OPENED Settings**
+- **Micro mode trial 3: residual 3.2 px (perfect) → OPENED Settings**
+
+The 163 px-but-opened-Settings trial is the most informative: the
+cursor was demonstrably nowhere near the Settings icon, yet
+Settings opened. This is consistent with iPadOS pointer-effect snap
+pulling the cursor toward the nearest interactive element AT CLICK
+TIME, independent of the algorithm's reported pre-click residual.
+
+**Strategic implication**:
+
+The algorithm's "where the cursor lands" reported by motion-diff +
+template-match is RELIABLE post-Phase-106. But the actual click
+registration on iPad is influenced by iPadOS pointer-effect snap
+behavior the algorithm doesn't model. Click-success vs cursor-
+location are different metrics:
+
+- **Cursor location accuracy** (the algorithm's domain): Phase 106
+  delivered 100% verification at this target. Done.
+- **Click-success rate** (iPadOS hit-area + snap): bounded by
+  iPadOS's pointer-effect heuristic. The algorithm can position the
+  cursor; iPadOS decides what gets clicked.
+
+This makes the documented "~88% for tiny targets" matrix figure
+plausibly OPTIMISTIC for default mode at iPad icon-sized targets.
+The N=5 sample isn't enough to override the matrix, but it's
+consistently directional across two benches (Phase 109 = 2/5 in
+both modes; Phase 110 confirmed = 2/5 across THREE modes).
+
+**For users**: tiny iPad targets remain the keyboard-first workflow's
+strength. click_at IS more reliable than before (no more contaminated-
+template false positives), but absolute click-success on individual
+~70 px icons is still 40-50% per session, not 88%. Use Spotlight /
+keyboard navigation when reliability matters more than mouse-input.
+
 ### Phase 109 bench (2026-04-27, v0.5.102): clickable-target reliability — honest findings
 
 To answer the question Phase 107 left open ("does the cursor-

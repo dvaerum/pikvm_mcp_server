@@ -35,10 +35,22 @@ interface Trial {
   cursorVerified: boolean;
 }
 
-async function runTrial(maxRetries: number): Promise<Trial> {
+async function runTrial(maxRetries: number, useMicro = false): Promise<Trial> {
   // Return to home screen
   await ipadGoHome(client);
   await new Promise(r => setTimeout(r, 800));
+
+  const microOpts = useMicro ? {
+    linearTriggerResidualPx: 200,
+    linearChunkMagnitude: 20,
+    linearChunkPaceMs: 80,
+    linearCorrectionCap: 40,
+    linearMaxPasses: 12,
+    maxCorrectionPasses: 12,
+    linearResidualPx: 25,
+    iconToleranceResidualPx: 25,
+    disableLinearBailout: true,
+  } : {};
 
   const r = await clickAtWithRetry(client, TARGET, {
     maxRetries,
@@ -46,6 +58,7 @@ async function runTrial(maxRetries: number): Promise<Trial> {
       strategy: 'detect-then-move',
       forbidSlamFallback: true,
       profile,
+      ...microOpts,
     },
   });
 
@@ -64,12 +77,12 @@ async function runTrial(maxRetries: number): Promise<Trial> {
   };
 }
 
-async function bench(label: string, maxRetries: number) {
-  console.error(`\n=== ${label} (maxRetries=${maxRetries}, ${TRIALS} trials, target=(${TARGET.x},${TARGET.y})) ===`);
+async function bench(label: string, maxRetries: number, useMicro = false) {
+  console.error(`\n=== ${label} (maxRetries=${maxRetries}, micro=${useMicro}, ${TRIALS} trials, target=(${TARGET.x},${TARGET.y})) ===`);
   const trials: Trial[] = [];
   for (let i = 0; i < TRIALS; i++) {
     try {
-      const t = await runTrial(maxRetries);
+      const t = await runTrial(maxRetries, useMicro);
       t.attempt = i + 1;
       trials.push(t);
       const residStr = t.residual !== null ? `${t.residual.toFixed(1)}px` : 'UNVERIFIED';
@@ -91,10 +104,12 @@ async function bench(label: string, maxRetries: number) {
 
 const single = await bench('SINGLE-SHOT (maxRetries=0)', 0);
 const retried = await bench('WITH RETRIES (maxRetries=2)', 2);
+const micro = await bench('WITH RETRIES + PHASE 65 MICRO', 2, true);
 
 console.error('\n=== END-TO-END SUMMARY (Settings-icon target, ~70 px) ===');
-console.error(`single-shot:  opened ${single.successCount}/${TRIALS}, verified ${single.verifiedCount}/${TRIALS}`);
-console.error(`with retries: opened ${retried.successCount}/${TRIALS}, verified ${retried.verifiedCount}/${TRIALS}`);
+console.error(`single-shot:           opened ${single.successCount}/${TRIALS}, verified ${single.verifiedCount}/${TRIALS}`);
+console.error(`with retries:          opened ${retried.successCount}/${TRIALS}, verified ${retried.verifiedCount}/${TRIALS}`);
+console.error(`retries + micro:       opened ${micro.successCount}/${TRIALS}, verified ${micro.verifiedCount}/${TRIALS}`);
 
 // Final return to home so we leave the iPad in a known state.
 await ipadGoHome(client);
