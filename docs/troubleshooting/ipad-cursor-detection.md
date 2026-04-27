@@ -105,6 +105,54 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 98 bench (2026-04-27, v0.5.88): empirical residual distribution at the iPad status-bar target
+
+Ran `bench-clickretry.ts` (10 trials × 2 modes, target `(929, 99)` —
+top status-bar area, non-clickable so screenChanged is N/A) against
+the live iPad in Settings → Apple Account. v0.5.88 local code,
+maxRetries: 2 in both modes.
+
+```
+=== BASELINE (default chunk-60) ===
+  residuals: 73, 168, 177, 63, 163, 934, 53, 934, 58, 934
+  withinIcon (≤25 px): 0/10
+
+=== PHASE 65 micro (chunk-20, slow pace, 12 passes, disableLinearBailout) ===
+  residuals: 5, 6, 37, 934, 934, 934, 36, 934, 24, 39
+  withinIcon (≤25 px): 3/10
+```
+
+**Findings**:
+
+1. **Phase 65 micro is decisively more precise WHEN tracking succeeds**.
+   Baseline best non-edge residual: 53 px. Phase 65 micro best: 5 px.
+   Excluding the four 934 px detection-failure trials, Phase 65 micro
+   achieved 3/6 ≤ 25 px (50%) and 6/6 ≤ 50 px.
+2. **Both modes hit a ~30–40% detection-failure rate** at this target,
+   manifesting as `residual=934.3` px — that's the cursor parking at
+   HDMI X ~986 (iPad's right-edge region; the target is X=929 in the
+   status bar, within ~60 px of the right edge). Hypothesis: `+/-40
+   px` wake motion at the edge clamps to no movement → motion-diff
+   sees no displacement → fallback emits stale open-loop deltas →
+   cursor ends up far from target. Edge-of-letterbox targets are
+   harder for detect-then-move than the docs reflect.
+3. **screenChanged is not a useful metric for non-clickable targets**.
+   Both modes scored 0–3/10 here because the status bar isn't an
+   active button. The withinIcon (residual) metric is the right
+   signal for accuracy benches.
+
+**Action items surfaced by this bench**:
+
+- Targets within ~50 px of the iPad letterbox edge produce a 30–40%
+  detection-failure tail — callers SHOULD avoid edge targets when a
+  more central alternative exists (e.g. for Settings, click the
+  search field at ~(740, 145) rather than the date display at the
+  status bar).
+- The Phase 65 micro config is the right default for precision-
+  sensitive iPad targets — confirmed empirically. The current code
+  applies micro-step settings via the existing `linearTriggerResidual`
+  / `linearMaxPasses` parameters.
+
 ### Phase 96 live verification (2026-04-27): iPadOS 26 exposes NO pointer-acceleration toggle for our HID profile
 
 Used the keyboard-first workflow (Cmd+Space → Settings → Cmd+F →
