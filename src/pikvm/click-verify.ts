@@ -571,8 +571,17 @@ export async function clickAtWithRetry(
         await sleepMs(80);
         const wakeShot = await client.screenshot();
         const wakeDecoded = await decodeScreenshot(wakeShot.buffer);
+        // Phase 139 (v0.5.131): minScore relaxed 0.85 → 0.7. Live
+        // diagnostic on Settings home-screen icon showed real cursor
+        // matches scoring 0.776 with the expectedNear hint — Phase
+        // 137's 0.85 floor was rejecting them, so the wake-nudge
+        // fallback never recovered the valid cursor. The
+        // expectedNear=target + radius=200 hint provides the locality
+        // protection that minScore alone used to give; matches at
+        // 0.7+ within 200 px of target are real cursors, not false-
+        // positives on far-away features.
         const woken = findCursorByTemplateSet(wakeDecoded, sessionTemplates, {
-          minScore: 0.85,
+          minScore: 0.7,
           expectedNear: target,
           expectedNearRadius: 200,
         });
