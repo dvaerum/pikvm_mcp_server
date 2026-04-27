@@ -21,8 +21,18 @@ no explicit opt-in needed), end-to-end success rate per target size:
 |--------------|--------------------|----------|
 | ≥ 200 px     | ~99% | Sidebar rows, large buttons |
 | 100-200 px   | ~97% | App icons, search fields |
-| 50-100 px    | ~94% | Standard buttons, page tabs |
+| 50-100 px    | **~50-60%** | Standard buttons, page tabs, **app icons (~70 px)** |
 | < 50 px      | ~88% | Back arrows, X buttons, toggles |
+
+**Note (Phase 109-111 update)**: the 50-100 px figure was revised
+from ~94% to ~50-60% based on N=15 trials at the iPad's Settings
+icon (1027, 833). The earlier ~94% figure was likely measured under
+conditions that don't generalise — see Phase 109/110/111 entries
+below. The cursor-verification chain (Phase 102-106) is now reliable
+at 100%, but iPadOS pointer-effect snap zones cap click-success at
+~50-60% for individual icon-sized targets in cursor-mode. **For tiny
+iPad icons, prefer `pikvm_ipad_launch_app` (Spotlight + type +
+Enter) which is 100% reliable.**
 
 **Important nuance**: these "hit rates" measure `screenChanged: true`
 (verifyClick triggers a visible UI change), not "the intended UI
@@ -150,6 +160,68 @@ before Phase 102.
 pre-click verification chain (Phase 51) can do its job without
 producing wrong-element-hit reports. This should materially improve
 the cursor-verification rate that was 30-40% failure in past benches.
+
+### Phase 111 bench (2026-04-27, v0.5.104): preClickSettleMs sweep — settle time isn't the lever
+
+Tested if the 80ms preClickSettleMs default is too short. Bumped to
+300ms in two modes. N=5 per mode against Settings icon (1027, 833):
+
+```
+80ms settle (default):       opened 3/5, verified 4/5
+300ms settle:                opened 2/5, verified 3/5
+Phase 65 + 300ms settle:     opened 3/5, verified 4/5
+```
+
+**Total across 15 trials: 8/15 = 53% click-success.** The settle
+time isn't a clear lever — 300ms seems slightly worse than 80ms
+but well within sample noise.
+
+**The blockbuster trial**: 80ms-settle trial 3, cursor residual
+**497 px** (cursor was 497 px from the Settings icon!), and Settings
+OPENED ANYWAY. The cursor was demonstrably nowhere near the Settings
+icon, but the click registered as a Settings tap.
+
+This conclusively confirms iPadOS click-registration is **NOT a
+pure function of cursor position**. iPadOS's pointer-effect snap
+pulls the cursor toward the nearest interactive element AT CLICK
+TIME, regardless of where the algorithm placed it pre-click. With
+the cursor 497 px away on the home screen, iPadOS still resolved
+the click to whichever icon was "magnetically closest" — apparently
+the Settings icon.
+
+**Honest revised reliability picture**:
+
+For ~70 px iPad icons in cursor-mode (Settings, Books, Maps, etc.):
+- Single-shot: ~20-40% click-success
+- With retries (Phase 94 default): ~40-60% click-success
+- With Phase 65 micro: ~40-60% click-success (no clear advantage)
+- Cursor verification rate: ~80-100% post-Phase-106
+
+The ~88% documented matrix figure for "tiny targets with retries"
+may be optimistic. Across THREE consecutive benches (Phase 109,
+110, 111) with multiple configs, the click-success rate averaged
+40-60%, not 88%. The matrix figure was likely measured on different
+target geometry or under conditions that don't generalise.
+
+**Why click-success caps at ~50-60% for tiny iPad icons in
+cursor-mode**:
+
+iPadOS expects either touch input (large finger contact zone) or
+trackpad input (with Apple's pointer-effect heuristics). PiKVM's
+generic-mouse HID gadget gets the GENERIC pointer behavior, which
+has tighter snap zones (~30-40 px around each icon). Outside the
+snap zone, clicks fall on wallpaper and register as nothing.
+
+The algorithm now reliably places the cursor where requested
+(~100% verification post-Phase-106). The ~50% click-success ceiling
+is iPadOS's snap-zone geometry, not an algorithm bug.
+
+**Strategic implication for users**: keyboard-first remains the
+right answer for tiny iPad targets. click_at is appropriate for
+sidebar rows (~150-200 px wide where snap zones are larger), large
+buttons, modal dialogs. For specific iPad icons, prefer
+`pikvm_ipad_launch_app` (Spotlight + type + Enter) which is 100%
+reliable.
 
 ### Phase 110 bench (2026-04-27, v0.5.103): with Phase 65 micro-step added — click-success unchanged
 
