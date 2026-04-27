@@ -17,8 +17,8 @@
 
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { seedCursorTemplate } from '../seed-template.js';
-import type { CursorTemplate } from '../cursor-detect.js';
+import { seedCursorTemplate, extractMaskedTemplate } from '../seed-template.js';
+import type { CursorTemplate, DecodedScreenshot } from '../cursor-detect.js';
 
 /** Build a 256×256 PNG with optional bright cluster at (cx, cy). The
  *  cluster is a `size`×`size` square at brightness `gray`. Default size
@@ -219,5 +219,66 @@ describe('seedCursorTemplate', () => {
     });
 
     expect(client.emits).toEqual([{ dx: 50, dy: 80 }]);
+  });
+});
+
+describe('extractMaskedTemplate', () => {
+  /** Build a tiny decoded screenshot (uniform fill or per-pixel fn). */
+  function frame(width: number, height: number, fill: (i: number) => [number, number, number]): DecodedScreenshot {
+    const rgb = Buffer.alloc(width * height * 3);
+    for (let i = 0; i < width * height; i++) {
+      const [r, g, b] = fill(i);
+      rgb[i * 3] = r;
+      rgb[i * 3 + 1] = g;
+      rgb[i * 3 + 2] = b;
+    }
+    return { rgb, width, height };
+  }
+
+  it('all-true mask = identity (template equals unmasked extract)', () => {
+    const screen = frame(50, 50, (i) => {
+      const x = i % 50, y = Math.floor(i / 50);
+      const inCursor = Math.abs(x - 25) < 4 && Math.abs(y - 25) < 4;
+      return inCursor ? [240, 240, 240] : [60, 60, 60];
+    });
+    const allTrue = new Array(50 * 50).fill(true);
+    const tpl = extractMaskedTemplate(screen, { x: 25, y: 25 }, 24, allTrue);
+
+    // Centre pixel still bright (cursor centre).
+    const centreOff = (12 * 24 + 12) * 3;
+    expect(tpl.rgb[centreOff]).toBe(240);
+    // Edge pixel still has the dark background.
+    const edgeOff = 0;
+    expect(tpl.rgb[edgeOff]).toBe(60);
+  });
+
+  it("REGRESSION (Phase 106): all-false mask produces an all-zero template", () => {
+    const screen = frame(50, 50, () => [240, 240, 240]);
+    const allFalse = new Array(50 * 50).fill(false);
+    const tpl = extractMaskedTemplate(screen, { x: 25, y: 25 }, 24, allFalse);
+
+    for (let i = 0; i < 24 * 24 * 3; i++) {
+      expect(tpl.rgb[i]).toBe(0);
+    }
+  });
+
+  it("REGRESSION (Phase 106): mask isolating a 6×6 region keeps only those pixels bright", () => {
+    // Bright everywhere; mask true only for centre 6×6. Result: template
+    // should have exactly 36 bright pixels (the masked region), the rest
+    // zeroed — proves the masking actually filters the extract.
+    const screen = frame(50, 50, () => [240, 240, 240]);
+    const mask = new Array(50 * 50).fill(false);
+    for (let y = 22; y < 28; y++) {
+      for (let x = 22; x < 28; x++) {
+        mask[y * 50 + x] = true;
+      }
+    }
+    const tpl = extractMaskedTemplate(screen, { x: 25, y: 25 }, 24, mask);
+
+    let bright = 0;
+    for (let i = 0; i < 24 * 24; i++) {
+      if (tpl.rgb[i * 3] > 100) bright++;
+    }
+    expect(bright).toBe(36);
   });
 });
