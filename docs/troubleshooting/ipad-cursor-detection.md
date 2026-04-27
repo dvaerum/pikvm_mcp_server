@@ -6,6 +6,70 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## ⚠️ Phase 119 (2026-04-27, v0.5.113): Phase 107 "100% verification" claim was WRONG — template-match false-positives on wallpaper gradients
+
+User pushed back on the "ceiling is architectural" framing. Built a
+pure visual-servo prototype (screenshot → find cursor → compute
+delta → tiny emit → repeat). Live trace showed:
+
+```
+iter 0: cursor=(952,916) score=0.71 delta=(75,-83) dist=112
+iter 1: cursor=(952,916) score=0.71 delta=(75,-83) dist=112
+... (repeated 30 iterations identically)
+```
+
+**Cursor STAYED at (952, 916) at score 0.71 for ALL 30 iterations**
+despite the script emitting moves toward target each iteration.
+Visual inspection of the iPad home screen at (952, 916) shows
+**EMPTY WALLPAPER** — no cursor there. Template-match had been
+false-positive matching a wallpaper gradient feature.
+
+**Implications**:
+
+1. **Phase 107's "100% cursor verification" claim was an artifact**
+   of low minScore threshold (0.5). Template-match always finds
+   SOMETHING that scores ≥ 0.5 — even when that something is a
+   wallpaper feature, not the cursor.
+
+2. **Phase 109-114 click-success ~50% measurements were measuring
+   the wrong thing**. We weren't measuring "cursor positioning
+   accuracy then click registration"; we were measuring "cursor
+   ends up somewhere ≈ random + iPadOS click registration".
+
+3. **The Phase 102-118 conclusion that the ceiling was iPadOS-side
+   needs revisiting**. The cursor position the algorithm reports
+   isn't reliably the actual cursor position. iPadOS click
+   registration may actually be fine; it's our cursor location
+   detection that's lying.
+
+**Real next directions**:
+
+- Raise template-match minScore to 0.85+ to reject borderline
+  matches
+- Add post-match shape verification (check that bright pixels
+  actually form an arrow shape, not just any cursor-template-
+  similar pattern)
+- Use motion-confirmation: emit a known move, screenshot, verify
+  the new "cursor position" moved in the expected direction by
+  ~the expected magnitude. If it didn't move, template-match
+  found wallpaper.
+- Use dark-frame negative space detection: a real cursor occludes
+  background pixels. Diff the matched template against the
+  underlying frame — should differ significantly if cursor is
+  there, should be near-identical if it's wallpaper.
+
+**Honest revised state**: Phase 102-117's CODE changes (mask-based
+extraction, multi-cluster try, etc.) still help — the captured
+templates ARE clean cursor shapes (visually verified). But the
+MATCHING of those clean templates against new screenshots fails
+when the screen has cursor-template-similar features (gradients,
+shadows, edges). The bench numbers reported "high cursor verification"
+because we never validated that what was matched was actually the
+cursor.
+
+Apology to the user: I retreated to "iPadOS architectural ceiling"
+when the real issue was a methodology bug in my own benchmarking.
+
 ## 🎯 TL;DR — operational reliability post-Phase 117
 
 | Operation | Reliability |
