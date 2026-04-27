@@ -289,6 +289,20 @@ export interface ClickAtWithRetryOptions {
    *  scores) and small per-iteration emits to keep iPadOS in its
    *  near-1:1 linear regime. Default 5; set 0 to disable. */
   microCorrectionIterations?: number;
+  /** Phase 145 (v0.5.136): mouse-button hold duration in ms. Default
+   *  undefined → uses `client.mouseClick`'s built-in 150 ms (which
+   *  empirically registers as a tap on most iPadOS modal dialogs).
+   *
+   *  Operators can experiment with this when click_at fires but the
+   *  iPad doesn't respond:
+   *  - Try 50 ms if iPad is interpreting 150 ms as a long-press
+   *    (e.g. icon shake-to-delete instead of launch).
+   *  - Try 300-500 ms if iPad rejects fast taps (rare; some
+   *    accessibility-mode iPads need slower interactions).
+   *
+   *  Tuning this hasn't moved the needle in any session bench;
+   *  exposed as an escape hatch for future investigation. */
+  clickDurationMs?: number;
   /** Phase 45: residual (px) at which post-move micro-correction
    *  declares convergence. Default 8 — comfortably inside the iPadOS
    *  icon hit area (~70 px wide). */
@@ -929,7 +943,13 @@ export async function clickAtWithRetry(
       await sleepMs(50); // give iPadOS time to apply pointer-effect snap
     }
 
-    await client.mouseClick(button);
+    // Phase 145: optional clickDurationMs override. Undefined uses
+    // client.mouseClick's built-in 150ms default.
+    if (options.clickDurationMs !== undefined) {
+      await client.mouseClick(button, { downMs: options.clickDurationMs });
+    } else {
+      await client.mouseClick(button);
+    }
 
     if (postClickSettleMs > 0) await sleepMs(postClickSettleMs);
     const postShot = await client.screenshot();
