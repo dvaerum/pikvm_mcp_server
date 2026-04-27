@@ -14,8 +14,8 @@ commit messages.
 - Detect-then-move startup failure rate: ~10% (Phase 68 retries closed
   most of the gap from a previous ~40%)
 
-**With `maxRetries: 2`** (3 attempts), end-to-end success rate per
-target size:
+**With `maxRetries: 2`** (3 attempts — Phase 94 default on iPad,
+no explicit opt-in needed), end-to-end success rate per target size:
 
 | Target width | 3-attempt hit rate | Examples |
 |--------------|--------------------|----------|

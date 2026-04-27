@@ -9,9 +9,9 @@ type app name → Enter) succeed 100% of the time across Settings,
 Files, App Store. By contrast, `pikvm_mouse_click_at` on iPad has a
 per-attempt hit rate of ~50% at icon tolerance (≤25 px residual) for
 tiny targets and ~70-80% for large rows/buttons (Phase 70 bench,
-post-Phase 65/68/69 improvements). With `maxRetries: 2` (3 attempts)
-the cumulative hit rate climbs to ~88% for tiny targets and ~99% for
-large ones. iPadOS pointer-acceleration variance (~6× run-to-run)
+post-Phase 65/68/69 improvements). With `maxRetries: 2` (3 attempts —
+Phase 94 default on iPad, automatic) the cumulative hit rate climbs
+to ~88% for tiny targets and ~99% for large ones. iPadOS pointer-acceleration variance (~6× run-to-run)
 and motion-diff noise on animated UI are the underlying limits — see
 `docs/troubleshooting/ipad-cursor-detection.md` § "Current state".
 
