@@ -172,6 +172,47 @@ describe('findCursorByTemplateSet', () => {
     expect(r!.templateIndex).toBe(0);
   });
 
+  it('REGRESSION (Phase 123): expectedNear hint prefers a within-radius match over a far higher-scoring one', async () => {
+    // Live diagnostic finding: template-match against busy iPad
+    // home screens picks up dock-icon false-positives at score
+    // 0.65-0.71 (the (990, 990) dock match in Phase 123 vs the
+    // real cursor at (991, 835)). Without the hint, a dock-icon
+    // false-positive can outscore the actual cursor. With the
+    // hint biasing toward `expectedNear`, the within-radius
+    // match wins regardless of the absolute score.
+    const w = 400, h = 400;
+    const cursor: [number, number, number] = [240, 240, 240];
+    const wallpaper: [number, number, number] = [50, 50, 50];
+
+    const tplFrame = await decodeScreenshot(
+      await stamp(await makeFrame(w, h, wallpaper), 200, 200, 7, cursor),
+    );
+    const template = extractCursorTemplateDecoded(tplFrame, { x: 200, y: 200 }, 24);
+
+    // Construct a screen with TWO cursor-like blobs:
+    // - A SLIGHTLY brighter blob at (300, 300) — the "false positive"
+    // - The real cursor at (100, 100) — slightly less bright
+    let frame = await makeFrame(w, h, wallpaper);
+    frame = await stamp(frame, 100, 100, 7, [240, 240, 240]); // real cursor
+    frame = await stamp(frame, 300, 300, 7, [250, 250, 250]); // brighter decoy
+    const screen = await decodeScreenshot(frame);
+
+    // No hint: the brighter decoy at (300, 300) likely wins.
+    const noHint = findCursorByTemplateSet(screen, [template], { minScore: 0.5 });
+    expect(noHint).not.toBeNull();
+
+    // With hint near (100, 100): the real cursor wins despite
+    // (300, 300) potentially scoring higher.
+    const withHint = findCursorByTemplateSet(screen, [template], {
+      minScore: 0.5,
+      expectedNear: { x: 100, y: 100 },
+      expectedNearRadius: 50,
+    });
+    expect(withHint).not.toBeNull();
+    expect(Math.abs(withHint!.position.x - 100)).toBeLessThan(10);
+    expect(Math.abs(withHint!.position.y - 100)).toBeLessThan(10);
+  });
+
   it('falls below minScore when no template fits', async () => {
     const w = 200, h = 200;
     // Build a "template" of pure red — won't match a gray cursor frame.
