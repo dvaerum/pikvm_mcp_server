@@ -288,6 +288,11 @@ export interface ClickAtWithRetryResult {
     cursorVerified: boolean;
     skippedClickReason?: string;
   }[];
+  /** Phase 93: when every attempt failed for the same reason class, this
+   *  holds an aggregated diagnosis suitable for one-line operator output.
+   *  Null when ≥ 2 distinct failure classes ran, when only one attempt
+   *  ran, or when at least one attempt was not a recognised skip. */
+  failureSummary: string | null;
 }
 
 /**
@@ -728,6 +733,9 @@ export async function clickAtWithRetry(
     finalVerification: lastVerification!,
     postClickScreenshot: lastPostShot,
     attemptHistory,
+    failureSummary: lastVerification!.screenChanged
+      ? null
+      : summariseFailureClass(attemptHistory),
   };
 }
 
@@ -784,6 +792,102 @@ export function isRateLimited(
   const rx = observed.x;
   const ry = observed.y;
   return rx > 0 && rx < threshold && ry > 0 && ry < threshold;
+}
+
+/** Phase 93 — discriminator for the click-skip reason classes recorded
+ *  by clickAtWithRetry. Exposed so callers (the MCP handler, tests) can
+ *  reason about *why* a class of attempts failed without parsing the
+ *  per-attempt `skippedClickReason` strings (which contain dynamic
+ *  numbers and would be brittle to grep). */
+export type SkipReasonClass =
+  | 'move-failed'
+  | 'rate-limit'
+  | 'cursor-not-verified'
+  | 'residual-too-large'
+  | 'pre-click-disagree';
+
+/**
+ * Phase 93 — classify a per-attempt skippedClickReason string into one of
+ * the five skip classes that clickAtWithRetry can produce. Returns null
+ * for unrecognised strings (defensive: future skip categories or a
+ * non-skip attempt should never be aggregated under an existing class).
+ *
+ * Pure: never throws, never reads I/O.
+ */
+export function classifySkipReason(reason: string | undefined): SkipReasonClass | null {
+  if (!reason) return null;
+  if (reason.startsWith('moveToPixel threw:')) return 'move-failed';
+  if (reason.startsWith('rate-limit:')) return 'rate-limit';
+  if (reason === 'cursor not verified') return 'cursor-not-verified';
+  if (/> maxResidualPx=/.test(reason)) return 'residual-too-large';
+  if (
+    /algorithm lied|best match score|no template match|narrow window/i.test(reason)
+  ) {
+    return 'pre-click-disagree';
+  }
+  return null;
+}
+
+/**
+ * Phase 93 — summarise the failure class when EVERY attempt in
+ * `attemptHistory` was skipped under the SAME class. When the class is
+ * uniform, returns an actionable single-line message the MCP handler
+ * can surface so the operator sees the diagnosis instead of just one
+ * attempt's skip reason.
+ *
+ * Returns null when:
+ *   - History has fewer than 2 attempts (no class-level pattern yet),
+ *   - At least one attempt was not a recognised skip (mixed history),
+ *   - Or attempts span ≥ 2 distinct skip classes (no clear diagnosis).
+ *
+ * Pure: never throws, never reads I/O.
+ */
+export function summariseFailureClass(
+  attemptHistory: ReadonlyArray<{ skippedClickReason?: string }>,
+): string | null {
+  if (attemptHistory.length < 2) return null;
+  const classes = attemptHistory.map((a) => classifySkipReason(a.skippedClickReason));
+  if (classes.some((c) => c === null)) return null;
+  const unique = new Set(classes);
+  if (unique.size !== 1) return null;
+  const klass = classes[0]!;
+  const n = attemptHistory.length;
+  switch (klass) {
+    case 'residual-too-large':
+      return (
+        `All ${n} attempts skipped: cursor landing exceeded maxResidualPx ` +
+        `on every attempt. Loosen maxResidualPx if near-target clicks are ` +
+        `acceptable, or use keyboard navigation for tiny targets.`
+      );
+    case 'cursor-not-verified':
+      return (
+        `All ${n} attempts skipped: cursor position could not be verified ` +
+        `post-move on any attempt. iPad may be locked, dim, or showing too ` +
+        `much animation noise — try pikvm_ipad_unlock, check brightness, or ` +
+        `use the keyboard-first workflow.`
+      );
+    case 'rate-limit':
+      return (
+        `All ${n} attempts skipped: iPadOS rate-limited USB HID input on ` +
+        `every attempt. Possible causes: popup intercepting input, low-power ` +
+        `state, accessibility throttle. Investigate iPad-side state — ` +
+        `retries cannot recover from this.`
+      );
+    case 'move-failed':
+      return (
+        `All ${n} attempts failed: moveToPixel threw on every attempt ` +
+        `(cursor cannot be located against the current screen). iPad may ` +
+        `be on lock screen — call pikvm_ipad_unlock first, or pass ` +
+        `autoUnlockOnDetectFail: true to recover automatically.`
+      );
+    case 'pre-click-disagree':
+      return (
+        `All ${n} attempts skipped: pre-click template search disagreed ` +
+        `with motion-diff on every attempt. Cached cursor templates may be ` +
+        `stale (delete ./data/cursor-templates/ to force recapture), or the ` +
+        `screen has cursor-look-alike elements (status icons, glyphs).`
+      );
+  }
 }
 
 /**

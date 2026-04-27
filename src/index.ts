@@ -1298,6 +1298,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             r.attempts === 1
               ? '1 attempt'
               : `${r.attempts} attempts (${r.success ? 'succeeded' : 'all failed'})`;
+          const summaryText = r.failureSummary ? `\n${r.failureSummary}` : '';
           return {
             content: [
               {
@@ -1306,7 +1307,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   r.finalMoveResult.message +
                   `\nClicked ${button} at approximate position. ` +
                   `Phase 25 retry-on-miss ran ${attemptsText}. ` +
-                  r.finalVerification.message,
+                  r.finalVerification.message +
+                  summaryText,
               },
               { type: 'image', data: r.postClickScreenshot.toString('base64'), mimeType: 'image/jpeg' },
             ],
