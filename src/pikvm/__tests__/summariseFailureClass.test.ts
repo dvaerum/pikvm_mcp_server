@@ -142,4 +142,47 @@ describe('summariseFailureClass', () => {
     expect(summary).toMatch(/pre-click template search/);
     expect(summary).toMatch(/cursor-templates|stale/);
   });
+
+  it("REGRESSION (Phase 112): detects iPadOS pointer-effect snap-zone miss (verified cursor + clicked + no screenChanged)", () => {
+    // The Phase 109-111 failure mode: every attempt clicks (no skip),
+    // cursor is verified at the requested target, but screenChanged
+    // stays false. This is iPadOS pointer-effect snap-zone — the
+    // cursor was correctly positioned but iPadOS didn't register the
+    // click on the target element. The summariser should specifically
+    // surface this so users see the keyboard-first recommendation.
+    const summary = summariseFailureClass([
+      { cursorVerified: true, screenChanged: false },
+      { cursorVerified: true, screenChanged: false },
+      { cursorVerified: true, screenChanged: false },
+    ]);
+    expect(summary).not.toBeNull();
+    expect(summary).toMatch(/All 3 attempts clicked/);
+    expect(summary).toMatch(/snap-zone|pointer-effect/);
+    expect(summary).toMatch(/pikvm_ipad_launch_app|Spotlight/);
+  });
+
+  it("Phase 112: doesn't fire on mixed verified/unverified attempts", () => {
+    // If even ONE attempt was unverified, the snap-zone diagnosis
+    // doesn't apply — that's the existing cursor-not-verified class.
+    const summary = summariseFailureClass([
+      { cursorVerified: true, screenChanged: false },
+      { cursorVerified: false, screenChanged: false, skippedClickReason: 'cursor not verified' },
+    ]);
+    // Should fall through to the existing classification — but here
+    // it's mixed (one snap-zone-style + one skipped) so returns null.
+    expect(summary).toBeNull();
+  });
+
+  it("Phase 112: doesn't fire when at least one attempt succeeded (screenChanged=true)", () => {
+    // If any attempt succeeded, the failureSummary shouldn't fire at
+    // all — the click_at handler skips the summary when success is true.
+    // But also as a defensive check inside summariseFailureClass: if
+    // any attempt has screenChanged=true, the snap-zone class doesn't
+    // apply (because the click DID register at least once).
+    const summary = summariseFailureClass([
+      { cursorVerified: true, screenChanged: false },
+      { cursorVerified: true, screenChanged: true },  // this one succeeded
+    ]);
+    expect(summary).toBeNull();
+  });
 });
