@@ -24,6 +24,17 @@ target size:
 | 50-100 px    | ~94% | Standard buttons, page tabs |
 | < 50 px      | ~88% | Back arrows, X buttons, toggles |
 
+**Important nuance**: these "hit rates" measure `screenChanged: true`
+(verifyClick triggers a visible UI change), not "the intended UI
+element was activated". With residuals up to 100 px, a click can
+register on an ADJACENT element rather than the target. Live
+example (2026-04-27): click targeting a Settings sub-row landed
+60 px off and instead activated a sidebar row above. Both events
+trigger `screenChanged: true`. Callers that need "correct element
+hit" should screenshot-verify the resulting state, not rely on
+`screenChanged` alone — the verification is "click happened
+somewhere clickable", not "click hit the right thing".
+
 **Operational requirements**:
 1. iPad must be UNLOCKED (lock screen has no cursor for detection).
 2. Brightness ≥ ~50/255 mean (dimmed iPad → detection fails).
