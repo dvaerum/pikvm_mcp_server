@@ -249,6 +249,20 @@ export interface ClickAtWithRetryOptions {
    *  (preserve existing behaviour). Set true for fire-and-forget
    *  click_at on a fresh iPad target. */
   autoUnlockOnDetectFail?: boolean;
+  /** Phase 88: skip the click if the verified cursor position is more
+   *  than this many pixels from the target. Useful when callers care
+   *  about CORRECT element hit, not just "screen changed somewhere".
+   *  Live-verified failure mode (2026-04-27): residual 78 px caused a
+   *  click targeting Settings > Software Update to instead activate
+   *  the Apple Account sidebar row. Both clicks report
+   *  `screenChanged: true`, but only one hit the intended element.
+   *
+   *  When set, attempts with residual exceeding this threshold are
+   *  marked skipped and the retry loop runs again. Set to e.g. 25 for
+   *  strict icon-tolerance clicks, 50 for "near-enough is fine".
+   *  Default undefined (no skip; preserves prior behaviour where any
+   *  cursor-verified attempt clicks regardless of residual). */
+  maxResidualPx?: number;
 }
 
 export interface ClickAtWithRetryResult {
@@ -483,6 +497,45 @@ export async function clickAtWithRetry(
       });
       // Don't break — let the retry loop attempt fresh detection.
       continue;
+    }
+
+    // Phase 88: maxResidualPx gate. If caller supplied a strict residual
+    // limit, skip the click when cursor is too far from target — clicks
+    // that land 50-100 px off can register on adjacent UI elements
+    // (verified 2026-04-27: target Software Update at (1090,416), cursor
+    // at (1030,466) navigated to Apple Account row instead). Callers that
+    // need correct-element-hit semantics opt in by setting maxResidualPx.
+    // Default undefined preserves the prior "click regardless of residual"
+    // behaviour.
+    if (
+      options.maxResidualPx !== undefined &&
+      cursorVerified &&
+      lastMoveResult.finalDetectedPosition
+    ) {
+      const dx = lastMoveResult.finalDetectedPosition.x - target.x;
+      const dy = lastMoveResult.finalDetectedPosition.y - target.y;
+      const residual = Math.sqrt(dx * dx + dy * dy);
+      if (residual > options.maxResidualPx) {
+        lastVerification = {
+          changedPixels: 0,
+          totalPixels: 0,
+          changedFraction: 0,
+          screenChanged: false,
+          message:
+            `Click skipped: residual ${residual.toFixed(1)}px exceeds ` +
+            `maxResidualPx=${options.maxResidualPx}. Clicking would risk ` +
+            `landing on an adjacent UI element. Loosen maxResidualPx if ` +
+            `near-target clicks are acceptable.`,
+        };
+        attemptHistory.push({
+          attempt,
+          screenChanged: false,
+          changedFraction: 0,
+          cursorVerified: true,
+          skippedClickReason: `residual ${residual.toFixed(1)}px > maxResidualPx=${options.maxResidualPx}`,
+        });
+        continue;
+      }
     }
 
     if (preClickSettleMs > 0) await sleepMs(preClickSettleMs);
