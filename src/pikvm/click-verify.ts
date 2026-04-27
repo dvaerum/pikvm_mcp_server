@@ -30,6 +30,36 @@ import { detectIpadBoundsFromBuffer } from './orientation.js';
 import { loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './template-set.js';
 import { ipadGoHome } from './ipad-unlock.js';
 
+/**
+ * Phase 127 — sanity-clamp the live px/mickey ratio reported by
+ * `moveToPixel.usedPxPerMickey` before using it in the micro-
+ * correction or pre-click approach math. moveToPixel sometimes
+ * derives asymmetric / pathological ratios from a single noisy
+ * motion-diff (live trace: usedPxPerMickey={ x: 0.7291,
+ * y: 1.4833 }). Using such a low ratio in `mickeys = px / ratio`
+ * means the loop emits 1.5-3× too many mickeys per residual
+ * pixel — cursor over-shoots, then over-shoots back the other way
+ * each iteration, oscillating around the target rather than
+ * converging.
+ *
+ * The empirical iPad small-emit range (5-mickey chunks at slow
+ * pace) is roughly 0.9-2.0 px/mickey. Outside that range the
+ * measurement is unreliable; fall back to the fleet default 1.3
+ * which is the validated iPad value across many sessions.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function clampPxPerMickeyRatio(
+  live: number | undefined,
+  min = 0.9,
+  max = 2.5,
+  fallback = 1.3,
+): number {
+  if (live === undefined || !Number.isFinite(live)) return fallback;
+  if (live < min || live > max) return fallback;
+  return live;
+}
+
 export interface ClickVerification {
   /** Pixels that changed between the pre and post screenshots within
    *  the diffed area. */
@@ -675,24 +705,10 @@ export async function clickAtWithRetry(
       // zero movement), so each iter actually moves the cursor.
       const PER_ITER_CAP_MICKEYS = 5;
       const SETTLE_MS = 350;
-      // Phase 127 (v0.5.120): sanity-clamp the live px/mickey
-      // ratio. moveToPixel sometimes reports asymmetric/pathological
-      // ratios (e.g. live trace: usedPxPerMickey={0.73, 1.48} on
-      // iPad — the X axis is way outside the empirical 0.9-2.0
-      // range for small emits). Using such a low ratio causes the
-      // micro-correction loop to under-estimate cursor movement,
-      // emit extra mickeys, and oscillate around target. Clamp to
-      // the empirically-validated iPad-small-emit range; if the
-      // live value is outside, fall back to the fleet default 1.3.
-      const RATIO_MIN = 0.9;
-      const RATIO_MAX = 2.5;
-      const FLEET_DEFAULT = 1.3;
-      const liveX = lastMoveResult.usedPxPerMickey?.x;
-      const liveY = lastMoveResult.usedPxPerMickey?.y;
-      const ratioX = liveX !== undefined && liveX >= RATIO_MIN && liveX <= RATIO_MAX
-        ? liveX : FLEET_DEFAULT;
-      const ratioY = liveY !== undefined && liveY >= RATIO_MIN && liveY <= RATIO_MAX
-        ? liveY : FLEET_DEFAULT;
+      // Phase 127 (v0.5.120): sanity-clamp via the pure helper
+      // (see `clampPxPerMickeyRatio` below).
+      const ratioX = clampPxPerMickeyRatio(lastMoveResult.usedPxPerMickey?.x);
+      const ratioY = clampPxPerMickeyRatio(lastMoveResult.usedPxPerMickey?.y);
       // Detect iPad bounds for edge-safety check; full-frame fallback if
       // bounds detection fails (treat full HDMI frame as the safe area —
       // less safe but at least allows progress on non-iPad targets).
@@ -784,14 +800,9 @@ export async function clickAtWithRetry(
       const apDy = target.y - cursorAtClick.y;
       const apResidual = Math.hypot(apDx, apDy);
       if (apResidual >= 3) {
-        // Phase 127: same sanity-clamp as the micro-correction
-        // loop — pathological ratios cause overshoot/undershoot.
-        const apLiveX = lastMoveResult.usedPxPerMickey?.x;
-        const apLiveY = lastMoveResult.usedPxPerMickey?.y;
-        const apRatioX = apLiveX !== undefined && apLiveX >= 0.9 && apLiveX <= 2.5
-          ? apLiveX : 1.3;
-        const apRatioY = apLiveY !== undefined && apLiveY >= 0.9 && apLiveY <= 2.5
-          ? apLiveY : 1.3;
+        // Phase 127: same sanity-clamp as the micro-correction loop.
+        const apRatioX = clampPxPerMickeyRatio(lastMoveResult.usedPxPerMickey?.x);
+        const apRatioY = clampPxPerMickeyRatio(lastMoveResult.usedPxPerMickey?.y);
         const apxRaw = apDx / apRatioX;
         const apyRaw = apDy / apRatioY;
         const apx = Math.sign(apxRaw) * Math.min(Math.ceil(Math.abs(apxRaw)), preClickApproachMickeys);
