@@ -860,9 +860,43 @@ export function classifySkipReason(reason: string | undefined): SkipReasonClass 
  * Pure: never throws, never reads I/O.
  */
 export function summariseFailureClass(
-  attemptHistory: ReadonlyArray<{ skippedClickReason?: string }>,
+  attemptHistory: ReadonlyArray<{
+    skippedClickReason?: string;
+    cursorVerified?: boolean;
+    screenChanged?: boolean;
+  }>,
 ): string | null {
   if (attemptHistory.length < 2) return null;
+
+  // Phase 112: detect the "iPadOS pointer-effect snap-zone" failure
+  // mode that emerged in Phase 109-111 benches. Symptoms:
+  //   - Every attempt actually clicked (no skipReason)
+  //   - Cursor was verified at the requested target on every attempt
+  //   - screenChanged was false on every attempt
+  //
+  // This is NOT an algorithm failure. The cursor IS where it was
+  // requested. iPadOS's pointer-effect snap zones determine which
+  // interactive element receives the click — when the cursor is in
+  // the dead-zone between elements, clicks land on wallpaper and
+  // register as nothing. Phase 109-111 measured this caps click-
+  // success at ~50-60% for ~70 px iPad icons even with 100% cursor
+  // verification.
+  const allClicked = attemptHistory.every((a) => !a.skippedClickReason);
+  const allVerified = attemptHistory.every((a) => a.cursorVerified === true);
+  const allMissed = attemptHistory.every((a) => a.screenChanged === false);
+  if (allClicked && allVerified && allMissed) {
+    const n = attemptHistory.length;
+    return (
+      `All ${n} attempts clicked with verified cursor but no screen ` +
+      `change — likely iPadOS pointer-effect snap-zone miss. The ` +
+      `cursor was correctly positioned but iPadOS didn't register ` +
+      `the click on the target element. For tiny iPad icons, prefer ` +
+      `pikvm_ipad_launch_app (Spotlight) which is 100% reliable. See ` +
+      `docs/troubleshooting/ipad-cursor-detection.md § Phase 111 for ` +
+      `the empirical ~50-60% click-success ceiling.`
+    );
+  }
+
   const classes = attemptHistory.map((a) => classifySkipReason(a.skippedClickReason));
   if (classes.some((c) => c === null)) return null;
   const unique = new Set(classes);
