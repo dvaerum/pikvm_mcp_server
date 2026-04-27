@@ -21,12 +21,15 @@ import { seedCursorTemplate } from '../seed-template.js';
 import type { CursorTemplate } from '../cursor-detect.js';
 
 /** Build a 256×256 PNG with optional bright cluster at (cx, cy). The
- *  cluster is a `size`×`size` square at brightness `gray`. */
+ *  cluster is a `size`×`size` square at brightness `gray`. Default size
+ *  6 (~36 bright pixels, ~6% of a 24×24 template) matches a realistic
+ *  iPad cursor footprint after Phase 102 added an upper-bound on bright
+ *  pixel count to looksLikeCursor (rejects > 12% bright as letter-glyph). */
 async function pngWithCluster(
   cx: number | null,
   cy: number | null,
   gray: number = 220,
-  size: number = 12,
+  size: number = 6,
 ): Promise<Buffer> {
   const w = 256, h = 256;
   const raw = Buffer.alloc(w * h * 3, 30); // dark grey background
