@@ -97,10 +97,23 @@ export async function seedCursorTemplate(
 
   const decBefore = await decodeScreenshot(before.buffer);
   const decAfter = await decodeScreenshot(after.buffer);
+  // Phase 103: tighten cluster-size bounds to match actual iPad cursor
+  // footprint. Live discovery 2026-04-27 (root cause of Phase 102's
+  // contaminated template cache): the previous `maxClusterSize: 200`
+  // accepted iPadOS pointer-effect halos around interactive elements
+  // (which manifest as 100-300 px clusters when the cursor approaches
+  // an icon/avatar). Picking the LARGEST cluster then captured the
+  // halo — and `extractCursorTemplateDecoded` centred a 24×24 template
+  // on the halo's centroid, which usually fell on the underlying icon
+  // or letter. Result: 7/8 cached templates were "G"/text glyphs
+  // instead of cursors.
+  //
+  // Real iPad cursor diff clusters: 25-50 px. Tightening max to 70
+  // excludes halos. Bumping min from 4 to 15 excludes JPEG noise.
   const clusters = diffScreenshotsDecoded(decBefore, decAfter, {
     diffThreshold: 30,
-    minClusterSize: 4,
-    maxClusterSize: 200,
+    minClusterSize: 15,
+    maxClusterSize: 70,
     mergeRadius: 20,
     brightnessFloor: 100,
     maxChannelDelta: 0,
@@ -111,9 +124,11 @@ export async function seedCursorTemplate(
       cursorPosition: null,
       templatePersisted: false,
       reason:
-        'no motion-diff clusters detected — cursor may be off-screen, dim, or already at the wake-emit destination. Try a larger emitDx/emitDy.',
+        'no cursor-sized motion-diff clusters detected (15-70 px). Cursor may be off-screen, dim, faded, or already at the wake-emit destination. Try a larger emitDx/emitDy or wait for iPadOS to render the cursor before seeding.',
     };
   }
+  // Pick the largest cluster among those that PASSED the cursor-size
+  // bounds — that's the cursor when bounds are correctly set.
   const cursorCluster = clusters.sort((a, b) => b.pixels - a.pixels)[0];
   const cursorPos = {
     x: Math.round(cursorCluster.centroidX),

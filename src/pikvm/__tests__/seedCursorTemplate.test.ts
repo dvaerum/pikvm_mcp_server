@@ -104,20 +104,21 @@ describe('seedCursorTemplate', () => {
     expect(result.ok).toBe(false);
     expect(result.cursorPosition).toBeNull();
     expect(result.templatePersisted).toBe(false);
-    expect(result.reason).toContain('no motion-diff clusters detected');
+    // Phase 103: message updated to reflect the new cursor-sized cluster
+    // bounds (15-70 px). Match on the still-stable substring.
+    expect(result.reason).toContain('no cursor-sized motion-diff clusters');
   });
 
   it('returns failure when looksLikeCursor rejects the extracted template', async () => {
-    // Use a 3×3 cluster (9 bright pixels) — enough for motion-diff
-    // (minClusterSize=4) but below the 4% threshold (≥23 px) that
-    // looksLikeCursor requires of a 24×24 template. The cluster is
-    // detected, the template is extracted, but looksLikeCursor rejects.
-    //
-    // Phase 53/56 keeps small clusters / text fragments / dim regions
-    // out of the template set even when motion-diff produces a
-    // candidate.
+    // Use a 4×4 cluster (16 bright pixels) — passes Phase 103's tighter
+    // motion-diff lower bound (minClusterSize=15) but below the 4%
+    // threshold (≥23 px of a 24×24 template) that looksLikeCursor
+    // requires. The cluster is detected, the template is extracted, but
+    // looksLikeCursor rejects. Pre-Phase-103 the test used a 3×3 cluster
+    // exploiting the looser minClusterSize=4 — Phase 103 tightened that
+    // to 15 to keep noise out, so the cluster size has to bump too.
     const before = await pngWithCluster(null, null);
-    const after = await pngWithCluster(100, 100, 220, 3);  // 3×3 = 9 px
+    const after = await pngWithCluster(100, 100, 220, 4);  // 4×4 = 16 px
     const client = new ScriptedClient();
     client.shots = [before, after];
 
