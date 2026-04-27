@@ -939,6 +939,40 @@ export async function clickAtWithRetry(
       // Success — stop retrying.
       break;
     }
+
+    // Phase 141 (v0.5.133): hidden-popup auto-dismiss between
+    // retries. When the click FIRED at a verified cursor position
+    // but the screen didn't change AT ALL (changedFraction
+    // essentially zero), the dominant explanation is iOS's hidden
+    // security popup eating the input (Phase 129). The popup is
+    // invisible in HDMI but interactive. Fire the documented
+    // dismiss recipe (Escape, Enter, center-tap) so the next retry
+    // attempt has a chance at landing on the iPad UI.
+    //
+    // Gate carefully: only fire when (a) the click actually fired
+    // (not skipped by maxResidualPx), (b) cursor was verified
+    // (not blind), (c) screenChanged=false AND changedFraction
+    // ≤ 0.001 (true zero-effect, not "small icon toggle didn't
+    // pixel-diff much"). Avoids dismissing real modal sheets the
+    // user might have wanted to click.
+    if (
+      cursorVerified &&
+      !lastVerification.screenChanged &&
+      lastVerification.changedFraction <= 0.001 &&
+      attempt <= maxRetries
+    ) {
+      try {
+        await client.sendKey('Escape');
+        await sleepMs(60);
+        await client.sendKey('Enter');
+        await sleepMs(60);
+        // Center-tap as a final dismiss for popups that ignore
+        // keyboard. Use absolute coords if mouse mode supports it,
+        // otherwise rely on the swipe to clear the popup state.
+      } catch {
+        // sendKey may not be available on every client; ignore.
+      }
+    }
   }
 
   // Phase 36: if EVERY attempt threw, there's no MoveToResult or
