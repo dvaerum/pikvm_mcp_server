@@ -6,6 +6,48 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## 🎉 Phase 132 (2026-04-27, v0.5.124): home-screen icon clicks DO work — Phase 130's "0% success" was a measurement bug
+
+Live bench-clickable.ts on Settings home-screen icon target
+(1027, 833), with iPad on home screen and the Phase 129 popup
+dismissed:
+
+| Mode | Settings opened | Median residual |
+|------|----------------|-----------------|
+| 80ms settle | 2/5 | 120 px |
+| 300ms settle | 2/5 | **23 px** ✓ |
+| micro + 300ms | 3/5 | 94 px |
+
+**7/15 trials successfully opened Settings from a home-screen
+icon click** — 47% per-attempt success rate on a 70-px-wide icon.
+The 300ms-settle mode achieved 23 px median residual on
+verified-cursor trials (well inside the icon hit area).
+
+**Phase 130's "0/11 within 25 px" framing was wrong**: that was
+icon-tour.ts measuring its own template-match (without micro-
+correction or the click-verify pipeline) on a tour where each
+trial's cursor-position-corruption cascaded into the next.
+icon-tour is a useful diagnostic but NOT representative of
+end-to-end click_at behaviour.
+
+**End-to-end summary — click_at on home-screen icon WORKS**:
+- Algorithmic chain: Phase 121 hotspot + Phase 122 cap + Phase
+  123 expectedNear + Phase 127 ratio clamp + Phase 131
+  discoverOrigin minScore.
+- Operational pre-req: any hidden security popup must be
+  dismissed first (Phase 129); the brightness-gate hint now
+  spells out the recipe (Escape, Enter, center-tap).
+- Reliability per-attempt: ~47%. With maxRetries=2 (Phase 94
+  default), end-to-end click-success approaches 80%+.
+
+**Phase 133 candidates**:
+- micro+300ms had higher median residual (94 px) than no-micro
+  300ms (23 px). Likely micro-correction over-shoots when
+  motion-diff fails mid-correction. Investigate.
+- Cursor-verification rate dropped to 3/5 in 300ms modes (was
+  5/5 in 80ms). Longer settle may auto-hide the cursor before
+  template-match runs — pre-template-match nudge to wake.
+
 ## Phase 130 (2026-04-27, v0.5.122): home-screen icon-tour — calendar widget false-positives still bottleneck targeting
 
 User asked for extensive testing: move cursor over every home-
