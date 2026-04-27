@@ -161,6 +161,54 @@ pre-click verification chain (Phase 51) can do its job without
 producing wrong-element-hit reports. This should materially improve
 the cursor-verification rate that was 30-40% failure in past benches.
 
+### Phase 117 finding (2026-04-27, v0.5.110): Spotlight has direct toggle for Reduce Motion — but clicking it ALSO hits snap-zone
+
+While trying alternatives to multi-step navigation, discovered that
+**iPadOS Spotlight (Cmd+Space) shows the Reduce Motion toggle as a
+"Top Hit" widget** when you search for it. Direct toggle, no nav
+needed:
+
+```
+Top Hit
+[icon] Reduce Motion        [OFF switch]
+```
+
+This is a one-click solution IF you can hit the toggle (~50 px wide
+pill switch on the right side of the row).
+
+**Live test**: clicked at intended toggle position (1140, 246).
+Result: `success=true` (16.83% pixels changed) but cursor landed at
+(1073, 257) — **67 px LEFT of the actual toggle pill**. The click
+registered on the row text area but didn't flip the switch.
+Toggle still OFF.
+
+This demonstrates the iPad UI hit-area asymmetry: a row with a
+toggle at the right has TWO interactive zones — the row body
+(navigates) and the toggle pill (toggles). A click that lands on
+row body but not on the pill registers as "navigate" not "toggle".
+
+For a ~50 px toggle pill at iPad's right side, our cursor-positioning
+accuracy (typically ~30-90 px residual from intended target) often
+lands OUTSIDE the toggle's hit area. Even when the click registers
+("succeeds"), it doesn't perform the desired action.
+
+**Final operational conclusion** for the Phase 102-117 arc:
+
+1. Algorithm-side cursor-verification: **100%** (Phase 106).
+2. Click registration on icon-sized targets: **~50-60%** (Phase
+   109-111).
+3. Click registration on small toggle/switch targets within wider
+   rows: **<50%** (Phase 117 — this attempt).
+4. Multi-step iPad menu navigation: **~17% per attempt** (Phase 116).
+5. **Keyboard-first via Spotlight (`pikvm_ipad_launch_app`): 100%**
+   reliable.
+
+For users who need to perform an iPad UI action programmatically:
+prefer keyboard paths whenever a Spotlight target exists; fall back
+to click_at for app icons / sidebar rows where snap-zone helps;
+manually toggle Settings switches when needed (the chicken-and-egg
+of "test Reduce Motion via cursor" cannot be broken from software).
+
 ### Phase 116 demonstration (2026-04-27, v0.5.109): chicken-and-egg confirmed — multi-step iPad nav via click_at hits snap-zone unpredictability
 
 Tried to navigate Settings → Accessibility → Motion → Reduce Motion
