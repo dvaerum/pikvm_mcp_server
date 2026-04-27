@@ -1079,7 +1079,17 @@ export function isRateLimited(
  * fails a regression test instead of silently degrading the iPad UX.
  */
 export function defaultMaxRetriesFor(mouseAbsoluteMode: boolean): number {
-  return mouseAbsoluteMode ? 0 : 2;
+  // Phase 142 (v0.5.134): bumped iPad default 2 → 3. Phase 141's
+  // auto-dismiss-popup-between-retries fires only on attempts that
+  // actually fired-but-zero-effect; with maxRetries=2 (3 attempts
+  // total), Phase 141 fires at most twice — and if a sticky popup
+  // takes more than one Escape+Enter to clear (e.g. nested
+  // permission prompts), the click_at exits before the dismiss
+  // sequence completes. maxRetries=3 (4 attempts total) gives
+  // Phase 141 three dismiss rounds before exhaustion. Cost: +1
+  // attempt latency on terminal-failure cases; gain: success on
+  // popup chains that take 2-3 dismisses to clear.
+  return mouseAbsoluteMode ? 0 : 3;
 }
 
 /**
