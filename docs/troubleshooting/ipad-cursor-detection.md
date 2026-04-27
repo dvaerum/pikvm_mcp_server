@@ -31,9 +31,16 @@ register on an ADJACENT element rather than the target. Live
 example (2026-04-27): click targeting a Settings sub-row landed
 60 px off and instead activated a sidebar row above. Both events
 trigger `screenChanged: true`. Callers that need "correct element
-hit" should screenshot-verify the resulting state, not rely on
-`screenChanged` alone — the verification is "click happened
-somewhere clickable", not "click hit the right thing".
+hit" should either:
+
+1. **Screenshot-verify the resulting state** — `screenChanged` alone
+   says "click happened somewhere clickable", not "click hit the
+   right thing".
+2. **Pass `maxResidualPx: 25` (Phase 88)** to refuse imprecise
+   clicks at the source — attempts that land more than 25 px from
+   the target are skipped (counted as a retry). Trades absolute
+   hit rate for "I clicked the right thing" confidence. See
+   `docs/skills/click-at.md` for the strict-target call shape.
 
 **Operational requirements**:
 1. iPad must be UNLOCKED (lock screen has no cursor for detection).
