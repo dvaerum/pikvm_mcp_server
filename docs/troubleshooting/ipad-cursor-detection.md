@@ -6,6 +6,54 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 123 (2026-04-27, v0.5.117): expectedNear hint kills the dock false-positive
+
+Visual diagnostic confirmed Phase 119's class is alive and well in
+the click-verify pipeline. Built `inspect-cursor-at.ts`: move
+cursor to (1027, 833), screenshot, run `findCursorByTemplateSet`,
+overlay TARGET + FOUND on the screenshot. Output:
+
+```
+moveToPixel finalDetectedPosition: (991, 835)   ← motion-diff: cursor near target
+template-match: (990, 990) score 0.69            ← FOUND a DOCK ICON, not the cursor
+residual = 161 px                                ← obviously wrong
+```
+
+The template-match was matching a *dock icon* near (990, 990) at
+score 0.69 — same false-positive class as Phase 119, just on a
+different scoring band. The cursor's REAL location at ~(991, 835)
+was inside the Settings icon's bounds; template-match never even
+looked there.
+
+**Fix**: pass `expectedNear` hint to `findCursorByTemplateSet` in
+the click-verify micro-correction loop. Initial hint = motion-
+diff's `finalDetectedPosition`; later iterations use the previous
+loop's match. Locality-aware ranking
+(cursor-detect.ts:900) prefers within-radius matches over far
+high-scoring ones — exactly what's needed when the iPad UI has
+cursor-NCC-correlated icons all over the screen.
+
+After Phase 123 the same diagnostic now reports:
+
+```
+hint: (994, 835)
+template-match: (1006, 826) score 0.735         ← cursor on the Settings icon
+residual = 22 px                                ← much better
+```
+
+Visually FOUND lands directly on the Settings icon — the click
+should register. Bench results show one trial (300ms settle,
+maxRetries=2, no-micro) reaching residual=16 px — proving the
+cursor *can* converge that close. Click-success on the Settings
+target still 0/5 in micro mode (residuals stable at 34 px) — the
+remaining gap is between the per-call detection accuracy and what
+iPadOS pointer-effect actually accepts as a click. Next phases
+will target the residual-vs-success disconnect.
+
+**Test gap**: the inspector is a one-shot script, not a unit
+test. Phase 124 should pin the expectedNear-hint behaviour as a
+regression test.
+
 ## Phase 121 (2026-04-27, v0.5.115): hotspot offset — report cursor TIP, not bbox-centre
 
 `findCursorByTemplate` had been returning the bounding-box CENTRE

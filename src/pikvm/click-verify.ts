@@ -666,11 +666,23 @@ export async function clickAtWithRetry(
       }
       let prevFound: { x: number; y: number } | null = null;
       let prevEmit: { mx: number; my: number } | null = null;
+      // Phase 123 (v0.5.117): bias template-match search toward the
+      // cursor's last-known position (from moveToPixel's motion-
+      // diff). Without this hint, template-match against busy
+      // screens picks up far-away false-positives — e.g. a dock
+      // icon at (990, 990) scoring 0.69 against the cursor template
+      // when the real cursor is near (991, 835). Locality-aware
+      // ranking in findCursorByTemplateSet (cursor-detect.ts:900)
+      // prefers within-radius matches over higher-scoring far ones.
+      const initialHint = lastMoveResult.finalDetectedPosition;
       for (let iter = 0; iter < microCorrectionIterations; iter++) {
         const microShot = await client.screenshot();
         const microDecoded = await decodeScreenshot(microShot.buffer);
+        const hint = prevFound ?? initialHint;
         const found = findCursorByTemplateSet(microDecoded, sessionTemplates, {
           minScore: minPreClickTemplateScore,
+          expectedNear: hint ?? undefined,
+          expectedNearRadius: 80,
         });
         if (!found) break; // can't verify, stop here (Phase 41/42 will catch)
         // Phase 120: motion-confirmation gate. If the previous iteration
