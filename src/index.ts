@@ -510,7 +510,7 @@ const tools: Tool[] = [
         verifySettleMs: { type: 'number', description: 'Milliseconds to wait between click and post-click screenshot for the UI to render. Default 300.' },
         verifyRegionHalfPx: { type: 'number', description: 'When set, the verification diff is restricted to a square window of ±N HDMI px around the click target. Useful when the expected effect is a small/local UI change (button highlight, focus indicator) and a full-frame diff would be diluted by background animations. Default: full-frame.' },
         verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
-        maxRetries: { type: 'number', description: 'When >0, retry the click up to N times if Phase 23 verification reports no screen change. Each retry runs a fresh detect-then-move probe (NOT compound corrections — independent trials). Recommended for iPad targets where per-attempt hit rate is low: maxRetries=2 typically gives ~88% cumulative hit rate from a 50% per-attempt baseline. Requires verifyClick=true. Default 0 (single-shot, pre-Phase-25 behavior).' },
+        maxRetries: { type: 'number', description: 'When >0, retry the click up to N times if Phase 23 verification reports no screen change. Each retry runs a fresh detect-then-move probe (NOT compound corrections — independent trials). Phase 94 default: 2 on iPad (relative-mouse) targets where per-attempt hit rate is ~50% — three attempts give ~88% cumulative hit rate; 0 on desktop (absolute-mouse) targets where single-shot is reliable. Pass 0 explicitly to opt out (single-shot, pre-Phase-25 behavior). Requires verifyClick=true.' },
         minBrightness: { type: 'number', description: 'Brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness AND stddev (Phase 48). The gate aborts with a "wake the iPad" error ONLY when the frame is uniformly dim (mean < threshold AND stddev < 3) — dark-mode UI passes the gate because the high stddev from text/icon contrast indicates cursor will still be detectable. Default 35 on iPad targets (Phase 39 calibrated against live data: 29 = popup overlay, 41 = bright iPad with dark wallpaper); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
         autoUnlockOnDetectFail: { type: 'boolean', description: 'Phase 72: when an attempt fails because the iPad is on the lock screen (Phase 70 found this is the dominant detect-then-move failure mode), automatically call ipadGoHome to unlock and retry once before giving up on this attempt. SIDE EFFECT: if the iPad is INSIDE AN APP and detect-then-move fails for some other reason, this will exit the app to home — not what you want for in-app clicks. Default false (preserve manual control). Set true for fire-and-forget click_at on a fresh iPad target where you don\'t care about app state.' },
         maxResidualPx: { type: 'number', description: 'Phase 88: skip the click if the verified cursor is more than this many pixels from the target. Useful when callers care about CORRECT element hit, not just "screen changed". Live-verified failure mode (2026-04-27): residual 78 px caused a click targeting Settings → Software Update to instead activate the Apple Account sidebar row. Set to e.g. 25 for strict icon-tolerance clicks, 50 for "near-enough is fine". Default unset (preserves prior behaviour: any cursor-verified attempt clicks regardless of residual).' },
@@ -1213,7 +1213,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const verifySettleMs = validateNumber(args.verifySettleMs, 0, 5000) ?? 300;
         const verifyRegionHalfPx = validateNumber(args.verifyRegionHalfPx, 1, 1920);
         const verifyMinChangeFraction = validateNumber(args.verifyMinChangeFraction, 0.0001, 1);
-        const maxRetries = validateNumber(args.maxRetries, 0, 10) ?? 0;
+        // Phase 94: default to 2 retries on iPad (relative-mouse), 0 on
+        // desktop (absolute-mouse). Single-shot click_at is ~50% reliable
+        // on tiny iPad targets (verified Phase 70 bench), ~88% with
+        // retries=2. Mirroring the existing mouseAbsoluteMode-driven
+        // defaults for forbidSlamFallback and minBrightness so users get
+        // sensible behaviour without reading docs. Pass maxRetries=0
+        // explicitly to opt out (e.g. for a quick single toggle on iPad
+        // where the caller will retry at a higher level themselves).
+        const maxRetriesArg = validateNumber(args.maxRetries, 0, 10);
+        const maxRetries = maxRetriesArg !== undefined
+          ? maxRetriesArg
+          : (mouseAbsoluteMode ? 0 : 2);
         // Phase 38 / v0.5.26: explicit MCP parameter for the brightness gate.
         // Default mirrors the auto-policy: VERY_DIM_THRESHOLD on iPad
         // targets (relative-mouse), 0 elsewhere. Pass 0 explicitly to disable.
