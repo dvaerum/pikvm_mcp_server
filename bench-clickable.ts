@@ -55,6 +55,10 @@ async function runTrial(maxRetries: number, useMicro = false, preClickSettleMs =
   const r = await clickAtWithRetry(client, TARGET, {
     maxRetries,
     preClickSettleMs,
+    // Phase 134: skip click when residual > 35px (icon hit-area). Prevents
+    // counting wrong-icon hits as success — better to retry than land on Books
+    // when targeting Settings.
+    maxResidualPx: 35,
     moveToOptions: {
       strategy: 'detect-then-move',
       forbidSlamFallback: true,

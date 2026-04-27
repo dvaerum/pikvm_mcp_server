@@ -6,6 +6,53 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 134 (2026-04-27, v0.5.126): honest success rate is ~27% per-attempt; "60%" included wrong-icon hits
+
+Re-ran the bench-clickable.ts with `maxResidualPx: 35` skip-gate
+(Phase 88 facility, opt-in until now). Result:
+
+| Mode | Settings opened (gated) | Verified |
+|------|------------------------|----------|
+| 80ms settle | 2/5 | 5/5 |
+| 300ms settle | 0/5 | 2/5 |
+| micro + 300ms | 2/5 | 4/5 |
+
+**4/15 = 27% real per-attempt success on the CORRECT icon.**
+
+The previous "60%" figure (Phase 132) was measuring `screenChanged`
+without a residual gate — when the cursor landed 200 px off, it
+clicked a DIFFERENT icon (Books, App Store), the screen changed,
+and the bench counted it as "Settings opened". Visual observation
+of post-click screenshots confirms some of those were wrong-icon
+hits.
+
+Successful trials (residual ≤ 35 px) had residuals:
+**10.6, 20.2, 28.2, 31.1, 34.0 px** — all well inside the icon
+hit-area. When the algorithm hits the icon, the click registers
+reliably. The variance comes from the OPEN-LOOP move sometimes
+overshooting Y by 60+ px due to iPadOS acceleration on long emits.
+
+**Recommended iPad recipe** (revised):
+- Pass `maxResidualPx: 35` in options. Otherwise wrong-icon hits
+  silently count as success.
+- `maxRetries: 2` (Phase 94 default already on iPad). With strict
+  gate, retries actually reattempt rather than confirm bad hits.
+- `preClickSettleMs: 80` if cursor verification matters more than
+  motion-based snap.
+
+End-to-end with `maxResidualPx=35` and `maxRetries=2`:
+~27% × 3 attempts → ~60% of click_at calls return on the correct
+icon. The rest get a "click skipped: residual exceeded" diagnostic
+that the operator can act on (e.g., switch to keyboard-first
+launch_app).
+
+**Phase 135 candidates**:
+- Address Y-axis open-loop overshoot (the dominant 60+px miss
+  cause). Smaller chunkMagnitude for Y emits, or a per-axis
+  acceleration model in moveToPixel.
+- Auto-set maxResidualPx=35 for iPad targets (mouseAbsolute=false
+  detection) so callers don't need to remember.
+
 ## 🎉 Phase 132 (2026-04-27, v0.5.124): home-screen icon clicks DO work — Phase 130's "0% success" was a measurement bug
 
 Live bench-clickable.ts on Settings home-screen icon target
