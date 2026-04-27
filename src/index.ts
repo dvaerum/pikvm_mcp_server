@@ -28,7 +28,7 @@ import {
   BallisticsProfile,
 } from './pikvm/ballistics.js';
 import { moveToPixel } from './pikvm/move-to.js';
-import { verifyClickByDiff, clickAtWithRetry, defaultMaxRetriesFor } from './pikvm/click-verify.js';
+import { verifyClickByDiff, clickAtWithRetry, defaultMaxRetriesFor, defaultMaxResidualPxFor } from './pikvm/click-verify.js';
 import { seedCursorTemplate } from './pikvm/seed-template.js';
 import { VERSION } from './version.js';
 import {
@@ -1299,7 +1299,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               moveToOptions: moveOpts,
               minBrightness,
               autoUnlockOnDetectFail: args.autoUnlockOnDetectFail === true,
-              maxResidualPx: args.maxResidualPx !== undefined ? Number(args.maxResidualPx) : undefined,
+              // Phase 135: iPad targets get a 35 px default gate so the click
+              // doesn't silently land on an adjacent icon. Caller can override
+              // (or pass 0 to disable).
+              maxResidualPx: args.maxResidualPx !== undefined
+                ? Number(args.maxResidualPx)
+                : defaultMaxResidualPxFor(mouseAbsoluteMode),
             },
           );
           const attemptsText =
