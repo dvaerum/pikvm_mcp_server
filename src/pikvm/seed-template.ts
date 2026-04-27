@@ -97,23 +97,20 @@ export async function seedCursorTemplate(
 
   const decBefore = await decodeScreenshot(before.buffer);
   const decAfter = await decodeScreenshot(after.buffer);
-  // Phase 103: tighten cluster-size bounds to match actual iPad cursor
-  // footprint. Live discovery 2026-04-27 (root cause of Phase 102's
-  // contaminated template cache): the previous `maxClusterSize: 200`
-  // accepted iPadOS pointer-effect halos around interactive elements
-  // (which manifest as 100-300 px clusters when the cursor approaches
-  // an icon/avatar). Picking the LARGEST cluster then captured the
-  // halo — and `extractCursorTemplateDecoded` centred a 24×24 template
-  // on the halo's centroid, which usually fell on the underlying icon
-  // or letter. Result: 7/8 cached templates were "G"/text glyphs
-  // instead of cursors.
+  // Phase 103 + 104: cluster-size bounds tuned from live measurement.
+  // Phase 103 was too tight — used 70 max based on a wrong assumption
+  // that iPad cursors are 25-50 px. Phase 104 measured live (debug-diff
+  // script): the actual iPadOS cursor in a plain area produces diff
+  // clusters of 80-90 px (anti-aliased edges + soft shadow). Bumped
+  // max to 120 to admit real cursors comfortably while still excluding
+  // pointer-effect halos (200-400+ px).
   //
-  // Real iPad cursor diff clusters: 25-50 px. Tightening max to 70
-  // excludes halos. Bumping min from 4 to 15 excludes JPEG noise.
+  // Lower bound 15 excludes JPEG noise (typical noise clusters are
+  // 1-15 px in our measurements).
   const clusters = diffScreenshotsDecoded(decBefore, decAfter, {
     diffThreshold: 30,
     minClusterSize: 15,
-    maxClusterSize: 70,
+    maxClusterSize: 120,
     mergeRadius: 20,
     brightnessFloor: 100,
     maxChannelDelta: 0,
@@ -124,29 +121,52 @@ export async function seedCursorTemplate(
       cursorPosition: null,
       templatePersisted: false,
       reason:
-        'no cursor-sized motion-diff clusters detected (15-70 px). Cursor may be off-screen, dim, faded, or already at the wake-emit destination. Try a larger emitDx/emitDy or wait for iPadOS to render the cursor before seeding.',
+        'no cursor-sized motion-diff clusters detected (15-120 px). Cursor may be off-screen, dim, faded, or already at the wake-emit destination. Try a larger emitDx/emitDy or wait for iPadOS to render the cursor before seeding.',
     };
   }
-  // Pick the largest cluster among those that PASSED the cursor-size
-  // bounds — that's the cursor when bounds are correctly set.
-  const cursorCluster = clusters.sort((a, b) => b.pixels - a.pixels)[0];
-  const cursorPos = {
-    x: Math.round(cursorCluster.centroidX),
-    y: Math.round(cursorCluster.centroidY),
-  };
-  // Reuse the already-decoded `decAfter` rather than re-decoding the
-  // JPEG via the convenience wrapper. Avoids one full sharp() pipeline
-  // per seed call.
-  const template = extractCursorTemplateDecoded(decAfter, cursorPos, 24);
-  if (!looksLikeCursor(template)) {
+  // Phase 104: try each candidate cluster, accept the first that
+  // produces a template passing looksLikeCursor. Motion-diff produces
+  // TWO clusters per cursor move — the BEFORE position (now empty in
+  // decAfter, so extraction yields a dark template that fails
+  // brightness gate) and the AFTER position (now bright, extraction
+  // yields a real cursor template). Cluster sizes are often similar
+  // (89 px vs 83 px in live data), so picking "largest" doesn't reliably
+  // pick the AFTER cluster. Trying both is robust.
+  const sorted = [...clusters].sort((a, b) => b.pixels - a.pixels);
+  let chosenCluster: typeof sorted[number] | null = null;
+  let chosenTemplate: CursorTemplate | null = null;
+  const rejectReasons: string[] = [];
+  for (const cluster of sorted) {
+    const pos = {
+      x: Math.round(cluster.centroidX),
+      y: Math.round(cluster.centroidY),
+    };
+    const candidate = extractCursorTemplateDecoded(decAfter, pos, 24);
+    if (looksLikeCursor(candidate)) {
+      chosenCluster = cluster;
+      chosenTemplate = candidate;
+      break;
+    }
+    rejectReasons.push(`(${pos.x},${pos.y}) ${cluster.pixels}px → looksLikeCursor rejected`);
+  }
+  if (!chosenCluster || !chosenTemplate) {
     return {
       ok: false,
-      cursorPosition: cursorPos,
+      cursorPosition: {
+        x: Math.round(sorted[0].centroidX),
+        y: Math.round(sorted[0].centroidY),
+      },
       templatePersisted: false,
       reason:
-        'looksLikeCursor rejected the extracted template (cohesion / brightness / saturation gate failed). The motion-diff cluster may not actually be the cursor — try a different wake emit, or check that the iPad screen is bright enough.',
+        `looksLikeCursor rejected all ${sorted.length} candidate cluster(s). ` +
+        `Tried: ${rejectReasons.slice(0, 5).join('; ')}. The motion-diff clusters may not be the cursor — try a different wake emit direction, or check that the iPad screen is bright enough.`,
     };
   }
+  const cursorPos = {
+    x: Math.round(chosenCluster.centroidX),
+    y: Math.round(chosenCluster.centroidY),
+  };
+  const template = chosenTemplate;
   const existing = await loadExisting(dir);
   const result = await persist(dir, template, existing);
   return {

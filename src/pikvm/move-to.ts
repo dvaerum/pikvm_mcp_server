@@ -489,16 +489,23 @@ export function looksLikeCursor(t: CursorTemplate): boolean {
   const meanSat = totalSaturation / px;
   if (brightCount < px * 0.04) return false;
   if (meanSat >= 50) return false;
-  // Phase 102: upper-bound on bright pixel count. Discovered live
+  // Phase 102 + 104: upper-bound on bright pixel count. Discovered live
   // 2026-04-27 that the template-set was 7/8 contaminated with letter
   // glyphs ("Search", "Georg", "GS" avatar's "G"). Each is a SINGLE
   // connected blob (so the Phase 66 cohesion gate passes), achromatic,
-  // and bright — passing every existing check. The discriminator: real
-  // iPad cursors occupy 25-60 of 576 (4-10%) of the 24×24 template;
-  // letters typically occupy 80-150 (14-26%). Capping at 12% (~70 px)
-  // catches letters without rejecting larger cursor shapes (e.g. the
-  // I-beam in landscape, ~50 px). Tune up if real cursors get rejected.
-  if (brightCount > px * 0.12) return false;
+  // and bright — passing every existing check.
+  //
+  // Phase 102 first set the cap at 12% based on a wrong assumption that
+  // real iPad cursors occupy 4-10% of the 24×24 template. Phase 104 (an
+  // hour later) measured live: real iPad cursor diff clusters are 80-90
+  // px (~14-16% of 576) due to anti-aliased edges + soft shadow. The
+  // Phase 102 cap rejected real cursors too. Phase 104 relaxed to 18%
+  // (~104 px) — admits real cursors while still excluding most letter
+  // glyphs (which measured 80-150 px / 14-26%). The 18%/26% margin is
+  // tighter than I'd like; if letters slip through, the next layer to
+  // strengthen is shape-aware: arrow/I-beam have specific aspect ratios
+  // and bright-pixel distributions that letters don't match.
+  if (brightCount > px * 0.18) return false;
 
   // Connected-components on the bright mask (4-connectivity, BFS).
   // Track only the largest component's size — we don't need the full
