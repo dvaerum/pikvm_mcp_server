@@ -718,8 +718,20 @@ async function discoverOrigin(
         await sleep(attempt.settleMs);
         const shot = await decodeScreenshot((await client.screenshot()).buffer);
         await saveDebug(`origin-shot-${attempt.label}`, shot.buffer);
+        // Phase 131 (v0.5.123): tighten minScore from
+        // findCursorByTemplateDecoded's default 0.83 to 0.85, AND
+        // pass it explicitly here. The locateCursor-fallback call
+        // had been accepting globally-best matches WITHOUT any
+        // hint or score floor — on a busy home screen with calendar
+        // widget number-grid features, that returns
+        // (758, 450) score 0.66 instead of the real cursor.
+        // Phase 130's icon-tour caught 7/11 trials taking that
+        // false positive. Real cursor matches against captured
+        // templates score 0.85+; raising the floor rejects the
+        // false-positive band while still accepting real cursors.
         const found = findCursorByTemplateSet(shot, tmplSet, {
           verbose: options.verbose,
+          minScore: 0.85,
         });
         if (found) {
           if (options.verbose) {
