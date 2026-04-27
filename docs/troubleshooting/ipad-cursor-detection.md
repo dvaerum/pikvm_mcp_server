@@ -161,6 +161,57 @@ pre-click verification chain (Phase 51) can do its job without
 producing wrong-element-hit reports. This should materially improve
 the cursor-verification rate that was 30-40% failure in past benches.
 
+### Phase 115 finding (2026-04-27, v0.5.108): Settings → Accessibility → Motion → Reduce Motion is plausibly the user-side lever
+
+After Phase 114 conclusively showed the 50% ceiling is architectural,
+researched online for known iPadOS pointer-effect + USB HID issues.
+[An iDownloadBlog article](https://www.idownloadblog.com/2020/05/21/how-to-disable-ipad-pointer-animations/)
+explicitly states:
+
+> "after disabling iPad pointer animations, the cursor will no longer
+>  automatically snap onto nearby items such as icons, tabs, buttons,
+>  sliders, and other user interface elements"
+
+**Verified live on this iPad (iPadOS 26.x)**: searching Settings for
+"Reduce Motion" returns a hit at **Settings → Accessibility → Motion
+→ Reduce Motion**. The path Phase 96 looked for ("Pointer Control")
+no longer exists in iPadOS 26 (settings reorganised), but Reduce
+Motion in the Motion submenu is the parent toggle that includes
+disabling pointer animations / snap.
+
+**Hypothesis**: enabling Reduce Motion would disable iPadOS pointer-
+effect snap, removing the 50% ceiling on tiny-icon click-success.
+Clicks would then register based purely on cursor position, and
+cursor-position accuracy is already at 100% post-Phase-106.
+
+**Why this isn't tested in-session**:
+
+1. Toggling Reduce Motion requires CLICKING the toggle in Accessibility
+   → Motion. This is the problem we're trying to fix — chicken-and-egg.
+2. Even if we navigate via keyboard search-result, activating the
+   result row requires a click (Tab+Enter does not work on iPad
+   Settings search results — verified live).
+3. Reduce Motion is a user-settings change that affects the user's
+   iPad beyond this session. It also disables widget animations,
+   parallax wallpaper, app-launch zooms, etc. — broader than just
+   pointer-effect.
+
+**User-actionable recommendation**: if click_at on tiny iPad icons is
+critical for your workflow, manually enable Reduce Motion on the
+iPad (Settings → Accessibility → Motion → Reduce Motion ON). Expected
+effect: click-success rate on icon-sized targets jumps from ~50-60%
+toward the cursor-positioning accuracy ceiling (~95%+ with maxRetries=2
+post-Phase-106). Trade-off: lose iPadOS animation polish.
+
+If Reduce Motion is enabled and click_at reliability does NOT
+improve, the pointer-effect-snap hypothesis is wrong and there's a
+deeper issue (e.g., iPadOS click debounce per Phase 114). Either
+way, this is a user-side experiment beyond what the project can
+control from software.
+
+[Sources for the snap-disable claim](https://www.idownloadblog.com/2020/05/21/how-to-disable-ipad-pointer-animations/) +
+[Apple Cult of Mac on Pointer Control settings](https://www.cultofmac.com/how-to/how-to-customize-ipad-mouse-pointer-control-settings).
+
 ### Phase 114 experiment (2026-04-27, v0.5.107): explicit dither pattern — also doesn't help
 
 Tested whether explicit dithering (try clicks at small offsets around
