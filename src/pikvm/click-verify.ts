@@ -794,6 +794,23 @@ export function isRateLimited(
   return rx > 0 && rx < threshold && ry > 0 && ry < threshold;
 }
 
+/**
+ * Phase 95 — pure helper: pick the `maxRetries` default given the
+ * target's mouse mode. Single-shot click_at on iPad (relative-mouse)
+ * is ~50% reliable on tiny targets (Phase 70 bench data); with
+ * retries=2 it's ~88%. Desktop (absolute-mouse) targets are reliable
+ * single-shot, so retries are pure overhead. Mirrors the existing
+ * mouseAbsoluteMode-driven defaults for `forbidSlamFallback` and
+ * `minBrightness`.
+ *
+ * Extracted so the contract is unit-testable and a future revert
+ * (someone removing the conditional and going back to a flat default)
+ * fails a regression test instead of silently degrading the iPad UX.
+ */
+export function defaultMaxRetriesFor(mouseAbsoluteMode: boolean): number {
+  return mouseAbsoluteMode ? 0 : 2;
+}
+
 /** Phase 93 — discriminator for the click-skip reason classes recorded
  *  by clickAtWithRetry. Exposed so callers (the MCP handler, tests) can
  *  reason about *why* a class of attempts failed without parsing the
