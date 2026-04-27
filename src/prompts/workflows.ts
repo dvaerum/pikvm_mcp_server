@@ -370,7 +370,7 @@ pikvm_key("Escape")                            # dismiss (works for most modals)
 pikvm_screenshot                               # confirm dismissed
 \`\`\`
 
-If Escape doesn't work for a particular modal, the modal probably needs a button click. THEN you fall back to \`pikvm_mouse_click_at\` with \`maxRetries: 3\` — quiet backdrops (modal scrim) tend to make cursor clicks more reliable than home-screen clicks.
+If Escape doesn't work for a particular modal, the modal probably needs a button click. THEN you fall back to \`pikvm_mouse_click_at\` with \`maxRetries: 2\` — quiet backdrops (modal scrim) tend to make cursor clicks more reliable than home-screen clicks.
 
 ## Plan for "${goal}"
 
