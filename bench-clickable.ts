@@ -63,6 +63,10 @@ async function runTrial(maxRetries: number, useMicro = false, preClickSettleMs =
       strategy: 'detect-then-move',
       forbidSlamFallback: true,
       profile,
+      // Phase 136: slow open-loop chunk pace (30→100ms) to keep iPadOS
+      // pointer acceleration in the linear regime. Same default the
+      // MCP click_at handler now applies on iPad targets.
+      chunkPaceMs: 100,
       ...microOpts,
     },
   });
