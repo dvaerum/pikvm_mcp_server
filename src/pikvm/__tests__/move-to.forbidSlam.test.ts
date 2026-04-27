@@ -52,7 +52,9 @@ describe('moveToPixel forbidSlamFallback', () => {
     // Phase 68 added 3 progressive-wake retries (300+400+500 ms settles)
     // to the template-match fallback before giving up. Plus locateCursor's
     // own probe retries and settles. The overall failure path now takes
-    // up to ~5 seconds before it gives up — bumped timeout to 15s.
+    // up to ~5 seconds in a normal run, but v8 coverage instrumentation
+    // adds 2-3× overhead — bumped timeout to 30 s so coverage runs are
+    // not flaky.
     await expect(
       moveToPixel(client as unknown as PiKVMClient, { x: 500, y: 500 }, {
         strategy: 'detect-then-move',
@@ -61,7 +63,7 @@ describe('moveToPixel forbidSlamFallback', () => {
         calibrationProbeMickeys: 0,
       }),
     ).rejects.toThrow(/slam fallback forbidden|cursor cannot be located|detect-then-move failed/i);
-  }, 15000);
+  }, 30000);
 
   it('default (forbidSlamFallback=false) falls back to slam silently', async () => {
     const client = new FakeClient();
@@ -83,5 +85,5 @@ describe('moveToPixel forbidSlamFallback', () => {
     // Either slam-then-move was used or detect-then-move recovered. Either
     // way, we DON'T throw.
     expect(['slam-then-move', 'detect-then-move']).toContain(r.strategy);
-  }, 30000);
+  }, 60000);
 });
