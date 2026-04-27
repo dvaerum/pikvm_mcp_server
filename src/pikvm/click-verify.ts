@@ -505,24 +505,20 @@ export async function clickAtWithRetry(
     // (verified 2026-04-27: target Software Update at (1090,416), cursor
     // at (1030,466) navigated to Apple Account row instead). Callers that
     // need correct-element-hit semantics opt in by setting maxResidualPx.
-    // Default undefined preserves the prior "click regardless of residual"
-    // behaviour.
-    if (
-      options.maxResidualPx !== undefined &&
-      cursorVerified &&
-      lastMoveResult.finalDetectedPosition
-    ) {
-      const dx = lastMoveResult.finalDetectedPosition.x - target.x;
-      const dy = lastMoveResult.finalDetectedPosition.y - target.y;
-      const residual = Math.sqrt(dx * dx + dy * dy);
-      if (residual > options.maxResidualPx) {
+    if (cursorVerified && lastMoveResult.finalDetectedPosition) {
+      const skipResidual = residualForSkip(
+        lastMoveResult.finalDetectedPosition,
+        target,
+        options.maxResidualPx,
+      );
+      if (skipResidual !== null) {
         lastVerification = {
           changedPixels: 0,
           totalPixels: 0,
           changedFraction: 0,
           screenChanged: false,
           message:
-            `Click skipped: residual ${residual.toFixed(1)}px exceeds ` +
+            `Click skipped: residual ${skipResidual.toFixed(1)}px exceeds ` +
             `maxResidualPx=${options.maxResidualPx}. Clicking would risk ` +
             `landing on an adjacent UI element. Loosen maxResidualPx if ` +
             `near-target clicks are acceptable.`,
@@ -532,7 +528,7 @@ export async function clickAtWithRetry(
           screenChanged: false,
           changedFraction: 0,
           cursorVerified: true,
-          skippedClickReason: `residual ${residual.toFixed(1)}px > maxResidualPx=${options.maxResidualPx}`,
+          skippedClickReason: `residual ${skipResidual.toFixed(1)}px > maxResidualPx=${options.maxResidualPx}`,
         });
         continue;
       }
@@ -788,6 +784,30 @@ export function isRateLimited(
   const rx = observed.x;
   const ry = observed.y;
   return rx > 0 && rx < threshold && ry > 0 && ry < threshold;
+}
+
+/**
+ * Phase 88 — pure helper: compute Euclidean residual between cursor and
+ * target, and decide whether the click should be skipped.
+ *
+ * Returns null when no skip is required (residual ≤ maxResidualPx, OR
+ * maxResidualPx is undefined — opt-out behaviour). Returns the computed
+ * residual as a number when the click should be skipped — the caller
+ * uses it to populate the skip-reason message.
+ *
+ * Pulled out as a pure function so the contract is unit-testable. The
+ * inline call site in clickAtWithRetry forwards directly to this helper.
+ */
+export function residualForSkip(
+  cursor: { x: number; y: number },
+  target: { x: number; y: number },
+  maxResidualPx: number | undefined,
+): number | null {
+  if (maxResidualPx === undefined) return null;
+  const dx = cursor.x - target.x;
+  const dy = cursor.y - target.y;
+  const residual = Math.sqrt(dx * dx + dy * dy);
+  return residual > maxResidualPx ? residual : null;
 }
 
 export interface PreClickAgreement {
