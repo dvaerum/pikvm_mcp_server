@@ -23,6 +23,7 @@
  */
 
 import {
+  computeTemplateHotspot,
   decodeScreenshot,
   diffPixels,
   diffScreenshotsDecoded,
@@ -255,5 +256,10 @@ export function extractMaskedTemplate(
       }
     }
   }
+  // Phase 121: re-derive hotspot AFTER masking; the masked pixel
+  // distribution differs from the un-masked pre-mask version, and
+  // the post-mask distribution is what findCursorByTemplate
+  // actually correlates against.
+  tpl.hotspot = computeTemplateHotspot(tpl);
   return tpl;
 }

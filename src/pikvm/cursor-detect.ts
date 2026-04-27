@@ -635,6 +635,90 @@ export interface CursorTemplate {
   rgb: Buffer;
   width: number;
   height: number;
+  /**
+   * Phase 121: optional hotspot offset (within the template's
+   * coordinate space) of the cursor's clickable point. For an
+   * iPadOS arrow cursor, this is the arrow TIP — typically near
+   * the upper-left of the template, NOT the bounding-box centre.
+   * When present, `findCursorByTemplate` returns
+   * `topLeft + hotspot` instead of `topLeft + (width/2, height/2)`.
+   * When absent, the bbox centre is used (legacy v0.5.113-and-
+   * earlier behaviour).
+   */
+  hotspot?: { x: number; y: number };
+}
+
+/**
+ * Phase 121 — locate the cursor's clickable hotspot within a
+ * captured cursor template.
+ *
+ * The iPadOS cursor over wallpaper / non-interactive content is a
+ * small upper-left-pointing arrow with the bright TIP at the top
+ * of the visible shape. The bounding-box centre is in the dark
+ * region BELOW and to the right of the tip — typically 8-12 px
+ * away from where iPadOS actually registers the click.
+ *
+ * Algorithm: find pixels brighter than the template's mean
+ * luminance plus a margin, then return the topmost (smallest y)
+ * bright pixel — averaged over equally-topmost pixels to be robust
+ * against JPEG noise.  For a round/dot cursor this returns a point
+ * on the upper edge of the dot (off by ~radius from the true
+ * centre, but still better than the 12+ px offset of bbox-centre
+ * against an arrow).  For a uniform/empty template it returns
+ * bbox-centre as a safe fallback.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function computeTemplateHotspot(
+  template: CursorTemplate,
+): { x: number; y: number } {
+  const { width, height, rgb } = template;
+  const n = width * height;
+
+  // Pass 1: compute mean and max luminance.
+  let sum = 0;
+  let max = 0;
+  for (let i = 0; i < n; i++) {
+    const o = i * 3;
+    const lum = (rgb[o] + rgb[o + 1] + rgb[o + 2]) / 3;
+    sum += lum;
+    if (lum > max) max = lum;
+  }
+  const mean = sum / n;
+  // Adaptive threshold: pixels within 30% of peak luminance, but
+  // also at least 20 above mean. iPadOS soft cursors peak around
+  // 100-130 luminance — fixed thresholds like 150 miss the cursor
+  // entirely and pick up isolated noise. The (max - mean) * 0.7
+  // term scales with the template's contrast.
+  const threshold = Math.max(mean + 20, mean + (max - mean) * 0.7);
+
+  const fallback = { x: Math.floor(width / 2), y: Math.floor(height / 2) };
+
+  if (max - mean < 30) return fallback; // very low contrast → no clear cursor
+
+  // Pass 2: find topmost bright pixel(s); average their x to
+  // centre on the cursor tip.
+  let minY = -1;
+  let sameYxSum = 0;
+  let sameYxCount = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const o = (y * width + x) * 3;
+      const lum = (rgb[o] + rgb[o + 1] + rgb[o + 2]) / 3;
+      if (lum < threshold) continue;
+      if (minY === -1 || y < minY) {
+        minY = y;
+        sameYxSum = x;
+        sameYxCount = 1;
+      } else if (y === minY) {
+        sameYxSum += x;
+        sameYxCount += 1;
+      }
+    }
+  }
+
+  if (minY === -1) return fallback;
+  return { x: Math.round(sameYxSum / sameYxCount), y: minY };
 }
 
 /**
@@ -656,7 +740,9 @@ export function extractCursorTemplateDecoded(
     const srcOffset = ((top + y) * screenshot.width + left) * 3;
     screenshot.rgb.copy(out, y * size * 3, srcOffset, srcOffset + size * 3);
   }
-  return { rgb: out, width: size, height: size };
+  const tpl: CursorTemplate = { rgb: out, width: size, height: size };
+  tpl.hotspot = computeTemplateHotspot(tpl);
+  return tpl;
 }
 
 /** Convenience wrapper for callers that only have the JPEG buffer. */
@@ -833,18 +919,30 @@ export function findCursorByTemplateDecoded(
     }
   }
 
+  // Phase 121: report the cursor's clickable HOTSPOT (arrow tip
+  // for an iPadOS arrow cursor), not the bounding-box centre. The
+  // bbox centre lies in the dark region below the visible cursor
+  // and was systematically 8-15 px off the click point, leaving
+  // converged residuals stuck at 30-40 px on a ~70 px target
+  // (Phase 109-117). Templates without a `hotspot` field (legacy
+  // disk-loaded templates) fall back to bbox centre.
+  const hs = template.hotspot ?? {
+    x: Math.floor(template.width / 2),
+    y: Math.floor(template.height / 2),
+  };
+
   if (options.verbose) {
     console.error(
-      `[template-match] best score=${bestScore.toFixed(3)} at (${bestX + Math.floor(template.width / 2)}, ` +
-        `${bestY + Math.floor(template.height / 2)}) (window=${xMin}-${xMax}×${yMin}-${yMax}, step=${step})`,
+      `[template-match] best score=${bestScore.toFixed(3)} at (${bestX + hs.x}, ` +
+        `${bestY + hs.y}) hotspot=(${hs.x},${hs.y}) (window=${xMin}-${xMax}×${yMin}-${yMax}, step=${step})`,
     );
   }
 
   if (bestScore < minScore) return null;
   return {
     position: {
-      x: bestX + Math.floor(template.width / 2),
-      y: bestY + Math.floor(template.height / 2),
+      x: bestX + hs.x,
+      y: bestY + hs.y,
     },
     score: bestScore,
   };
@@ -1013,7 +1111,16 @@ export async function loadCursorTemplate(
   try {
     const buf = await fs.readFile(filePath);
     const decoded = await decodeToRgb(buf);
-    return { rgb: decoded.data, width: decoded.width, height: decoded.height };
+    const tpl: CursorTemplate = {
+      rgb: decoded.data,
+      width: decoded.width,
+      height: decoded.height,
+    };
+    // Phase 121: legacy disk-format templates don't carry a
+    // hotspot; recompute it from the loaded pixel data so
+    // findCursorByTemplate reports the cursor TIP, not bbox-centre.
+    tpl.hotspot = computeTemplateHotspot(tpl);
+    return tpl;
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === 'ENOENT') return null;
