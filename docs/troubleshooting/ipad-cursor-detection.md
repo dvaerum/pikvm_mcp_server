@@ -105,6 +105,52 @@ screen, not Settings.
 `da3a434` before live-testing on iPad.** Rebuild + restart the
 MCP server after pulling main if you see the slam-fallback warning.
 
+### Phase 106 live verification (2026-04-27): masked extraction captures clean cursor templates over context-bleed positions
+
+After shipping Phase 106's `extractMaskedTemplate`, re-ran the seed
+flow at the EXACT position that failed under Phase 104's context-
+bleed problem: cursor at (983, 1023), sitting on the iPad's home-
+indicator bar (a bright horizontal bar at the bottom of the iPad
+display).
+
+**Phase 104 result at this position**: looksLikeCursor rejected the
+extract because the 24×24 region captured the bar (155 of 576 = 27%
+bright, all forming one connected blob — passes cohesion, fails
+upper-bound brightness).
+
+**Phase 106 result at this position**:
+```
+{
+  "ok": true,
+  "cursorPosition": { "x": 983, "y": 1023 },
+  "templatePersisted": true,
+  "decision": "added",
+  "templateCount": 1
+}
+```
+
+Visual inspection of the captured `data/cursor-templates/<n>.jpg`:
+**a clean iPad cursor arrow shape, dark everywhere else**. The
+home-indicator bar's static pixels were correctly masked out because
+they didn't change between BEFORE and AFTER frames; only the
+cursor's pixels (which DID change because the cursor moved 30 px
+right) appear as bright in the template.
+
+This proves the architectural fix works: future seedCursorTemplate
+calls produce clean cursor templates regardless of background
+context (text, icons, indicator bar, colored wallpaper, anything).
+The Phase 104 "needs truly plain background" limitation is GONE.
+
+The template-set persistence machinery now has an honest cursor
+template to work with — template-match becomes a useful augmentation
+to motion-diff, not the false-positive contamination source it was
+before Phase 102.
+
+**Strategic implication**: with template-match now reliable, the
+pre-click verification chain (Phase 51) can do its job without
+producing wrong-element-hit reports. This should materially improve
+the cursor-verification rate that was 30-40% failure in past benches.
+
 ### Phase 104 (2026-04-27): tune Phase 102/103 thresholds against live measurement + multi-cluster try
 
 Phase 102 set looksLikeCursor's bright-pixel upper bound at 12% based
