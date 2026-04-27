@@ -44,7 +44,7 @@ After Phases 65-77 (v0.5.68+):
 Single-digit residuals are achievable when motion-diff succeeds (Phase 69 measured 6-9 px hits). 
 
 ## When to Use vs Closed-Loop Correction
-- For most click tasks: prefer `pikvm_mouse_click_at` with `maxRetries: 2` — same algorithm, but with retry-on-miss orchestration baked in.
+- For most click tasks: prefer `pikvm_mouse_click_at` (which already retries up to 2× by default on iPad after Phase 94) — same algorithm as this tool, but with retry-on-miss orchestration baked in.
 - For agent-driven closed-loop where you want screenshot inspection between move and click: this tool returns the screenshot and reported residual, suitable for an agent to compute a correction delta and issue follow-up `pikvm_mouse_move` calls.
 
 ## Example Calls
