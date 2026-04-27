@@ -422,10 +422,18 @@ export async function clickAtWithRetry(
         throw new Error(
           `clickAtWithRetry: screen too dim for cursor detection ` +
           `(mean=${brightness.mean.toFixed(0)}/255 stddev=${brightness.stddev.toFixed(1)}, threshold=mean<${minBrightness}+stddev<3). ` +
-          `Possible causes: (1) iPad display brightness too low — adjust manually ` +
-          `(software wakes don't restore it); (2) a security/permission popup is open — ` +
-          `it may be positioned off the HDMI capture frame but is still interactive, ` +
-          `try sending Escape via pikvm_key, then Enter, then Cmd+Period. ` +
+          `Possible causes: ` +
+          `(1) iPad display brightness too low — adjust manually ` +
+          `(software wakes don't restore it). ` +
+          `(2) Phase 129 (v0.5.121) finding — a hidden security/privacy popup ` +
+          `is open (Apple Pay / Face ID / password / app-permission prompt). ` +
+          `iOS deliberately blanks these from HDMI/screen-capture output to ` +
+          `prevent credential theft, BUT they remain interactive: keyboard and ` +
+          `mouse events still reach the popup even though it's invisible to us. ` +
+          `Try dismissing blindly: pikvm_key Escape, then Enter, then Cmd+Period; ` +
+          `or pikvm_mouse_click_at on the centre of the iPad area (~960×540) ` +
+          `which is where iOS centers most modal sheets. Confirm dismissal by ` +
+          `re-running the click — if mean brightness recovers, the popup is gone. ` +
           `Set minBrightness=0 to skip this check.`,
         );
       }
