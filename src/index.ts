@@ -1235,6 +1235,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           assumeCursorAt,
           profile: cachedProfile,
           forbidSlamFallback: !mouseAbsoluteMode,
+          // Phase 136: on iPad (relative-mouse) targets, slow the
+          // open-loop chunk pace from 30 ms → 100 ms. iPadOS pointer
+          // acceleration tracks velocity across consecutive deltas; a
+          // 30 ms pace is fast enough that 9 chunks of 20 mickeys each
+          // are seen as one fast burst (live measurement: 167-mickey
+          // Y emit moved 167 px when calibration predicted 105 px —
+          // 1.6× over-shoot). 100 ms pace gives iPadOS time to decay
+          // velocity between chunks, keeping each chunk in the linear
+          // regime that calibration measured. Costs ~600 ms of extra
+          // latency on a long emit; saves the cursor from landing
+          // 60+ px past target.
+          ...(!mouseAbsoluteMode ? { chunkPaceMs: 100 } : {}),
         };
         const verifyOpts = {
           ...(verifyRegionHalfPx !== undefined
