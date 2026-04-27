@@ -40,6 +40,7 @@ The iPad MUST be unlocked. Detect-then-move can't find the cursor against the lo
 | button | string | left | left / right / middle / up / down |
 | maxRetries | number | 0 | **Recommended 2** on iPad |
 | autoUnlockOnDetectFail | boolean | false | Phase 72 opt-in lock-screen recovery |
+| maxResidualPx | number | *(unset)* | Phase 88: skip the click if cursor lands more than N px from target. Set to 25 for strict icon-tolerance (refuses imprecise clicks that risk hitting adjacent UI elements). Leave unset for permissive behaviour. |
 | verifyClick | boolean | true | Pre/post screenshot diff confirms click landed |
 | strategy | string | detect-then-move | DO NOT use slam-then-move on iPad — re-locks via hot corner |
 
@@ -54,6 +55,12 @@ The iPad MUST be unlocked. Detect-then-move can't find the cursor against the lo
 ```json
 { "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2, "autoUnlockOnDetectFail": true } }
 ```
+
+**Strict-target click (refuse to click on the wrong adjacent element):**
+```json
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2, "maxResidualPx": 25 } }
+```
+With `maxResidualPx: 25`, attempts that land more than 25 px from the target are skipped (counts as a retry). Trades absolute hit rate for "I clicked the right thing" confidence — useful when the target is near other clickable elements that could be accidentally hit.
 
 ## When NOT to Use
 - Tiny targets (< 30 px): even with retries, hit rate drops below 80%. Use keyboard navigation if available — see [ipad-keyboard-workflow.md](ipad-keyboard-workflow.md).
