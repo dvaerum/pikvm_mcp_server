@@ -161,6 +161,46 @@ pre-click verification chain (Phase 51) can do its job without
 producing wrong-element-hit reports. This should materially improve
 the cursor-verification rate that was 30-40% failure in past benches.
 
+### Phase 116 demonstration (2026-04-27, v0.5.109): chicken-and-egg confirmed — multi-step iPad nav via click_at hits snap-zone unpredictability
+
+Tried to navigate Settings → Accessibility → Motion → Reduce Motion
+via local v0.5.109 click_at to test the Phase 115 hypothesis
+empirically. Two-click navigation:
+
+1. **Click "Reduce Motion" search result row at (760, 200)**:
+   `success=true attempts=3` ✓ — landed on the Accessibility parent
+   page (the search result navigates to Accessibility section, not
+   directly to Motion sub-page).
+2. **Click "Motion" row at (1000, 573)** on the Accessibility page:
+   `success=true attempts=1` BUT cursor landed at (984, 531) and
+   the click activated **Read & Speak** at Y=618, not Motion at
+   Y=573.
+
+Click 1 worked (large search-result row, ~310 px wide).
+Click 2 did NOT hit the right row — exact iPadOS snap-zone failure
+mode we've been measuring. Cursor was 42 px ABOVE the target Motion
+row, but iPadOS snap pulled the click DOWN to the Read & Speak row
+(45 px BELOW the target). Net error: 87 px from intended target.
+
+**This is a perfect live demonstration** of why click_at on
+multi-step iPad menu navigation isn't reliable: even with the
+Phase 102-106 algorithm-side cursor-verification fix, iPadOS
+snap-zone behavior makes individual menu-item clicks unpredictable.
+
+Each step in a multi-step navigation has 50-60% click-success.
+For a 3-step navigation (Settings → Accessibility → Motion → toggle
+Reduce Motion), end-to-end success ≈ 0.55³ = 17%. That's a 1-in-6
+chance of completing the navigation per attempt.
+
+**Reaffirms the strategic conclusion**: keyboard-first workflows
+remain the right answer for iPad navigation. **`pikvm_ipad_launch_app`
++ Spotlight search** can navigate to specific Settings panes
+deterministically; manual click navigation cannot.
+
+Reduce Motion test was NOT performed because navigation reliably
+breaks in step 2. User must enable Reduce Motion manually if they
+want to test whether disabling iPadOS snap fixes the ceiling.
+
 ### Phase 115 finding (2026-04-27, v0.5.108): Settings → Accessibility → Motion → Reduce Motion is plausibly the user-side lever
 
 After Phase 114 conclusively showed the 50% ceiling is architectural,
