@@ -24,10 +24,11 @@
 
 import {
   decodeScreenshot,
+  diffPixels,
   diffScreenshotsDecoded,
   extractCursorTemplateDecoded,
 } from './cursor-detect.js';
-import type { CursorTemplate } from './cursor-detect.js';
+import type { CursorTemplate, DecodedScreenshot } from './cursor-detect.js';
 import { looksLikeCursor } from './move-to.js';
 import {
   persistTemplate,
@@ -124,6 +125,25 @@ export async function seedCursorTemplate(
         'no cursor-sized motion-diff clusters detected (15-120 px). Cursor may be off-screen, dim, faded, or already at the wake-emit destination. Try a larger emitDx/emitDy or wait for iPadOS to render the cursor before seeding.',
     };
   }
+  // Phase 106: compute the per-pixel diff mask once. Used to mask the
+  // template extract — pixels that didn't change (static background
+  // context like text or icons) get zeroed out, leaving only the
+  // cursor's contribution. This solves the context-bleed problem from
+  // Phase 104: extracting a 24×24 region around the cursor previously
+  // captured "cursor + surrounding text/indicator bar/icons" which
+  // looksLikeCursor correctly rejected as too-bright. With the mask,
+  // the template has bright cursor pixels in the AFTER position and
+  // dark/zero everywhere else regardless of background.
+  const diffMask = diffPixels(
+    decBefore.rgb,
+    decAfter.rgb,
+    decBefore.width,
+    decBefore.height,
+    30,    // diffThreshold (matches diffScreenshotsDecoded above)
+    100,   // brightnessFloor
+    0,     // maxChannelDelta
+  );
+
   // Phase 104: try each candidate cluster, accept the first that
   // produces a template passing looksLikeCursor. Motion-diff produces
   // TWO clusters per cursor move — the BEFORE position (now empty in
@@ -141,7 +161,7 @@ export async function seedCursorTemplate(
       x: Math.round(cluster.centroidX),
       y: Math.round(cluster.centroidY),
     };
-    const candidate = extractCursorTemplateDecoded(decAfter, pos, 24);
+    const candidate = extractMaskedTemplate(decAfter, pos, 24, diffMask);
     if (looksLikeCursor(candidate)) {
       chosenCluster = cluster;
       chosenTemplate = candidate;
@@ -180,4 +200,60 @@ export async function seedCursorTemplate(
         ? 'Template was perceptually similar to an existing one — kept the existing copy.'
         : `Template ${result.decision} (${result.kept.length} total).`,
   };
+}
+
+/**
+ * Phase 106: extract a 24×24 cursor template from `screenshot` centred on
+ * `centre`, but ZERO OUT pixels that are NOT in the supplied diff mask.
+ *
+ * The motivation: the cursor's footprint is a small subset of the 24×24
+ * template region. The rest is static background context (text, icons,
+ * indicator bars) that contaminates the template — looksLikeCursor's
+ * brightness gate then rejects the extract because the surrounding
+ * context contributes too many bright pixels.
+ *
+ * The diff mask flags pixels that CHANGED between BEFORE and AFTER
+ * frames — the cursor's contribution is exactly that set (because the
+ * cursor moved). Masking the extract to the diff signature gives a
+ * template that has bright cursor pixels in the right shape and zeros
+ * everywhere else, regardless of what was originally underneath the
+ * cursor.
+ *
+ * NCC matching against future screenshots still works: the cursor's
+ * distinctive bright pattern dominates the correlation; the dark
+ * background pixels in the template multiply against future-screenshot
+ * pixels and contribute variance, but the cursor pattern carries the
+ * match score.
+ *
+ * Pure: no I/O, deterministic.
+ */
+export function extractMaskedTemplate(
+  screenshot: DecodedScreenshot,
+  centre: { x: number; y: number },
+  size: number,
+  diffMask: ReadonlyArray<boolean>,
+): CursorTemplate {
+  // Extract first via the existing path (handles edge clamping correctly).
+  const tpl = extractCursorTemplateDecoded(screenshot, centre, size);
+  // Re-derive the same clamped top-left as extractCursorTemplateDecoded
+  // so we can index back into the diff mask at the matching pixel.
+  const half = Math.floor(size / 2);
+  const left = Math.max(0, Math.min(screenshot.width - size, centre.x - half));
+  const top = Math.max(0, Math.min(screenshot.height - size, centre.y - half));
+  // Iterate the template's pixels; for any whose source-frame position is
+  // NOT in the diff mask, zero out the RGB triple.
+  for (let y = 0; y < size; y++) {
+    const srcY = top + y;
+    for (let x = 0; x < size; x++) {
+      const srcX = left + x;
+      const maskIdx = srcY * screenshot.width + srcX;
+      if (!diffMask[maskIdx]) {
+        const tplOff = (y * size + x) * 3;
+        tpl.rgb[tplOff] = 0;
+        tpl.rgb[tplOff + 1] = 0;
+        tpl.rgb[tplOff + 2] = 0;
+      }
+    }
+  }
+  return tpl;
 }
