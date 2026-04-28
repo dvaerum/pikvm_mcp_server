@@ -129,7 +129,7 @@ Or if using the .env file:
 - **`pikvm_type`** - Type text with keymap-aware special character handling (required: text; optional: keymap, slow, delay)
 - **`pikvm_key`** - Send a key or key combo, e.g. Ctrl+Alt+Del (required: key; optional: modifiers, state)
 - **`pikvm_shortcut`** - Send multiple keys pressed simultaneously (required: keys array)
-- **`pikvm_dismiss_popup`** - Run the Phase 141 hidden-popup dismiss recipe (Escape → 60ms → Enter → 60ms). Useful when `click_at` returns success but the screenshot shows no UI change — the dominant explanation is an iOS HDMI-blocked security popup (Apple Pay / Face ID / password / Low Battery / app permission) eating the input. Phase 162 (v0.5.152) live-verified Escape dismisses these. Best-effort, no required args.
+- **`pikvm_dismiss_popup`** - Run the hidden-popup dismiss recipe (Escape → 60ms → Enter → 60ms). Useful when `click_at` returns success but the screenshot shows no UI change — the dominant explanation is an iOS HDMI-blocked security popup (Apple Pay / Face ID / password / Low Battery / app permission) eating the input. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly with one Escape). Best-effort, no required args.
 
 ### Mouse
 - **`pikvm_mouse_move`** - Move cursor to absolute pixel position or relative delta (required: x, y; optional: relative)

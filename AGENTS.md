@@ -79,7 +79,7 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 3. **`pikvm_type`** - Type text (handles special chars correctly via keymap)
 4. **`pikvm_key`** - Send key/combo (e.g., Ctrl+Alt+Del)
 5. **`pikvm_shortcut`** - Send keyboard shortcut (multiple keys pressed simultaneously)
-5a. **`pikvm_dismiss_popup`** (Phase 165, v0.5.155+) - Run the documented Phase 141 hidden-popup-dismiss recipe (Escape → Enter). Use when click_at returns success but the screenshot shows no UI change — the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating the input. Phase 162 live-verified Escape clears these.
+5a. **`pikvm_dismiss_popup`** - Run the hidden-popup-dismiss recipe (Escape → Enter). Use when click_at returns success but the screenshot shows no UI change — the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating the input. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly with one Escape).
 
 ### Mouse
 6. **`pikvm_mouse_move`** - Move mouse cursor (absolute or relative)
@@ -134,7 +134,7 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 46** (25 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow). Phase 165 (v0.5.155) added `pikvm_dismiss_popup`.
+**Total tools: 46** (25 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
