@@ -6,6 +6,30 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 155 (2026-04-28, v0.5.145): extract `chunkMickeys` pure helper (DRY duplicate emit math)
+
+Continuation of the Phase 147-154 regression-pinning push. The
+chunked-mickey computation (`Math.sign * Math.min(Math.ceil(Math.abs))`)
+appeared at TWO call sites in `clickAtWithRetry`: the micro-correction
+loop's per-iteration emit AND Phase 125's in-motion approach emit.
+Duplication invited drift — a refactor at one call site that
+misremembered ceil/floor or sign handling would silently regress
+only one path.
+
+Extracted as `chunkMickeys(rawMickeys, maxMickeys)`. The helper
+explicitly handles edge cases: zero raw count returns 0, sub-1
+mickey magnitudes round UP via ceil (so fractional residuals don't
+stall the loop), magnitude is capped after ceil (raw=10.5 cap=5
+returns 5, NOT 11), sign-preserving on negative inputs, and
+NaN/Infinity defensively returns 0 (defends against ratio=0
+division producing infinite emits).
+
+11 regression tests pin: zero, fractional, negative, capped,
+boundary, disabled-feature, defensive-NaN, ceil-not-floor, and
+Math.sign(0) cases. Both call sites now use the helper.
+
+No behavior change. 521 tests passing (was 510; +11 new).
+
 ## Phase 154 (2026-04-28, v0.5.144): extract `isLockScreenRecoveryError` pure helper
 
 Continuation of the Phase 147-153 regression-pinning push. Phase 71
