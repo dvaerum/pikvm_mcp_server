@@ -6,6 +6,33 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 181 (2026-04-28, v0.5.171): live test — swipe-up home gesture also DOES NOT bypass stuck-app state
+
+Tested `pikvm_ipad_unlock` (sends mouse swipe-up from the home
+indicator at y=1035, dragging 800 px upward — the gesture iPadOS
+uses for "go home"). Tool reports "Unlock swipe: 800 px upward in
+27 chunks over 288 ms" and the post-screenshot shows the cursor
+moved (visible at ~955,290 — moved upward 800 px as commanded)
+but the Settings → Read & Speak app state persists.
+
+This rounds out the recovery-taxonomy across HID input pathways:
+- Visible system popup + Escape (keyboard) → ✅ works (Phase 162, 176)
+- Cmd+Tab system shortcut (keyboard) → ❌ no effect (Phase 180)
+- Swipe-up home gesture (mouse drag) → ❌ no effect (Phase 181, here)
+
+Pure-HID recovery from the stuck-app state has been exhaustively
+tested across all three pathways. The cursor moves correctly (mouse
+HID delivers), but the iPad's foreground-app input handler is
+absorbing every gesture without acting on it. Only physical
+interaction can clear this state.
+
+The Phase 162/176 popup-Escape path remains the best architectural
+recovery for the failure mode it targets (system popups eating
+input). The stuck-app failure mode is genuinely orthogonal and has
+no remote-only remedy.
+
+No code change. 555 tests passing.
+
 ## Phase 180 (2026-04-28, v0.5.170): live test — Cmd+Tab DOES NOT bypass the stuck app state
 
 Hypothesized that `pikvm_ipad_app_switcher` (which sends Cmd+Tab
