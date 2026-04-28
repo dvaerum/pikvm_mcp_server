@@ -6,6 +6,23 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 179 (2026-04-28, v0.5.169): regression test pinning every pikvm_* tool has a non-empty description
+
+Added a regression test that asserts every `pikvm_*` tool defined
+in src/index.ts has a non-trivial description body (>20 chars).
+Catches accidental description truncation during refactor — the
+MCP protocol requires a non-empty description and clients/LLM
+agents rely on it for tool selection guidance.
+
+Initial regex was too strict (assumed single-line `description: '...'`
+inline) and false-positively flagged `pikvm_seed_cursor_template`
+which uses multi-line concatenation. Refactored to scan up to 3
+lines after `name:` for the first quoted string — handles both
+single-line and multi-line concat patterns.
+
+Net: 555 tests passing (was 554; +1 new). Future refactors that
+truncate a description below 20 chars trip the assertion.
+
 ## Phase 178 (2026-04-28, v0.5.168): finish drop-version-anchors push — AGENTS.md + README.md tool catalog entries
 
 Phase 177 cleaned the prompt prose and skill doc; AGENTS.md and

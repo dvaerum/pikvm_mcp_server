@@ -60,6 +60,47 @@ async function listPikvmToolNames(): Promise<string[]> {
   return names;
 }
 
+/**
+ * Phase 179 (v0.5.169): extract each `pikvm_*` tool's `name` and
+ * its sibling `description: '...'`. Returns a list of {name,
+ * description} so a regression test can assert every tool has a
+ * non-empty description. Catches accidental truncations during
+ * refactor.
+ *
+ * The regex is lenient (handles single quotes with escaped quotes,
+ * the spread of typical tool descriptions). It anchors to the
+ * specific pattern at top-of-tool-array-entry so multi-line nested
+ * descriptions inside inputSchema are NOT matched.
+ */
+async function listPikvmToolNameDesc(): Promise<Array<{ name: string; description: string }>> {
+  const indexPath = path.join(repoRoot(), 'src', 'index.ts');
+  const src = await fs.readFile(indexPath, 'utf8');
+  const lines = src.split('\n');
+  const out: Array<{ name: string; description: string }> = [];
+  for (let i = 0; i < lines.length; i++) {
+    const nameMatch = /^\s+name: '(pikvm_[a-z_]+)',?$/.exec(lines[i]);
+    if (!nameMatch) continue;
+    // Description follows on the next line. Two layouts tolerated:
+    //   description: 'single-line value'
+    //   description:
+    //     'multi-line concat ' +
+    //     'value continues...',
+    // Both cases: scan up to 3 lines after the name and grab the first
+    // quoted string. We don't need the FULL description, just proof of
+    // a non-trivial body.
+    let description = '';
+    for (let j = i + 1; j <= i + 3 && j < lines.length; j++) {
+      const onLine = /['"`]([^'"`]+)['"`]/.exec(lines[j]);
+      if (onLine) {
+        description = onLine[1];
+        break;
+      }
+    }
+    out.push({ name: nameMatch[1], description });
+  }
+  return out;
+}
+
 describe('AGENTS.md freshness', () => {
   it('mentions the actual tool-guide count', async () => {
     const doc = await readAgentsMd();
@@ -98,6 +139,22 @@ describe('AGENTS.md freshness', () => {
     expect(tools.length).toBeGreaterThan(0);
     for (const t of tools) {
       expect(doc, `AGENTS.md should mention ${t}`).toContain(t);
+    }
+  });
+
+  it('Phase 179: every pikvm_* tool has a non-empty single-line description', async () => {
+    // Catches accidental description truncation during refactor.
+    // The MCP protocol requires a non-empty description string for
+    // each tool — clients use it to display tool purpose. An empty
+    // description means the tool would surface to LLM agents with
+    // no usage hint at all.
+    const tools = await listPikvmToolNameDesc();
+    expect(tools.length).toBeGreaterThan(0);
+    for (const t of tools) {
+      expect(
+        t.description.length,
+        `${t.name} must have a non-empty description`,
+      ).toBeGreaterThan(20);
     }
   });
 
