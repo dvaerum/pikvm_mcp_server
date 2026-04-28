@@ -6,6 +6,31 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 176 (2026-04-28, v0.5.166): reproduce Phase 162 — Escape dismisses Low Battery 5% popup too
+
+Same iPad, lower battery (5% instead of 10%), same UI flow:
+1. Low Battery system popup appeared (centered modal: "Low Battery
+   5% remaining — Low Power Mode / Close").
+2. `pikvm_key("Escape")` dismissed it cleanly — Settings →
+   Read & Speak with the Reduce Motion search overlay still
+   foreground but the popup is gone.
+
+Reproducing Phase 162 at a different battery threshold confirms:
+- The Escape recipe works on system-modal popups regardless of
+  the specific popup content (10% vs 5% = different message,
+  same dismiss path).
+- The session-long iPad app-state input-block (Settings sticky
+  state) is genuinely a different layer from system popups.
+  Escape clears the popup; the app state persists.
+
+This second live reproduction strengthens Phase 162's
+architectural validation: `runDismissRecipe()` and the new
+`pikvm_dismiss_popup` MCP tool target a real recurring failure
+mode that any deployment with low-battery / Apple Pay / Face ID /
+permission popups will hit.
+
+No code change. 554 tests passing.
+
 ## Phase 175 (2026-04-28, v0.5.165): fix stale `maxRetries` description — was Phase-94-era "default 2"
 
 The `maxRetries` parameter description on `pikvm_mouse_click_at`
