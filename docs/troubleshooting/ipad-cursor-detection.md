@@ -6,6 +6,28 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 178 (2026-04-28, v0.5.168): finish drop-version-anchors push — AGENTS.md + README.md tool catalog entries
+
+Phase 177 cleaned the prompt prose and skill doc; AGENTS.md and
+README.md still had the same pattern in their `pikvm_dismiss_popup`
+catalog entries. AGENTS.md said "(Phase 165, v0.5.155+)" and
+"Phase 162 live-verified"; README.md said "Phase 141 hidden-popup
+dismiss recipe" and "Phase 162 (v0.5.152) live-verified".
+
+Both updated to drop version anchors and reference the dual live
+proof (Low Battery 10% and 5% modals). Also dropped the trailing
+"Phase 165 (v0.5.155) added pikvm_dismiss_popup" sentence in
+AGENTS.md's tool count section — the count itself is auto-anchored
+by the Phase 173 dynamic-counting test, so the historical
+attribution adds no value.
+
+This completes the Phase 174-178 version-anchor cleanup arc for
+the new tool's user-facing surfaces. Internal phase entries inside
+the troubleshooting doc retain their version anchors as historical
+record.
+
+No production behavior change. 554 tests passing.
+
 ## Phase 177 (2026-04-28, v0.5.167): drop version anchors from "Silent failure remedy" callouts
 
 Phase 167-168's "Silent failure remedy" / "Hidden popup remedy"
