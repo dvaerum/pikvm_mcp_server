@@ -6,6 +6,25 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 172 (2026-04-28, v0.5.162): extract `formatDismissResult` for handler-side regression coverage
+
+The `pikvm_dismiss_popup` MCP handler's user-visible summary text
+was inlined in `src/index.ts` — `runDismissRecipe` had unit tests
+but the handler's summary formatting did not. Two distinct
+formatting branches (clean / error-path) and load-bearing strings
+(pikvm_screenshot mention, key-count accuracy, "Best-effort
+continued anyway" reassurance) were untested.
+
+Extracted as `formatDismissResult` in click-verify.ts. 8 regression
+tests pin: clean-path canonical "Escape, Enter" mention, the
+load-bearing pikvm_screenshot guidance, error-path count reporting,
+multi-error joining, partial-success keysSent accuracy, the
+best-effort continuation message, the branch selection (errors
+length determines branch), and a defensive vacuous-success case.
+
+Net impact: 552 tests passing (was 544; +8 new). The MCP handler's
+user-facing prose is now regression-pinned alongside the helper.
+
 ## Phase 171 (2026-04-28, v0.5.161): make AGENTS.md tool-count regression test count tools dynamically
 
 Phase 170 caught the manual hardcode in agents-doc-freshness.test.ts
