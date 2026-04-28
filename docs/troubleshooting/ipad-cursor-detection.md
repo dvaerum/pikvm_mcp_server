@@ -6,6 +6,34 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 173 (2026-04-28, v0.5.163): per-tool name-coverage tests catch 3 missing iPad tools in AGENTS.md
+
+Added two new regression tests in `agents-doc-freshness.test.ts`:
+1. Every `pikvm_*` tool defined in src/index.ts must be mentioned
+   in AGENTS.md.
+2. Every `pikvm_*` tool defined in src/index.ts must be mentioned
+   in README.md.
+
+The first test caught REAL drift on first run: 3 tools were
+missing from AGENTS.md's tool list — `pikvm_ipad_home`,
+`pikvm_ipad_app_switcher`, `pikvm_ipad_launch_app`. These are
+high-reliability iPad tools (Phase 162 confirmed `launch_app`
+100% reliable for Settings/Files/App Store/Maps/Safari) but the
+AGENTS.md tool catalog had never been updated to reflect them.
+
+Added the three tools as 14a/14b/14c (between `pikvm_ipad_unlock`
+at 14 and `pikvm_mouse_move_to` at 15, preserving existing
+numbering). README.md was already up-to-date — only AGENTS.md
+had this drift.
+
+This is the highest-impact catch from the per-tool coverage
+test: AGENTS.md is the developer-facing catalog and three
+production-ready iPad tools were silently invisible to anyone
+using AGENTS.md as their reference.
+
+554 tests passing (was 552; +2 new — the per-tool coverage
+tests). Plus the docs sync.
+
 ## Phase 172 (2026-04-28, v0.5.162): extract `formatDismissResult` for handler-side regression coverage
 
 The `pikvm_dismiss_popup` MCP handler's user-visible summary text
