@@ -6,6 +6,41 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 184 (2026-04-28, v0.5.174): live test — pikvm_type does NOT reach the focused search field either
+
+Final diagnostic of the stuck-app failure mode. Tested whether
+HID keyboard text typing (single character "x" via
+`pikvm_type`) would reach the focused search field that visibly
+contains "Reduce Motion`|" with the cursor positioned at the end.
+
+Result: tool reports `Typed 1 character(s): "x"` (HID emit
+succeeded) but the post-screenshot shows the search field text
+unchanged. The "x" was silently absorbed by iPadOS — same
+pathway that consumed Backspace, Cmd+H, Cmd+Tab, swipe-up
+gesture, and clicks on the X clear button.
+
+This completes the comprehensive HID-input taxonomy for the
+stuck-app failure mode:
+
+| Input pathway | Reaches iPad subsystem? | Result on stuck app |
+|---|---|---|
+| Mouse cursor move (relative) | YES (cursor draws on screen) | App ignores |
+| Mouse click | YES (HID emit fires) | App ignores |
+| Mouse swipe-up gesture | YES (cursor moves) | App ignores |
+| Keyboard Escape (on system popup) | YES (popup dismissed) | N/A — popup layer |
+| Keyboard Escape (on app) | YES (HID emit fires) | App ignores |
+| Keyboard Cmd+Tab | YES (HID emit fires) | iPadOS ignores (no app switcher) |
+| Keyboard Cmd+H | YES (HID emit fires) | App ignores |
+| Keyboard text (`pikvm_type`) | YES (HID emit fires) | App ignores |
+| Consumer media keys (Volume±) | NO — PiKVM HID gadget lacks them | N/A |
+
+The cursor moves; the keyboard fires; system popups dismiss; only
+the app's foreground input handler is broken. This is the
+definitive boundary documentation: there is no remote-only HID
+recovery path through the foreground-app input layer.
+
+No code change. 555 tests passing.
+
 ## Phase 182 (2026-04-28, v0.5.172): PiKVM HID boot-protocol does NOT expose consumer media keys (VolumeUp/etc.)
 
 Tested whether VolumeUp could bypass the stuck-app state since
