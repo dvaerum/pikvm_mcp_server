@@ -886,8 +886,8 @@ export async function clickAtWithRetry(
         // continue pushing the cursor away from target. 10 px slack
         // tolerates iPadOS acceleration variance + JPEG noise without
         // letting genuine divergence (e.g. a 30→200 px run-away) bleed
-        // through.
-        if (prevResidual !== null && residual > prevResidual + 10) {
+        // through. Predicate extracted as Phase 149 isDivergenceDetected.
+        if (isDivergenceDetected({ prevResidual, currentResidual: residual })) {
           break;
         }
         prevResidual = residual;
@@ -1218,6 +1218,37 @@ export function shouldAdoptSecondOpinion(args: {
   initialResidual: number;
 }): boolean {
   return !args.cursorVerified || args.wokenResidual < args.initialResidual;
+}
+
+/**
+ * Phase 149 (v0.5.139) — pure helper: detect divergence in the
+ * micro-correction loop. Phase 133 (v0.5.125) added an in-loop guard
+ * that breaks the iteration when the residual GROWS by more than
+ * `slackPx` between iterations, which means the corrections are
+ * pushing the cursor in the wrong direction. Phase 132 bench observed
+ * a trial reach residual 200 px while no-micro-mode reached 23 px on
+ * the same target — micro was diverging.
+ *
+ * The 10 px slack is calibrated:
+ *  - Too tight (e.g. 0) → JPEG noise + iPadOS acceleration variance
+ *    fires false divergences and the loop exits before converging.
+ *  - Too loose (e.g. 100) → genuine 30→200 px run-aways bleed
+ *    through; the loop dutifully drives the cursor off-screen.
+ *
+ * The `prevResidual !== null` guard skips the first iteration (no
+ * prior residual to compare against). Without it, NaN comparison
+ * would unpredictably break or pass.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function isDivergenceDetected(args: {
+  prevResidual: number | null;
+  currentResidual: number;
+  slackPx?: number;
+}): boolean {
+  if (args.prevResidual === null) return false;
+  const slack = args.slackPx ?? 10;
+  return args.currentResidual > args.prevResidual + slack;
 }
 
 /**
