@@ -6,6 +6,31 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 147 (2026-04-28, v0.5.137): extract `shouldFireDismissRecipe` pure helper + regression tests
+
+Phase 141 (v0.5.133) added an inline four-way AND predicate inside
+`clickAtWithRetry` that decides whether to fire the hidden-popup
+auto-dismiss recipe (Escape+Enter) between retries. The conditions
+are subtle (cursor-verified, screen-not-changed, changedFraction
+zero-effect floor 0.001, retries-remaining), and a future refactor
+that collapses any of the four guards would silently disable the iOS
+hidden-security-popup recovery without breaking any existing test.
+
+Mitigation: extracted the predicate as `shouldFireDismissRecipe` in
+`click-verify.ts:1124`, following the established pure-helper
+convention (Phase 89 `residualForSkip`, Phase 95
+`defaultMaxRetriesFor`, Phase 135 `defaultMaxResidualPxFor`,
+Phase 127 `clampPxPerMickeyRatio`). 8 regression tests in
+`shouldFireDismissRecipe.test.ts` pin all four guards individually:
+collapsing the AND to a single condition fails ≥1 test. The boundary
+behavior at `changedFraction=0.001` and `attempt=maxRetries` is also
+pinned so tightening either bound by a future "optimization" must
+explicitly accept the test breakage.
+
+No behavior change — pure refactor for testability + regression-
+proofing the most subtle bit of click_at retry policy. 451 tests
+passing (was 443; +8 new).
+
 ## Phase 146 (2026-04-27, v0.5.136): PiKVM HID reset doesn't clear iPad-side input-block
 
 Tested HID device reset via `client.resetHid()` (PiKVM's
