@@ -6,6 +6,33 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 182 (2026-04-28, v0.5.172): PiKVM HID boot-protocol does NOT expose consumer media keys (VolumeUp/etc.)
+
+Tested whether VolumeUp could bypass the stuck-app state since
+media keys are system-level on iPadOS regardless of foreground app
+focus. Result: `pikvm_key("VolumeUp")` rejected by PiKVM:
+> ValidatorError: The argument 'VolumeUp' is not a valid Keyboard key
+
+PiKVM emulates a USB HID boot-protocol keyboard, which by design
+exposes only the standard 104-key set. Consumer Control HID class
+codes (Volume+, Volume-, Mute, Brightness, Power, Play/Pause) are
+in a separate USB HID Usage Page (Consumer Control 0x0c) that
+boot-protocol keyboards don't carry.
+
+Implication: any recovery path that requires media keys, brightness
+keys, or system-power keys is unavailable via PiKVM HID. To gain
+those, PiKVM would need to advertise a separate Consumer Control
+HID descriptor, which is not currently part of the gadget config.
+
+Combined with Phase 180 (Cmd+Tab) and Phase 181 (mouse swipe-up),
+this completes the comprehensive negative-result taxonomy: the
+stuck-app failure mode has no remote-only HID recovery path
+because PiKVM's HID gadget surface area genuinely doesn't include
+the keys/gestures needed to reach iPadOS subsystems that bypass
+foreground-app focus.
+
+No code change. 555 tests passing.
+
 ## Phase 181 (2026-04-28, v0.5.171): live test — swipe-up home gesture also DOES NOT bypass stuck-app state
 
 Tested `pikvm_ipad_unlock` (sends mouse swipe-up from the home
