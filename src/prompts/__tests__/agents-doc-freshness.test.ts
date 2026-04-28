@@ -24,6 +24,25 @@ async function readReadmeMd(): Promise<string> {
   return fs.readFile(path.join(repoRoot(), 'README.md'), 'utf8');
 }
 
+/**
+ * Phase 171 (v0.5.161): count `pikvm_*` tool definitions in
+ * src/index.ts dynamically rather than hardcoding the count in the
+ * test. Phase 170 caught the manual hardcode (24 → 25 needed bump
+ * after adding pikvm_dismiss_popup) — making this dynamic eliminates
+ * the maintenance burden so future tool additions only need to bump
+ * AGENTS.md, not also the test.
+ *
+ * The regex matches the pattern `name: 'pikvm_<name>'` inside the
+ * tool array literal — same pattern the MCP server uses for every
+ * tool definition.
+ */
+async function countPikvmTools(): Promise<number> {
+  const indexPath = path.join(repoRoot(), 'src', 'index.ts');
+  const src = await fs.readFile(indexPath, 'utf8');
+  const matches = src.match(/^\s+name: 'pikvm_/gm) ?? [];
+  return matches.length;
+}
+
 describe('AGENTS.md freshness', () => {
   it('mentions the actual tool-guide count', async () => {
     const doc = await readAgentsMd();
@@ -35,19 +54,14 @@ describe('AGENTS.md freshness', () => {
     expect(doc).toContain(`${workflowPrompts.length} multi-step workflow prompts`);
   });
 
-  it('Total tools count matches 25 hardware + (toolGuides + workflows) skills', async () => {
+  it('Total tools count matches dynamic pikvm_* count + (toolGuides + workflows) skills', async () => {
+    // Phase 171 (v0.5.161): count pikvm_* tools dynamically from
+    // src/index.ts so adding a new tool only requires updating
+    // AGENTS.md (not also this test). Phase 170 was the trigger:
+    // adding pikvm_dismiss_popup needed manual bumps in two places.
     const doc = await readAgentsMd();
-    // 25 hardware tools as of Phase 165 (v0.5.155). Counted from src/index.ts:
-    // pikvm_version, pikvm_health_check, pikvm_screenshot,
-    // pikvm_get_resolution, pikvm_type, pikvm_key, pikvm_shortcut,
-    // pikvm_dismiss_popup (Phase 165),
-    // pikvm_mouse_move, pikvm_mouse_click, pikvm_mouse_scroll,
-    // pikvm_calibrate, pikvm_set_calibration, pikvm_get_calibration,
-    // pikvm_clear_calibration, pikvm_ipad_unlock, pikvm_detect_orientation,
-    // pikvm_ipad_home, pikvm_ipad_app_switcher, pikvm_ipad_launch_app,
-    // pikvm_mouse_move_to, pikvm_mouse_click_at, pikvm_measure_ballistics,
-    // pikvm_auto_calibrate, pikvm_seed_cursor_template.
-    const expectedTotal = 25 + toolGuidePrompts.length + workflowPrompts.length;
+    const hardwareToolCount = await countPikvmTools();
+    const expectedTotal = hardwareToolCount + toolGuidePrompts.length + workflowPrompts.length;
     expect(doc).toContain(`Total tools: ${expectedTotal}`);
   });
 

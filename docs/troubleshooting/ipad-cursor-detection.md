@@ -6,6 +6,25 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 171 (2026-04-28, v0.5.161): make AGENTS.md tool-count regression test count tools dynamically
+
+Phase 170 caught the manual hardcode in agents-doc-freshness.test.ts
+(24 → 25 needed bumping after Phase 165 added a new tool). The
+test was correctly anchoring AGENTS.md against code, but the
+hardcoded baseline meant adding a new tool required updates in
+TWO places: AGENTS.md and the test file.
+
+Refactor: read `src/index.ts` at test time and count occurrences of
+`name: 'pikvm_<name>'` (the canonical MCP tool definition pattern).
+Now the test compares AGENTS.md's "Total tools: N" against the
+dynamically-counted truth from the source. Adding a new tool only
+requires updating AGENTS.md.
+
+The test invariant remains the same — AGENTS.md must claim the
+correct tool count. Just less work to keep that invariant true.
+
+No production behavior change. 544 tests passing.
+
 ## Phase 170 (2026-04-28, v0.5.160): bump AGENTS.md tool count 24 → 25 + sync regression test
 
 Phase 165 added `pikvm_dismiss_popup` (the 25th `pikvm_*` tool) but
