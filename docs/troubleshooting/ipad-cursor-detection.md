@@ -6,6 +6,27 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 149 (2026-04-28, v0.5.139): extract `isDivergenceDetected` pure helper
+
+Continuation of Phase 147/148's regression-pinning push. Phase 133
+(v0.5.125) added an in-loop divergence guard inside the micro-
+correction loop after Phase 132's bench observed a trial reach
+residual 200 px while no-micro-mode reached 23 px on the same
+target — corrections were pushing the cursor AWAY from target.
+The guard's 10 px slack is calibrated tuning: too tight (0) fires
+on JPEG noise, too loose (100) lets genuine 30→200 px run-aways
+through. The `prevResidual !== null` guard skips the first
+iteration where there's no prior to compare.
+
+Both the slack constant and the null guard could silently regress
+under refactoring. Extracted as `isDivergenceDetected`, with 10
+regression tests pinning the slack boundary (10 px exact does NOT
+trigger; 11 px does), the convergence path (shrinking residual
+returns false), the null path, and the Phase 132 bench scenario
+(30→200 px must still trigger).
+
+No behavior change. 473 tests passing (was 463; +10 new).
+
 ## Phase 148 (2026-04-28, v0.5.138): extract second-opinion gate + adopt-only-if-closer pure helpers
 
 Continuation of Phase 147's regression-pinning push. Phase 137
