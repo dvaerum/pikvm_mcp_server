@@ -1431,6 +1431,30 @@ export function chunkMickeys(rawMickeys: number, maxMickeys: number): number {
 }
 
 /**
+ * Phase 156 (v0.5.146) — pure helper: pick the open-loop chunk pace
+ * default given the target's mouse mode. Phase 136 (v0.5.128) measured
+ * a 167-mickey Y emit landing 60 px past target on iPad at 30 ms
+ * pace — iPadOS pointer acceleration was tracking velocity across
+ * the chunk burst, so 9 chunks of 20 mickeys each were seen as one
+ * fast burst. Slowing to 100 ms lets velocity decay between chunks,
+ * keeping each chunk in the linear regime that calibration measured.
+ *
+ * iPad targets (mouseAbsoluteMode=false) get 100 ms. Desktop
+ * (mouseAbsoluteMode=true) doesn't have iPadOS pointer acceleration,
+ * so the default 30 ms (returned as undefined → caller's default
+ * applies) is retained.
+ *
+ * Extracted so the iPad value is regression-pinned. A future revert
+ * to 30 ms (or "let's optimise latency by halving this") would silently
+ * re-introduce Phase 136's overshoot bug.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function defaultChunkPaceMsFor(mouseAbsoluteMode: boolean): number | undefined {
+  return mouseAbsoluteMode ? undefined : 100;
+}
+
+/**
  * Phase 135 — pure helper: pick the `maxResidualPx` default given the
  * target's mouse mode. iPad targets benefit from a strict 35 px gate
  * because the open-loop move sometimes overshoots Y by 60+ px due to

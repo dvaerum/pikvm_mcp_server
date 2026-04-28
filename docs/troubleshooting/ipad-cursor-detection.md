@@ -6,6 +6,25 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 156 (2026-04-28, v0.5.146): extract `defaultChunkPaceMsFor` pure helper
+
+Continuation of the Phase 147-155 regression-pinning push. Phase 136
+(v0.5.128) measured a 167-mickey Y emit landing 60 px past target on
+iPad at 30 ms chunk pace — iPadOS pointer acceleration tracks
+velocity across consecutive chunks, so 9 chunks of 20 mickeys each
+were seen as one fast burst (1.6× over-shoot). Slowing to 100 ms
+lets velocity decay between chunks.
+
+The 100 ms value lived inline in `src/index.ts:1249` as a magic
+number behind a `!mouseAbsoluteMode` ternary. Extracted as
+`defaultChunkPaceMsFor(mouseAbsoluteMode)` matching the Phase 95
+`defaultMaxRetriesFor` and Phase 135 `defaultMaxResidualPxFor`
+pattern. 4 regression tests pin the iPad/desktop branches and
+explicitly forbid both collapsing to a single value or dropping the
+iPad floor below 100 ms.
+
+No behavior change. 525 tests passing (was 521; +4 new).
+
 ## Phase 155 (2026-04-28, v0.5.145): extract `chunkMickeys` pure helper (DRY duplicate emit math)
 
 Continuation of the Phase 147-154 regression-pinning push. The
