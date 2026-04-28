@@ -504,7 +504,7 @@ export async function clickAtWithRetry(
       // the dominant cause of detect-then-move failures.
       if (
         options.autoUnlockOnDetectFail &&
-        /lock screen|pikvm_ipad_unlock/i.test(recoveredErr.message)
+        isLockScreenRecoveryError(recoveredErr.message)
       ) {
         try {
           await ipadGoHome(client);
@@ -1386,6 +1386,26 @@ export function isScreenTooDimForCursorDetection(args: {
   minBrightness: number;
 }): boolean {
   return args.mean < args.minBrightness && args.severity === 'very-dim';
+}
+
+/**
+ * Phase 154 (v0.5.144) — pure helper: detect whether a moveToPixel
+ * error indicates lock-screen state, suitable for Phase 72's
+ * auto-recovery path. The regex matches either "lock screen" (human-
+ * readable phrase from Phase 71's error message) OR
+ * "pikvm_ipad_unlock" (tool-name reference). Both alternatives are
+ * load-bearing — if Phase 71's wording changes to "lockscreen" or
+ * the tool name is renamed, the recovery silently stops firing.
+ *
+ * Phase 75 (v0.5.45) added regression tests for the error-message
+ * format itself; this helper additionally pins the DETECTION
+ * regex as a separate concern (the message can stay the same while
+ * the regex breaks if someone narrows it).
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function isLockScreenRecoveryError(message: string): boolean {
+  return /lock screen|pikvm_ipad_unlock/i.test(message);
 }
 
 /**

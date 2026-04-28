@@ -6,6 +6,25 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 154 (2026-04-28, v0.5.144): extract `isLockScreenRecoveryError` pure helper
+
+Continuation of the Phase 147-153 regression-pinning push. Phase 71
+(v0.5.42) added a clear "iPad may be on lock screen" error message;
+Phase 72 (v0.5.43) added auto-recovery that detects the error
+substring and re-tries after `pikvm_ipad_unlock`. The detection
+regex `/lock screen|pikvm_ipad_unlock/i` has TWO load-bearing
+alternatives: the human-readable phrase AND the tool-name. Phase 75
+already pinned the error MESSAGE format; this pins the DETECTION
+REGEX as a separate concern (the message could stay the same while
+a refactor narrows the regex and silently disables recovery).
+
+Extracted as `isLockScreenRecoveryError`; 7 regression tests pin
+both alternatives, case-insensitivity, the boundary cases (lockfile,
+locked, lock contention must NOT match), and a named regression case
+explicitly preventing single-alternative collapse.
+
+No behavior change. 510 tests passing (was 503; +7 new).
+
 ## Phase 153 (2026-04-28, v0.5.143): extract `isScreenTooDimForCursorDetection` pure helper
 
 Continuation of the Phase 147-152 regression-pinning push. Phase 38
