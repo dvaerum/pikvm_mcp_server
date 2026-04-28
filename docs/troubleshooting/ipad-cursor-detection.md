@@ -6,6 +6,26 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 159 (2026-04-28, v0.5.149): bench-clickretry uses defaultMaxRetriesFor (was stale at 2)
+
+DRY consolidation continued. `bench-clickretry.ts` had `maxRetries: 2`
+hardcoded with a docstring comment "Phase 94 iPad default" — but
+Phase 142 (v0.5.134) bumped the iPad default 2 → 3, and the bench
+was never updated. Result: every bench-clickretry run since
+v0.5.134 has measured an OUTDATED retry count, under-reporting
+production click_at success rate by one retry round of headroom.
+
+Wired the bench to use `defaultMaxRetriesFor(false)` and updated the
+docstring to point at the helper. Future tuning of the default
+automatically tracks across the bench.
+
+This is a meta-bug — not a behavior regression in production, but a
+bench-vs-prod measurement drift that's invisible without an audit.
+The Phase 158 → 159 consolidation push reduces the duplication
+surface where this can happen again.
+
+No production behavior change. 538 tests passing (unchanged).
+
 ## Phase 158 (2026-04-28, v0.5.148): bench-clickable uses defaultChunkPaceMsFor + defaultMaxResidualPxFor
 
 DRY consolidation. `bench-clickable.ts` had hardcoded `maxResidualPx:
