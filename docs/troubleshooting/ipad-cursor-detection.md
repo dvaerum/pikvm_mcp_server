@@ -6,6 +6,33 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 180 (2026-04-28, v0.5.170): live test — Cmd+Tab DOES NOT bypass the stuck app state
+
+Hypothesized that `pikvm_ipad_app_switcher` (which sends Cmd+Tab
+held briefly) might bypass the foreground-app input-block since
+Cmd+Tab is system-level keyboard, not app-level. Tested live:
+1. iPad still in stuck Settings → Read & Speak with search overlay.
+2. `pikvm_ipad_app_switcher` called.
+3. Tool reports "Opened App Switcher with Cmd+Tab" but the
+   screenshot shows NO app-switcher UI — same Settings page
+   foreground.
+
+This is a meaningful negative result: Escape on visible system
+popups works (Phase 162, Phase 176) but Cmd+Tab on the stuck app
+does NOT. The two failure modes are different:
+- System popups intercept HID input but Escape still propagates.
+- Stuck-app state appears to consume HID input before iPadOS
+  routes it to system-level shortcuts.
+
+Implication: there's no pure HID recovery path from the stuck-app
+state. The Phase 162/176 Escape recipe targets a DIFFERENT failure
+mode (visible popups eating input) than this one (sticky-focus app
+state). Both are real, both happen on the same iPad, but they
+require different recovery strategies — and the stuck-app one
+requires physical interaction.
+
+No code change. 555 tests passing.
+
 ## Phase 179 (2026-04-28, v0.5.169): regression test pinning every pikvm_* tool has a non-empty description
 
 Added a regression test that asserts every `pikvm_*` tool defined
