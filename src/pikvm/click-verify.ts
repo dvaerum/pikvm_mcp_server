@@ -930,7 +930,13 @@ export async function clickAtWithRetry(
       const apDx = target.x - cursorAtClick.x;
       const apDy = target.y - cursorAtClick.y;
       const apResidual = Math.hypot(apDx, apDy);
-      if (apResidual >= 3) {
+      if (
+        shouldEmitApproach({
+          preClickApproachMickeys,
+          cursorKnown: true,
+          residual: apResidual,
+        })
+      ) {
         // Phase 127: same sanity-clamp as the micro-correction loop.
         const apRatioX = clampPxPerMickeyRatio(lastMoveResult.usedPxPerMickey?.x);
         const apRatioY = clampPxPerMickeyRatio(lastMoveResult.usedPxPerMickey?.y);
@@ -1249,6 +1255,38 @@ export function isDivergenceDetected(args: {
   if (args.prevResidual === null) return false;
   const slack = args.slackPx ?? 10;
   return args.currentResidual > args.prevResidual + slack;
+}
+
+/**
+ * Phase 150 (v0.5.140) — pure helper: gate Phase 125's in-motion
+ * approach emit. The in-motion click sends one final directional
+ * mickey emit toward target and clicks WITHOUT settling, exploiting
+ * iPadOS pointer-effect's "snap-to-icon while moving" behavior. But
+ * the emit is wasted (and can over-shoot via acceleration variance)
+ * when the residual is already sub-pixel-noise distance from target.
+ *
+ * Fire conditions:
+ *  - preClickApproachMickeys > 0: feature opt-in (caller can disable
+ *    by passing 0).
+ *  - cursorKnown: we have a position to compute the emit from. With
+ *    no known cursor, the math would NaN-poison the chunk size.
+ *  - residual ≥ minResidualPx (default 3): far enough from target to
+ *    benefit from an emit. Below 3 px the cursor's already inside
+ *    iPadOS's pointer-effect snap radius for typical icon-sized
+ *    targets and an extra emit just adds acceleration noise.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function shouldEmitApproach(args: {
+  preClickApproachMickeys: number;
+  cursorKnown: boolean;
+  residual: number;
+  minResidualPx?: number;
+}): boolean {
+  if (args.preClickApproachMickeys <= 0) return false;
+  if (!args.cursorKnown) return false;
+  const minResidual = args.minResidualPx ?? 3;
+  return args.residual >= minResidual;
 }
 
 /**

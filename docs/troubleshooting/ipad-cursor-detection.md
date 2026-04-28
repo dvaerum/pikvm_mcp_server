@@ -6,6 +6,28 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 150 (2026-04-28, v0.5.140): extract `shouldEmitApproach` pure helper
+
+Continuation of the Phase 147-149 regression-pinning push. Phase
+125 (v0.5.119) introduced the in-motion click: send one
+directional emit toward target then click WITHOUT settling, so
+iPadOS pointer-effect's snap-to-icon behavior fires while the
+cursor is moving toward the target. The 3 px residual gate
+prevents wasted emits when the cursor is already inside iPadOS's
+snap radius — adding more motion at sub-pixel distance just
+injects acceleration variance noise.
+
+The gate had three subtle conditions inline: `preClickApproachMickeys
+> 0` (feature opt-in), cursor position known (defends against NaN
+in subsequent emit math), and `apResidual >= 3` (the snap-radius
+threshold). Extracted as `shouldEmitApproach`; 9 regression tests
+pin the disabled-feature case, the unknown-cursor case, the 3 px
+boundary (≥, not >), the custom minResidualPx override, and two
+explicit regression cases naming the failure mode if any guard is
+dropped.
+
+No behavior change. 482 tests passing (was 473; +9 new).
+
 ## Phase 149 (2026-04-28, v0.5.139): extract `isDivergenceDetected` pure helper
 
 Continuation of Phase 147/148's regression-pinning push. Phase 133
