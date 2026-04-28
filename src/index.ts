@@ -34,6 +34,7 @@ import {
   defaultMaxRetriesFor,
   defaultMaxResidualPxFor,
   defaultChunkPaceMsFor,
+  runDismissRecipe,
 } from './pikvm/click-verify.js';
 import { seedCursorTemplate } from './pikvm/seed-template.js';
 import { VERSION } from './version.js';
@@ -298,6 +299,14 @@ const tools: Tool[] = [
         },
       },
       required: ['keys'],
+    },
+  },
+  {
+    name: 'pikvm_dismiss_popup',
+    description: 'Phase 165 (v0.5.155): run the documented Phase 141 hidden-popup dismiss recipe (Escape → 60ms → Enter → 60ms). Useful when click_at lands on a known-correct target but produces no UI change — the dominant explanation is an iOS HDMI-blocked security popup (Apple Pay / Face ID / password / Low Battery / app permission) eating the input. Phase 162 live-verified that Escape DOES dismiss visible system popups (Low Battery 10% modal cleared cleanly with one Escape). Best-effort: errors are captured and returned, never thrown. Returns { keysSent, errors }.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
     },
   },
   {
@@ -939,6 +948,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await pikvm.sendShortcut(keys);
         return {
           content: [{ type: 'text', text: `Sent shortcut: ${keys.join('+')}` }],
+        };
+      }
+
+      case 'pikvm_dismiss_popup': {
+        // Phase 165: run the documented Phase 141 hidden-popup dismiss recipe.
+        const result = await runDismissRecipe(pikvm);
+        const summary = result.errors.length === 0
+          ? `Dismiss recipe sent ${result.keysSent} keys (Escape, Enter). If a hidden popup was eating input, it should now be cleared — verify with pikvm_screenshot and retry the original action.`
+          : `Dismiss recipe sent ${result.keysSent} keys with ${result.errors.length} error(s): ${result.errors.join('; ')}. Best-effort dismiss continued anyway.`;
+        return {
+          content: [{ type: 'text', text: summary }],
         };
       }
 
