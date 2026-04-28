@@ -6,6 +6,38 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 185 (2026-04-28, v0.5.175): iPad battery death confirmed — streamer source offline, awaiting auto-reboot
+
+The session-long stuck-app state has reached its predictable
+endpoint: at battery 1% with charger trickling slowly enough that
+the device kept draining, the iPad finally hit 0% and powered off.
+
+Live signature:
+- `pikvm_screenshot` returns 503 Service Unavailable.
+- `GET /api/streamer` shows `streamer.source.online: false` —
+  HDMI capture has no signal.
+
+This confirms the predicted natural-recovery path. The iPad will
+auto-boot when the charger restores enough battery (typical iPadOS
+threshold ~3-5%); on boot it shows the lock screen — fresh app
+state, the stuck Settings → Read & Speak search-field-focused
+state is cleared.
+
+This validates the recovery taxonomy completed across Phases 162,
+176, 180-184: there was no remote-only HID remedy for the
+foreground-app stuck-input failure mode, and the natural recovery
+mechanism (battery cycle → auto-boot → lock screen) is the
+universal restorer.
+
+Operational implication for documentation: when click_at + dismiss-
+popup recovery cycles fail, polling for `streamer.source.online`
+and waiting for the natural reboot is itself a recovery strategy.
+The total wall-clock from "iPad confirmed stuck" to "iPad recovered
+via battery cycle" depends on charger throughput vs. discharge rate
+and can range from minutes to hours.
+
+No code change. 555 tests passing.
+
 ## Phase 184 (2026-04-28, v0.5.174): live test — pikvm_type does NOT reach the focused search field either
 
 Final diagnostic of the stuck-app failure mode. Tested whether
