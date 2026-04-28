@@ -6,6 +6,26 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 160 (2026-04-28, v0.5.150): test-client CLI default also stale at 2 — same fix
+
+DRY consolidation continued. `test-client.ts`'s `click-retry` and
+`micro-click` modes had `Number(process.argv[5] ?? 2)` — same
+stale-at-Phase-94 default that bench-clickretry had. CLI users
+running ad-hoc tests against the iPad were also measuring outdated
+behavior since v0.5.134.
+
+Wired the fallback to `defaultMaxRetriesFor(false)`. CLI users can
+still override with the third positional arg; only the default
+changes.
+
+This pattern (hardcoded duplicates of helper-derived defaults) is
+worth auditing periodically — caught two stale defaults this
+session (Phase 159 and 160). The production code path uses helpers,
+but ad-hoc tooling tends to fork the value at the time it was
+written.
+
+No production behavior change. 538 tests passing (unchanged).
+
 ## Phase 159 (2026-04-28, v0.5.149): bench-clickretry uses defaultMaxRetriesFor (was stale at 2)
 
 DRY consolidation continued. `bench-clickretry.ts` had `maxRetries: 2`
