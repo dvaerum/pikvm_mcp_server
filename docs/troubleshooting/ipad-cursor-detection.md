@@ -6,6 +6,25 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 152 (2026-04-28, v0.5.142): extract `shouldRunMicroCorrection` pure helper
+
+Continuation of the Phase 147-151 regression-pinning push. Phase 49
+(v0.5.37) introduced the bounds-aware micro-correction loop with a
+three-condition entry gate: microCorrectionIterations > 0 (caller
+opt-in), templates loaded (template-match needs them), and a
+finalDetectedPosition from moveToPixel (locality hint for first
+match). Each guard prevents a different failure mode:
+- Drop the iterations check → loop runs even when caller asked for 0.
+- Drop the templates check → expensive no-op cycle on every entry.
+- Drop the position check → template-match has no spatial bias and
+  is much more likely to return a wallpaper false-positive.
+
+Extracted as `shouldRunMicroCorrection`; 6 regression tests pin all
+three guards individually + the AND-collapse regression case + a
+defensive negative-iterations check.
+
+No behavior change. 496 tests passing (was 490; +6 new).
+
 ## Phase 151 (2026-04-28, v0.5.141): extract `shouldRunMotionConfirmation` pure helper
 
 Continuation of the Phase 147-150 regression-pinning push. Phase

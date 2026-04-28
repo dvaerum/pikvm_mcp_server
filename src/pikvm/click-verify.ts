@@ -796,9 +796,11 @@ export async function clickAtWithRetry(
     //   - Refuse to emit if it would push cursor within MARGIN px of
     //     iPad bounds edges (avoids hot-corner / bottom-edge gestures)
     if (
-      microCorrectionIterations > 0 &&
-      sessionTemplates.length > 0 &&
-      lastMoveResult.finalDetectedPosition
+      shouldRunMicroCorrection({
+        microCorrectionIterations,
+        hasTemplates: sessionTemplates.length > 0,
+        hasInitialPosition: lastMoveResult.finalDetectedPosition !== null,
+      })
     ) {
       const EDGE_MARGIN_PX = 50;
       // Phase 122 (v0.5.116): bumped from 2 to 5. The original
@@ -1318,6 +1320,38 @@ export function shouldRunMotionConfirmation(args: {
   if (args.prevFound === null) return false;
   if (args.prevEmit === null) return false;
   return args.prevEmit.mx !== 0 || args.prevEmit.my !== 0;
+}
+
+/**
+ * Phase 152 (v0.5.142) — pure helper: gate Phase 49's bounds-aware
+ * micro-correction loop. Three conditions must hold to enter the
+ * loop:
+ *  - microCorrectionIterations > 0: feature opt-in. A caller passing
+ *    0 explicitly disables the loop (e.g. a desktop target where the
+ *    moveToPixel linear region already converges to single-digit
+ *    residuals; running the loop just adds latency).
+ *  - hasTemplates: templates are required for the per-iteration
+ *    template-match step. Without templates, every iteration would
+ *    return null on the first findCursorByTemplateSet call and the
+ *    loop would no-op a screenshot+settle cycle before exiting.
+ *  - hasInitialPosition: a starting cursor position from
+ *    moveToPixel's motion-diff is required as the locality hint for
+ *    the first template-match. Without it, the template-match
+ *    against a busy home screen has no spatial bias and is much more
+ *    likely to return a false-positive on a wallpaper feature.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function shouldRunMicroCorrection(args: {
+  microCorrectionIterations: number;
+  hasTemplates: boolean;
+  hasInitialPosition: boolean;
+}): boolean {
+  return (
+    args.microCorrectionIterations > 0 &&
+    args.hasTemplates &&
+    args.hasInitialPosition
+  );
 }
 
 /**
