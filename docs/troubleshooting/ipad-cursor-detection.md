@@ -6,6 +6,26 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 163 (2026-04-28, v0.5.153): refresh README + ipad-keyboard-first-workflow doc to maxRetries=3
+
+Continuation of Phase 161's prompt-refresh push. README.md and
+docs/skills/ipad-keyboard-first-workflow.md still said
+"`maxRetries: 2` (Phase 94 default)" in their active prose —
+guidance that, followed literally, makes callers PASS 2 explicitly
+and OVERRIDE the Phase 142 default of 3. Same drift class as the
+prompts updated in Phase 161, just in a different surface.
+
+Updated both files to reference Phase 94/142 default of 3 with the
+Phase 141 hidden-popup-dismiss-recipe rationale.
+
+The historical phase entries inside the troubleshooting log
+(timestamped Phase 78, Phase 109 etc.) intentionally retain
+"`maxRetries: 2`" as part of their as-of-write-time content and
+are NOT updated retroactively — they're a historical record, not
+live guidance.
+
+No production behavior change. 538 tests passing (unchanged).
+
 ## Phase 162 (2026-04-28, v0.5.152): live proof — Escape DOES dismiss system popups (validates Phase 141 recipe)
 
 After ~12 hours of the iPad being apparently fully unresponsive
