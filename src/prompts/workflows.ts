@@ -335,7 +335,7 @@ Goal: **${goal}**
 
 ## Why keyboard, not cursor
 
-\`pikvm_mouse_click_at\` on iPad has a per-attempt hit rate of ~50% at icon tolerance (≤25 px residual) on small targets and ~70-80% on large rows/buttons (Phase 70 bench, post-Phase 65/68/69 improvements). With \`maxRetries: 2\` (3 attempts — Phase 94 default on iPad, automatic) the cumulative hit rate climbs to ~88% for tiny targets and ~99% for large ones. iPadOS pointer-acceleration variance and motion-diff noise on animated UI are the underlying limits, AND iPadOS 26 exposes no pointer-speed toggle for our HID profile (Phase 96 live-verified) — see \`docs/troubleshooting/ipad-cursor-detection.md\` § "Current state". **Start with keyboard wherever possible.** Reach for cursor clicks for elements with no keyboard equivalent.
+\`pikvm_mouse_click_at\` on iPad has a per-attempt hit rate of ~50% at icon tolerance (≤25 px residual) on small targets and ~70-80% on large rows/buttons (Phase 70 bench, post-Phase 65/68/69 improvements). The Phase 94/142 iPad default is \`maxRetries: 3\` (4 attempts — automatic; bumped from 2 to 3 in Phase 142 for popup-dismiss-recipe headroom); cumulative hit rate ~88% for tiny targets and ~99% for large ones. iPadOS pointer-acceleration variance and motion-diff noise on animated UI are the underlying limits, AND iPadOS 26 exposes no pointer-speed toggle for our HID profile (Phase 96 live-verified) — see \`docs/troubleshooting/ipad-cursor-detection.md\` § "Current state". **Start with keyboard wherever possible.** Reach for cursor clicks for elements with no keyboard equivalent.
 
 The keyboard channel — \`pikvm_shortcut\`, \`pikvm_type\`, \`pikvm_key\` — is reliable. Spotlight launches across Settings, Files, App Store, Maps, Safari are all live-validated 100%.
 
@@ -350,7 +350,7 @@ The keyboard channel — \`pikvm_shortcut\`, \`pikvm_type\`, \`pikvm_key\` — i
    - **Dismiss modal / cancel:** \`pikvm_key("Escape")\`.
    - **Go back / close:** \`pikvm_shortcut(["MetaLeft", "BracketLeft"])\` (Cmd+\`[\`) — back navigation in most stock apps.
    - **Return to home:** \`pikvm_ipad_home\` (Cmd+H).
-4. **Cursor click ONLY needed?** Use \`pikvm_mouse_click_at\` with \`verifyClick: true\` (default) and \`maxRetries: 2\`. For unknown lock-screen state, also pass \`autoUnlockOnDetectFail: true\` (Phase 72 opt-in self-recovery; note it calls \`ipadGoHome\` which exits any open app). Always inspect the returned screenshot.
+4. **Cursor click ONLY needed?** Use \`pikvm_mouse_click_at\` with \`verifyClick: true\` (default) and the iPad default \`maxRetries: 3\` (auto-applied; pass \`0\` to opt out for one-shot toggles). For unknown lock-screen state, also pass \`autoUnlockOnDetectFail: true\` (Phase 72 opt-in self-recovery; note it calls \`ipadGoHome\` which exits any open app). Always inspect the returned screenshot.
 
 ## Worked example: open Settings and search
 
@@ -370,7 +370,7 @@ pikvm_key("Escape")                            # dismiss (works for most modals)
 pikvm_screenshot                               # confirm dismissed
 \`\`\`
 
-If Escape doesn't work for a particular modal, the modal probably needs a button click. THEN you fall back to \`pikvm_mouse_click_at\` with \`maxRetries: 2\` — quiet backdrops (modal scrim) tend to make cursor clicks more reliable than home-screen clicks.
+If Escape doesn't work for a particular modal, the modal probably needs a button click. THEN you fall back to \`pikvm_mouse_click_at\` (iPad default \`maxRetries: 3\` auto-applies) — quiet backdrops (modal scrim) tend to make cursor clicks more reliable than home-screen clicks.
 
 ## Plan for "${goal}"
 
