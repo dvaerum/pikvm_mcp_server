@@ -304,7 +304,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_dismiss_popup',
-    description: 'Phase 165 (v0.5.155): run the documented Phase 141 hidden-popup dismiss recipe (Escape → 60ms → Enter → 60ms). Useful when click_at lands on a known-correct target but produces no UI change — the dominant explanation is an iOS HDMI-blocked security popup (Apple Pay / Face ID / password / Low Battery / app permission) eating the input. Phase 162 live-verified that Escape DOES dismiss visible system popups (Low Battery 10% modal cleared cleanly with one Escape). Best-effort: errors are captured and returned, never thrown. Returns { keysSent, errors }.',
+    description: 'Run the hidden-popup dismiss recipe (Escape → 60ms → Enter → 60ms). Useful when click_at lands on a known-correct target but produces no UI change — the dominant explanation is an iOS HDMI-blocked security popup (Apple Pay / Face ID / password / Low Battery / app permission) eating the input. Live-verified that Escape DOES dismiss visible system popups (a Low Battery 10% modal cleared cleanly with one Escape). Best-effort: errors are captured and returned, never thrown. Returns { keysSent, errors }.',
     inputSchema: {
       type: 'object',
       properties: {},
