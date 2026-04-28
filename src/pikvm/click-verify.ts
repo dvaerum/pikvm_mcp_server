@@ -869,10 +869,10 @@ export async function clickAtWithRetry(
         // template matched a static gradient feature that NCC-correlates
         // with the cursor template, e.g. (952, 916) at score 0.71 in the
         // Phase 119 trace). Stop micro-correcting against a phantom.
-        if (prevFound && prevEmit && (prevEmit.mx !== 0 || prevEmit.my !== 0)) {
-          const expectedDx = prevEmit.mx * ratioX;
-          const expectedDy = prevEmit.my * ratioY;
-          if (!cursorMovedAsExpected(prevFound, found.position, expectedDx, expectedDy)) {
+        if (shouldRunMotionConfirmation({ prevFound, prevEmit })) {
+          const expectedDx = prevEmit!.mx * ratioX;
+          const expectedDy = prevEmit!.my * ratioY;
+          if (!cursorMovedAsExpected(prevFound!, found.position, expectedDx, expectedDy)) {
             break;
           }
         }
@@ -1287,6 +1287,37 @@ export function shouldEmitApproach(args: {
   if (!args.cursorKnown) return false;
   const minResidual = args.minResidualPx ?? 3;
   return args.residual >= minResidual;
+}
+
+/**
+ * Phase 151 (v0.5.141) — pure helper: gate Phase 120's motion-
+ * confirmation check inside the micro-correction loop. Phase 119
+ * caught a case where a template-match scored 0.71 against a static
+ * wallpaper gradient feature (952, 916) and the loop happily
+ * micro-corrected against the phantom, driving the cursor off-target.
+ * Phase 120's fix: after the previous iteration's emit, check the
+ * "cursor" actually moved by the predicted amount; if not, the match
+ * is a wallpaper false-positive and we should stop micro-correcting.
+ *
+ * The check itself lives in `cursorMovedAsExpected` (cursor-detect.ts,
+ * already tested). This helper gates WHETHER to run that check:
+ *  - Need a previous found position (first iteration: nothing to
+ *    compare against).
+ *  - Need a previous emit (likewise).
+ *  - The previous emit must have been non-zero in EITHER axis. A
+ *    zero-emit (no-op) shouldn't trigger motion confirmation — there's
+ *    no expected movement to confirm. The OR-split matters: collapsing
+ *    to a single-axis check would break Y-only emits.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function shouldRunMotionConfirmation(args: {
+  prevFound: { x: number; y: number } | null;
+  prevEmit: { mx: number; my: number } | null;
+}): boolean {
+  if (args.prevFound === null) return false;
+  if (args.prevEmit === null) return false;
+  return args.prevEmit.mx !== 0 || args.prevEmit.my !== 0;
 }
 
 /**
