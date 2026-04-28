@@ -24,6 +24,8 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 
 **Phase 94 / Phase 142 default**: `maxRetries` defaults to **3 on iPad (relative-mouse) targets** (Phase 142 bumped from 2 → 3 for Phase 141's hidden-popup-dismiss-recipe headroom) — turns ~50% per-attempt into ~88% reliable end-to-end for tiny targets. Pass `maxRetries: 0` explicitly to opt out (single-shot, e.g. for a quick one-off toggle).
 
+**Silent failure remedy** (Phase 165, v0.5.155+): when click_at returns success but the post-click screenshot shows no UI change, the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating input. iPadOS deliberately blanks these from HDMI capture but keyboard input still reaches them. Call **`pikvm_dismiss_popup`** to fire the documented Escape → Enter recipe, then retry the click. Phase 162 live-verified Escape clears system popups (Low Battery 10% modal dismissed cleanly with one Escape).
+
 ## Critical pre-flight
 
 The iPad MUST be unlocked. Detect-then-move can't find the cursor against the lock-screen wallpaper. Options:
@@ -38,7 +40,7 @@ The iPad MUST be unlocked. Detect-then-move can't find the cursor against the lo
 | x | number | *(required)* | Target X in HDMI screenshot pixels |
 | y | number | *(required)* | Target Y in HDMI screenshot pixels |
 | button | string | left | left / right / middle / up / down |
-| maxRetries | number | 2 (iPad) / 0 (desktop) | Phase 94: auto-defaults to 2 on iPad (relative-mouse) / 0 on desktop. Pass 0 explicitly to opt out of retries on iPad. |
+| maxRetries | number | 3 (iPad) / 0 (desktop) | Phase 94/142: auto-defaults to 3 on iPad (relative-mouse, bumped from 2 → 3 in Phase 142 for Phase 141 dismiss-recipe headroom) / 0 on desktop. Pass 0 explicitly to opt out of retries on iPad. |
 | autoUnlockOnDetectFail | boolean | false | Phase 72 opt-in lock-screen recovery |
 | maxResidualPx | number | *(unset)* | Phase 88: skip the click if cursor lands more than N px from target. Set to 25 for strict icon-tolerance (refuses imprecise clicks that risk hitting adjacent UI elements). Leave unset for permissive behaviour. |
 | verifyClick | boolean | true | Pre/post screenshot diff confirms click landed |

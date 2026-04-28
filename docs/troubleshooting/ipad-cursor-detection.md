@@ -6,6 +6,27 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 167 (2026-04-28, v0.5.157): docs/skills/click-at.md cross-links to `pikvm_dismiss_popup`
+
+`docs/skills/click-at.md` is the primary skill prompt for click_at;
+when LLM agents fail a click (returns success but screenshot shows
+no UI change), they currently have no documented escape hatch
+beyond the auto-dismiss-between-retries that fires inside
+clickAtWithRetry's loop.
+
+Added a "Silent failure remedy" section to click-at.md that:
+- Names `pikvm_dismiss_popup` as the explicit recovery tool.
+- Cites Phase 162's live validation (Low Battery 10% Escape proof).
+- Explains the iOS HDMI-blocked popup mechanism so agents
+  understand WHY this works.
+
+Also fixed the click-at.md parameters table — the `maxRetries` row
+still listed default `2 (iPad)` even though Phase 142 bumped it
+to 3 and the prose section was already updated in Phase 164. Pure
+docs sync.
+
+No production behavior change. 544 tests passing.
+
 ## Phase 166 (2026-04-28, v0.5.156): surface `pikvm_dismiss_popup` in README tool list
 
 Phase 165 added the new MCP tool but didn't update README's "###
