@@ -985,10 +985,13 @@ export async function clickAtWithRetry(
     // pixel-diff much"). Avoids dismissing real modal sheets the
     // user might have wanted to click.
     if (
-      cursorVerified &&
-      !lastVerification.screenChanged &&
-      lastVerification.changedFraction <= 0.001 &&
-      attempt <= maxRetries
+      shouldFireDismissRecipe({
+        cursorVerified,
+        screenChanged: lastVerification.screenChanged,
+        changedFraction: lastVerification.changedFraction,
+        attempt,
+        maxRetries,
+      })
     ) {
       try {
         await client.sendKey('Escape');
@@ -1119,6 +1122,42 @@ export function defaultMaxRetriesFor(mouseAbsoluteMode: boolean): number {
   // attempt latency on terminal-failure cases; gain: success on
   // popup chains that take 2-3 dismisses to clear.
   return mouseAbsoluteMode ? 0 : 3;
+}
+
+/**
+ * Phase 147 (v0.5.137) — pure helper: gate the Phase 141 hidden-popup
+ * auto-dismiss recipe (Escape+Enter between retries). Extracted from
+ * the inline predicate in clickAtWithRetry so the contract is
+ * unit-testable and a future revert can't silently regress the iOS
+ * hidden-security-popup recovery path.
+ *
+ * Fire conditions (ALL must hold):
+ *  - cursorVerified: the click actually fired at a verified cursor
+ *    position (not a blind/skipped attempt). Firing the dismiss
+ *    recipe on a skipped attempt would be wasted effort.
+ *  - !screenChanged: the click visibly produced no UI change.
+ *  - changedFraction ≤ 0.001: the change was true zero-effect, not a
+ *    small icon toggle (e.g. a checkbox flicker) that the
+ *    minChangedFraction floor rejected. Without this floor, we'd
+ *    auto-dismiss real intentional clicks on tiny UI controls.
+ *  - attempt ≤ maxRetries: we have at least one more retry round to
+ *    benefit from the dismiss; firing on the FINAL attempt is wasted.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function shouldFireDismissRecipe(args: {
+  cursorVerified: boolean;
+  screenChanged: boolean;
+  changedFraction: number;
+  attempt: number;
+  maxRetries: number;
+}): boolean {
+  return (
+    args.cursorVerified &&
+    !args.screenChanged &&
+    args.changedFraction <= 0.001 &&
+    args.attempt <= args.maxRetries
+  );
 }
 
 /**
