@@ -79,6 +79,7 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 3. **`pikvm_type`** - Type text (handles special chars correctly via keymap)
 4. **`pikvm_key`** - Send key/combo (e.g., Ctrl+Alt+Del)
 5. **`pikvm_shortcut`** - Send keyboard shortcut (multiple keys pressed simultaneously)
+5a. **`pikvm_dismiss_popup`** (Phase 165, v0.5.155+) - Run the documented Phase 141 hidden-popup-dismiss recipe (Escape → Enter). Use when click_at returns success but the screenshot shows no UI change — the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating the input. Phase 162 live-verified Escape clears these.
 
 ### Mouse
 6. **`pikvm_mouse_move`** - Move mouse cursor (absolute or relative)

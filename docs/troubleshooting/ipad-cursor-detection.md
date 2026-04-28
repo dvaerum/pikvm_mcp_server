@@ -6,6 +6,25 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 169 (2026-04-28, v0.5.159): final surface — AGENTS.md tool list
+
+AGENTS.md is the developer-facing catalogue of MCP tools (auto-
+discovered by various agent runtimes). Phase 165's
+`pikvm_dismiss_popup` was missing from the numbered list. Added
+as 5a (between pikvm_shortcut and the Mouse section) so the
+existing tool numbering is preserved while the new tool is
+discoverable by AGENTS.md readers.
+
+This completes the surface-coverage push for `pikvm_dismiss_popup`:
+- MCP tool listing (Phase 165)
+- README.md tool catalog (Phase 166)
+- docs/skills/click-at.md (Phase 167)
+- src/prompts/workflows.ts (Phase 168)
+- src/prompts/tool-guides.ts (Phase 168)
+- AGENTS.md (Phase 169)
+
+No production behavior change. 544 tests passing.
+
 ## Phase 168 (2026-04-28, v0.5.158): cross-link `pikvm_dismiss_popup` from MCP prompts (workflows + tool-guides)
 
 Phase 165 added the new MCP tool, Phase 166 surfaced it in README,
