@@ -899,11 +899,9 @@ export async function clickAtWithRetry(
           break;
         }
         prevResidual = residual;
-        // Cap raw delta in mickeys.
-        const mxRaw = dx / ratioX;
-        const myRaw = dy / ratioY;
-        const mx = Math.sign(mxRaw) * Math.min(Math.ceil(Math.abs(mxRaw)), PER_ITER_CAP_MICKEYS);
-        const my = Math.sign(myRaw) * Math.min(Math.ceil(Math.abs(myRaw)), PER_ITER_CAP_MICKEYS);
+        // Cap raw delta in mickeys (Phase 155 chunkMickeys helper).
+        const mx = chunkMickeys(dx / ratioX, PER_ITER_CAP_MICKEYS);
+        const my = chunkMickeys(dy / ratioY, PER_ITER_CAP_MICKEYS);
         if (mx === 0 && my === 0) break; // would be a no-op
         // Edge-safety: predict cursor's next position and refuse if it
         // would exit the safe-bounds margin. This is the Phase 49 fix
@@ -948,10 +946,8 @@ export async function clickAtWithRetry(
         // Phase 127: same sanity-clamp as the micro-correction loop.
         const apRatioX = clampPxPerMickeyRatio(lastMoveResult.usedPxPerMickey?.x);
         const apRatioY = clampPxPerMickeyRatio(lastMoveResult.usedPxPerMickey?.y);
-        const apxRaw = apDx / apRatioX;
-        const apyRaw = apDy / apRatioY;
-        const apx = Math.sign(apxRaw) * Math.min(Math.ceil(Math.abs(apxRaw)), preClickApproachMickeys);
-        const apy = Math.sign(apyRaw) * Math.min(Math.ceil(Math.abs(apyRaw)), preClickApproachMickeys);
+        const apx = chunkMickeys(apDx / apRatioX, preClickApproachMickeys);
+        const apy = chunkMickeys(apDy / apRatioY, preClickApproachMickeys);
         if (apx !== 0 || apy !== 0) {
           await client.mouseMoveRelative(apx, apy);
           // NO settle here — the click below fires while the cursor
@@ -1406,6 +1402,32 @@ export function isScreenTooDimForCursorDetection(args: {
  */
 export function isLockScreenRecoveryError(message: string): boolean {
   return /lock screen|pikvm_ipad_unlock/i.test(message);
+}
+
+/**
+ * Phase 155 (v0.5.145) — pure helper: compute one chunked mickey
+ * emit from a raw fractional count, capped at `maxMickeys`. Used by
+ * both the micro-correction loop (per-iteration emit) and the
+ * Phase 125 in-motion approach. The math has subtle edge cases:
+ *
+ *  - Math.sign(0) === 0, so a zero raw count returns 0 (no emit).
+ *  - Math.ceil rounds magnitude up (e.g. raw=2.1 → 3 mickeys), so
+ *    sub-1-mickey residuals still emit 1 mickey if the sign is
+ *    non-zero. This intentionally avoids stalling at fractional
+ *    distances.
+ *  - The cap is applied to magnitude AFTER ceil, so raw=10.5 with
+ *    cap=5 returns sign*5, NOT sign*ceil(10.5) = 11.
+ *  - Negative raw values produce negative output (sign-preserving).
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function chunkMickeys(rawMickeys: number, maxMickeys: number): number {
+  if (!Number.isFinite(rawMickeys)) return 0;
+  if (maxMickeys <= 0) return 0;
+  return (
+    Math.sign(rawMickeys) *
+    Math.min(Math.ceil(Math.abs(rawMickeys)), maxMickeys)
+  );
 }
 
 /**
