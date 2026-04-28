@@ -6,6 +6,16 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 166 (2026-04-28, v0.5.156): surface `pikvm_dismiss_popup` in README tool list
+
+Phase 165 added the new MCP tool but didn't update README's "###
+Keyboard" tool list. Users browsing the README wouldn't discover
+the new capability without inspecting the source. Added a one-line
+entry between `pikvm_shortcut` and the next section, citing
+Phase 141 as the recipe and Phase 162 as the live validation.
+
+No production behavior change. 544 tests passing.
+
 ## Phase 165 (2026-04-28, v0.5.155): expose Phase 141 dismiss recipe as `pikvm_dismiss_popup` MCP tool
 
 Phase 141's hidden-popup-dismiss recipe (Escape → 60ms → Enter →
