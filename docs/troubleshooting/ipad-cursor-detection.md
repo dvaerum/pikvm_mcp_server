@@ -6,6 +6,24 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 151 (2026-04-28, v0.5.141): extract `shouldRunMotionConfirmation` pure helper
+
+Continuation of the Phase 147-150 regression-pinning push. Phase
+119 caught a wallpaper-template-match false-positive at (952, 916)
+score 0.71 against a static gradient feature; Phase 120's fix
+runs `cursorMovedAsExpected` after each emit to detect non-moving
+"cursors". The gate at the inline call site had three guards:
+prevFound !== null, prevEmit !== null, AND `(mx !== 0 || my !== 0)`.
+The OR-split is load-bearing — collapsing to single-axis-only would
+silently disable motion confirmation on Y-only emits.
+
+Extracted as `shouldRunMotionConfirmation`; 8 regression tests pin
+the first-iteration null path, the no-op (0,0) emit case, X-only
+and Y-only motion (the OR-split coverage), and a named regression
+case explicitly preventing single-axis collapse.
+
+No behavior change. 490 tests passing (was 482; +8 new).
+
 ## Phase 150 (2026-04-28, v0.5.140): extract `shouldEmitApproach` pure helper
 
 Continuation of the Phase 147-149 regression-pinning push. Phase
