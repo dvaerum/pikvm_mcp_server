@@ -1,8 +1,8 @@
 /**
  * Phase 65v + Phase 100: bench end-to-end clickAtWithRetry success rate.
- * Measures what the USER actually experiences: with maxRetries=2 (the
- * Phase 94 iPad default), how often does click_at get the cursor within
- * 25 px of target?
+ * Measures what the USER actually experiences: with the iPad maxRetries
+ * default (sourced from defaultMaxRetriesFor — Phase 142 set it to 3),
+ * how often does click_at get the cursor within 25 px of target?
  *
  * Default: 10 trials × 2 modes (baseline vs Phase 65 micro), target
  * `(929, 99)` (status bar — non-clickable, residual-only).
@@ -19,7 +19,10 @@
 
 import { loadConfig } from './src/config.js';
 import { PiKVMClient } from './src/pikvm/client.js';
-import { clickAtWithRetry } from './src/pikvm/click-verify.js';
+import {
+  clickAtWithRetry,
+  defaultMaxRetriesFor,
+} from './src/pikvm/click-verify.js';
 import { loadProfile } from './src/pikvm/ballistics.js';
 
 const cfg = loadConfig();
@@ -71,8 +74,12 @@ async function runTrial(useMicro: boolean): Promise<Trial> {
     iconToleranceResidualPx: 25,
     disableLinearBailout: true,
   } : {};
+  // Phase 159 (v0.5.149): track the production iPad default automatically.
+  // Was hardcoded at 2 per Phase 94 doc; Phase 142 bumped to 3 but the
+  // bench was never updated, so historical bench runs measured an outdated
+  // retry count. Sourcing from the helper keeps both in sync.
   const r = await clickAtWithRetry(client, TARGET, {
-    maxRetries: 2,
+    maxRetries: defaultMaxRetriesFor(/*absolute=*/false),
     moveToOptions: {
       profile,
       forbidSlamFallback: true,
