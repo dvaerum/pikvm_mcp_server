@@ -6,6 +6,28 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 164 (2026-04-28, v0.5.154): refresh docs/skills/click-at.md — final Phase 94 default callout
+
+The "**Phase 94 default**" callout in `docs/skills/click-at.md` line
+25 was the last remaining live prose surface telling readers the
+iPad default is 2 retries. Mirrored to "**Phase 94 / Phase 142
+default**" with the value 3 and rationale (Phase 141 hidden-popup-
+dismiss recipe needs three retry rounds for sticky popups).
+
+This completes the Phase 161-164 prompt-refresh push. The active
+prose across:
+- src/prompts/workflows.ts (Phase 161)
+- src/prompts/tool-guides.ts (Phase 161)
+- README.md (Phase 163)
+- docs/skills/ipad-keyboard-first-workflow.md (Phase 163)
+- docs/skills/click-at.md (Phase 164)
+
+…now consistently reflects the Phase 142 maxRetries=3 default.
+Historical phase entries inside the troubleshooting log retain
+their as-of-write-time content for accurate history.
+
+No production behavior change. 538 tests passing (unchanged).
+
 ## Phase 163 (2026-04-28, v0.5.153): refresh README + ipad-keyboard-first-workflow doc to maxRetries=3
 
 Continuation of Phase 161's prompt-refresh push. README.md and
