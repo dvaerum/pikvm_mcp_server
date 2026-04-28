@@ -95,6 +95,9 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 
 ### Relative-Mouse Targets (iPad, etc. — `mouse.absolute=false`)
 14. **`pikvm_ipad_unlock`** - Unlock iPad via USB HID swipe-up gesture (800 px default). Verified on iPad portrait in 1920x1080 HDMI frame.
+14a. **`pikvm_ipad_home`** - Return to the iPad home screen via Cmd+H. Idempotent on the home screen; dismisses any foreground app; unlocks if currently on the lock screen.
+14b. **`pikvm_ipad_app_switcher`** - Open the iPad app-switcher (Cmd+\\ or hardware home gesture). Useful to verify which app is foreground or to switch between apps.
+14c. **`pikvm_ipad_launch_app`** - Launch any iPad app via the verified keyboard-first pipeline (unlock → Cmd+Space Spotlight → type → Enter). 100% reliable across Settings, Files, App Store, Maps, Safari (live-validated). Far more reliable than clicking icons.
 15. **`pikvm_mouse_move_to`** - Approximate move-to-pixel via slam-to-corner + delta emission. Returns screenshot for visual verification.
 16. **`pikvm_mouse_click_at`** - `pikvm_mouse_move_to` + `mouseClick` + click verification (pre/post screenshot diff; returns `screenChanged: true|false`). Use the verdict to detect missed clicks instead of eyeballing screenshots; opt out via `verifyClick: false`.
 17. **`pikvm_measure_ballistics`** - Characterise relative-mouse px/mickey via screenshot-diff sampling. Writes profile to `./data/ballistics.json`. Best-effort on iPad — fragile on the home screen due to animated widgets.

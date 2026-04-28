@@ -43,6 +43,23 @@ async function countPikvmTools(): Promise<number> {
   return matches.length;
 }
 
+/**
+ * Phase 173 (v0.5.163): extract all `pikvm_*` tool names from
+ * src/index.ts. Used by name-coverage tests below to assert every
+ * tool is mentioned in user-facing surfaces (AGENTS.md, README.md).
+ */
+async function listPikvmToolNames(): Promise<string[]> {
+  const indexPath = path.join(repoRoot(), 'src', 'index.ts');
+  const src = await fs.readFile(indexPath, 'utf8');
+  const re = /^\s+name: '(pikvm_[a-z_]+)'/gm;
+  const names: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    names.push(m[1]);
+  }
+  return names;
+}
+
 describe('AGENTS.md freshness', () => {
   it('mentions the actual tool-guide count', async () => {
     const doc = await readAgentsMd();
@@ -69,6 +86,18 @@ describe('AGENTS.md freshness', () => {
     const doc = await readAgentsMd();
     for (const p of toolGuidePrompts) {
       expect(doc).toContain(`\`${p.name}\``);
+    }
+  });
+
+  it('Phase 173: every pikvm_* tool defined in src/index.ts is mentioned in AGENTS.md', async () => {
+    // Catches "added a tool but forgot to document it" — exactly
+    // the drift class Phase 169-170 caught manually for
+    // pikvm_dismiss_popup. Future tools get the same guard.
+    const doc = await readAgentsMd();
+    const tools = await listPikvmToolNames();
+    expect(tools.length).toBeGreaterThan(0);
+    for (const t of tools) {
+      expect(doc, `AGENTS.md should mention ${t}`).toContain(t);
     }
   });
 
@@ -134,6 +163,18 @@ describe('README.md freshness', () => {
     for (const p of [...toolGuidePrompts, ...workflowPrompts]) {
       const toolName = `skill_${p.name.replace(/-/g, '_')}`;
       expect(doc).toContain(toolName);
+    }
+  });
+
+  it('Phase 173: every pikvm_* tool defined in src/index.ts is mentioned in README.md', async () => {
+    // Companion guard to the AGENTS.md test above. README has its
+    // own tool catalog at "### Keyboard / ### Mouse / etc." that
+    // also needs to keep up with src/index.ts.
+    const doc = await readReadmeMd();
+    const tools = await listPikvmToolNames();
+    expect(tools.length).toBeGreaterThan(0);
+    for (const t of tools) {
+      expect(doc, `README.md should mention ${t}`).toContain(t);
     }
   });
 });
