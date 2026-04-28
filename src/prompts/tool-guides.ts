@@ -568,7 +568,7 @@ After Phases 65-77 (v0.5.68+):
 Single-digit residuals are achievable when motion-diff succeeds (Phase 69 measured 6-9 px hits).
 
 ## When to Use vs Closed-Loop Correction
-- For most click tasks: prefer \`pikvm_mouse_click_at\` with \`maxRetries: 2\` — same algorithm, but with retry-on-miss orchestration baked in.
+- For most click tasks: prefer \`pikvm_mouse_click_at\` (iPad default \`maxRetries: 3\` is auto-applied per Phase 142) — same algorithm, with retry-on-miss orchestration baked in.
 - For agent-driven closed-loop where you want screenshot inspection between move and click: this tool returns the screenshot and reported residual, suitable for an agent to compute a correction delta and issue follow-up \`pikvm_mouse_move\` calls.
 
 ## Example Calls
@@ -612,7 +612,7 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 | 50-100 px | ~60% | **~50-60%** | Standard buttons, page tabs, ~70 px iPad icons (Phase 111 measured) |
 | < 50 px | ~50% | ~88% | Back arrows, X buttons, toggles |
 
-**Phase 94 default**: \`maxRetries\` defaults to 2 on iPad (relative-mouse) targets — turns ~50% per-attempt into ~88% reliable end-to-end. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
+**Phase 94 / Phase 142 default**: \`maxRetries\` defaults to 3 on iPad (relative-mouse) targets (originally 2; Phase 142 bumped to 3 for the Phase 141 hidden-popup auto-dismiss recipe to have an extra round). Turns ~50% per-attempt into ~88% reliable end-to-end on tiny targets. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
 
 ## Critical pre-flight
 

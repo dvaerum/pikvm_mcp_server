@@ -6,6 +6,28 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 161 (2026-04-28, v0.5.151): refresh user-facing prompts to maxRetries=3 (was stuck at Phase 94 era's 2)
+
+DRY-audit continued. The MCP `prompts/workflows.ts` and
+`prompts/tool-guides.ts` user-facing strings still said
+"`maxRetries: 2`" in three places — guidance that, if followed
+literally, leads callers to PASS 2 explicitly, overriding the
+Phase 142 default of 3 with one fewer retry. Worse than just
+out-of-date wording: it actively degrades click_at experience for
+anyone reading the prompt and copying the example.
+
+Updated all three call sites in workflows.ts plus the "Phase 94
+default" callout in tool-guides.ts to reference Phase 142's bump
+2 → 3 and the rationale (Phase 141 hidden-popup auto-dismiss
+needs at least three retry rounds to reliably clear sticky
+popups).
+
+This pattern (prompt strings drift from code defaults) is the
+same shape as the bench drifts in Phase 159/160. The doc strings
+need explicit refresh whenever the default helper changes.
+
+No production behavior change. 538 tests passing (unchanged).
+
 ## Phase 160 (2026-04-28, v0.5.150): test-client CLI default also stale at 2 — same fix
 
 DRY consolidation continued. `test-client.ts`'s `click-retry` and
