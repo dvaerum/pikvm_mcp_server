@@ -6,6 +6,26 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 170 (2026-04-28, v0.5.160): bump AGENTS.md tool count 24 → 25 + sync regression test
+
+Phase 165 added `pikvm_dismiss_popup` (the 25th `pikvm_*` tool) but
+AGENTS.md still said "Total tools: 45 (24 hardware + 21 skills)".
+The Phase 74 regression test in
+`agents-doc-freshness.test.ts` pinned the count at 24 — it caught
+my Phase 169 bump to 25 hardware as a test failure on first run.
+
+This is the test working as designed: when I manually updated the
+tool count to 25+21=46 in AGENTS.md, the test correctly flagged
+that the hardcoded 24 in the test file was now wrong. Updated both
+the AGENTS.md count AND the test's expected `24` → `25` to bring
+them into sync.
+
+The Phase 74 regression test is exactly this kind of guard for
+silent doc drift — well-targeted, caught the drift on the first
+test run rather than after-the-fact.
+
+No production behavior change. 544 tests passing.
+
 ## Phase 169 (2026-04-28, v0.5.159): final surface — AGENTS.md tool list
 
 AGENTS.md is the developer-facing catalogue of MCP tools (auto-

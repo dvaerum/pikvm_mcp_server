@@ -35,18 +35,19 @@ describe('AGENTS.md freshness', () => {
     expect(doc).toContain(`${workflowPrompts.length} multi-step workflow prompts`);
   });
 
-  it('Total tools count matches 24 hardware + (toolGuides + workflows) skills', async () => {
+  it('Total tools count matches 25 hardware + (toolGuides + workflows) skills', async () => {
     const doc = await readAgentsMd();
-    // 24 hardware tools as of v0.5.64. Counted from src/index.ts:
+    // 25 hardware tools as of Phase 165 (v0.5.155). Counted from src/index.ts:
     // pikvm_version, pikvm_health_check, pikvm_screenshot,
     // pikvm_get_resolution, pikvm_type, pikvm_key, pikvm_shortcut,
+    // pikvm_dismiss_popup (Phase 165),
     // pikvm_mouse_move, pikvm_mouse_click, pikvm_mouse_scroll,
     // pikvm_calibrate, pikvm_set_calibration, pikvm_get_calibration,
     // pikvm_clear_calibration, pikvm_ipad_unlock, pikvm_detect_orientation,
     // pikvm_ipad_home, pikvm_ipad_app_switcher, pikvm_ipad_launch_app,
     // pikvm_mouse_move_to, pikvm_mouse_click_at, pikvm_measure_ballistics,
     // pikvm_auto_calibrate, pikvm_seed_cursor_template.
-    const expectedTotal = 24 + toolGuidePrompts.length + workflowPrompts.length;
+    const expectedTotal = 25 + toolGuidePrompts.length + workflowPrompts.length;
     expect(doc).toContain(`Total tools: ${expectedTotal}`);
   });
 
