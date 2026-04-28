@@ -35,6 +35,7 @@ import {
   defaultMaxResidualPxFor,
   defaultChunkPaceMsFor,
   runDismissRecipe,
+  formatDismissResult,
 } from './pikvm/click-verify.js';
 import { seedCursorTemplate } from './pikvm/seed-template.js';
 import { VERSION } from './version.js';
@@ -953,12 +954,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'pikvm_dismiss_popup': {
         // Phase 165: run the documented Phase 141 hidden-popup dismiss recipe.
+        // Phase 172 extracted formatDismissResult so both formatting branches
+        // are regression-pinned by unit tests.
         const result = await runDismissRecipe(pikvm);
-        const summary = result.errors.length === 0
-          ? `Dismiss recipe sent ${result.keysSent} keys (Escape, Enter). If a hidden popup was eating input, it should now be cleared — verify with pikvm_screenshot and retry the original action.`
-          : `Dismiss recipe sent ${result.keysSent} keys with ${result.errors.length} error(s): ${result.errors.join('; ')}. Best-effort dismiss continued anyway.`;
         return {
-          content: [{ type: 'text', text: summary }],
+          content: [{ type: 'text', text: formatDismissResult(result) }],
         };
       }
 

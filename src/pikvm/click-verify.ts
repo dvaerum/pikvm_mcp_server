@@ -1488,6 +1488,34 @@ export async function runDismissRecipe(
 }
 
 /**
+ * Phase 172 (v0.5.162) — pure helper: format the user-visible
+ * summary text returned by the `pikvm_dismiss_popup` MCP handler.
+ * Extracted so the two formatting branches (clean vs error-path)
+ * are unit-testable. Mentioning `pikvm_screenshot` is load-bearing:
+ * the user/agent needs to verify the dismiss took effect, and the
+ * recommended verification path is a screenshot.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function formatDismissResult(result: {
+  keysSent: number;
+  errors: string[];
+}): string {
+  if (result.errors.length === 0) {
+    return (
+      `Dismiss recipe sent ${result.keysSent} keys (Escape, Enter). ` +
+      `If a hidden popup was eating input, it should now be cleared — ` +
+      `verify with pikvm_screenshot and retry the original action.`
+    );
+  }
+  return (
+    `Dismiss recipe sent ${result.keysSent} keys with ` +
+    `${result.errors.length} error(s): ${result.errors.join('; ')}. ` +
+    `Best-effort dismiss continued anyway.`
+  );
+}
+
+/**
  * Phase 135 — pure helper: pick the `maxResidualPx` default given the
  * target's mouse mode. iPad targets benefit from a strict 35 px gate
  * because the open-loop move sometimes overshoots Y by 60+ px due to
