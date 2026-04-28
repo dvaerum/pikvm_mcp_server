@@ -599,8 +599,12 @@ export async function clickAtWithRetry(
         )
       : Infinity;
     if (
-      sessionTemplates.length > 0 &&
-      (!cursorVerified || initialResidual > SECOND_OPINION_RESIDUAL_PX)
+      shouldFireSecondOpinion({
+        hasTemplates: sessionTemplates.length > 0,
+        cursorVerified,
+        initialResidual,
+        secondOpinionResidualPx: SECOND_OPINION_RESIDUAL_PX,
+      })
     ) {
       try {
         await client.mouseMoveRelative(1, 0);
@@ -631,7 +635,13 @@ export async function clickAtWithRetry(
             woken.position.x - target.x,
             woken.position.y - target.y,
           );
-          if (!cursorVerified || wokenResidual < initialResidual) {
+          if (
+            shouldAdoptSecondOpinion({
+              cursorVerified,
+              wokenResidual,
+              initialResidual,
+            })
+          ) {
             (lastMoveResult as { finalDetectedPosition: { x: number; y: number } | null })
               .finalDetectedPosition = woken.position;
             cursorVerified = true;
@@ -1158,6 +1168,56 @@ export function shouldFireDismissRecipe(args: {
     args.changedFraction <= 0.001 &&
     args.attempt <= args.maxRetries
   );
+}
+
+/**
+ * Phase 148 (v0.5.138) — pure helper: gate the Phase 137/140 wake-
+ * nudge + second-opinion template-match. Extracted from the inline
+ * predicate in clickAtWithRetry so the trigger conditions are
+ * regression-pinned.
+ *
+ * Fire conditions:
+ *  - hasTemplates: at least one cached cursor template is loaded.
+ *    Without templates, second-opinion has nothing to match against.
+ *  - !cursorVerified OR initialResidual > secondOpinionResidualPx:
+ *    fire EITHER when motion-diff failed completely (cursor not
+ *    located at all) OR when motion-diff returned a position but the
+ *    residual is suspiciously high. Phase 140 caught a live case
+ *    where motion-diff picked an icon-LABEL feature 30 px below the
+ *    real cursor — without this trigger the click would have landed
+ *    on the wrong measured position.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function shouldFireSecondOpinion(args: {
+  hasTemplates: boolean;
+  cursorVerified: boolean;
+  initialResidual: number;
+  secondOpinionResidualPx?: number;
+}): boolean {
+  if (!args.hasTemplates) return false;
+  const threshold = args.secondOpinionResidualPx ?? 25;
+  return !args.cursorVerified || args.initialResidual > threshold;
+}
+
+/**
+ * Phase 148 (v0.5.138) — pure helper: decide whether the second-
+ * opinion template match should REPLACE the position reported by
+ * motion-diff. Phase 140 added this guard after observing that an
+ * unconditional swap could replace a good 17 px motion-diff match
+ * with a worse 50 px template match (the wake-nudge frame might
+ * catch the cursor mid-flight). Adopt only when:
+ *  - cursor was not verified at all (anything is better than blind), OR
+ *  - the second-opinion position is strictly closer to target.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function shouldAdoptSecondOpinion(args: {
+  cursorVerified: boolean;
+  wokenResidual: number;
+  initialResidual: number;
+}): boolean {
+  return !args.cursorVerified || args.wokenResidual < args.initialResidual;
 }
 
 /**

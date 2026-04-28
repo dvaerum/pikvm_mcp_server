@@ -6,6 +6,31 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 148 (2026-04-28, v0.5.138): extract second-opinion gate + adopt-only-if-closer pure helpers
+
+Continuation of Phase 147's regression-pinning push. Phase 137
+(v0.5.129) introduced the wake-nudge fallback that template-matches
+the cursor when motion-diff fails. Phase 140 (v0.5.132) extended
+the trigger to ALSO fire when motion-diff returned a position but
+the residual was suspiciously high (> 25 px) — caught a live case
+where motion-diff picked an icon-LABEL feature 30 px below the real
+cursor. Phase 140 also added the adopt-only-if-strictly-closer
+guard so a wake-nudge frame catching the cursor mid-flight can't
+quietly REGRESS a good motion-diff match.
+
+Both predicates lived inline in `clickAtWithRetry`. Extracted as
+`shouldFireSecondOpinion` and `shouldAdoptSecondOpinion` in
+`click-verify.ts`, with 12 regression tests in
+`secondOpinion.test.ts` pinning:
+- The OR-split trigger (motion-diff failed OR residual > 25 px) —
+  collapsing to a single condition fails ≥1 test.
+- The strictly-less-than adopt guard — switching to ≤ or unconditional
+  swap fails the Phase 140 regression case (50 px replacing 17 px).
+- Boundary behavior at residual === threshold and equal residuals.
+- Default threshold of 25 px when not specified.
+
+No behavior change. 463 tests passing (was 451; +12 new).
+
 ## Phase 147 (2026-04-28, v0.5.137): extract `shouldFireDismissRecipe` pure helper + regression tests
 
 Phase 141 (v0.5.133) added an inline four-way AND predicate inside
