@@ -16,7 +16,11 @@
 
 import { loadConfig } from './src/config.js';
 import { PiKVMClient } from './src/pikvm/client.js';
-import { clickAtWithRetry } from './src/pikvm/click-verify.js';
+import {
+  clickAtWithRetry,
+  defaultChunkPaceMsFor,
+  defaultMaxResidualPxFor,
+} from './src/pikvm/click-verify.js';
 import { ipadGoHome } from './src/pikvm/ipad-unlock.js';
 import { loadProfile } from './src/pikvm/ballistics.js';
 
@@ -52,21 +56,26 @@ async function runTrial(maxRetries: number, useMicro = false, preClickSettleMs =
     disableLinearBailout: true,
   } : {};
 
+  // Phase 158 (v0.5.148): use the same helpers the MCP click_at
+  // handler uses, so the bench tracks production behavior automatically
+  // when defaults change. Bench is iPad-only (relative-mouse=false).
+  const ipadResidualGate = defaultMaxResidualPxFor(/*absolute=*/false);
+  const ipadChunkPace = defaultChunkPaceMsFor(/*absolute=*/false);
   const r = await clickAtWithRetry(client, TARGET, {
     maxRetries,
     preClickSettleMs,
     // Phase 134: skip click when residual > 35px (icon hit-area). Prevents
     // counting wrong-icon hits as success — better to retry than land on Books
-    // when targeting Settings.
-    maxResidualPx: 35,
+    // when targeting Settings. Sourced from defaultMaxResidualPxFor.
+    ...(ipadResidualGate !== undefined ? { maxResidualPx: ipadResidualGate } : {}),
     moveToOptions: {
       strategy: 'detect-then-move',
       forbidSlamFallback: true,
       profile,
       // Phase 136: slow open-loop chunk pace (30→100ms) to keep iPadOS
-      // pointer acceleration in the linear regime. Same default the
-      // MCP click_at handler now applies on iPad targets.
-      chunkPaceMs: 100,
+      // pointer acceleration in the linear regime. Sourced from
+      // defaultChunkPaceMsFor.
+      ...(ipadChunkPace !== undefined ? { chunkPaceMs: ipadChunkPace } : {}),
       ...microOpts,
     },
   });
