@@ -45,8 +45,19 @@ let lastGoodBounds: IpadBounds | null = null;
 
 /** Aspect-ratio sanity check. iPad displays are 4:3 or 3:2 — short/long
  *  side ratio between ~0.62 and ~0.75. A detection well outside that
- *  range probably missed a black edge. */
-function aspectLooksSane(w: number, h: number): boolean {
+ *  range probably missed a black edge.
+ *
+ *  The bounds [0.55, 0.85] are wider than the strict iPad aspect range
+ *  on purpose: minor letterbox crop variance + JPEG compression noise
+ *  can push a real iPad detection toward the edges of the strict range.
+ *  Phase 157 (v0.5.147) exported this so the bounds are
+ *  regression-pinned — narrowing them silently rejects valid iPad
+ *  detections; widening them lets non-iPad screens slip through.
+ *
+ *  Exported for unit tests. Not part of the public detection API.
+ *
+ *  Pure: deterministic, no I/O. */
+export function aspectLooksSane(w: number, h: number): boolean {
   const r = Math.min(w, h) / Math.max(w, h);
   return r >= 0.55 && r <= 0.85;
 }

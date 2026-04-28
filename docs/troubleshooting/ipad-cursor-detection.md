@@ -6,6 +6,30 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 157 (2026-04-28, v0.5.147): export `aspectLooksSane` + regression tests
+
+Continuation of the Phase 147-156 regression-pinning push.
+`aspectLooksSane` was a private helper inside `orientation.ts` —
+not part of the public API but load-bearing: it gates whether a
+fresh bounds detection is trusted vs. falling back to the cached
+last-good detection. The threshold [0.55, 0.85] is calibrated for
+iPad 4:3/3:2 ratios with letterbox-noise tolerance.
+
+A future "let's tighten this to strict iPad aspect" refactor would
+reject valid detections under modest noise; widening would let
+non-iPad / degenerate-square detections poison the cache. Exported
+the helper and added 13 regression tests pinning both bounds (0.55
+and 0.85), the 16:9-is-accepted (loose-by-design) case, the square-
+crop rejection, and ultra-wide rejection.
+
+While writing tests I caught a misconception in my own initial
+draft: 16:9 (0.5625) is INSIDE [0.55, 0.85] so it IS accepted. The
+function isn't iPad-only — it's a "not totally bonkers" filter. The
+tests now reflect actual behavior rather than what the function
+name suggests.
+
+No behavior change. 538 tests passing (was 525; +13 new).
+
 ## Phase 156 (2026-04-28, v0.5.146): extract `defaultChunkPaceMsFor` pure helper
 
 Continuation of the Phase 147-155 regression-pinning push. Phase 136
