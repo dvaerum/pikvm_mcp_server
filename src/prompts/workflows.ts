@@ -372,7 +372,7 @@ pikvm_screenshot                               # confirm dismissed
 
 If Escape doesn't work for a particular modal, the modal probably needs a button click. THEN you fall back to \`pikvm_mouse_click_at\` (iPad default \`maxRetries: 3\` auto-applies) — quiet backdrops (modal scrim) tend to make cursor clicks more reliable than home-screen clicks.
 
-**Hidden popup remedy** (Phase 165): if \`click_at\` returns success but the post-click screenshot shows NO UI change, an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) is eating the input. iPadOS deliberately blanks these from HDMI capture but keyboard still reaches them. Call \`pikvm_dismiss_popup\` (fires Escape → Enter), then retry the click. Phase 162 live-verified this clears system popups.
+**Hidden popup remedy**: if \`click_at\` returns success but the post-click screenshot shows NO UI change, an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) is eating the input. iPadOS deliberately blanks these from HDMI capture but keyboard still reaches them. Call \`pikvm_dismiss_popup\` (fires Escape → Enter), then retry the click. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly).
 
 ## Plan for "${goal}"
 
