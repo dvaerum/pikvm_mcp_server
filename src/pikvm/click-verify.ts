@@ -1013,17 +1013,10 @@ export async function clickAtWithRetry(
         maxRetries,
       })
     ) {
-      try {
-        await client.sendKey('Escape');
-        await sleepMs(60);
-        await client.sendKey('Enter');
-        await sleepMs(60);
-        // Center-tap as a final dismiss for popups that ignore
-        // keyboard. Use absolute coords if mouse mode supports it,
-        // otherwise rely on the swipe to clear the popup state.
-      } catch {
-        // sendKey may not be available on every client; ignore.
-      }
+      // Phase 165: extracted as runDismissRecipe so the MCP
+      // pikvm_dismiss_popup tool shares the same recipe. Errors
+      // are swallowed inside the helper.
+      await runDismissRecipe(client);
     }
   }
 
@@ -1452,6 +1445,46 @@ export function chunkMickeys(rawMickeys: number, maxMickeys: number): number {
  */
 export function defaultChunkPaceMsFor(mouseAbsoluteMode: boolean): number | undefined {
   return mouseAbsoluteMode ? undefined : 100;
+}
+
+/**
+ * Phase 165 (v0.5.155) — run the documented Phase 141 hidden-popup
+ * dismiss recipe: Escape → 60 ms → Enter → 60 ms. Caller-friendly
+ * version of the inline recipe Phase 141 fires between retries
+ * inside `clickAtWithRetry`. Exposed so the MCP `pikvm_dismiss_popup`
+ * tool can invoke it on demand.
+ *
+ * Why this recipe: iOS HDMI-blocked security popups (Apple Pay,
+ * Face ID, password, app permission, Low Battery) are invisible in
+ * HDMI capture but remain interactive. Phase 162 (v0.5.152) live-
+ * verified that Escape DOES dismiss visible system popups (the
+ * Low Battery 10% modal cleared cleanly with a single Escape).
+ * Enter is sent as a fallback for popups whose default action is
+ * an OK button rather than Cancel.
+ *
+ * Errors from sendKey are caught — some clients may not support it.
+ * Returns the count of keys sent so callers can sanity-check.
+ */
+export async function runDismissRecipe(
+  client: { sendKey: (k: string) => Promise<void> },
+): Promise<{ keysSent: number; errors: string[] }> {
+  const errors: string[] = [];
+  let keysSent = 0;
+  try {
+    await client.sendKey('Escape');
+    keysSent++;
+    await sleepMs(60);
+  } catch (err) {
+    errors.push(`Escape: ${(err as Error).message}`);
+  }
+  try {
+    await client.sendKey('Enter');
+    keysSent++;
+    await sleepMs(60);
+  } catch (err) {
+    errors.push(`Enter: ${(err as Error).message}`);
+  }
+  return { keysSent, errors };
 }
 
 /**

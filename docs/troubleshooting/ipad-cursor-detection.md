@@ -6,6 +6,34 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 165 (2026-04-28, v0.5.155): expose Phase 141 dismiss recipe as `pikvm_dismiss_popup` MCP tool
+
+Phase 141's hidden-popup-dismiss recipe (Escape → 60ms → Enter →
+60ms) was inlined inside `clickAtWithRetry`'s retry loop —
+callers had no way to invoke it on demand when they suspected a
+popup outside of a click_at flow. Phase 162's live finding (Escape
+DOES dismiss visible system popups, demonstrated against the Low
+Battery 10% modal) makes the recipe useful as a standalone tool.
+
+Three changes:
+1. Extracted the recipe as `runDismissRecipe(client)` in
+   `click-verify.ts:1455`. Returns `{ keysSent, errors }`.
+2. Phase 141's inline call replaced with a single `await
+   runDismissRecipe(client)` — DRY consolidation.
+3. New MCP tool `pikvm_dismiss_popup` calls the helper and reports
+   the result. Recommended use: when click_at returns success but
+   the screenshot shows no UI change, fire `pikvm_dismiss_popup`
+   then retry — clears any iOS-side popup eating input.
+
+6 regression tests pin: order (Escape before Enter, NOT reversed),
+sendKey-fails-on-Escape graceful continuation, sendKey-fails-on-Enter
+partial-success, all-fail no-throw contract, and "best-effort"
+contract Phase 141 originally guaranteed.
+
+No production behavior change to `clickAtWithRetry`'s retry loop
+(same recipe, just refactored). Net new MCP capability:
+`pikvm_dismiss_popup`. 544 tests passing (was 538; +6 new).
+
 ## Phase 164 (2026-04-28, v0.5.154): refresh docs/skills/click-at.md — final Phase 94 default callout
 
 The "**Phase 94 default**" callout in `docs/skills/click-at.md` line
