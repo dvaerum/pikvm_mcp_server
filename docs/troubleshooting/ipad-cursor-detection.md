@@ -6,6 +6,21 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 177 (2026-04-28, v0.5.167): drop version anchors from "Silent failure remedy" callouts
+
+Phase 167-168's "Silent failure remedy" / "Hidden popup remedy"
+callouts in `docs/skills/click-at.md`, `src/prompts/tool-guides.ts`,
+and `src/prompts/workflows.ts` retained the "(Phase 165, v0.5.155+)"
+and "Phase 162 live-verified" anchors. Per Phase 82/174 lesson,
+version-anchored phrasing in user-facing prompts ages poorly.
+
+Removed the version anchors and updated the live-verify mention
+to reference both Low Battery dismiss reproductions (Phase 162's
+10% modal and Phase 176's 5% modal). The recipe is now described
+purely by what it DOES rather than which phase introduced it.
+
+No production behavior change. 554 tests passing.
+
 ## Phase 176 (2026-04-28, v0.5.166): reproduce Phase 162 — Escape dismisses Low Battery 5% popup too
 
 Same iPad, lower battery (5% instead of 10%), same UI flow:

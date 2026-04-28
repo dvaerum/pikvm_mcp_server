@@ -614,7 +614,7 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 
 **Phase 94 / Phase 142 default**: \`maxRetries\` defaults to 3 on iPad (relative-mouse) targets (originally 2; Phase 142 bumped to 3 for the Phase 141 hidden-popup auto-dismiss recipe to have an extra round). Turns ~50% per-attempt into ~88% reliable end-to-end on tiny targets. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
 
-**Silent failure remedy** (Phase 165, v0.5.155+): when click_at returns success but the post-click screenshot shows no UI change, the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating input. Call \`pikvm_dismiss_popup\` to fire the documented Escape → Enter recipe, then retry. Phase 162 live-verified Escape clears system popups.
+**Silent failure remedy**: when click_at returns success but the post-click screenshot shows no UI change, the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating input. Call \`pikvm_dismiss_popup\` to fire the documented Escape → Enter recipe, then retry. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly with one Escape).
 
 ## Critical pre-flight
 
