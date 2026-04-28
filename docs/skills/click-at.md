@@ -22,7 +22,7 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 | 50-100 px | ~60% | **~50-60%** | Standard buttons, page tabs, ~70 px iPad icons (Phase 111 measured) |
 | < 50 px | ~50% | ~88% | Back arrows, X buttons, toggles |
 
-**Phase 94 default**: `maxRetries` defaults to **2 on iPad (relative-mouse) targets** — turns ~50% per-attempt into ~88% reliable end-to-end for tiny targets. Pass `maxRetries: 0` explicitly to opt out (single-shot, e.g. for a quick one-off toggle).
+**Phase 94 / Phase 142 default**: `maxRetries` defaults to **3 on iPad (relative-mouse) targets** (Phase 142 bumped from 2 → 3 for Phase 141's hidden-popup-dismiss-recipe headroom) — turns ~50% per-attempt into ~88% reliable end-to-end for tiny targets. Pass `maxRetries: 0` explicitly to opt out (single-shot, e.g. for a quick one-off toggle).
 
 ## Critical pre-flight
 
