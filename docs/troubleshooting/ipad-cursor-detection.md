@@ -6,6 +6,43 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 162 (2026-04-28, v0.5.152): live proof — Escape DOES dismiss system popups (validates Phase 141 recipe)
+
+After ~12 hours of the iPad being apparently fully unresponsive
+to HID input, the battery dropped to 10% and iPadOS surfaced a
+visible "Low Battery 10% remaining — Low Power Mode / Close" popup.
+
+Live test sequence:
+1. `pikvm_screenshot` showed the modal centered on screen.
+2. `pikvm_key("Escape")` — popup dismissed cleanly. Returned to
+   the underlying Settings → Read & Speak with the search overlay
+   ("Reduce Motion`") still active.
+3. `pikvm_shortcut(["MetaLeft", "KeyH"])` — Settings page persists.
+   Cmd+H does NOT exit Settings even though Escape works.
+
+This is the strongest live proof yet that Phase 141's auto-dismiss
+recipe (Escape between retries) is correctly targeted: system-
+modal popups (Apple Pay, Face ID, Low Battery, permission prompts)
+ARE keyboard-dismissable via Escape even when the iPad's
+foreground app is otherwise unresponsive to mouse clicks and Cmd+H.
+
+What this means for click_at:
+- The Phase 129 "hidden HDMI-blocked popup" recipe was the correct
+  diagnosis; Escape is the right tool.
+- The Phase 141 auto-dismiss-between-retries gate (now extracted
+  as `shouldFireDismissRecipe`) is the right architectural fix.
+- The persistent Settings → Read & Speak state observed across
+  the session is NOT a popup (Escape doesn't dismiss it) — it's
+  the active app state itself, which appears to be locked into
+  the search-field-focused mode and only dismissable from the
+  iPad's physical UI.
+
+The session-long input-block was actually TWO different states
+overlapping: a system popup (now demonstrated to be dismissable)
+plus a sticky app state (still requires physical interaction).
+
+No code change. 538 tests passing.
+
 ## Phase 161 (2026-04-28, v0.5.151): refresh user-facing prompts to maxRetries=3 (was stuck at Phase 94 era's 2)
 
 DRY-audit continued. The MCP `prompts/workflows.ts` and
