@@ -444,7 +444,13 @@ export async function clickAtWithRetry(
       // low mean but high stddev (text/icon contrast against dark bg) and
       // cursor detection works fine. Gate fires only when severity is
       // explicitly 'very-dim' (low mean AND low stddev).
-      if (brightness.mean < minBrightness && brightness.severity === 'very-dim') {
+      if (
+        isScreenTooDimForCursorDetection({
+          mean: brightness.mean,
+          severity: brightness.severity,
+          minBrightness,
+        })
+      ) {
         throw new Error(
           `clickAtWithRetry: screen too dim for cursor detection ` +
           `(mean=${brightness.mean.toFixed(0)}/255 stddev=${brightness.stddev.toFixed(1)}, threshold=mean<${minBrightness}+stddev<3). ` +
@@ -1352,6 +1358,34 @@ export function shouldRunMicroCorrection(args: {
     args.hasTemplates &&
     args.hasInitialPosition
   );
+}
+
+/**
+ * Phase 153 (v0.5.143) — pure helper: gate Phase 38's fail-fast
+ * brightness precheck. Phase 48 (v0.5.36) fixed a false-positive
+ * where dark-mode iPads (low mean RGB but high stddev from icon /
+ * text contrast) were spuriously failing the precheck despite
+ * cursor detection working fine on them.
+ *
+ * The fix added a severity-class guard: only fail-fast on UNIFORM
+ * dim frames (severity === 'very-dim', set by classifyBrightness
+ * when BOTH mean is low AND stddev < 3). Dark-mode UI scores
+ * severity='dim' (low mean, but stddev > 3 from contrast features),
+ * which the precheck deliberately does NOT trip.
+ *
+ * The two-condition AND is load-bearing: dropping the severity
+ * check would re-introduce the dark-mode false-positive that
+ * blocked normal click_at on dark-mode apps for an entire session
+ * before Phase 48 was diagnosed.
+ *
+ * Pure: deterministic, no I/O.
+ */
+export function isScreenTooDimForCursorDetection(args: {
+  mean: number;
+  severity: 'normal' | 'dim' | 'very-dim';
+  minBrightness: number;
+}): boolean {
+  return args.mean < args.minBrightness && args.severity === 'very-dim';
 }
 
 /**

@@ -6,6 +6,29 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 153 (2026-04-28, v0.5.143): extract `isScreenTooDimForCursorDetection` pure helper
+
+Continuation of the Phase 147-152 regression-pinning push. Phase 38
+(v0.5.27) added a fail-fast brightness precheck. Phase 48 (v0.5.36)
+fixed it after dark-mode iPads were spuriously failing — they have
+low mean RGB (background is dark) but high stddev (icon/text
+contrast features), and cursor detection works fine on them. The
+fix added a severity-class guard so only UNIFORM dim frames
+(severity === 'very-dim') trip the gate.
+
+The two-condition AND is load-bearing: collapsing it to just
+`mean < threshold` would silently re-introduce the dark-mode
+false-positive that blocked clicks for an entire session before
+Phase 48 was diagnosed.
+
+Extracted as `isScreenTooDimForCursorDetection`; 7 regression tests
+pin both halves of the AND, including a named regression case for
+the Phase 48 dark-mode scenario (mean=25, severity='dim' → must
+NOT fire) and a defensive case for hypothetical false-very-dim
+classifications.
+
+No behavior change. 503 tests passing (was 496; +7 new).
+
 ## Phase 152 (2026-04-28, v0.5.142): extract `shouldRunMicroCorrection` pure helper
 
 Continuation of the Phase 147-151 regression-pinning push. Phase 49
