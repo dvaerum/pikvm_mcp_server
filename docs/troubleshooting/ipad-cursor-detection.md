@@ -6,6 +6,25 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 174 (2026-04-28, v0.5.164): drop version-anchored phrasing from `pikvm_dismiss_popup` description
+
+Per Phase 82's lesson-learned: version-anchored phrasing in
+user-facing strings ages poorly. Phase 165's tool description had
+"Phase 165 (v0.5.155)" and "Phase 162" tags pinned to its
+contemporaneous versions — these will read as historical
+references next time the tool description is bumped or copy-pasted.
+
+Replaced with version-free phrasing: "Run the hidden-popup
+dismiss recipe..." instead of "Phase 165 (v0.5.155): run the
+documented Phase 141 hidden-popup dismiss recipe...". Live-verify
+mention is preserved but without the Phase 162 anchor.
+
+The Phase entries inside the troubleshooting doc retain their
+version anchors (they're a historical record). Only live tool
+descriptions should be version-free.
+
+No production behavior change. 554 tests passing.
+
 ## Phase 173 (2026-04-28, v0.5.163): per-tool name-coverage tests catch 3 missing iPad tools in AGENTS.md
 
 Added two new regression tests in `agents-doc-freshness.test.ts`:
