@@ -6,6 +6,28 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 175 (2026-04-28, v0.5.165): fix stale `maxRetries` description — was Phase-94-era "default 2"
+
+The `maxRetries` parameter description on `pikvm_mouse_click_at`
+still said "Phase 94 default: 2 on iPad" even though Phase 142
+bumped the default to 3 and the prose-level docs were updated in
+Phase 161-164. The MCP-tool description (which agents read at
+tool-list-time) was missed.
+
+This is the third class of "default 2 → 3" drift caught and fixed
+this session:
+- Phase 159-160: bench tooling and CLI defaults
+- Phase 161-164: user-facing prose (workflows, tool-guides, docs)
+- Phase 175 (here): the MCP-tool inputSchema description itself
+
+The maxRetries description now reads "Default: 3 on iPad
+(relative-mouse) targets... four attempts give ~88% cumulative hit
+rate plus headroom for the hidden-popup auto-dismiss recipe to fire
+on each retry; 0 on desktop". Rationale baked in but no version
+anchor (per Phase 82/174 lesson learned).
+
+No production behavior change. 554 tests passing.
+
 ## Phase 174 (2026-04-28, v0.5.164): drop version-anchored phrasing from `pikvm_dismiss_popup` description
 
 Per Phase 82's lesson-learned: version-anchored phrasing in
