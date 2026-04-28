@@ -6,6 +6,29 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 168 (2026-04-28, v0.5.158): cross-link `pikvm_dismiss_popup` from MCP prompts (workflows + tool-guides)
+
+Phase 165 added the new MCP tool, Phase 166 surfaced it in README,
+Phase 167 cross-linked it from the click-at skill doc. The MCP
+prompts (`workflows.ts` and `tool-guides.ts`) — which LLM agents
+actually consume at tool-list-time — still didn't mention the new
+recovery tool.
+
+Added "Silent failure remedy" / "Hidden popup remedy" callouts to
+both prompts so LLM agents discover the new capability via the same
+MCP listing they use for other tools. Each callout cites Phase 165
+(when the tool was added) and Phase 162 (the live validation).
+
+This completes the Phase 165→168 surface-coverage push. The new
+`pikvm_dismiss_popup` tool is now discoverable from:
+- MCP tool listing (Phase 165 — direct via tools/list)
+- README.md tool catalog (Phase 166)
+- docs/skills/click-at.md prompt (Phase 167)
+- src/prompts/workflows.ts (Phase 168)
+- src/prompts/tool-guides.ts (Phase 168)
+
+No production behavior change. 544 tests passing.
+
 ## Phase 167 (2026-04-28, v0.5.157): docs/skills/click-at.md cross-links to `pikvm_dismiss_popup`
 
 `docs/skills/click-at.md` is the primary skill prompt for click_at;
