@@ -6,6 +6,26 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 158 (2026-04-28, v0.5.148): bench-clickable uses defaultChunkPaceMsFor + defaultMaxResidualPxFor
+
+DRY consolidation. `bench-clickable.ts` had hardcoded `maxResidualPx:
+35` and `chunkPaceMs: 100` — exact duplicates of the iPad defaults
+the MCP handler picks via Phase 95/135/156 helpers. If a future
+phase tunes the iPad value (e.g. tightens to 30 px after a fresh
+bench), the MCP click_at would update automatically but the bench
+would stay at 35, silently measuring against the OLD default.
+
+Wired both bench values to the same helpers. The bench is iPad-only,
+so it passes `/*absolute=*/false` explicitly. Behavior unchanged
+(same numerical defaults at v0.5.148), but the next time the helpers
+change, the bench tracks the change automatically.
+
+Also cleaned up a Phase 156 IIFE wart in src/index.ts: the spread
+`...((() => {...})())` was hoisted to a clean `const chunkPace =
+defaultChunkPaceMsFor(...)` followed by a simple conditional spread.
+
+No behavior change. 538 tests passing (unchanged).
+
 ## Phase 157 (2026-04-28, v0.5.147): export `aspectLooksSane` + regression tests
 
 Continuation of the Phase 147-156 regression-pinning push.

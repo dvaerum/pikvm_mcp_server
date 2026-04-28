@@ -1236,24 +1236,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? minBrightnessArg
           : (mouseAbsoluteMode ? 0 : VERY_DIM_THRESHOLD);
 
+        // Phase 136 / Phase 156: iPad targets get chunkPaceMs=100ms
+        // open-loop default; desktop uses caller's default. Helper is
+        // regression-pinned by defaultChunkPaceMsFor.test.ts.
+        const chunkPace = defaultChunkPaceMsFor(mouseAbsoluteMode);
         const moveOpts = {
           strategy: strategyStr,
           assumeCursorAt,
           profile: cachedProfile,
           forbidSlamFallback: !mouseAbsoluteMode,
-          // Phase 136 / Phase 156 helper: on iPad (relative-mouse)
-          // targets, slow the open-loop chunk pace from 30 ms → 100 ms.
-          // iPadOS pointer acceleration tracks velocity across
-          // consecutive deltas; 30 ms is fast enough that 9 chunks of
-          // 20 mickeys each are seen as one fast burst (live: 167-mickey
-          // Y emit moved 167 px when calibration predicted 105 px —
-          // 1.6× over-shoot). 100 ms pace lets iPadOS decay velocity
-          // between chunks, keeping each chunk in the linear regime.
-          // Helper is regression-pinned by defaultChunkPaceMsFor.test.ts.
-          ...((() => {
-            const pace = defaultChunkPaceMsFor(mouseAbsoluteMode);
-            return pace !== undefined ? { chunkPaceMs: pace } : {};
-          })()),
+          ...(chunkPace !== undefined ? { chunkPaceMs: chunkPace } : {}),
         };
         const verifyOpts = {
           ...(verifyRegionHalfPx !== undefined
