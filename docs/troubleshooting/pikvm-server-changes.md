@@ -98,6 +98,34 @@ subclass=1 at all four sites).
 **Net effect: ZERO changes to PiKVM. The system is in the same
 state it was before this session's SSH access began.**
 
+### 2026-04-28 — API-only interactions, ZERO config changes
+
+This session (v0.5.137 → v0.5.172, Phases 147-182) ran exclusively
+against PiKVM's HTTP API. No SSH, no config edits, no service
+restarts. API endpoints exercised:
+
+- `GET /api/hid` — read HID gadget status (mouse.online,
+  keyboard.online, jiggler state). Read-only.
+- `POST /api/hid/reset` — Phase 146 transient HID reset to test
+  whether re-enumerating the USB HID gadget would clear the iPad
+  input-block. Reset succeeded but did NOT clear the iPad-side
+  state. The `/api/hid/reset` endpoint is itself transient
+  (re-enumerates the USB gadget, no persistent config change).
+- `POST /api/hid/events/send_mouse_relative` — every cursor move.
+- `POST /api/hid/events/send_mouse_button` — every click.
+- `POST /api/hid/events/send_keyboard` — every key press (Phase
+  162/176 Escape dismiss, Phase 180 Cmd+Tab, etc.).
+- `GET /api/streamer/snapshot` — every screenshot.
+
+All endpoints are read-only (snapshots, status) or transient (HID
+events that don't persist on the PiKVM filesystem). No
+`/etc/kvmd/override.yaml`, mouse boot-patch, or systemd
+unit modifications.
+
+**Net effect: ZERO permanent changes to PiKVM during this session.
+The system is in the same state it was before the v0.5.137 work
+began.**
+
 ## Closed avenue: dual-mode mouse on iPad
 
 The `mouse_alt` / dual-mode mouse approach IS NOT a path forward
