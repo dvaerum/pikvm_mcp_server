@@ -254,3 +254,78 @@ the same state it was before this experiment.**
 See `docs/troubleshooting/ipad-touchscreen-hid-dead-end.md` for the
 full technical write-up of the descriptor design and why iPadOS
 ignored it.
+
+### 2026-04-30 09:24 UTC — Phase 188 Step 1: gamepad HID descriptor kernel-level sanity check + revert
+
+Phase 188's plan called for a 3-step gamepad HID experiment. With
+the iPad battery-dead and no USB host on the cable, **only Step 1
+(Linux/kernel-side sanity check) is exercisable right now.** Step
+2 and 3 require the iPad to be online to observe enumeration and
+behaviour respectively — deferred until iPad reboots.
+
+Step 1 question: does the configfs add of a generic-HID-gamepad
+function (`hid.usb2` with the 46-byte descriptor from
+`docs/troubleshooting/ipad-gamepad-hid-investigation.md`) succeed
+at the kernel level without errors, AND can it be cleanly reverted
+to the pre-experiment state?
+
+Action:
+```
+ssh root@pikvm01.bb.vcamp.dk
+GADGET=/sys/kernel/config/usb_gadget/kvmd
+cd $GADGET
+echo "" > UDC                               # unbind
+mkdir functions/hid.usb2
+echo 0 > functions/hid.usb2/protocol
+echo 0 > functions/hid.usb2/subclass
+echo 5 > functions/hid.usb2/report_length
+# Wrote 46-byte gamepad descriptor (see ipad-gamepad-hid-
+# investigation.md for the byte layout) to functions/hid.usb2/report_desc
+ln -s functions/hid.usb2 configs/c.1/hid.usb2
+echo "fe980000.usb" > UDC                   # rebind
+```
+
+Result:
+- `/dev/hidg2` was created (major 236, minor 2).
+- `dmesg` showed clean re-enumeration: `dwc2 fe980000.usb: bound
+  driver configfs-gadget.kvmd`. No errors.
+- kvmd + kvmd-otg services remained `active` throughout.
+- A test write of 5 zero bytes to `/dev/hidg2` returned
+  `Errno 108 transport endpoint shutdown` — exactly as expected
+  with the iPad off (no USB host to deliver the report to). When
+  the iPad is back online, the same write should succeed.
+
+This proves the **descriptor format is well-formed** and the
+**configfs add/remove flow is reliable** — both prerequisites for
+Phase 188 Step 2 (iPad enumeration test) when the iPad reboots.
+
+Action (revert):
+```
+ssh root@pikvm01.bb.vcamp.dk
+cd /sys/kernel/config/usb_gadget/kvmd
+echo "" > UDC
+rm -f configs/c.1/hid.usb2
+rmdir functions/hid.usb2
+echo "fe980000.usb" > UDC
+```
+
+Verification:
+- Functions back to {hid.usb0, hid.usb1, mass_storage.usb0}.
+- `/dev/hidg2` gone; `/dev/hidg0` + `/dev/hidg1` intact.
+- Mouse boot-patch (`protocol=2, subclass=1`) intact at all four
+  sites in `mouse.py`.
+- kvmd + kvmd-otg both `active`.
+
+Tangential observation: when the SSH session opened, root was
+already mounted `rw,relatime` (not `ro` as the PiKVM policy
+expects). Not caused by this experiment — the SSH session's first
+command (`mount | grep " / "`) showed `rw` BEFORE any configfs
+modification was issued. Most likely a leftover from the Phase 46
+`streamer.forever` edit that wasn't followed by a `ro` remount.
+**Restored to `ro` at the end of this session** via the PiKVM
+`ro` helper. Future contributors: always run `ro` before
+disconnecting if you ran `rw` for any reason.
+
+**Net effect of this Phase 188 Step 1 experiment: ZERO permanent
+changes to PiKVM. Bonus side-effect: root mount restored to the
+documented `ro` baseline.**
