@@ -119,7 +119,7 @@ Or if using the .env file:
 
 ### Diagnostics
 - **`pikvm_version`** - Return the running server version. Use to detect a stale deployment: query this and compare against `main` (currently `0.5.40`).
-- **`pikvm_health_check`** - One-call deployment health: server version + safety-guard state + live HID profile + iPad bounds detection. Run FIRST after deployment; surfaces stale deployments, failed startup detection, and target-type mismatches.
+- **`pikvm_health_check`** - One-call deployment health: server version + safety-guard state + **streamer source state (Phase 189: distinguishes "PiKVM down" from "device behind HDMI is off")** + live HID profile + iPad bounds detection + screen brightness. Run FIRST after deployment, AND when `pikvm_screenshot` returns 503 (Phase 190 enriches the error with a hint pointing here). Surfaces stale deployments, failed startup detection, source-side outages (e.g. iPad battery dead), and target-type mismatches.
 
 ### Display
 - **`pikvm_screenshot`** - Capture current screen as JPEG (optional: maxWidth, maxHeight, quality)
