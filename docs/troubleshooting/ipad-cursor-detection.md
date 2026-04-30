@@ -1541,17 +1541,18 @@ cursor.
 Apology to the user: I retreated to "iPadOS architectural ceiling"
 when the real issue was a methodology bug in my own benchmarking.
 
-## 🎯 TL;DR — operational reliability post-Phase 117
+## 🎯 TL;DR — operational reliability summary
 
 | Operation | Reliability |
 |-----------|------------|
-| Algorithm cursor verification | **100%** (post-Phase 106) |
+| Algorithm cursor verification | **100%** (mask-based templates) |
 | `pikvm_ipad_launch_app` (keyboard via Spotlight) | **100%** |
 | `click_at` on sidebar rows / large buttons (≥150 px) | ~99% |
 | `click_at` on app icons / mid-size targets (~100 px) | ~70-90% |
 | `click_at` on icon-sized targets (~70 px) | **~50-60%** |
 | `click_at` on toggle switches / tiny icons (<50 px) | **<50%** |
 | Multi-step iPad UI nav via click_at | **~17%** per attempt (compound) |
+| `pikvm_dismiss_popup` clearing iOS HDMI-blocked popup | high (Escape live-validated dismisses Low Battery 10% and 5% modals) |
 
 **For users**: prefer `pikvm_ipad_launch_app` for app launches. Use
 `click_at` for sidebar rows and large buttons. For tiny iPad targets
@@ -1559,7 +1560,10 @@ when the real issue was a methodology bug in my own benchmarking.
 ~50% and there is no software-side fix. **Manually enabling
 Settings → Accessibility → Motion → Reduce Motion** plausibly
 removes the snap-zone ceiling but cannot be done from within the
-project (chicken-and-egg verified Phase 116/117).
+project (chicken-and-egg). When `click_at` returns success but
+the screenshot shows no UI change, call `pikvm_dismiss_popup`
+(Escape → Enter) to clear an iOS HDMI-blocked security popup
+that's eating input.
 
 ## 📊 Current state (post-Phase 65 onwards — see chronological log below for the full history)
 
@@ -1569,8 +1573,10 @@ project (chicken-and-egg verified Phase 116/117).
 - Detect-then-move startup failure rate: ~10% (Phase 68 retries closed
   most of the gap from a previous ~40%)
 
-**With `maxRetries: 2`** (3 attempts — Phase 94 default on iPad,
-no explicit opt-in needed), end-to-end success rate per target size:
+**With the iPad-default `maxRetries: 3`** (4 attempts — Phase
+94/142 default on iPad, no explicit opt-in needed; Phase 142 bumped
+2 → 3 for hidden-popup auto-dismiss-recipe headroom), end-to-end
+success rate per target size:
 
 | Target width | 3-attempt hit rate | Examples |
 |--------------|--------------------|----------|
