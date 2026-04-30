@@ -6,6 +6,80 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 187 (2026-04-30, v0.5.177): cursor-keepalive wiggle — close the auto-hide gap between detection screenshots
+
+User-proposed solution to the long-standing observation that iPadOS
+auto-hides the on-screen pointer after ~1 s of mouse inactivity, and
+that several cursor-detection screenshots in the click pipeline
+landed in that fade window when there was a long pause between
+emit-driven phases (most commonly: post-`moveToPixel` → pre-click
+verification, or the first iteration of micro-correction after the
+linear-region final approach).
+
+`wakeupCursor` (Phase 5) had been the only protection against the
+fade — it ran at origin discovery time. Anything past origin
+discovery was on its own, and on slow paths (e.g. `preClickSettleMs`
+extended for adversarial UI, or v8 coverage overhead during testing)
+the cursor went invisible before the next screenshot.
+
+The fix is a **timestamp-gated minimal wiggle**:
+
+- New module `src/pikvm/cursor-keepalive.ts` with two exports:
+  - `recordEmit()` — called from `client.mouseMoveRelative` (added
+    in this phase) so every mouse move auto-stamps the
+    "last-activity" timestamp.
+  - `keepCursorAlive(client, options?)` — checks elapsed time
+    since last emit; if > `staleThresholdMs` (default 700 ms,
+    well below iPadOS's ~1 s fade window), emits a +1/-1 mickey
+    round-trip wiggle (net-zero displacement) and waits
+    `settleMs` (default 200 ms, matches the Phase 13
+    streamer+iPadOS render latency research).
+
+- `keepCursorAlive` is wired into the three vulnerable screenshot
+  sites in `click-verify.ts`:
+  - Pre-click verification screenshot (after `preClickSettleMs`
+    settle).
+  - Micro-correction loop's bounds-detection screenshot.
+  - Per-iteration micro-correction screenshot (defensive — covers
+    extended settles).
+
+Behaviour on the hot path: when each cursor-detection screenshot
+follows a recent (≤ 700 ms) emit, `keepCursorAlive` sees a fresh
+timestamp and is a no-op (one `Date.now()` and a branch). It only
+wiggles when the path between phases stretched past the fade
+window. This means there's no added latency on quiet successful
+clicks but the cursor is reliably visible on adversarial paths.
+
+The pure predicate `shouldWiggle` is exposed for unit tests and for
+callers that want to gate on staleness without the side-effect.
+13 dedicated tests pin the contract; full suite 568/568 green.
+
+This complements (does not replace) Phase 43 (`preClickWiggleMickeys`)
+and Phase 125 (`preClickApproachMickeys`): those operate at
+button-down time to satisfy iPadOS pointer-effect's "cursor must be
+moving" snap requirement. Keepalive operates at screenshot time to
+satisfy the upstream "cursor must be visible at all" requirement.
+The two solve different problems and run independently.
+
+## Phase 186 (2026-04-30, v0.5.176): TL;DR section cleanup — drop version anchors, add dismiss-popup row
+
+Maintenance pass on the troubleshooting doc's "TL;DR — operational
+reliability" section. Three small content tightenings:
+
+1. Header changed from "post-Phase 117" → "summary" (anchor-free
+   so future phases don't strand the heading at a fixed cut-line).
+2. Reliability table gained a row for `pikvm_dismiss_popup`,
+   reflecting the Phase 162/176 live validation that Escape
+   dismisses the iPadOS Low Battery 10%/5% modals.
+3. The "When `click_at` returns success but no UI change" pointer
+   now explicitly recommends `pikvm_dismiss_popup` (Escape →
+   Enter) as the next step — recovers from iOS HDMI-blocked
+   security/permission popups eating input invisibly.
+
+Also bumped the documented `maxRetries` default from "2 (3
+attempts)" → "3 (4 attempts)" to reflect Phase 142's bump for
+hidden-popup auto-dismiss-recipe headroom.
+
 ## Phase 185 (2026-04-28, v0.5.175): iPad battery death confirmed — streamer source offline, awaiting auto-reboot
 
 The session-long stuck-app state has reached its predictable

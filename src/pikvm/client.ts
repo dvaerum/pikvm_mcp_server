@@ -7,6 +7,7 @@
 
 import { Agent, fetch } from 'undici';
 import sharp from 'sharp';
+import { recordEmit } from './cursor-keepalive.js';
 
 export interface PiKVMConfig {
   host: string;
@@ -518,6 +519,11 @@ export class PiKVMClient {
     params.set('delta_y', clampedY.toString());
 
     await this.request('POST', `/hid/events/send_mouse_relative?${params}`);
+    // Phase 187: stamp the keepalive clock. The keepalive guard
+    // (cursor-keepalive.ts) reads this timestamp to decide whether
+    // the iPadOS pointer is at risk of having faded out before the
+    // next cursor-detection screenshot.
+    recordEmit();
   }
 
   /**

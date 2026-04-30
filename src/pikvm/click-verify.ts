@@ -29,6 +29,7 @@ import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
 import { detectIpadBoundsFromBuffer } from './orientation.js';
 import { loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './template-set.js';
 import { ipadGoHome } from './ipad-unlock.js';
+import { keepCursorAlive } from './cursor-keepalive.js';
 
 /**
  * Phase 127 — sanity-clamp the live px/mickey ratio reported by
@@ -722,6 +723,14 @@ export async function clickAtWithRetry(
 
     if (preClickSettleMs > 0) await sleepMs(preClickSettleMs);
 
+    // Phase 187: if the preClickSettleMs (or any prior pause) pushed
+    // the elapsed-since-emit gap past iPadOS's auto-hide threshold,
+    // wiggle to keep the cursor visible for the upcoming pre-click
+    // screenshot. Cheap no-op on the hot path (recent emit → no
+    // wiggle); meaningful when callers configure long settles or when
+    // the path between moveToPixel and here had unexpected slowdowns.
+    await keepCursorAlive(client);
+
     // Pre-click screenshot taken AFTER cursor settles, so the diff
     // isolates the click's UI effect from cursor motion during move-to.
     const preShot = await client.screenshot();
@@ -834,6 +843,13 @@ export async function clickAtWithRetry(
       // less safe but at least allows progress on non-iPad targets).
       let safeBounds: { x: number; y: number; width: number; height: number };
       try {
+        // Phase 187: micro-correction's first screenshot can land in
+        // the iPadOS auto-hide window if there was a pause between
+        // moveToPixel and here. The bounds detection itself doesn't
+        // need the cursor, but this fires the wiggle once and the
+        // cached emit-stamp guards the per-iteration screenshots
+        // below from also wiggling redundantly.
+        await keepCursorAlive(client);
         const shot0 = await client.screenshot();
         const ipadBounds = await detectIpadBoundsFromBuffer(shot0.buffer, { verbose: false });
         safeBounds = { x: ipadBounds.x, y: ipadBounds.y, width: ipadBounds.width, height: ipadBounds.height };
@@ -862,6 +878,12 @@ export async function clickAtWithRetry(
       // prefers within-radius matches over higher-scoring far ones.
       const initialHint = lastMoveResult.finalDetectedPosition;
       for (let iter = 0; iter < microCorrectionIterations; iter++) {
+        // Phase 187: defensive keepalive. The first iteration is
+        // already guarded by the bounds-detection wiggle above; later
+        // iterations have a 350 ms settle which is well under iPadOS's
+        // ~1 s fade. This call is a no-op on the typical path and
+        // covers the case where settle was extended by a slow streamer.
+        await keepCursorAlive(client);
         const microShot = await client.screenshot();
         const microDecoded = await decodeScreenshot(microShot.buffer);
         const hint = prevFound ?? initialHint;
