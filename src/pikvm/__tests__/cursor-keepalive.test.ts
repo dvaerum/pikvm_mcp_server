@@ -186,4 +186,18 @@ describe('keepCursorAlive', () => {
     await keepCursorAlive(client, { enabled: false, staleThresholdMs: 700, settleMs: 0 });
     expect(calls).toHaveLength(0);
   });
+
+  it('verbose:true logs the wiggle decision (covers the diagnostic branch)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-28T00:00:00.000Z'));
+    const { client } = mockClient();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    recordEmit();
+    vi.advanceTimersByTime(1500);
+    const promise = keepCursorAlive(client, { verbose: true, staleThresholdMs: 700, settleMs: 0 });
+    await vi.advanceTimersByTimeAsync(30);
+    await promise;
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('[keepalive] wiggling'));
+    errorSpy.mockRestore();
+  });
 });
