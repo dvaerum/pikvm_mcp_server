@@ -16,6 +16,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { PiKVMClient } from './pikvm/client.js';
 import { loadConfig } from './config.js';
+import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
 import { BusyLock } from './pikvm/lock.js';
@@ -1537,6 +1538,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     } else {
       message = 'An unexpected error occurred';
     }
+    // Phase 190: append actionable hint when the error pattern matches a
+    // known operator-recoverable case. The raw "PiKVM API error 503 ...
+    // UnavailableError ... Service Unavailable" doesn't tell the LLM
+    // agent that the problem is source-side (iPad off / mid-reboot /
+    // unplugged) rather than PiKVM-side. Hint points at
+    // pikvm_health_check (Phase 189) which surfaces source.online state
+    // and lets the agent decide whether to wait or escalate.
+    message = appendOperatorHint(message);
     return {
       content: [{ type: 'text', text: `Error: ${message}` }],
       isError: true,
