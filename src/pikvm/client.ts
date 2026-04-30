@@ -262,6 +262,50 @@ export class PiKVMClient {
   }
 
   /**
+   * Phase 189: report streamer source state.
+   *
+   * `/api/streamer` returns `source.online: boolean` indicating whether the
+   * HDMI capture is seeing a signal (i.e. whether the connected device — iPad
+   * in our usage — is powered on and outputting video). When the iPad is off
+   * (e.g. battery dead, hard reboot in progress), `pikvm_screenshot` returns
+   * 503 UnavailableError; the operator gets a generic "Service Unavailable"
+   * with no clue whether the issue is PiKVM itself or the iPad.
+   *
+   * Surfacing `source.online` in `pikvm_health_check` lets the operator
+   * differentiate "PiKVM down" from "iPad off" at a glance.
+   */
+  async getStreamerStatus(): Promise<{ sourceOnline: boolean; resolution: ScreenResolution }> {
+    interface StreamerResponse {
+      ok: boolean;
+      result: {
+        streamer: {
+          source: {
+            online: boolean;
+            resolution: {
+              width: number;
+              height: number;
+            };
+          };
+        };
+      };
+    }
+
+    const response = await this.request<StreamerResponse>('GET', '/streamer');
+    const source = response?.result?.streamer?.source;
+    if (!source || typeof source.online !== 'boolean') {
+      throw new Error('Invalid or missing streamer.source data from PiKVM API');
+    }
+    const res = source.resolution;
+    if (!res || typeof res.width !== 'number' || typeof res.height !== 'number') {
+      throw new Error('Invalid or missing streamer.source.resolution data from PiKVM API');
+    }
+    return {
+      sourceOnline: source.online,
+      resolution: { width: res.width, height: res.height },
+    };
+  }
+
+  /**
    * Convert pixel coordinates to PiKVM's normalized coordinate system
    * PiKVM uses range -32768 to 32767 for absolute positioning
    *

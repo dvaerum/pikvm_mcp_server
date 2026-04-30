@@ -756,6 +756,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           `(true = slam-fallback BLOCKED, safe for iPad).`,
         );
 
+        // Phase 189: report streamer source state up-front. When iPad is
+        // off (battery dead, mid-reboot, HDMI cable unplugged), screenshot
+        // calls return 503 UnavailableError which is opaque. Surfacing
+        // `streamer.source.online` here lets the operator distinguish
+        // "PiKVM is down" from "the device behind the HDMI cable is off".
+        try {
+          const streamer = await pikvm.getStreamerStatus();
+          if (streamer.sourceOnline) {
+            lines.push(
+              `Streamer source: online — HDMI capture has signal at ` +
+              `${streamer.resolution.width}×${streamer.resolution.height}.`,
+            );
+          } else {
+            lines.push(
+              `⚠ Streamer source: OFFLINE — no HDMI signal. The device behind ` +
+              `the cable (iPad in our setup) is powered off, mid-reboot, ` +
+              `unplugged, or its display is asleep beyond what wake nudges can ` +
+              `recover. pikvm_screenshot will return 503 UnavailableError ` +
+              `until the source comes back. Wake the device or restore HDMI; ` +
+              `cursor/click tools are unusable in this state.`,
+            );
+          }
+        } catch (err) {
+          lines.push(`Streamer source state: FAILED to read (${(err as Error).message}).`);
+        }
+
         // Live HID profile — re-read so a transient startup-detection failure
         // doesn't permanently mislead the operator.
         try {
