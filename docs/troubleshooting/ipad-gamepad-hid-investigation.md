@@ -1,8 +1,18 @@
 # iPad gamepad-HID — research note (NOT a confirmed avenue)
 
-**Status (2026-04-30):** desk research only. No live test — iPad
-was offline (battery cycle) when this was written. Live experiment
-deferred to a later phase.
+**Status (2026-04-30):** desk research + Step 1 (Linux/kernel
+sanity check) complete. Steps 2-3 (iPad enumeration + behaviour)
+deferred until iPad battery recovers.
+
+**Step 1 update (2026-04-30 09:24 UTC):** the 46-byte gamepad
+descriptor was added to PiKVM via configfs and accepted cleanly
+by the kernel. `/dev/hidg2` materialised, kvmd remained active,
+no dmesg errors. Test write returned `Errno 108 transport endpoint
+shutdown` (expected — iPad host was off). Reverted; PiKVM back to
+{hid.usb0, hid.usb1, mass_storage.usb0}. See `pikvm-server-changes.md`
+for the full action+verification log. **Descriptor format and
+configfs flow both validated; Phase 188 Step 2 ready to run when
+iPad reboots.**
 
 This note exists to capture what I learned about exposing a USB HID
 **gamepad** to the iPad via the PiKVM USB OTG composite gadget, as
