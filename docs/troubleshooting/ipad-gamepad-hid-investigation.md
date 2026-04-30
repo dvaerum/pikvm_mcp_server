@@ -214,6 +214,115 @@ trial bench against Settings/Books/Maps icons that
 distributions tells us whether the gamepad path is materially
 better than the current mouse path.
 
+## Live runbook (Steps 2-3 — copy-paste, run after iPad reboots)
+
+This block is intended for direct execution when the iPad is
+online and `pikvm_screenshot` returns a frame. Step 1 has already
+been validated (2026-04-30 09:24 UTC, see `pikvm-server-changes.md`)
+so it's only repeated here to put the gamepad function in place.
+
+**Pre-flight (run from this Mac):**
+```bash
+# Sanity-check: iPad streamer is online
+curl -ksu "admin:$PASS" "https://pikvm01.bb.vcamp.dk/api/streamer" \
+  | python3 -c "import sys,json;s=json.load(sys.stdin)['result']['streamer']['source'];print('online:',s.get('online'),'res:',s.get('resolution'))"
+# Expect: online: True
+```
+
+**Step 2 (PiKVM — add gadget, observe iPad with no reports):**
+```bash
+ssh root@pikvm01.bb.vcamp.dk 'bash -se' <<'EOF'
+set -e
+GADGET=/sys/kernel/config/usb_gadget/kvmd
+cd $GADGET
+echo "" > UDC                                # unbind
+mkdir functions/hid.usb2
+echo 0 > functions/hid.usb2/protocol
+echo 0 > functions/hid.usb2/subclass
+echo 5 > functions/hid.usb2/report_length
+python3 - <<'PY'
+desc = bytes([
+  0x05,0x01, 0x09,0x05, 0xA1,0x01,
+    0x09,0x01, 0xA1,0x00,
+      0x09,0x30, 0x09,0x31, 0x09,0x33, 0x09,0x34,
+      0x15,0x81, 0x25,0x7F, 0x75,0x08, 0x95,0x04, 0x81,0x02,
+    0xC0,
+    0x05,0x09, 0x19,0x01, 0x29,0x08,
+      0x15,0x00, 0x25,0x01, 0x75,0x01, 0x95,0x08, 0x81,0x02,
+  0xC0,
+])
+open("/sys/kernel/config/usb_gadget/kvmd/functions/hid.usb2/report_desc","wb").write(desc)
+PY
+ln -s functions/hid.usb2 configs/c.1/hid.usb2
+echo "fe980000.usb" > UDC
+ls -l /dev/hidg2
+EOF
+```
+
+Then immediately:
+- Take screenshot via `pikvm_screenshot` (compare to baseline:
+  any new on-screen indicator? AssistiveTouch ring? cursor change?).
+- Wait 10 s, take another screenshot.
+- If nothing visible — proceed to Step 3 anyway (the device may
+  enumerate silently like a Bluetooth controller does).
+
+**Step 3 (PiKVM — send stick deflection, observe cursor):**
+```bash
+# Send right-stick X = +50, hold for 500 ms
+ssh root@pikvm01.bb.vcamp.dk 'python3 -c "
+import time
+with open(\"/dev/hidg2\",\"wb\",buffering=0) as f:
+    # report layout: LX, LY, RX(=+50), RY, BUTTONS
+    f.write(bytes([0,0,50,0,0]))
+    time.sleep(0.5)
+    f.write(bytes([0,0,0,0,0]))     # release
+"'
+```
+
+Then take screenshot — did the on-screen cursor move right?
+
+If cursor moved: try other directions (RX=-50, RY=+50, RY=-50)
+to confirm linear behaviour. Capture screenshots at each step.
+
+If cursor didn't move: send button-1 press to test the click
+path:
+```bash
+ssh root@pikvm01.bb.vcamp.dk 'python3 -c "
+import time
+with open(\"/dev/hidg2\",\"wb\",buffering=0) as f:
+    f.write(bytes([0,0,0,0,0x01]))   # button 1 pressed
+    time.sleep(0.15)
+    f.write(bytes([0,0,0,0,0x00]))   # button 1 released
+"'
+```
+
+Take screenshot — did anything change? (Tap registered on the
+focused UI element?)
+
+**Mandatory revert (regardless of outcome):**
+```bash
+ssh root@pikvm01.bb.vcamp.dk 'bash -se' <<'EOF'
+set -e
+GADGET=/sys/kernel/config/usb_gadget/kvmd
+cd $GADGET
+echo "" > UDC
+rm -f configs/c.1/hid.usb2
+rmdir functions/hid.usb2
+echo "fe980000.usb" > UDC
+# Verify
+ls $GADGET/functions/      # should NOT include hid.usb2
+ls -l /dev/hidg*           # should be hidg0 + hidg1 only
+systemctl is-active kvmd kvmd-otg
+# If root was rw, restore ro
+mount | grep " / " | grep -q rw && ro || true
+EOF
+```
+
+**Document the result regardless of outcome:** append a Phase 188
+Step 2-3 entry to `pikvm-server-changes.md` and update the Status
+header at the top of this file with the win-condition / dead-
+avenue verdict.
+
 ## References
 
 - Phase 31 (touchscreen-HID dead-end) —
