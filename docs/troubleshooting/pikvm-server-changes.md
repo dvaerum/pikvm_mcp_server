@@ -329,3 +329,64 @@ disconnecting if you ran `rw` for any reason.
 **Net effect of this Phase 188 Step 1 experiment: ZERO permanent
 changes to PiKVM. Bonus side-effect: root mount restored to the
 documented `ro` baseline.**
+
+### 2026-05-08 ~11:25 UTC — Phase 188 Steps 2-3: gamepad iPad-side test + revert (CLOSED AVENUE)
+
+After iPad battery recovery and reboot, ran the deferred Steps
+2-3 of the Phase 188 plan. The iPad was on the Files app
+("No Recents" view).
+
+Action (Step 2 — add gamepad gadget):
+```
+ssh root@pikvm01.bb.vcamp.dk
+GADGET=/sys/kernel/config/usb_gadget/kvmd
+cd $GADGET
+echo "" > UDC
+mkdir functions/hid.usb2
+echo 0 > functions/hid.usb2/protocol
+echo 0 > functions/hid.usb2/subclass
+echo 5 > functions/hid.usb2/report_length
+# wrote the 46-byte generic-HID-gamepad descriptor
+ln -s functions/hid.usb2 configs/c.1/hid.usb2
+echo "fe980000.usb" > UDC
+# /dev/hidg2 created, dmesg clean, kvmd remained active
+```
+
+Action (Step 3 — stick deflections + button):
+```
+# Right-stick X=+50, hold 1s, release
+# Then: all 4 axes max + button 1 for 2s
+# Then: left-stick X=+100, then Y=+100, with neutral baseline first
+```
+
+Result: **iPad showed zero response.** No cursor surfaced, no
+AssistiveTouch ring appeared, no UI change of any kind across
+all three test patterns. Screenshot at 11.25 and 11.26 identical
+except for the clock.
+
+This confirms (live) the most-likely failure mode from the
+Phase 188 pre-mortem: iPadOS routes generic HID gamepad input
+ONLY to apps registered with GameController.framework, not the
+system pointer. Files app is not a registered consumer.
+
+Action (revert):
+```
+echo "" > UDC
+rm -f configs/c.1/hid.usb2
+rmdir functions/hid.usb2
+echo "fe980000.usb" > UDC
+```
+
+Verification:
+- Functions back to {hid.usb0, hid.usb1, mass_storage.usb0}
+- /dev/hidg2 gone; /dev/hidg0 + /dev/hidg1 intact
+- Mouse boot-patch (`protocol=2, subclass=1`) intact at all 4 sites
+- kvmd + kvmd-otg both `active`
+- Root mount: `ro,relatime` (no rw remount needed — configfs
+  is volatile tmpfs, doesn't touch rootfs)
+
+**Net effect: ZERO permanent changes to PiKVM. Phase 188 path
+fully closed and documented. The 50-60 % iPad icon-click ceiling
+remains. Recommended path forward stays the keyboard-first
+workflow (`pikvm_ipad_launch_app` via Spotlight) for any task
+that doesn't strictly need a mouse click on a small target.**

@@ -1,18 +1,38 @@
-# iPad gamepad-HID — research note (NOT a confirmed avenue)
+# iPad gamepad-HID — CLOSED AVENUE (negative result)
 
-**Status (2026-04-30):** desk research + Step 1 (Linux/kernel
-sanity check) complete. Steps 2-3 (iPad enumeration + behaviour)
-deferred until iPad battery recovers.
+**Status (2026-05-08):** **CLOSED.** Live-validated dead end —
+generic USB HID gamepads are NOT surfaced as system pointer
+devices on iPadOS. Same architecture as Phase 31 touchscreen-HID.
 
-**Step 1 update (2026-04-30 09:24 UTC):** the 46-byte gamepad
-descriptor was added to PiKVM via configfs and accepted cleanly
-by the kernel. `/dev/hidg2` materialised, kvmd remained active,
-no dmesg errors. Test write returned `Errno 108 transport endpoint
-shutdown` (expected — iPad host was off). Reverted; PiKVM back to
-{hid.usb0, hid.usb1, mass_storage.usb0}. See `pikvm-server-changes.md`
-for the full action+verification log. **Descriptor format and
-configfs flow both validated; Phase 188 Step 2 ready to run when
-iPad reboots.**
+**Live result (2026-05-08 ~11:25 UTC):** with PiKVM's gamepad
+hid.usb2 (46-byte descriptor, see below) bound and reports being
+written, the iPad showed **zero response** to:
+- Right-stick X = +50 deflection (1 s hold)
+- Both sticks max-deflected (LX=LY=RX=RY=127) + button 1 pressed
+  for 2 s
+- Left-stick X then Y deflection sequence (1.5 s each, with
+  baseline neutral pre-stimulus to satisfy any expected idle state)
+
+No cursor appeared, no AssistiveTouch ring, no UI change of any
+kind. Files app continued displaying "No Recents" identically
+across all stimuli, only the clock advancing.
+
+**Why:** iPadOS's GameController.framework only routes gamepad
+input to apps that have **explicitly registered** as game-input
+consumers. SpringBoard / system pointer is not a registered
+consumer. Files app is not a registered consumer. So events go
+into the kernel, the gadget enumerates, but the application layer
+ignores them.
+
+This is the SAME failure mode as Phase 31 USB-touchscreen-HID:
+descriptor accepted by Linux, ignored by iPadOS input subsystem.
+
+**Future contributors: do NOT re-investigate this approach.** The
+only path that MIGHT work is AssistiveTouch with manual on-iPad
+pairing of the gadget as an "adaptive accessory" pointer device —
+but that requires user interaction we cannot perform via PiKVM,
+and Apple's docs don't confirm generic HID gamepads are
+recognized in that flow.
 
 This note exists to capture what I learned about exposing a USB HID
 **gamepad** to the iPad via the PiKVM USB OTG composite gadget, as
