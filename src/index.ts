@@ -35,6 +35,7 @@ import {
   defaultMaxRetriesFor,
   defaultMaxResidualPxFor,
   defaultChunkPaceMsFor,
+  defaultInterRetryJitterFor,
   runDismissRecipe,
   formatDismissResult,
 } from './pikvm/click-verify.js';
@@ -531,6 +532,7 @@ const tools: Tool[] = [
         minBrightness: { type: 'number', description: 'Brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness AND stddev (Phase 48). The gate aborts with a "wake the iPad" error ONLY when the frame is uniformly dim (mean < threshold AND stddev < 3) — dark-mode UI passes the gate because the high stddev from text/icon contrast indicates cursor will still be detectable. Default 35 on iPad targets (Phase 39 calibrated against live data: 29 = popup overlay, 41 = bright iPad with dark wallpaper); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
         autoUnlockOnDetectFail: { type: 'boolean', description: 'Phase 72: when an attempt fails because the iPad is on the lock screen (Phase 70 found this is the dominant detect-then-move failure mode), automatically call ipadGoHome to unlock and retry once before giving up on this attempt. SIDE EFFECT: if the iPad is INSIDE AN APP and detect-then-move fails for some other reason, this will exit the app to home — not what you want for in-app clicks. Default false (preserve manual control). Set true for fire-and-forget click_at on a fresh iPad target where you don\'t care about app state.' },
         maxResidualPx: { type: 'number', description: 'Phase 88: skip the click if the verified cursor is more than this many pixels from the target. Useful when callers care about CORRECT element hit, not just "screen changed". Live-verified failure mode (2026-04-27): residual 78 px caused a click targeting Settings → Software Update to instead activate the Apple Account sidebar row. Set to e.g. 25 for strict icon-tolerance clicks, 50 for "near-enough is fine". Default unset (preserves prior behaviour: any cursor-verified attempt clicks regardless of residual).' },
+        interRetryJitterMickeys: { type: 'number', description: 'Phase 191: inter-retry approach randomization magnitude in mickeys. Before each retry > 1, the cursor is displaced by a deterministic 8-step compass rosette (NE → SE → SW → NW → E → S → W → N → wrap) so each attempt approaches the target on a fresh trajectory. Breaks iPadOS pointer-effect snap-zone CORRELATED failures across retries — pushes cumulative success rate closer to the binomial limit. Default 50 on iPad relative-mouse targets, 0 on desktop (no pointer-effect snap zones to break). Pass 0 explicitly to opt out.' },
       },
       required: ['x', 'y'],
     },
@@ -1363,6 +1365,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               maxResidualPx: args.maxResidualPx !== undefined
                 ? Number(args.maxResidualPx)
                 : defaultMaxResidualPxFor(mouseAbsoluteMode),
+              // Phase 191 (v0.5.180): inter-retry approach randomization.
+              // iPad relative mode → 50 mickeys default; desktop → 0 (off).
+              // Caller can override via the optional MCP arg, or pass 0 to opt out.
+              interRetryJitterMickeys: args.interRetryJitterMickeys !== undefined
+                ? Number(args.interRetryJitterMickeys)
+                : defaultInterRetryJitterFor(mouseAbsoluteMode),
             },
           );
           const attemptsText =
