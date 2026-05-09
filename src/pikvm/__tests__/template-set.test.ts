@@ -407,3 +407,60 @@ describe('Phase 194-A: loadTemplateSet validate callback', () => {
     }
   });
 });
+
+describe('Phase 196: loadTemplateSet maxAgeMs TTL', () => {
+  async function tempDir(): Promise<string> {
+    return await fs.mkdtemp(path.join(os.tmpdir(), 'pikvm-ttl-'));
+  }
+
+  it('drops templates whose mtime is older than maxAgeMs', async () => {
+    const dir = await tempDir();
+    try {
+      const oldFile = path.join(dir, '01-old.jpg');
+      const newFile = path.join(dir, '02-new.jpg');
+      await saveCursorTemplate(gradientTemplate(1), oldFile);
+      await saveCursorTemplate(gradientTemplate(2), newFile);
+
+      // Backdate the first file by 7 hours.
+      const sevenHoursAgo = Date.now() - 7 * 60 * 60 * 1000;
+      await fs.utimes(oldFile, new Date(sevenHoursAgo), new Date(sevenHoursAgo));
+
+      // 6h TTL → old file dropped, new file kept.
+      const loaded = await loadTemplateSet(dir, undefined, 6 * 60 * 60 * 1000);
+      expect(loaded).toHaveLength(1);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('honors maxAgeMs=null to disable TTL (back-compat for callers that opt out)', async () => {
+    const dir = await tempDir();
+    try {
+      const oldFile = path.join(dir, '01-old.jpg');
+      await saveCursorTemplate(gradientTemplate(1), oldFile);
+      const longTimeAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      await fs.utimes(oldFile, new Date(longTimeAgo), new Date(longTimeAgo));
+
+      const loaded = await loadTemplateSet(dir, undefined, null);
+      expect(loaded).toHaveLength(1);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('default TTL (6h) drops a 24-hour-old template', async () => {
+    const dir = await tempDir();
+    try {
+      const file = path.join(dir, '01.jpg');
+      await saveCursorTemplate(gradientTemplate(1), file);
+      const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      await fs.utimes(file, new Date(oneDayAgo), new Date(oneDayAgo));
+
+      // No explicit maxAgeMs → uses default 6h.
+      const loaded = await loadTemplateSet(dir);
+      expect(loaded).toHaveLength(0);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

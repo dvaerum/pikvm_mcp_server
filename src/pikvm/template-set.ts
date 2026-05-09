@@ -72,6 +72,18 @@ export function templateSimilarity(a: CursorTemplate, b: CursorTemplate): number
   return dot / denom;
 }
 
+/** Default max-age for persisted templates: 6 hours. Templates older
+ *  than this are considered cross-session contamination and skipped
+ *  at load time. Phase 196 (v0.5.192): live bench showed Files target
+ *  went from 0% (deterministic 245.15 px residual every trial) to 33%
+ *  (varying residuals 52/246/122 px) when the template directory was
+ *  wiped between sessions. Stale templates from a prior session were
+ *  consistently false-positive-matching at the same wrong location in
+ *  the top-right region (likely on a Maps widget feature). A 6-hour
+ *  TTL naturally separates sessions while still letting templates
+ *  amortize across long-running batches. */
+export const DEFAULT_TEMPLATE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
 /** Load every `*.jpg` in `dir` as a CursorTemplate. Returns an empty
  *  array if the directory doesn't exist. Sorted by filename so the
  *  ordering is stable across processes.
@@ -84,10 +96,18 @@ export function templateSimilarity(a: CursorTemplate, b: CursorTemplate): number
  *  up on disk despite the persist-side gate; this load-time check
  *  ensures such files cannot poison `findCursorByTemplateSet` even
  *  if they reappear. Callers that don't want validation pass nothing.
+ *
+ *  Phase 196 (v0.5.192): optional `maxAgeMs` rejects templates whose
+ *  file mtime is older than that many milliseconds. Cross-session
+ *  templates can match strongly at non-cursor features (e.g. animated
+ *  widget pixels) and produce deterministic-wrong cursor positions.
+ *  Pass `null` (not undefined) to disable the age check. Default is
+ *  `DEFAULT_TEMPLATE_MAX_AGE_MS` (6h).
  */
 export async function loadTemplateSet(
   dir: string,
   validate?: (t: CursorTemplate) => boolean,
+  maxAgeMs: number | null = DEFAULT_TEMPLATE_MAX_AGE_MS,
 ): Promise<CursorTemplate[]> {
   let entries: string[] = [];
   try {
@@ -101,8 +121,18 @@ export async function loadTemplateSet(
     .filter((f) => f.toLowerCase().endsWith('.jpg') || f.toLowerCase().endsWith('.jpeg'))
     .sort();
   const out: CursorTemplate[] = [];
+  const now = Date.now();
   for (const f of jpegs) {
-    const t = await loadCursorTemplate(path.join(dir, f));
+    const fullPath = path.join(dir, f);
+    if (maxAgeMs != null) {
+      try {
+        const stat = await fs.stat(fullPath);
+        if (now - stat.mtimeMs > maxAgeMs) continue;
+      } catch {
+        continue;
+      }
+    }
+    const t = await loadCursorTemplate(fullPath);
     if (!t) continue;
     if (validate && !validate(t)) continue;
     out.push(t);
