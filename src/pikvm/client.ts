@@ -8,6 +8,7 @@
 import { Agent, fetch } from 'undici';
 import sharp from 'sharp';
 import { recordEmit } from './cursor-keepalive.js';
+import { CursorBelief, type Bounds as BeliefBounds } from './cursor-belief.js';
 
 export interface PiKVMConfig {
   host: string;
@@ -89,6 +90,20 @@ export class PiKVMClient {
   } | null = null;
   private calibration: CalibrationState | null = null;
 
+  /**
+   * Phase 192-B (v0.5.182): single source of truth for the cursor's
+   * believed position. Every successful `mouseMoveRelative` calls
+   * `belief.predict`. Callers can push observations via `observeCursor`
+   * and reset belief via `resetBelief`. Production consumers wire in
+   * during Phase C; this phase ships predict-only.
+   *
+   * Initialised at (0, 0) with a wide variance (10⁴ ≈ σ=100 px) so
+   * the belief is "I don't know yet" until first reset / observe. No
+   * bounds at construction — set via `setBeliefBounds` once iPad
+   * letterbox is detected.
+   */
+  belief: CursorBelief;
+
   constructor(config: PiKVMConfig) {
     this.config = {
       verifySsl: false,
@@ -102,6 +117,31 @@ export class PiKVMClient {
         rejectUnauthorized: this.config.verifySsl,
       },
     });
+
+    this.belief = new CursorBelief({
+      initialPosition: { x: 0, y: 0 },
+      initialPositionVariance: 10000, // wide — caller should reset on first known position
+    });
+  }
+
+  /** Phase 192-B: callers (orientation detection, etc.) push the iPad
+   *  letterbox bounds in here so belief.predict can clip + inflate. */
+  setBeliefBounds(bounds: BeliefBounds | null): void {
+    this.belief.bounds = bounds;
+  }
+
+  /** Phase 192-B: callers push successful cursor detections in.
+   *  `confidence` ∈ [0, 1]: 1.0 for a slam-anchored ground truth,
+   *  ~template-match-score for template detections, ~0.7 for
+   *  motion-diff cluster pairs. */
+  observeCursor(measurement: { x: number; y: number }, confidence: number): void {
+    this.belief.observe(measurement, confidence);
+  }
+
+  /** Phase 192-B: collapse belief to a known position (post-slam,
+   *  post-locateCursor probe, post-template seed). */
+  resetBelief(observation: { x: number; y: number }): void {
+    this.belief.reset(observation);
   }
 
   /**
@@ -568,6 +608,10 @@ export class PiKVMClient {
     // the iPadOS pointer is at risk of having faded out before the
     // next cursor-detection screenshot.
     recordEmit();
+    // Phase 192-B: forward-predict the cursor belief by the CLAMPED
+    // emit (what was actually sent over HID). Phase E will collapse
+    // recordEmit's separate timestamp into belief.lastUpdateMs.
+    this.belief.predict({ dx: clampedX, dy: clampedY });
   }
 
   /**
