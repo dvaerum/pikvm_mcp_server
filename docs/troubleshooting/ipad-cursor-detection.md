@@ -6,6 +6,100 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 193 (2026-04-30, v0.5.186): the detection layer was lying
+
+After shipping Phase 192-A through D (cursor-belief), a tightened-verify
+bench (verifyOptions region halfWidth=50, minChangedFraction=0.05)
+showed 50 % screenChanged hit rate on small icons — but visual
+inspection of 5 sampled "hits" revealed **0 correct-element-hits**.
+
+The belief module cannot help when its inputs are wrong. We took the
+input layer apart with `bench-detection-truth.ts` and
+`bench-findclusters-truth.ts` and found two independent failures.
+
+### 193-A — Two root causes
+
+**1. `findCursorByTemplateSet` returned the same wrong position
+every trial.** With the 8 cached templates in `data/cursor-templates/`,
+template match returned `(765, 786)` (TV dock icon) at NCC ≥ 0.955
+across 5 trials with 5 different actual cursor positions. The cached
+templates were matching the TV icon's dark-on-light-shape
+characteristics, not the cursor. Wiping `data/cursor-templates/`
+made template match correctly return `null` — proving the matcher
+itself is sound; the issue was contaminated cached templates from
+historic bad captures (Phase 119 regression returning).
+
+**2. `diffScreenshotsDecoded`/`findClusters` rejected the cursor.**
+On the same frame pair, motion-diff returned **zero clusters** in the
+[4, 90] cursor-size window — even though visual inspection showed the
+cursor moved ~100 px between the two frames. A brightness-floor sweep
+across `0, 50, 100, 130, 170, 200` found:
+
+| `brightnessFloor` | clusters | cursor-position cluster |
+|-------------------|---------:|-------------------------|
+| 0                 | 1500+    | yes (61 px)             |
+| 50                | 800+     | yes (61 px)             |
+| **100**           | **~120** | **yes (61 px)**         |
+| 130               | ~40      | partial                 |
+| 170 (old default) | 8        | **none**                |
+| 200               | 2        | none                    |
+
+The iPadOS pointer renders as a **DARK** arrow against the light
+wallpaper on this iPad. Pixels that diff through the cursor edge
+sit in the ~50–100 brightness range. The previous `170` default
+floor was rejecting the entire cursor cluster. `100` admits the
+cursor while still filtering the darkest wallpaper-tick noise
+(mostly < 80).
+
+### 193-B — Fix shipped (`v0.5.186`)
+
+- `src/pikvm/cursor-detect.ts:DEFAULT_DETECTION_CONFIG.brightnessFloor`
+  lowered `170 → 100` with an in-line comment pointing back to this
+  document and the diagnostic frame
+  (`data/detection-truth/03-*-nw-60-60.jpg`).
+- `data/cursor-templates/*` wiped. Templates will be re-seeded by
+  the runtime via `seedCursorTemplate` when a clean motion-diff pair
+  validates against `looksLikeCursor`.
+- Diagnostic benches kept in repo as evergreen tools:
+  - `bench-detection-truth.ts` — 5-trial frame-pair sanity (does
+    motion-diff/template-match agree with the actual cursor?)
+  - `bench-findclusters-truth.ts` — brightness-floor sweep on a
+    saved frame pair, no live iPad needed.
+- Re-running `bench-detection-truth.ts` after the fix: cursor-sized
+  cluster found at the actual cursor position on **every** trial,
+  with template-match correctly returning `null` until templates
+  are re-seeded.
+
+### 193-C — Pending: live click-rate verification
+
+The belief module + Phase 191 evaluation (Phase 192) was built on
+top of broken detection. With detection now correct, **the per-trial
+correct-element-hit rate has to be re-measured from scratch**. The
+prior "50 % on Settings/AppStore" claim is not trustworthy.
+
+Action: re-run `bench-click-extensive.ts 10` against
+{Settings, Books, App Store, Files}, then visually inspect every
+"hit" frame. Honest correct-element-hit rate goes here once we have
+the data.
+
+### What this means for future work
+
+- **Never trust `screenChanged` alone.** Always pair it with a
+  visual sample. The clock and animated wallpaper can flip the bit
+  with no real interaction. The Phase 192-eval bench's tightened
+  verify region (50-px halfwidth, 5 % changed-fraction) is the right
+  default, but even that is only an indirect proxy.
+- **Cached cursor templates are a foot-gun.** A single bad capture
+  poisons every subsequent click until the cache is wiped. The
+  `looksLikeCursor` validator + `seedCursorTemplate` cluster-size
+  bounds are the only line of defence; do not relax them.
+- **Brightness thresholds depend on wallpaper / dark mode.** The
+  `170` floor was tuned for older test conditions. With user-side
+  wallpaper changes, dark cursors can fall below the floor. The
+  `100` default is a compromise; a future improvement is an
+  adaptive brightness floor that samples ambient brightness from
+  the bounds region (Phase 194 candidate).
+
 ## Phase 192 (2026-05-09, v0.5.181 → v0.5.184): predictive cursor-belief module
 
 Live frame-by-frame trajectory data finally exposed why icon-click

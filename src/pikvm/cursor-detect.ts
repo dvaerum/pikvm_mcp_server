@@ -57,7 +57,19 @@ export const DEFAULT_DETECTION_CONFIG: DetectionConfig = {
   minClusterSize: 4,
   maxClusterSize: 2500,
   mergeRadius: 30,
-  brightnessFloor: 170,
+  // Phase 193-A (v0.5.186): lowered 170 → 100. Live frame-pair
+  // diagnostic on 2026-05-09 (data/detection-truth/03-*-nw-60-60.jpg)
+  // showed the iPadOS cursor renders as a DARK arrow against the
+  // current light wallpaper. Pixels that diff through the cursor
+  // edge are dark (~50–100 brightness); the previous 170 floor
+  // rejected the entire cursor cluster, leaving motion-diff with
+  // zero pairs to find. Lowering the floor to 100 admits a 61-px
+  // cluster at the actual cursor position (1058, 895 vs measured
+  // ground truth 1060, 895). 100 still filters out the darkest
+  // wallpaper-pixel diffs (mostly < 80 brightness) so noise floor
+  // is preserved. Document update + regression test pinning live in
+  // docs/troubleshooting/ipad-cursor-detection.md.
+  brightnessFloor: 100,
   // Default 0 = no pixel-level saturation filter. Pixel-level filtering
   // kills anti-aliased cursor edges (where R/G/B differ due to alpha
   // blending against the wallpaper). The right place to filter colored-
