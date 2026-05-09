@@ -6,6 +6,71 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 192 (2026-05-09, v0.5.181 → v0.5.184): predictive cursor-belief module
+
+Live frame-by-frame trajectory data finally exposed why icon-click
+reliability floors at ~50–60 %: the algorithm operates with no
+shared cursor-state model. Three concrete failures in the data:
+
+1. **Edge clamping is silent.** Trajectories T1/T2 ran 12 chunks
+   against the right wall with the algorithm's internal model
+   drifting >300 px from reality. iPadOS clamps; PiKVM keeps
+   emitting; algorithm keeps assuming travel.
+2. **px/mickey ratio is non-stationary.** Within an 8-chunk
+   trajectory the actual ratio varied 1.25–1.75 (40 % range).
+   Algorithm's single 1.3 estimate over/undershoots accordingly.
+3. **State is fragmented.** Cursor-position knowledge lived in
+   ~6 unrelated places (`finalDetectedPosition`, `expectedNear`,
+   `lastMoveResult.usedPxPerMickey`, `lastEmitMs`,
+   `getLastGoodBounds`, `postWarmupExpected`/`predictedPostOpen`)
+   none of which composed into a coherent belief.
+
+### Architecture: `CursorBelief` Kalman-style estimator
+
+A 4-state diagonal-covariance Kalman filter owned by `PiKVMClient`:
+
+- **State**: position {x, y} + velocity {vx, vy} + per-axis variance.
+- **Per-axis ratio belief**: mean + variance, learned from
+  observations.
+- **`predict(emit)`** — forward-propagate by `emit · ratio.mean`,
+  grow variance by process noise + ratio uncertainty. Clip predicted
+  position to bounds; if clipped, **inflate the clipped-axis variance**
+  ("we know cursor is somewhere on the edge, not exactly where").
+- **`observe(measurement, confidence)`** — Kalman gain update.
+  `confidence ∈ [0, 1]`: 1.0 for slam ground truth, NCC score for
+  template match, 0.85 for motion-diff cluster pair.
+- **`isAtEdge(threshold)`** — per-edge boolean for retry-start
+  unstick logic.
+- **`expectedRegion(confidence)`** — search-window provider for
+  biasing template-match.
+
+### Build phases (Phase 192-A through D, all shipped)
+
+- **Phase A** (`v0.5.181`): pure module + tests. 36 dedicated tests.
+- **Phase B** (`v0.5.182`): wired into `PiKVMClient.mouseMoveRelative`
+  (predict-only). 7 wiring tests + live trajectory replay
+  confirmed edge-clip variance inflation works in production.
+- **Phase C** (`v0.5.183`): `moveToPixel` pushes observations into
+  belief at every detection site (motion-diff success, template
+  match success, origin discovery). Optional chaining keeps test
+  mocks working.
+- **Phase D** (`v0.5.184`): `clickAtWithRetry` reads
+  `belief.isAtEdge()` at retry start and emits a directed unstick
+  (60 mickeys opposite the pinned edge) BEFORE the next moveToPixel.
+  Replaces Phase 191's blind rosette jitter.
+
+### Phase 191 marked superseded
+
+Phase 191's inter-retry compass-rosette jitter (`v0.5.180`) was
+based on indirect reasoning that retry failures were correlated by
+similar trajectories. Live A/B (5 trials per side) showed −20 pp
+vs baseline. The Phase 192-D belief-driven unstick is the principled
+replacement: it fires only when the cursor IS pinned (via belief
+state) and emits a *directed* unstick instead of a generic rosette.
+
+`defaultInterRetryJitterFor` flipped from 50 → 0 on iPad. Helper
+preserved as opt-in escape hatch.
+
 ## Phase 187 (2026-04-30, v0.5.177): cursor-keepalive wiggle — close the auto-hide gap between detection screenshots
 
 User-proposed solution to the long-standing observation that iPadOS
