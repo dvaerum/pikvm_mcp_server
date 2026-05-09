@@ -1642,6 +1642,17 @@ export async function moveToPixel(
         // radius that covers acceleration variance.
         expectedNear: predictedPostOpen,
         expectedNearRadius: 200,
+        // Phase 197 (v0.5.193): when motion-diff failed AND no
+        // template match falls within 200 px of where we predict the
+        // cursor should be, do NOT trust a far-away high-score match
+        // — it's almost certainly an iPad widget false-positive.
+        // Live bench at v0.5.192 showed Files-target's 0% hit rate
+        // came from the algorithm finding "the cursor" deterministic-
+        // ally at ~245 px residuals from target. Returning null here
+        // makes move-to fall back to predicted-position trust
+        // (line 1672 ELSE branch), which at least anchors clicks to
+        // the intended target instead of a confident-wrong location.
+        requireWithinRadius: true,
         verbose,
       });
       if (found) {
