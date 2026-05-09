@@ -156,4 +156,39 @@ describe('looksLikeCursor', () => {
     });
     expect(looksLikeCursor(t)).toBe(true);
   });
+
+  // Phase 194-B: dark cursor on light wallpaper. The user's iPad
+  // renders the pointer dark on a light teal wallpaper. Without the
+  // dark-cursor branch, every captured template was rejected and the
+  // template-set stayed empty live. The acceptance gate now checks
+  // BOTH bright-cursor-on-dim-bg AND dark-cursor-on-light-bg.
+  it('Phase 194-B: accepts a dark cursor template on a light backdrop', () => {
+    const t = template(24, 24, (i) => {
+      const x = i % 24, y = Math.floor(i / 24);
+      // Small dark cursor blob (cMax around 70 — within the 50–100
+      // range observed live on this iPad) on a light achromatic
+      // backdrop (~220).
+      const inCursor = Math.abs(x - 12) < 4 && Math.abs(y - 12) < 4;
+      return inCursor ? [70, 70, 70] : [220, 220, 220];
+    });
+    expect(looksLikeCursor(t)).toBe(true);
+  });
+
+  it('Phase 194-B: still rejects a uniform light backdrop with no cursor', () => {
+    // Pure light wallpaper, no dark blob — should not be mistaken
+    // for a cursor on the dark-blob branch.
+    const t = template(24, 24, () => [220, 220, 220]);
+    expect(looksLikeCursor(t)).toBe(false);
+  });
+
+  it('Phase 194-B: rejects a colored backdrop with a small dark blob (saturation gate)', () => {
+    const t = template(24, 24, (i) => {
+      const x = i % 24, y = Math.floor(i / 24);
+      const inCursor = Math.abs(x - 12) < 4 && Math.abs(y - 12) < 4;
+      // Dark blob is achromatic but backdrop is highly saturated teal
+      // → mean saturation across the template exceeds 50 → reject.
+      return inCursor ? [70, 70, 70] : [50, 200, 200];
+    });
+    expect(looksLikeCursor(t)).toBe(false);
+  });
 });
