@@ -390,3 +390,46 @@ fully closed and documented. The 50-60 % iPad icon-click ceiling
 remains. Recommended path forward stays the keyboard-first
 workflow (`pikvm_ipad_launch_app` via Spotlight) for any task
 that doesn't strictly need a mouse click on a small target.**
+
+### 2026-05-09 — observation only: PiKVM is undervoltage + throttled
+
+While doing end-of-session code review, queried `/api/info`:
+
+```
+GET https://pikvm01.bb.vcamp.dk/api/info
+→ result.hw.health.throttling.parsed_flags = {
+    "freq_capped":   { "now": false, "past": false },
+    "throttled":     { "now": true,  "past": true  },
+    "undervoltage":  { "now": true,  "past": true  }
+  }
+  raw_flags = 327685
+```
+
+CPU temperature 65 °C, 9 % load, 12.6 % memory used — so it's
+not a thermal or load issue. The `undervoltage: now: true` flag
+means the Pi 4 is actively receiving less than 4.65 V at the
+USB-C input.
+
+**Implications for this project:**
+
+- HID emit timing under undervoltage may be jittery. iPadOS
+  pointer-effect snap-zone is sensitive to emit velocity (Phase
+  143). If the Pi is throttled, fast emits may arrive
+  desynchronized — could explain part of the click-rate
+  variance Phase 111+ documented.
+- Screenshot capture latency may be elevated under throttle.
+  This affects motion-diff (relies on time-aligned pre/post
+  frames).
+- `pikvm_ipad_launch_app` and other multi-step flows may be
+  more flaky than they would be on a properly-powered Pi.
+
+**Recommended user-side action:** verify the PiKVM's power
+supply delivers a stable 5.1 V / 3 A. The official Raspberry
+Pi 4 PSU is the safest bet. Any thinner USB-C cable or weaker
+PSU (e.g. shared with a hub) can cause sustained undervoltage.
+
+**No PiKVM-side action needed from this project.** Documenting
+the observation so future click-rate measurements can be
+interpreted in context — a click-rate bench taken under
+undervoltage may not reflect the rate users would see on a
+properly-powered PiKVM.
