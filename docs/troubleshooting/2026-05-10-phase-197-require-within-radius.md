@@ -88,50 +88,82 @@ and the fallback path doesn't fire.
 
 A live bench at v0.5.193 will validate. Results will be appended.
 
-## Live measurement (v0.5.193) — REAL LIFT
+## Live measurement (v0.5.193) — initial 3-trial vs follow-up 5-trial
 
-3-trials × 4-targets bench at v0.5.193 (no template wipe between
-runs, same conditions as the v0.5.192 baseline):
+### 3-trial run (preliminary, noisy)
 
-| Target              | v0.5.192 | v0.5.193 |  Delta   |
-|:--------------------|:--------:|:--------:|:--------:|
-| Settings            |   33%    |   67%    |  +34 pp  |
-| Books               |  100%    |   67%    |  -33 pp* |
-| AppStore            |   67%    |  100%    |  +33 pp  |
-| Files               |    0%    |   33%    |  +33 pp  |
-| **Overall**         | **50%**  | **67%**  | **+17 pp**|
+| Target              | v0.5.192 | v0.5.193 (n=3) | Delta |
+|:--------------------|:--------:|:--------------:|:-----:|
+| Settings            |   33%    |   67%          | +34pp |
+| Books               |  100%    |   67%          | -33pp |
+| AppStore            |   67%    |  100%          | +33pp |
+| Files               |    0%    |   33%          | +33pp |
+| **Overall**         | **50%**  | **67%**        | +17pp |
 
-*Books regression is within sample noise on 3 trials (1 miss out
-of 3). Settings gain is also partly sample noise on 3 trials.
+### 5-trial follow-up (more honest)
 
-The headline result: **Files target went from 0% to 33%**. Trial 1
-HIT (algorithm trusted prediction, not a confident-wrong template
-match). The previously-deterministic ~245 px residual is gone;
-trial 2 reported residual 189 px (still a miss but a different
-position than the old false-positive lock-in).
+| Target              | v0.5.193 (n=5) | Median residual |
+|:--------------------|:--------------:|:---------------:|
+| Settings            |     80%        |    138px        |
+| Books               |    100%        |     66px        |
+| AppStore            |     60%        |    163px        |
+| Files               |   **0%**       |    239px        |
+| **Overall**         |   **60%**      |       —         |
 
-AppStore went 67% → 100% — also benefits from the fix because
-its top-right region had similar (smaller) widget interference.
+### What the larger-N tells us
 
-## Conclusion
+- The 60% overall sits between the v0.5.191 baseline (58%, n=3)
+  and the noisy v0.5.193 n=3 reading (67%). Phase 197 doesn't
+  blow up overall click rate — it's roughly neutral on the
+  aggregate.
+- **The Files-target false-positive lock-in IS broken**. Pre-
+  Phase 197: every Files trial reported residual 245.15301...
+  px (identical to many decimal places, deterministic). Post-
+  Phase 197 (n=5): residuals are 538, 239, unv, unv, 207. The
+  algorithm is no longer confidently locked onto a wrong widget
+  feature.
+- **But Files still fails 0% on 5 trials** — for OTHER reasons:
+  cursor fades before screenshot, snap-zone misses, or detection
+  genuinely failing in the top-right region. Two trials reported
+  `unv` (cursorVerified=false) — Phase 197 correctly returned
+  null instead of fabricating a position.
 
-Phase 197 ships a real measured improvement. The TTL from Phase
-196 plus `requireWithinRadius` from Phase 197 together close the
-loop on the cross-session and within-session false-positive
-template-match classes. Combined with users disabling iPadOS
-Pointer Animations (Phase 194-H), the predicted final small-icon
-click rate is ≥ 90% — to be confirmed when the user toggles
-Pointer Animations.
+### Practical takeaway
 
-## What's still on the roadmap
+Phase 197 is a CORRECTNESS improvement, not a click-rate
+improvement. The algorithm now reports honest "I don't know
+where the cursor is" instead of confidently lying. Downstream
+behavior (trust the prediction, retry) is unchanged.
 
-- Files-target hits 33%, not 100%. Remaining failures are likely
-  iPadOS Pointer Animations snap-zone misses (real cursor
-  position correct, click doesn't register on icon) — exactly
-  the class that the user-side toggle fixes.
-- Books regression on this sample is suspicious; a 10-trial bench
-  would settle whether it's noise or a real degradation.
-- The post-click verification path in `click-verify.ts:720`
-  still uses the lax fallback. Adding `requireWithinRadius: true`
-  there might tighten click-verification accuracy too. Worth a
-  follow-up bench.
+The remaining Files failure class needs different work:
+- Cursor wake/refresh before detection in top-right region
+- Region-specific search-window tuning (Maps widget interferes)
+- iPadOS Pointer Animations OFF (user-side toggle)
+
+## Conclusion (revised after 5-trial bench)
+
+Phase 197 ships a CORRECTNESS improvement, not a click-rate
+improvement. The Phase 196 TTL + Phase 197 `requireWithinRadius`
+together close the false-positive surface at:
+- Persist time (Phase 102-106 cluster bounds + masked extraction)
+- Load time content (Phase 194-A `looksLikeCursor` validator)
+- Load time age (Phase 196 6h TTL)
+- Match time (Phase 197 `requireWithinRadius`)
+
+Aggregate click rate on n=5: 60% — within noise of v0.5.191
+baseline (58%). The 67% on the initial n=3 sample was sample
+noise; don't read a real lift into it.
+
+## What's still on the roadmap (Phase 198+ candidates)
+
+- Files target still 0% on 5 trials. Remaining failure modes:
+  cursor fade before detection, snap-zone misses, or detection
+  genuinely failing in top-right region (Maps widget animation
+  interferes).
+- Region-specific search-window tuning: top-right has different
+  detection characteristics than dock area.
+- Apply `requireWithinRadius: true` to `click-verify.ts:720`
+  (wake-and-recapture path) — additive, Phase 140 already
+  filters second-opinion results by closer-to-target.
+- iPadOS Pointer Animations OFF (Phase 194-H, user-side):
+  remains the highest-leverage step for small-icon click rate.
