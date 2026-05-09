@@ -473,54 +473,40 @@ async function getCachedTemplates(): Promise<CursorTemplate[]> {
  *  Exported for unit tests.
  */
 const CURSOR_BRIGHTNESS_FLOOR = 100;
-export function looksLikeCursor(t: CursorTemplate): boolean {
-  const w = t.width;
-  const h = t.height;
-  const px = w * h;
-  const bright = new Uint8Array(px);
-  let brightCount = 0;
-  let totalSaturation = 0;
-  for (let i = 0; i < px; i++) {
-    const o = i * 3;
-    const r = t.rgb[o], g = t.rgb[o + 1], b = t.rgb[o + 2];
-    const cMin = Math.min(r, g, b);
-    const cMax = Math.max(r, g, b);
-    const sat = cMax - cMin;
-    totalSaturation += sat;
-    if (cMin >= CURSOR_BRIGHTNESS_FLOOR && sat <= 30) {
-      bright[i] = 1;
-      brightCount++;
-    }
-  }
-  const meanSat = totalSaturation / px;
-  if (brightCount < px * 0.04) return false;
-  if (meanSat >= 50) return false;
-  // Phase 102 + 104: upper-bound on bright pixel count. Discovered live
-  // 2026-04-27 that the template-set was 7/8 contaminated with letter
-  // glyphs ("Search", "Georg", "GS" avatar's "G"). Each is a SINGLE
-  // connected blob (so the Phase 66 cohesion gate passes), achromatic,
-  // and bright — passing every existing check.
-  //
-  // Phase 102 first set the cap at 12% based on a wrong assumption that
-  // real iPad cursors occupy 4-10% of the 24×24 template. Phase 104 (an
-  // hour later) measured live: real iPad cursor diff clusters are 80-90
-  // px (~14-16% of 576) due to anti-aliased edges + soft shadow. The
-  // Phase 102 cap rejected real cursors too. Phase 104 relaxed to 18%
-  // (~104 px) — admits real cursors while still excluding most letter
-  // glyphs (which measured 80-150 px / 14-26%). The 18%/26% margin is
-  // tighter than I'd like; if letters slip through, the next layer to
-  // strengthen is shape-aware: arrow/I-beam have specific aspect ratios
-  // and bright-pixel distributions that letters don't match.
-  if (brightCount > px * 0.18) return false;
+// Phase 194-B (v0.5.188): also accept dark cursor patterns. The iPad
+// in this user's deployment renders the cursor as DARK (~50-100 px
+// brightness) on a LIGHT teal wallpaper. The original looksLikeCursor
+// only counted BRIGHT achromatic pixels, so every cursor template
+// extracted on this hardware was rejected — leaving the runtime with
+// no templates to use for findCursorByTemplateSet. Phase 193-C bench
+// data confirmed templates dir was empty even after 40 click trials.
+//
+// Cursor pixels with cMax < 100 AND saturation <= 30 are dark
+// achromatic. The cap of 100 keeps very-dark wallpaper specks
+// (cMax < 80) from counting as "dark cursor" while still admitting
+// the iPad's pointer (50-100 brightness range observed live).
+const CURSOR_DARKNESS_CEILING = 100;
 
-  // Connected-components on the bright mask (4-connectivity, BFS).
-  // Track only the largest component's size — we don't need the full
-  // labelling, just the maximum.
+/** Find a single cohesive achromatic blob within a mask. Returns
+ *  total mask pixels, the size of the largest connected component,
+ *  and whether the cohesion gate (≥75 % of mask pixels in one blob)
+ *  passes. 4-connectivity BFS — same as the original
+ *  looksLikeCursor. Phase 194-B (v0.5.188) extracted this helper so
+ *  the same shape gate runs against both bright and dark cursor
+ *  candidates. */
+function cohesiveBlobInMask(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+): { count: number; largest: number } {
+  const px = w * h;
+  let count = 0;
+  for (let i = 0; i < px; i++) if (mask[i]) count++;
   const visited = new Uint8Array(px);
   const queue = new Int32Array(px);
   let largest = 0;
   for (let i = 0; i < px; i++) {
-    if (!bright[i] || visited[i]) continue;
+    if (!mask[i] || visited[i]) continue;
     visited[i] = 1;
     queue[0] = i;
     let head = 0;
@@ -531,32 +517,70 @@ export function looksLikeCursor(t: CursorTemplate): boolean {
       size++;
       const x = idx % w;
       const y = (idx - x) / w;
-      // 4-connectivity neighbours.
       if (x > 0) {
         const n = idx - 1;
-        if (bright[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
+        if (mask[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
       }
       if (x < w - 1) {
         const n = idx + 1;
-        if (bright[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
+        if (mask[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
       }
       if (y > 0) {
         const n = idx - w;
-        if (bright[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
+        if (mask[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
       }
       if (y < h - 1) {
         const n = idx + w;
-        if (bright[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
+        if (mask[n] && !visited[n]) { visited[n] = 1; queue[tail++] = n; }
       }
     }
     if (size > largest) largest = size;
   }
-  // Phase 66: cohesion threshold raised from 0.5 → 0.75. Live data showed
-  // a microphone-icon template (largest component 50% of bright) and a
-  // "Fi" text-fragment template (60%) passing the 0.5 gate. Real cursor
-  // templates measure 100% cohesion (single connected blob). Tightening
-  // to 0.75 keeps real cursors and rejects multi-blob icons / text.
-  return largest >= brightCount * 0.75;
+  return { count, largest };
+}
+
+export function looksLikeCursor(t: CursorTemplate): boolean {
+  const w = t.width;
+  const h = t.height;
+  const px = w * h;
+  const bright = new Uint8Array(px);
+  const dark = new Uint8Array(px);
+  let totalSaturation = 0;
+  for (let i = 0; i < px; i++) {
+    const o = i * 3;
+    const r = t.rgb[o], g = t.rgb[o + 1], b = t.rgb[o + 2];
+    const cMin = Math.min(r, g, b);
+    const cMax = Math.max(r, g, b);
+    const sat = cMax - cMin;
+    totalSaturation += sat;
+    if (cMin >= CURSOR_BRIGHTNESS_FLOOR && sat <= 30) bright[i] = 1;
+    if (cMax < CURSOR_DARKNESS_CEILING && sat <= 30) dark[i] = 1;
+  }
+  const meanSat = totalSaturation / px;
+  if (meanSat >= 50) return false;
+
+  // Phase 102 + 104: count window 4-18 % keeps cursor in, rejects
+  // text glyphs / icons (typically 14-26 % of a 24×24 crop).
+  // Phase 66: cohesion ≥ 75 % keeps single-blob cursors, rejects
+  // multi-blob icons / text fragments.
+  //
+  // Phase 194-B (v0.5.188): accept if EITHER bright OR dark cohesion
+  // matches. Bright path serves the historic case (cursor lighter
+  // than backdrop, e.g. dim Mac wallpaper). Dark path serves the
+  // iPad case (dark pointer on light wallpaper).
+  const brightBlob = cohesiveBlobInMask(bright, w, h);
+  const brightOk =
+    brightBlob.count >= px * 0.04 &&
+    brightBlob.count <= px * 0.18 &&
+    brightBlob.largest >= brightBlob.count * 0.75;
+  if (brightOk) return true;
+
+  const darkBlob = cohesiveBlobInMask(dark, w, h);
+  const darkOk =
+    darkBlob.count >= px * 0.04 &&
+    darkBlob.count <= px * 0.18 &&
+    darkBlob.largest >= darkBlob.count * 0.75;
+  return darkOk;
 }
 
 async function maybePersistTemplate(
