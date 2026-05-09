@@ -35,11 +35,13 @@ import {
   DecodedScreenshot,
   DEFAULT_DETECTION_CONFIG,
   decodeScreenshot,
+  diffPixels,
   diffScreenshotsDecoded,
   extractCursorTemplateDecoded,
   findCursorByTemplateSet,
   locateCursor,
 } from './cursor-detect.js';
+import { extractMaskedTemplate } from './seed-template.js';
 import {
   DEFAULT_TEMPLATE_DIR,
   LEGACY_TEMPLATE_PATH,
@@ -586,13 +588,39 @@ export function looksLikeCursor(t: CursorTemplate): boolean {
 async function maybePersistTemplate(
   screenshot: DecodedScreenshot,
   cursorPos: { x: number; y: number },
+  preFrame?: DecodedScreenshot,
 ): Promise<void> {
   try {
-    // 24 px (down from 32) tightens the crop around the iPad's ~22px
-    // arrow cursor, reducing background contamination that hurts cross-
-    // wallpaper template matching. See cursor-detect.test.ts for the
-    // contract.
-    const t = extractCursorTemplateDecoded(screenshot, cursorPos, 24);
+    // Phase 194-G (v0.5.191): when caller supplies the pre-emit frame,
+    // build a diff mask between pre and post and use mask-based
+    // extraction (the same path seedCursorTemplate uses since Phase 106).
+    // The cursor is ~7×11 px on a 24×24 = 576 px crop, so ~88 % of an
+    // unmasked template is wallpaper context. NCC against similar
+    // wallpaper regions then scores 0.9+ even when the actual cursor is
+    // absent — exactly the false-positive that locked Files-target
+    // template-match to (832, 408) regardless of cursor position
+    // (Phase 194-F finding). Mask extraction zeroes out non-changed
+    // pixels, leaving only the cursor's contribution to NCC.
+    let t: CursorTemplate;
+    if (preFrame) {
+      const diffMaskUint = diffPixels(
+        preFrame.rgb,
+        screenshot.rgb,
+        screenshot.width,
+        screenshot.height,
+        DEFAULT_DETECTION_CONFIG.diffThreshold,
+        DEFAULT_DETECTION_CONFIG.brightnessFloor,
+        DEFAULT_DETECTION_CONFIG.maxChannelDelta,
+      );
+      // diffPixels returns boolean[]; extractMaskedTemplate expects
+      // ReadonlyArray<boolean> — same shape.
+      t = extractMaskedTemplate(screenshot, cursorPos, 24, diffMaskUint);
+    } else {
+      // Fall back to the unmasked path when no pre-frame is available
+      // (legacy callers, tests). 24 px crop tightens around the iPad's
+      // ~22 px arrow cursor (Phase 102).
+      t = extractCursorTemplateDecoded(screenshot, cursorPos, 24);
+    }
     // Reject templates that don't look cursor-like — protects against
     // motion-diff picking a wrong pair (icon corner, animated widget)
     // and the bad capture poisoning all future template matches in a
@@ -1592,7 +1620,9 @@ export async function moveToPixel(
     // Phase 192-C: motion-diff cluster pair has medium-high
     // confidence (~0.85). Push the post-emit position into belief.
     client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, 0.85);
-    await maybePersistTemplate(shotB, currentPos);
+    // Phase 194-G: pass the pre-emit frame so maybePersistTemplate
+    // can mask out non-changed (= wallpaper) pixels from the template.
+    await maybePersistTemplate(shotB, currentPos, shotA);
   } else {
     // Motion-diff failed. Try template matching as a fallback.
     const motionFailReason = motionResult ? motionResult.reason : 'correction disabled';
