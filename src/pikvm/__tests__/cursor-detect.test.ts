@@ -317,3 +317,43 @@ describe('findCursorByTemplate minScore default', () => {
     expect(permissive).not.toBeNull();
   });
 });
+
+describe('Phase 193: DEFAULT_DETECTION_CONFIG defaults', () => {
+  // Pin the default brightnessFloor value. Phase 193 lowered it 170 → 100
+  // because a DARK iPad cursor on a LIGHT wallpaper produced cursor-edge
+  // diff pixels in the 50–100 brightness band — silently rejected by the
+  // old 170 floor. This test fails loudly if the default drifts back up.
+  it('brightnessFloor default is 100 (Phase 193: dark cursor / light wallpaper)', () => {
+    expect(DEFAULT_DETECTION_CONFIG.brightnessFloor).toBe(100);
+  });
+
+  it('default config catches a DARK cursor moving on a LIGHT wallpaper', async () => {
+    // Inverse of the existing "bright cursor on dim wallpaper" tests:
+    // wallpaper at 220 (typical light-mode iPad), cursor at 70 (dark
+    // shadow/outline pixels). Old floor=170 throws away the cursor
+    // entirely; new default=100 finds both pre and post clusters.
+    const w = 300, h = 200;
+    const lightWallpaper = [220, 220, 220] as [number, number, number];
+    const darkCursor = [70, 70, 70] as [number, number, number];
+    const baseA = await stampSquare(await makeScreenshot(w, h, lightWallpaper), 50, 50, 7, darkCursor);
+    const baseB = await stampSquare(await makeScreenshot(w, h, lightWallpaper), 150, 80, 7, darkCursor);
+    const a = await decodeScreenshot(baseA);
+    const b = await decodeScreenshot(baseB);
+
+    const clusters = diffScreenshotsDecoded(a, b, {
+      ...DEFAULT_DETECTION_CONFIG,
+      mergeRadius: 18,
+    });
+    const sized = clusters.filter((c) => c.pixels >= 8 && c.pixels <= 90);
+    expect(sized.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // Note: the live failure mode (170 floor silently rejecting the dark
+  // iPad cursor) doesn't reproduce on uniform-fill synthetic frames
+  // because the OR-across-frames brightness check finds the bright
+  // wallpaper at the cursor's OLD position. The real-world frame had
+  // wallpaper texture that varied below 170 at the cursor's pre-emit
+  // location, so the OR-check failed too. The diagnostic frames live
+  // at data/detection-truth/ + bench-findclusters-truth.ts; the
+  // pin-the-default test above is the proxy that actually fires.
+});
