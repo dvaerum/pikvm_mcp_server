@@ -125,4 +125,35 @@ describe('evaluatePreClickAgreement', () => {
     const verdict = evaluatePreClickAgreement(frame, [tmpl], { x: 152, y: 250 }, 0.6);
     expect(verdict.agree).toBe(true);
   });
+
+  // Phase 194-D: a weaker minScore (0.5) that admits low-quality
+  // matches lets contaminated templates pretend to "agree" with a
+  // wrong claim. The Phase 194-C live trial showed a click open
+  // Firefox at residual = 5 px claimed-from-Settings; the only way
+  // that passed evaluatePreClickAgreement is a sub-0.75 match
+  // somewhere in the narrow window. With minScore = 0.75 the path
+  // closes.
+  it('Phase 194-D: low-confidence match (score 0.55) does NOT agree at minScore=0.75', async () => {
+    // Frame contains a real cursor at (100, 100). Template was
+    // captured from a DIFFERENT frame with a slightly different
+    // pattern, so it scores below 0.75 against this frame.
+    const frame = await frameWithBlobAt(100, 100);
+    const otherFrame = await frameWithBlobAt(50, 50);
+    // Build a template at a wallpaper region of otherFrame so it
+    // scores low against frame's actual cursor.
+    const weakTpl = extractCursorTemplateDecoded(otherFrame, { x: 200, y: 200 }, 24);
+    // Claim near the wallpaper of frame, far from real cursor.
+    const verdictPermissive = evaluatePreClickAgreement(
+      frame, [weakTpl], { x: 220, y: 200 }, 0.5,
+    );
+    const verdictStrict = evaluatePreClickAgreement(
+      frame, [weakTpl], { x: 220, y: 200 }, 0.75,
+    );
+    // At 0.5, weak match might admit; at 0.75 it must reject.
+    expect(verdictStrict.agree).toBe(false);
+    // Document the contrast (permissive may agree, depends on
+    // synthetic template data; the assertion that matters is strict
+    // rejecting).
+    expect(verdictStrict.reason).toMatch(/lied|< 0\.75|no template/);
+  });
 });

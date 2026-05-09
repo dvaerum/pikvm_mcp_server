@@ -401,7 +401,19 @@ export async function clickAtWithRetry(
   const verifyOptions: ClickVerifyOptions = options.verifyOptions ?? {};
   const requireVerifiedCursor = options.requireVerifiedCursor ?? true;
   const minBrightness = options.minBrightness ?? VERY_DIM_THRESHOLD;
-  const minPreClickTemplateScore = options.minPreClickTemplateScore ?? 0.5;
+  // Phase 194-D (v0.5.189): bumped default 0.5 → 0.75. Phase 194-C
+  // bench data revealed a click that opened Firefox in the dock at
+  // ~(590, 965) when the algorithm claimed cursor was at residual = 5
+  // px from Settings (905, 800). evaluatePreClickAgreement Stage A
+  // must have admitted some non-cursor template match within the
+  // 200 px narrow window — likely an icon shape scoring around 0.5.
+  // Real cursor templates score 0.83+ on actual cursors; bumping to
+  // 0.75 keeps the cursor-on-cursor path while rejecting weak
+  // icon-shape false positives. Phase 67 set 0.83 as the default
+  // findCursorByTemplate minScore for similar reasons. The narrow-
+  // window radius (200 px) and closeEnoughDistance (200 px) are
+  // unchanged — the score threshold was the loose link.
+  const minPreClickTemplateScore = options.minPreClickTemplateScore ?? 0.75;
   const preClickWiggleMickeys = options.preClickWiggleMickeys ?? 5;
   // Phase 143 (v0.5.135): bumped default 5 → 10 mickeys. Phase 142
   // bench showed cursor reaching 10.6 px residual on home-screen
