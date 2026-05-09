@@ -642,4 +642,115 @@ describe('clickAtWithRetry', () => {
       expect(anyJitter).toBe(false);
     }, 30000);
   });
+
+  /**
+   * Phase 192-D: edge-unstick at retry start. When the cursor belief
+   * reports the cursor is pinned to an iPad edge, clickAtWithRetry
+   * emits a directed opposite-direction move (60 mickeys) before the
+   * next moveToPixel — replaces Phase 191's blind rosette jitter
+   * (which the live A/B showed didn't help).
+   *
+   * Mocked by giving the ScriptedClient a fake `belief` field whose
+   * `isAtEdge` returns east=true. The orchestrator should emit
+   * (-60, 0) before the second attempt.
+   */
+  describe('Phase 192-D: belief.isAtEdge unstick', () => {
+    it('emits a directed unstick BEFORE the second attempt when belief reports east edge', async () => {
+      const grey = await uniformPng(100, 100, 128);
+      const client = new ScriptedClient();
+      client.beforeClickFrame = grey;
+      client.postClickFrames = [grey];
+      // Inject a fake belief that reports east-pinned.
+      (client as unknown as { belief: unknown }).belief = {
+        isAtEdge: () => ({ north: false, south: false, east: true, west: false }),
+      };
+
+      await clickAtWithRetry(client as unknown as PiKVMClient, { x: 50, y: 50 }, {
+        maxRetries: 2,
+        moveToOptions: FAST_MOVE_OPTS,
+        preClickSettleMs: 0,
+        postClickSettleMs: 0,
+        requireVerifiedCursor: false,
+        minBrightness: 0,
+      });
+
+      // Find the unstick emit: dx=-60, dy=0, fired before any click on
+      // the second attempt (clicksBefore: 1).
+      const unstick = client.mouseMoveRelativeCalls.find(
+        c => c.dx === -60 && c.dy === 0 && c.clicksBefore === 1,
+      );
+      expect(unstick, 'expected unstick (-60, 0) before attempt 2').toBeDefined();
+    }, 30000);
+
+    it('does NOT emit unstick on attempt 1 (baseline preserved)', async () => {
+      const grey = await uniformPng(100, 100, 128);
+      const changed = await pngWithRect(100, 100, 128, { x: 10, y: 10, w: 30, h: 30, gray: 250 });
+      const client = new ScriptedClient();
+      client.beforeClickFrame = grey;
+      client.postClickFrames = [changed]; // first attempt hits
+
+      (client as unknown as { belief: unknown }).belief = {
+        isAtEdge: () => ({ north: false, south: false, east: true, west: false }),
+      };
+
+      await clickAtWithRetry(client as unknown as PiKVMClient, { x: 50, y: 50 }, {
+        maxRetries: 3,
+        moveToOptions: FAST_MOVE_OPTS,
+        preClickSettleMs: 0,
+        postClickSettleMs: 0,
+        requireVerifiedCursor: false,
+        minBrightness: 0,
+      });
+
+      // Attempt 1 had clicksBefore=0; should NOT contain an unstick emit.
+      const unstickOnA1 = client.mouseMoveRelativeCalls.find(
+        c => c.dx === -60 && c.dy === 0 && c.clicksBefore === 0,
+      );
+      expect(unstickOnA1).toBeUndefined();
+    }, 30000);
+
+    it('emits diagonal unstick when pinned in a corner', async () => {
+      const grey = await uniformPng(100, 100, 128);
+      const client = new ScriptedClient();
+      client.beforeClickFrame = grey;
+      client.postClickFrames = [grey];
+      // Pinned south-east → unstick (-60, -60).
+      (client as unknown as { belief: unknown }).belief = {
+        isAtEdge: () => ({ north: false, south: true, east: true, west: false }),
+      };
+
+      await clickAtWithRetry(client as unknown as PiKVMClient, { x: 50, y: 50 }, {
+        maxRetries: 1,
+        moveToOptions: FAST_MOVE_OPTS,
+        preClickSettleMs: 0,
+        postClickSettleMs: 0,
+        requireVerifiedCursor: false,
+        minBrightness: 0,
+      });
+
+      const unstick = client.mouseMoveRelativeCalls.find(
+        c => c.dx === -60 && c.dy === -60 && c.clicksBefore === 1,
+      );
+      expect(unstick).toBeDefined();
+    }, 30000);
+
+    it('no-op when client lacks a belief field (test mocks without belief stay working)', async () => {
+      const grey = await uniformPng(100, 100, 128);
+      const client = new ScriptedClient();
+      client.beforeClickFrame = grey;
+      client.postClickFrames = [grey];
+      // No belief field — ScriptedClient default.
+
+      await expect(
+        clickAtWithRetry(client as unknown as PiKVMClient, { x: 50, y: 50 }, {
+          maxRetries: 2,
+          moveToOptions: FAST_MOVE_OPTS,
+          preClickSettleMs: 0,
+          postClickSettleMs: 0,
+          requireVerifiedCursor: false,
+          minBrightness: 0,
+        }),
+      ).resolves.toBeDefined();
+    }, 30000);
+  });
 });

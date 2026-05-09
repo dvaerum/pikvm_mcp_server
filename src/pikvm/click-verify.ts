@@ -525,6 +525,39 @@ export async function clickAtWithRetry(
       }
     }
 
+    // Phase 192-D (v0.5.184): if the cursor belief reports the
+    // cursor is pinned to an iPad edge, emit a small unstick move
+    // BEFORE moveToPixel so the next detect-then-move starts in a
+    // detectable interior position. This addresses the failure
+    // pattern observed in the Phase 192 trajectory data: a cursor
+    // pinned to bottom-right runs many emit cycles with no visible
+    // motion because every emit clamps. The previous behaviour ran
+    // the entire retry against the wall, wasting the retry budget.
+    //
+    // The unstick magnitude (60 mickeys ≈ 80 px on iPad) is large
+    // enough to push the cursor well off the edge, small enough to
+    // stay safely inside the iPad letterbox. Direction is opposite
+    // the pinned edge: pinned east → emit west, pinned south →
+    // emit north. Diagonals when pinned in a corner.
+    //
+    // Optional chaining on the belief check so test mocks without
+    // a CursorBelief instance stay no-ops. Gated on attempt > 1 so
+    // attempt 1 always runs a fresh moveToPixel without any edge
+    // intervention — preserves the baseline behaviour for first-shot
+    // clicks even when belief incidentally reports edge.
+    if (attempt > 1) {
+      const edges = client.belief?.isAtEdge?.(15);
+      if (edges && (edges.north || edges.south || edges.east || edges.west)) {
+        const UNSTICK_MAG = 60;
+        const udx = (edges.east ? -1 : edges.west ? +1 : 0) * UNSTICK_MAG;
+        const udy = (edges.south ? -1 : edges.north ? +1 : 0) * UNSTICK_MAG;
+        if (udx !== 0 || udy !== 0) {
+          await client.mouseMoveRelative(udx, udy);
+          await sleepMs(80); // give iPadOS time to render cursor at new position
+        }
+      }
+    }
+
     // Fresh aim every attempt — moveToPixel runs detect-then-move probe
     // afresh so cursor position is rediscovered from scratch.
     //
@@ -1571,21 +1604,24 @@ export function defaultChunkPaceMsFor(mouseAbsoluteMode: boolean): number | unde
  * Phase 191 (v0.5.180) — pure helper: pick the inter-retry jitter
  * magnitude default given the target's mouse mode.
  *
- * iPad targets (mouseAbsoluteMode=false) get 50 mickeys (≈ 65 px linear /
- * ~150 px accelerated). The retry orchestrator emits
- * `jitterOffsetForAttempt(attempt, this)` before every attempt > 1 to
- * deliberately put the cursor on a different approach trajectory than
- * the previous attempt — breaking iPadOS pointer-effect snap-zone
- * correlated failures.
+ * Phase 192-D (v0.5.184) — flipped iPad default 50 → 0. Live A/B
+ * (5 trials per side, 2026-05-09) showed jitter-on at -20 pp vs
+ * baseline (4/5 success vs 5/5). The premise — that retry failures
+ * are correlated by similar trajectories — was based on indirect
+ * reasoning, not measured data. The principled replacement is
+ * Phase 192-D's `client.belief.isAtEdge()` unstick at retry start,
+ * which fires only when the belief actually reports the cursor is
+ * pinned and emits a directed unstick instead of a generic rosette.
  *
- * Desktop (mouseAbsoluteMode=true) gets 0 (disabled): no pointer-effect
- * snap zones to break, jitter would just add round-trip latency for
- * no functional benefit.
+ * Helper preserved as opt-in escape hatch — passing
+ * `interRetryJitterMickeys: 50` re-enables the old rosette
+ * behaviour for callers who want to experiment.
  *
  * Pure: deterministic, no I/O.
  */
 export function defaultInterRetryJitterFor(mouseAbsoluteMode: boolean): number {
-  return mouseAbsoluteMode ? 0 : 50;
+  void mouseAbsoluteMode; // arg retained for API compatibility
+  return 0;
 }
 
 /**

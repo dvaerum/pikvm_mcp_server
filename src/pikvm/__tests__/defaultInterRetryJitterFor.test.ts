@@ -15,11 +15,11 @@ import { describe, expect, it } from 'vitest';
 import { defaultInterRetryJitterFor } from '../click-verify.js';
 
 describe('defaultInterRetryJitterFor', () => {
-  it('iPad relative mode (mouseAbsoluteMode=false) → 50 mickeys', () => {
-    expect(defaultInterRetryJitterFor(false)).toBe(50);
+  it('iPad relative mode → 0 (Phase 192-D flipped from 50; live A/B showed -20pp)', () => {
+    expect(defaultInterRetryJitterFor(false)).toBe(0);
   });
 
-  it('desktop absolute mode (mouseAbsoluteMode=true) → 0 (disabled)', () => {
+  it('desktop absolute mode → 0 (always was; no pointer-effect snap zones to break)', () => {
     expect(defaultInterRetryJitterFor(true)).toBe(0);
   });
 
