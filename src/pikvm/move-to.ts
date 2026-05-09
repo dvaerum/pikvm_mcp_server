@@ -1260,6 +1260,29 @@ export async function moveToPixel(
   const origin = discovered.point;
   const actualStrategy = discovered.method;
 
+  // Phase 192-C: feed bounds + origin into the cursor belief.
+  // discoverOrigin's return is our most-trusted cursor position at
+  // this point — slam landed it at a known corner, or
+  // locateCursor/template-match measured it. Push it as a high-
+  // confidence reset so subsequent predict()s start from truth.
+  // Bounds (when available) enable the predict-side clip-and-inflate
+  // behaviour for emits that would project past iPad's letterbox.
+  //
+  // Optional chaining keeps the existing mock-based tests working —
+  // ScriptedClient stubs in click-retry.test.ts and forbidSlam
+  // tests don't implement these methods, and moveToPixel's
+  // production behaviour is unchanged when they're absent.
+  const beliefBounds = getLastGoodBounds();
+  if (beliefBounds) {
+    client.setBeliefBounds?.({
+      x: beliefBounds.x,
+      y: beliefBounds.y,
+      width: beliefBounds.width,
+      height: beliefBounds.height,
+    });
+  }
+  client.resetBelief?.({ x: origin.x, y: origin.y });
+
   const dxPx = targetX - origin.x;
   const dyPx = targetY - origin.y;
   const rawMickeysX = Math.round(Math.abs(dxPx) / pxPerMickeyX);
@@ -1536,6 +1559,9 @@ export async function moveToPixel(
     finalDetectedPosition = { ...currentPos };
     openLoopMode = 'motion';
     openLoopReason = `live ratio ${motion.livePxPerMickey.toFixed(3)}`;
+    // Phase 192-C: motion-diff cluster pair has medium-high
+    // confidence (~0.85). Push the post-emit position into belief.
+    client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, 0.85);
     await maybePersistTemplate(shotB, currentPos);
   } else {
     // Motion-diff failed. Try template matching as a fallback.
@@ -1563,6 +1589,11 @@ export async function moveToPixel(
         finalDetectedPosition = { ...currentPos };
         openLoopMode = 'template';
         openLoopReason = `template-match score=${found.score.toFixed(3)} tpl#${found.templateIndex}/${sessionTemplates.length} (motion: ${motionFailReason})`;
+        // Phase 192-C: template-match score IS the confidence signal —
+        // NCC ∈ [0,1] mapped directly. A 0.95 match collapses belief
+        // tight; a 0.7 match (just above the fleet threshold) only
+        // mildly tightens.
+        client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, found.score);
         if (verbose) {
           console.error(
             `[move-to] motion-diff failed; template-match recovered cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)} via template #${found.templateIndex}/${sessionTemplates.length}`,
@@ -1763,6 +1794,8 @@ export async function moveToPixel(
         finalDetectedPosition = { ...currentPos };
         passMode = 'motion';
         passReason = `live ratio ${cMotion.livePxPerMickey.toFixed(3)}`;
+        // Phase 192-C: correction-pass motion-diff observation.
+        client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, 0.85);
       } else {
         // Motion-diff failed on correction — try template match before
         // falling back to prediction.
@@ -1820,6 +1853,8 @@ export async function moveToPixel(
               passMode = 'template';
               passReason = `template score=${found.score.toFixed(3)} (motion: ${motionFailReason})`;
               templated = true;
+              // Phase 192-C: correction-pass template observation.
+              client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, found.score);
               if (verbose) {
                 console.error(
                   `[move-to] WARN pass ${totalPasses + 1}: motion-diff failed (${motionFailReason}); template-match recovered cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
