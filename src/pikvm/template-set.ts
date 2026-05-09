@@ -74,8 +74,21 @@ export function templateSimilarity(a: CursorTemplate, b: CursorTemplate): number
 
 /** Load every `*.jpg` in `dir` as a CursorTemplate. Returns an empty
  *  array if the directory doesn't exist. Sorted by filename so the
- *  ordering is stable across processes. */
-export async function loadTemplateSet(dir: string): Promise<CursorTemplate[]> {
+ *  ordering is stable across processes.
+ *
+ *  Phase 194-A (v0.5.187): optional `validate` callback runs at load
+ *  time. Templates that fail validation are silently skipped — a
+ *  defensive belt against any path that bypasses persist-time gates.
+ *  The bench on 2026-04-30 surfaced a contaminated template
+ *  (`brightCount=0.3 %`, `looksLikeCursor` returns false) that ended
+ *  up on disk despite the persist-side gate; this load-time check
+ *  ensures such files cannot poison `findCursorByTemplateSet` even
+ *  if they reappear. Callers that don't want validation pass nothing.
+ */
+export async function loadTemplateSet(
+  dir: string,
+  validate?: (t: CursorTemplate) => boolean,
+): Promise<CursorTemplate[]> {
   let entries: string[] = [];
   try {
     entries = await fs.readdir(dir);
@@ -90,7 +103,9 @@ export async function loadTemplateSet(dir: string): Promise<CursorTemplate[]> {
   const out: CursorTemplate[] = [];
   for (const f of jpegs) {
     const t = await loadCursorTemplate(path.join(dir, f));
-    if (t) out.push(t);
+    if (!t) continue;
+    if (validate && !validate(t)) continue;
+    out.push(t);
   }
   return out;
 }
