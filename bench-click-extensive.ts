@@ -1,26 +1,30 @@
 /**
- * Phase 191 (v0.5.180) extensive click-reliability bench.
+ * Phase 192-eval (v0.5.185) — extensive click-reliability bench
+ * with post-click screenshot capture.
  *
  * Imports `src/` directly via tsx — measures the LATEST code regardless
- * of the deployed MCP binary.
+ * of the deployed MCP binary's age.
  *
- * Two-part run:
+ * For each trial:
+ *   - reset to home via Cmd+H
+ *   - run clickAtWithRetry against the target (default jitter off, all
+ *     Phase 192 belief work active)
+ *   - save the post-click screenshot AND the algorithm-reported
+ *     verification state
+ *   - aggregate per-target outcomes
  *
- *  Part A — Focused A/B at one target (Settings 905, 800):
- *    15 trials × jitter off, 15 trials × jitter on. Verifies whether the
- *    Phase 191 rosette helps when retried-clicking a single target. Our
- *    earlier 5-trial bench was too noisy (baseline = 100%, no headroom).
+ * Outputs:
+ *   - per-trial JSONL: ./data/click-bench/results.jsonl
+ *   - per-trial PNGs:  ./data/click-bench/<target>/NN-{hit|miss}.jpg
+ *   - per-target summary table on stderr
  *
- *  Part B — Cross-target sweep at 4 small iPad icons (jitter ON only):
- *    10 trials per target. Maps reliability across the icon grid so we
- *    know whether a single 100% target is lucky or representative.
- *
- * Total: 70 trials × ~8 s ≈ 10 minutes.
- *
- * Reset between every trial: pikvm_ipad_home (Cmd+H — no slam, no
- * cursor disruption beyond closing whatever app we landed in).
+ * Usage:
+ *   npx tsx bench-click-extensive.ts                      # 10 trials per target
+ *   npx tsx bench-click-extensive.ts 12                    # 12 trials per target
  */
 
+import { promises as fs } from 'fs';
+import path from 'path';
 import { loadConfig } from './src/config.js';
 import { PiKVMClient } from './src/pikvm/client.js';
 import { clickAtWithRetry, defaultMaxRetriesFor } from './src/pikvm/click-verify.js';
@@ -32,18 +36,46 @@ const client = new PiKVMClient(cfg.pikvm);
 const profile = await loadProfile('./data/ballistics.json').catch(() => null);
 const MAX_RETRIES = defaultMaxRetriesFor(/*absolute=*/false); // iPad → 3
 
+const argv = process.argv.slice(2);
+const TRIALS = argv[0] !== undefined ? Number(argv[0]) : 10;
+
+const ROOT = './data/click-bench';
+await fs.rm(ROOT, { recursive: true, force: true }).catch(() => undefined);
+await fs.mkdir(ROOT, { recursive: true });
+const LOG = path.join(ROOT, 'results.jsonl');
+
+interface Target {
+  name: string;
+  slug: string;          // filesystem-safe
+  x: number;
+  y: number;
+  expectedScreen: string; // human-readable description of what should appear post-click
+}
+
+// Targets across the iPad home screen at 1680×1050. Sampled to cover
+// different positions: corner-ish, mid-row, dock, large vs small.
+const TARGETS: Target[] = [
+  { name: 'Settings (small icon, badge)',     slug: 'settings',     x: 905,  y: 800, expectedScreen: 'Settings sidebar (Apple Account / General / Wi-Fi list)' },
+  { name: 'Books (small icon)',                slug: 'books',        x: 640,  y: 800, expectedScreen: 'Books library / Reading Now' },
+  { name: 'App Store (small icon)',            slug: 'appstore',     x: 905,  y: 680, expectedScreen: 'App Store Today / Games / Apps tabs' },
+  { name: 'Files (small icon, top-right)',    slug: 'files',        x: 1035, y: 420, expectedScreen: 'Files Recents / Browse view' },
+];
+
+async function snap(filepath: string): Promise<void> {
+  await new Promise(r => setTimeout(r, 200));
+  const shot = await client.screenshot({ quality: 75 });
+  await fs.writeFile(filepath, shot.buffer);
+}
+
 interface Trial {
+  trial: number;
   success: boolean;
   attempts: number;
   attemptsToSuccess: number | null;
   residual: number | null;
   cursorVerified: boolean;
   failureReason: string | null;
-}
-
-interface CellResult {
-  label: string;
-  trials: Trial[];
+  postClickPath: string;
 }
 
 async function unlockAndSettle(): Promise<void> {
@@ -51,12 +83,10 @@ async function unlockAndSettle(): Promise<void> {
   await new Promise(r => setTimeout(r, 800));
 }
 
-async function runTrial(target: { x: number; y: number }, jitter: number): Promise<Trial> {
+async function runTrial(t: Target, n: number, dir: string): Promise<Trial> {
   await unlockAndSettle();
-
-  const r = await clickAtWithRetry(client, target, {
+  const r = await clickAtWithRetry(client, { x: t.x, y: t.y }, {
     maxRetries: MAX_RETRIES,
-    interRetryJitterMickeys: jitter,
     moveToOptions: {
       profile: profile ?? undefined,
       forbidSlamFallback: true,
@@ -64,133 +94,125 @@ async function runTrial(target: { x: number; y: number }, jitter: number): Promi
     },
     minBrightness: 0,
     requireVerifiedCursor: false,
+    // Phase 192-eval: tighten verify so screenChanged is meaningful.
+    // Without this, full-frame diff trips on the wallpaper animation,
+    // clock advance, and widget ticks — false-positive "hits" on
+    // 6 of 7 sampled frames in the prior bench.
+    //
+    // 50 px half-width = 100×100 px window centred on the target.
+    // iPad icons are ~70 px wide; this window covers the icon and
+    // a small margin without leaking into adjacent icons.
+    //
+    // 0.05 = at least 5% of the windowed pixels must change. A
+    // genuine icon tap → app launch produces near-100% change in
+    // the window (entire app appears). A clock tick produces ~0%
+    // in this small region.
+    verifyOptions: {
+      region: { x: t.x, y: t.y, halfWidth: 50, halfHeight: 50 },
+      minChangedFraction: 0.05,
+    },
   });
 
   const firstHit = r.attemptHistory.findIndex(a => a.screenChanged);
   const attemptsToSuccess = firstHit >= 0 ? firstHit + 1 : null;
   const cursor = r.finalMoveResult.finalDetectedPosition;
   const residual = cursor
-    ? Math.sqrt((cursor.x - target.x) ** 2 + (cursor.y - target.y) ** 2)
+    ? Math.sqrt((cursor.x - t.x) ** 2 + (cursor.y - t.y) ** 2)
     : null;
   const failureReason = !r.success
     ? (r.failureSummary ?? r.finalVerification.message ?? 'unknown')
     : null;
 
+  // Capture the algorithm's post-click screenshot (already in result)
+  // — but ALSO take a fresh screenshot 600 ms later so we see what's
+  // actually on screen after iPadOS finishes any animation.
+  await new Promise(r => setTimeout(r, 600));
+  const verdict = r.success ? 'hit' : 'miss';
+  const file = path.join(dir, `${n.toString().padStart(2, '0')}-${verdict}.jpg`);
+  await snap(file);
+
   return {
+    trial: n,
     success: r.success,
     attempts: r.attempts,
     attemptsToSuccess,
     residual,
     cursorVerified: cursor !== null,
     failureReason,
+    postClickPath: file,
   };
 }
 
-async function runCell(label: string, target: { x: number; y: number }, jitter: number, n: number): Promise<CellResult> {
-  console.error(`\n=== ${label} — target=(${target.x},${target.y}) jitter=${jitter} ${n} trials ===`);
+async function benchTarget(t: Target): Promise<Trial[]> {
+  const dir = path.join(ROOT, t.slug);
+  await fs.mkdir(dir, { recursive: true });
+  console.error(`\n=== ${t.name} (${t.x},${t.y}) — ${TRIALS} trials ===`);
+  console.error(`    Expected post-click screen: ${t.expectedScreen}`);
   const trials: Trial[] = [];
-  for (let i = 0; i < n; i++) {
+  for (let n = 1; n <= TRIALS; n++) {
     try {
-      const t = await runTrial(target, jitter);
-      trials.push(t);
-      const resStr = t.residual?.toFixed(0) ?? 'unv';
+      const trial = await runTrial(t, n, dir);
+      trials.push(trial);
+      const resStr = trial.residual?.toFixed(0) ?? 'unv';
+      const status = trial.success ? '✓ HIT' : '✗ MISS';
       console.error(
-        `  ${i + 1}/${n} success=${t.success ? 'Y' : 'N'} ` +
-        `attempts=${t.attempts} hitOn=${t.attemptsToSuccess ?? '-'} residual=${resStr}px` +
-        (t.failureReason ? ` reason="${t.failureReason.slice(0, 60)}…"` : ''),
+        `  ${n}/${TRIALS} ${status} attempts=${trial.attempts} hitOn=${trial.attemptsToSuccess ?? '-'} ` +
+        `residual=${resStr}px → ${trial.postClickPath}`,
       );
+      await fs.appendFile(LOG, JSON.stringify({ target: t.slug, ...trial }) + '\n');
     } catch (e) {
-      console.error(`  ${i + 1}/${n} ERROR: ${(e as Error).message}`);
+      const errMsg = (e as Error).message;
+      console.error(`  ${n}/${TRIALS} ✗ ERROR: ${errMsg}`);
       trials.push({
+        trial: n,
         success: false,
         attempts: 0,
         attemptsToSuccess: null,
         residual: null,
         cursorVerified: false,
-        failureReason: `THROW: ${(e as Error).message}`,
+        failureReason: `THROW: ${errMsg}`,
+        postClickPath: '',
       });
     }
   }
-  return { label, trials };
+  return trials;
 }
 
-function summarize(cell: CellResult): {
-  successRate: number;
-  perAttempt: Record<number, number>;
-  meanResidual: number | null;
-  medianResidual: number | null;
-  cursorVerifyRate: number;
-} {
-  const N = cell.trials.length;
-  const successCount = cell.trials.filter(t => t.success).length;
-  const perAttempt: Record<number, number> = {};
-  for (let i = 1; i <= MAX_RETRIES + 1; i++) perAttempt[i] = 0;
-  for (const t of cell.trials) {
-    if (t.attemptsToSuccess !== null) perAttempt[t.attemptsToSuccess]++;
+console.error(`Bench start. maxRetries=${MAX_RETRIES} (iPad default). ${TRIALS} trials × ${TARGETS.length} targets = ${TRIALS * TARGETS.length} clicks.`);
+console.error(`Frames + JSONL → ${ROOT}`);
+
+const allResults: Record<string, Trial[]> = {};
+for (const t of TARGETS) {
+  allResults[t.slug] = await benchTarget(t);
+}
+
+console.error(`\n\n========== SUMMARY ==========\n`);
+console.error(`${'Target'.padEnd(36)} | hit rate | first-hit attempts | median residual`);
+console.error(`${'-'.repeat(36)}-+----------+--------------------+------------------`);
+let totalSuccess = 0;
+let totalTrials = 0;
+for (const t of TARGETS) {
+  const trials = allResults[t.slug];
+  const hits = trials.filter(x => x.success).length;
+  const N = trials.length;
+  const histogram: Record<number, number> = {};
+  for (let i = 1; i <= MAX_RETRIES + 1; i++) histogram[i] = 0;
+  for (const x of trials) {
+    if (x.attemptsToSuccess !== null) histogram[x.attemptsToSuccess]++;
   }
-  const verifiedResiduals = cell.trials
-    .filter(t => t.residual !== null)
-    .map(t => t.residual!);
-  const meanResidual = verifiedResiduals.length > 0
-    ? verifiedResiduals.reduce((a, b) => a + b, 0) / verifiedResiduals.length
-    : null;
-  const medianResidual = verifiedResiduals.length > 0
-    ? [...verifiedResiduals].sort((a, b) => a - b)[Math.floor(verifiedResiduals.length / 2)]
-    : null;
-  const cursorVerifyRate = cell.trials.filter(t => t.cursorVerified).length / Math.max(1, N);
-  return {
-    successRate: successCount / Math.max(1, N),
-    perAttempt,
-    meanResidual,
-    medianResidual,
-    cursorVerifyRate,
-  };
-}
-
-console.error(`Bench start. maxRetries=${MAX_RETRIES} (iPad default).`);
-
-// PART A: Focused A/B at Settings (single target × 2 modes × 15 trials).
-const SETTINGS = { x: 905, y: 800 };
-const A_off = await runCell('A: Settings jitter OFF', SETTINGS, 0, 15);
-const A_on  = await runCell('A: Settings jitter ON',  SETTINGS, 50, 15);
-
-// PART B: Cross-target sweep with jitter on (4 targets × 10 trials).
-const TARGETS_B: Array<{ name: string; x: number; y: number }> = [
-  { name: 'Settings (small icon, badge)',     x: 905, y: 800 },
-  { name: 'App Store (small icon)',           x: 905, y: 680 },
-  { name: 'Books (small icon, leftmost col)', x: 640, y: 800 },
-  { name: 'Files (small icon, top-right)',    x: 1035, y: 420 },
-];
-const B_results: CellResult[] = [];
-for (const t of TARGETS_B) {
-  const cell = await runCell(`B: ${t.name}`, { x: t.x, y: t.y }, 50, 10);
-  B_results.push(cell);
-}
-
-// === SUMMARY ===
-console.error(`\n\n========== SUMMARY ==========`);
-
-console.error(`\n--- PART A: A/B at Settings (905, 800) ---`);
-const sA_off = summarize(A_off);
-const sA_on  = summarize(A_on);
-console.error(`jitter OFF: ${(sA_off.successRate * 100).toFixed(0)}% (${A_off.trials.filter(t => t.success).length}/${A_off.trials.length})  per-attempt-hit: ${JSON.stringify(sA_off.perAttempt)}  median-residual=${sA_off.medianResidual?.toFixed(0) ?? 'unv'}px`);
-console.error(`jitter ON : ${(sA_on.successRate * 100).toFixed(0)}% (${A_on.trials.filter(t => t.success).length}/${A_on.trials.length})  per-attempt-hit: ${JSON.stringify(sA_on.perAttempt)}  median-residual=${sA_on.medianResidual?.toFixed(0) ?? 'unv'}px`);
-const liftA = (sA_on.successRate - sA_off.successRate) * 100;
-console.error(`Lift: ${liftA >= 0 ? '+' : ''}${liftA.toFixed(0)} pp (${liftA >= 5 ? '✓ PASS' : liftA >= 0 ? '~ NEUTRAL' : '✗ FAIL'} acceptance bar +5 pp)`);
-
-console.error(`\n--- PART B: Cross-target sweep (jitter ON, 10 trials each) ---`);
-console.error(`${'Target'.padEnd(40)} | success | hit-on-attempt | median residual | verify`);
-console.error(`${'-'.repeat(40)}-+---------+----------------+-----------------+-------`);
-for (const cell of B_results) {
-  const s = summarize(cell);
-  const hitOnStr = Object.entries(s.perAttempt).filter(([, c]) => c > 0).map(([n, c]) => `${n}:${c}`).join(' ');
+  const hitOnStr = Object.entries(histogram).filter(([, c]) => c > 0).map(([n, c]) => `${n}:${c}`).join(' ') || '-';
+  const residuals = trials.filter(x => x.residual !== null).map(x => x.residual!);
+  const median = residuals.length > 0
+    ? [...residuals].sort((a, b) => a - b)[Math.floor(residuals.length / 2)].toFixed(0)
+    : 'n/a';
   console.error(
-    `${cell.label.replace('B: ', '').padEnd(40)} |   ${(s.successRate * 100).toFixed(0).padStart(3)}%  | ${hitOnStr.padEnd(14)} |       ${s.medianResidual?.toFixed(0).padStart(5) ?? '  unv'}px |  ${(s.cursorVerifyRate * 100).toFixed(0)}%`,
+    `${t.name.padEnd(36)} |   ${(hits / N * 100).toFixed(0).padStart(3)}%  | ${hitOnStr.padEnd(18)} |       ${median.padStart(5)}px`,
   );
+  totalSuccess += hits;
+  totalTrials += N;
 }
-
-const allB = B_results.flatMap(c => c.trials);
-const overallB = allB.filter(t => t.success).length / Math.max(1, allB.length);
-console.error(`\nOverall (Part B aggregate): ${(overallB * 100).toFixed(0)}% (${allB.filter(t => t.success).length}/${allB.length})`);
-
+console.error(`\nOverall: ${totalSuccess}/${totalTrials} (${(totalSuccess / totalTrials * 100).toFixed(0)}%)`);
+console.error(`\nNext: visually inspect a sample of post-click screenshots to verify "success" means correct-element-hit.`);
+console.error(`  Hits: ls ${ROOT}/<target>/*-hit.jpg`);
+console.error(`  Misses: ls ${ROOT}/<target>/*-miss.jpg`);
 process.exit(0);
