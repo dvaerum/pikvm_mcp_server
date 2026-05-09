@@ -110,14 +110,65 @@ pass an explicit `maxAgeMs`.
 The chain is now fully defensive — at persist time, at load time
 (content), at load time (age).
 
-## Predicted lift
+## Honest measured lift (REGRESSION on first attempt)
 
-The Files target was 0% before. Post-TTL, fresh-session benches
-should see Files closer to the AppStore range (~30-50%) on small
-icons. Combined with users disabling iPadOS Pointer Animations
-(Phase 194-H), the predicted small-icon click rate is ≥ 90%.
+A live re-bench at v0.5.192 with `data/cursor-templates/` wiped at
+bench start (Phase 196b initial commit) showed a REGRESSION:
 
-A live re-bench with v0.5.192 will validate.
+| Target              | v0.5.191 (stale templates) | v0.5.192 (clean templates)|
+|:--------------------|:--------------------------:|:-------------------------:|
+| Settings            |          100%              |             0%            |
+| Books               |          100%              |            67%            |
+| App Store           |           33%              |            33%            |
+| Files               |        0% (det. 245px)     |        0% (unverified)    |
+| **Overall**         |        **58%**             |          **25%**          |
+
+What this teaches us:
+
+The "stale" templates were not pure poison. Some helped Settings/
+Books (where the cursor lives in the lower-half of the screen and
+templates from prior sessions still matched correctly there). Only
+the Files target was actively poisoned by a template matching a
+top-right widget feature.
+
+A blanket wipe removes the helpful templates along with the
+poisonous one, and forces trial 1 of the first target to fall back
+to motion-diff alone — which has higher variance and frequently
+fails on iPadOS soft cursors.
+
+## Revised approach
+
+The TTL on `loadTemplateSet` is still a sound long-term safety net
+(catches truly cross-day templates), and was kept. The bench-script
+auto-wipe was REVERTED in `bench-click-extensive.ts` (Phase 196b
+follow-up). Manual wipe between back-to-back same-day comparison
+runs remains a good practice for A/B testing, but it is no longer
+the default bench-start behavior.
+
+Real fix for the Files-target false-positive remains TBD. Likely
+options:
+1. Per-region template stores (templates trained against one
+   screen region don't match in another).
+2. Stricter false-positive rejection at template-match time
+   (e.g. require multi-pixel motion-diff agreement above a higher
+   threshold).
+3. Region-blacklist (don't search for cursor inside known
+   animated widget zones like Maps).
+
+These are Phase 197+ candidates.
+
+## Conclusion
+
+Phase 196 ships:
+- (kept) 6h TTL on `loadTemplateSet` — defensive against
+  cross-session contamination, low blast radius.
+- (reverted) auto-wipe in `bench-click-extensive.ts` — was a
+  measured regression.
+
+Live numbers at v0.5.192 with templates left intact should match
+v0.5.191 baseline (58% overall). The Files-target failure is a
+deeper bug in template false-positive matching that the TTL alone
+doesn't fix.
 
 ## Diagnostic procedure for future stale-template incidents
 

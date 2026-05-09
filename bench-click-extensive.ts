@@ -44,16 +44,12 @@ await fs.rm(ROOT, { recursive: true, force: true }).catch(() => undefined);
 await fs.mkdir(ROOT, { recursive: true });
 const LOG = path.join(ROOT, 'results.jsonl');
 
-// Phase 196: wipe persisted cursor templates at bench start. Stale
-// templates from prior sessions can cause deterministic-residual
-// false positives (see docs/troubleshooting/2026-05-10-phase-196-template-ttl.md).
-// The 6h TTL in loadTemplateSet handles overnight gaps automatically,
-// but back-to-back same-day benches need an explicit wipe to compare
-// runs apples-to-apples.
-const TEMPLATES_DIR = './data/cursor-templates';
-await fs.rm(TEMPLATES_DIR, { recursive: true, force: true }).catch(() => undefined);
-await fs.mkdir(TEMPLATES_DIR, { recursive: true });
-console.error(`Wiped ${TEMPLATES_DIR} at bench start.`);
+// Phase 196b: do NOT auto-wipe data/cursor-templates here. Live test on
+// 2026-05-10 showed wiping made things WORSE (overall 58% → 25%) because
+// trial 1 of the first target then runs with NO templates, falling back
+// to motion-diff which has higher variance. The 6h TTL in loadTemplateSet
+// handles cross-session contamination automatically; for fair
+// before/after benches in a single session, manually wipe between runs.
 
 interface Target {
   name: string;
