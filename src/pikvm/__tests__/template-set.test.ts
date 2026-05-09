@@ -213,6 +213,69 @@ describe('findCursorByTemplateSet', () => {
     expect(Math.abs(withHint!.position.y - 100)).toBeLessThan(10);
   });
 
+  it('Phase 197: requireWithinRadius rejects far-away matches and returns null', async () => {
+    // Live finding (v0.5.192 Files-target bench): template-match
+    // returned a deterministic match at residual ~245px from the
+    // expectedNear hint on every trial. Default fallback returned
+    // that match anyway. With requireWithinRadius=true, the
+    // function returns null instead, letting the caller trust
+    // the predicted position rather than a confident-wrong one.
+    const w = 400, h = 400;
+    const cursor: [number, number, number] = [240, 240, 240];
+    const wallpaper: [number, number, number] = [50, 50, 50];
+
+    const tplFrame = await decodeScreenshot(
+      await stamp(await makeFrame(w, h, wallpaper), 200, 200, 7, cursor),
+    );
+    const template = extractCursorTemplateDecoded(tplFrame, { x: 200, y: 200 }, 24);
+
+    // Screen has ONLY a "decoy" at (300, 300), nothing near (100, 100).
+    let frame = await makeFrame(w, h, wallpaper);
+    frame = await stamp(frame, 300, 300, 7, [250, 250, 250]);
+    const screen = await decodeScreenshot(frame);
+
+    // Without requireWithinRadius (default): falls back to the decoy.
+    const lax = findCursorByTemplateSet(screen, [template], {
+      minScore: 0.5,
+      expectedNear: { x: 100, y: 100 },
+      expectedNearRadius: 50,
+    });
+    expect(lax).not.toBeNull();
+
+    // With requireWithinRadius=true: returns null because the decoy
+    // is outside the 50-px radius of (100, 100).
+    const strict = findCursorByTemplateSet(screen, [template], {
+      minScore: 0.5,
+      expectedNear: { x: 100, y: 100 },
+      expectedNearRadius: 50,
+      requireWithinRadius: true,
+    });
+    expect(strict).toBeNull();
+  });
+
+  it('Phase 197: requireWithinRadius without expectedNear is a no-op', async () => {
+    // Defensive: requireWithinRadius alone (no hint) shouldn't change
+    // behavior — the function still returns the highest-score match.
+    const w = 400, h = 400;
+    const cursor: [number, number, number] = [240, 240, 240];
+    const wallpaper: [number, number, number] = [50, 50, 50];
+
+    const tplFrame = await decodeScreenshot(
+      await stamp(await makeFrame(w, h, wallpaper), 200, 200, 7, cursor),
+    );
+    const template = extractCursorTemplateDecoded(tplFrame, { x: 200, y: 200 }, 24);
+
+    let frame = await makeFrame(w, h, wallpaper);
+    frame = await stamp(frame, 300, 300, 7, [240, 240, 240]);
+    const screen = await decodeScreenshot(frame);
+
+    const r = findCursorByTemplateSet(screen, [template], {
+      minScore: 0.5,
+      requireWithinRadius: true, // ignored without expectedNear
+    });
+    expect(r).not.toBeNull();
+  });
+
   it('falls below minScore when no template fits', async () => {
     const w = 200, h = 200;
     // Build a "template" of pure red — won't match a gray cursor frame.

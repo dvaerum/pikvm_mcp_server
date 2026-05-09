@@ -877,6 +877,14 @@ export interface FindCursorOptions {
    *  (single-template). */
   expectedNear?: Point;
   expectedNearRadius?: number;
+  /** Phase 197 (v0.5.193): when true and `expectedNear` is set, return
+   *  null if NO match falls within `expectedNearRadius`. Without this
+   *  the function falls back to the highest-scoring match anywhere on
+   *  screen — which is the iPad UI false-positive class
+   *  (Files target deterministically returned a match at ~245 px from
+   *  target on every trial). Default false for back-compat; callers
+   *  that have a strong locality prior should opt in. */
+  requireWithinRadius?: boolean;
   verbose?: boolean;
 }
 
@@ -1021,6 +1029,11 @@ export function findCursorByTemplateSet(
     );
     if (within.length > 0) {
       best = within.reduce((a, b) => (a.score >= b.score ? a : b));
+    } else if (options.requireWithinRadius) {
+      // Phase 197: caller asked us NOT to silently fall back to a far
+      // high-score match. Return null and let the caller decide
+      // (motion-diff retry, wake-and-capture, trust-prediction).
+      return null;
     }
   }
   if (!best) {
