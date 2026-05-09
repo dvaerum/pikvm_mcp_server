@@ -440,7 +440,13 @@ async function getCachedTemplates(): Promise<CursorTemplate[]> {
   // Migrate the legacy single-file template into the set directory so older
   // installs don't lose their cache when this code ships.
   await migrateLegacyTemplate(LEGACY_TEMPLATE_PATH, DEFAULT_TEMPLATE_DIR).catch(() => undefined);
-  cachedTemplates = await loadTemplateSet(DEFAULT_TEMPLATE_DIR).catch(() => []);
+  // Phase 194-A (v0.5.187): pass `looksLikeCursor` as a load-time
+  // validator. Defensive belt against contaminated templates that may
+  // have slipped past the persist-time gate. The 2026-04-30 bench
+  // surfaced one such file (`brightCount=0.3 %`); without this
+  // filter, future template-match calls would score garbage NCC
+  // against any teal-wallpaper region of the screen.
+  cachedTemplates = await loadTemplateSet(DEFAULT_TEMPLATE_DIR, looksLikeCursor).catch(() => []);
   return cachedTemplates;
 }
 

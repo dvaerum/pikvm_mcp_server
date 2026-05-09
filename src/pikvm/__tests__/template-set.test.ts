@@ -370,3 +370,40 @@ describe('migrateLegacyTemplate (one-time upgrade behaviour)', () => {
     }
   });
 });
+
+describe('Phase 194-A: loadTemplateSet validate callback', () => {
+  async function tempDir(): Promise<string> {
+    return await fs.mkdtemp(path.join(os.tmpdir(), 'pikvm-validate-'));
+  }
+
+  it('drops templates that fail the validate callback', async () => {
+    const dir = await tempDir();
+    try {
+      // Distinct seeds → distinct first-pixel R after JPEG round-trip:
+      // seed=1 → ~52, seed=2 → ~105, seed=99 → ~151. Reject anything
+      // with R > 130 — only seed=99 fails.
+      await saveCursorTemplate(gradientTemplate(1), path.join(dir, '01.jpg'));
+      await saveCursorTemplate(gradientTemplate(99), path.join(dir, '02.jpg'));
+      await saveCursorTemplate(gradientTemplate(2), path.join(dir, '03.jpg'));
+
+      const validate = (t: { rgb: Buffer | Uint8Array }): boolean => t.rgb[0] <= 130;
+
+      const loaded = await loadTemplateSet(dir, validate);
+      expect(loaded).toHaveLength(2);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps all templates when no validator is supplied (back-compat)', async () => {
+    const dir = await tempDir();
+    try {
+      await saveCursorTemplate(gradientTemplate(11), path.join(dir, '01.jpg'));
+      await saveCursorTemplate(gradientTemplate(99), path.join(dir, '02.jpg'));
+      const loaded = await loadTemplateSet(dir);
+      expect(loaded).toHaveLength(2);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

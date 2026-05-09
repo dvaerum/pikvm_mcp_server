@@ -22,7 +22,7 @@ import {
   findCursorByTemplateSet,
 } from './cursor-detect.js';
 import type { DecodedScreenshot } from './cursor-detect.js';
-import { moveToPixel } from './move-to.js';
+import { moveToPixel, looksLikeCursor } from './move-to.js';
 import type { MoveToOptions, MoveToResult } from './move-to.js';
 import type { PiKVMClient, MouseButton } from './client.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
@@ -437,7 +437,10 @@ export async function clickAtWithRetry(
   const interRetryJitterMickeys = options.interRetryJitterMickeys ?? 0;
   // Load cursor templates ONCE outside the retry loop. Empty set →
   // pre-click template check is a no-op (graceful degradation).
-  const sessionTemplates = await loadTemplateSet(DEFAULT_TEMPLATE_DIR).catch(() => []);
+  // Phase 194-A (v0.5.187): validate at load time so contaminated
+  // templates can't poison pre-click template search even if they
+  // somehow ended up on disk.
+  const sessionTemplates = await loadTemplateSet(DEFAULT_TEMPLATE_DIR, looksLikeCursor).catch(() => []);
 
   // Phase 38: brightness precheck — fail fast on a dim screen. Live-verified
   // 2026-04-26: cursor detection reliably fails when iPad display brightness
