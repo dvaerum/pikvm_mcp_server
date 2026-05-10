@@ -15,11 +15,19 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 
 ## Reliability (Phase 70-78 measurements, v0.5.69)
 
+> **HONESTY NOTE (Phase 214/219, 2026-05-10, v0.5.206):** the rows
+> below predate Phase 214's finding that prior measurements may have
+> been against the App Switcher state (because Cmd+H doesn't dismiss
+> the App Switcher — `pikvm_ipad_home` now exposes
+> `forceHomeViaSwipe: true` for guaranteed home-screen state). The
+> 50-100 px row in particular needs re-measurement on a confirmed
+> home screen. See `docs/troubleshooting/2026-05-10-phase-214-app-switcher-root-cause.md`.
+
 | Target width | Per-attempt hit | 3-attempt hit | Examples |
 |--------------|-----------------|---------------|----------|
 | ≥ 200 px | ~80% | ~99% | Sidebar rows, large buttons |
 | 100-200 px | ~70% | ~97% | App icons, search fields |
-| 50-100 px | ~60% | **~50-60%** | Standard buttons, page tabs, ~70 px iPad icons (Phase 111 measured) |
+| 50-100 px | ~60% | **~50-60%** | Standard buttons, page tabs, ~70 px iPad icons (Phase 111 measured — pre-Phase-214; re-bench needed) |
 | < 50 px | ~50% | ~88% | Back arrows, X buttons, toggles |
 
 **Phase 94 / Phase 142 default**: `maxRetries` defaults to **3 on iPad (relative-mouse) targets** (Phase 142 bumped from 2 → 3 for Phase 141's hidden-popup-dismiss-recipe headroom) — turns ~50% per-attempt into ~88% reliable end-to-end for tiny targets. Pass `maxRetries: 0` explicitly to opt out (single-shot, e.g. for a quick one-off toggle).
