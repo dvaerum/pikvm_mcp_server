@@ -425,7 +425,33 @@ export async function ipadGoHome(
     await sleep(200);
     await client.sendKey('Enter');
     await sleep(600);
-    messagePart += ' Followed by slam-corner + swipe-up + defensive Esc+Enter (Phase 231 undoes accidental lock).';
+    // Phase 235 (v0.5.208): the swipe leaves cursor pinned at the
+    // top edge (drag terminates at y≈0). Live N=5 diagnostic
+    // 2026-05-10: target-region clicks fail (residual 438 px) when
+    // cursor starts at top edge but succeed (residual 33 px) when
+    // cursor starts mid-screen. Per-call cap means moveToPixel
+    // can't recover from the top-edge pinning in one call. Deposit
+    // cursor at mid-screen here using chunked Y emits — pure
+    // downward motion (~540 px) split into 6 chunks of 100 px so
+    // iPadOS registers each separately rather than clamping.
+    if (bounds) {
+      const targetY = Math.round(bounds.y + bounds.height / 2);
+      let remDescend = Math.max(0, targetY);
+      while (remDescend > 0) {
+        const step = Math.min(100, remDescend);
+        await client.mouseMoveRelative(0, step);
+        remDescend -= step;
+        await sleep(40);
+      }
+    } else {
+      // No detected iPad bounds — fall back to a fixed descent that
+      // works for the reference 1920x1080 iPad portrait layout.
+      for (let i = 0; i < 6; i++) {
+        await client.mouseMoveRelative(0, 100);
+        await sleep(40);
+      }
+    }
+    messagePart += ' Followed by slam-corner + swipe-up + defensive Esc+Enter (Phase 231) + mid-screen cursor deposit (Phase 235).';
   }
 
   const shot = await client.screenshot();
