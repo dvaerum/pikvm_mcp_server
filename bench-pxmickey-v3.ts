@@ -196,7 +196,12 @@ async function main(): Promise<void> {
 
   await ipadGoHome(client);
   await new Promise(r => setTimeout(r, 800));
-  const seedResult = await seedCursorTemplate(client);
+  // Pre-wake the cursor with a small move so the seed function's
+  // before-frame has a visible cursor to diff against. settleMs=50
+  // (vs default 500) keeps the cursor visible in the after frame.
+  await client.mouseMoveRelative(20, 0);
+  await new Promise(r => setTimeout(r, 100));
+  const seedResult = await seedCursorTemplate(client, { settleMs: 50, emitDx: 80 });
   if (!seedResult.ok) {
     console.error(`Failed to seed cursor template: ${seedResult.reason}`);
     process.exit(1);
