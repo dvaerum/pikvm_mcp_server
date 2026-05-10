@@ -221,6 +221,31 @@ export class PiKVMClient {
   /**
    * Take a screenshot and calculate coordinate scaling factors
    */
+  /** Phase 202 (v0.5.196): emit a ±1px wake nudge IMMEDIATELY before
+   *  capturing a screenshot so the iPad's soft cursor is visible in
+   *  the captured frame. Empirical finding (live test 2026-05-10):
+   *  the iPad cursor fades within ~200ms of the last mouse emit, but
+   *  PiKVM's screenshot round-trip is 300-500ms. Without a wake-
+   *  nudge, ~95% of detection screenshots find no cursor; with one,
+   *  cursor is visible. Net cursor displacement is 0 (1 right + 1
+   *  left). Use for cursor-detection paths in moveToPixel and
+   *  click-verify where we NEED the cursor visible to detect it. */
+  async screenshotKeepingCursorAlive(options?: {
+    maxWidth?: number;
+    maxHeight?: number;
+    quality?: number;
+  }): Promise<ScreenshotResult> {
+    try {
+      await this.mouseMoveRelative(1, 0);
+      await this.mouseMoveRelative(-1, 0);
+    } catch {
+      // If the wake nudge fails (HID busy etc.), proceed with
+      // the screenshot anyway — degraded behavior matches old
+      // path; better than throwing here.
+    }
+    return this.screenshot(options);
+  }
+
   async screenshot(options?: {
     maxWidth?: number;
     maxHeight?: number;

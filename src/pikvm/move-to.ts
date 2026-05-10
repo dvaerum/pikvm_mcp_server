@@ -280,6 +280,25 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+/** Phase 202 (v0.5.196): wake-nudge wrapper around screenshot for the
+ *  cursor-detection path. Live empirical finding (2026-05-10): the iPad
+ *  cursor fades within ~200ms of the last mouse emit, but PiKVM's
+ *  screenshot round-trip is 300-500ms — so by the time the screenshot
+ *  arrives, the cursor is invisible. Without a wake nudge, ~95% of
+ *  detection screenshots find no cursor; with one, cursor stays visible.
+ *  Net cursor displacement: 0 (1px right + 1px left).
+ *  Falls back to plain screenshot() if `screenshotKeepingCursorAlive`
+ *  isn't on the client (e.g., test mocks). */
+async function screenshotForCursorDetection(
+  client: { screenshot: () => Promise<{ buffer: Buffer; screenshotWidth: number; screenshotHeight: number }>;
+            screenshotKeepingCursorAlive?: () => Promise<{ buffer: Buffer; screenshotWidth: number; screenshotHeight: number }> },
+): Promise<{ buffer: Buffer; screenshotWidth: number; screenshotHeight: number }> {
+  if (typeof client.screenshotKeepingCursorAlive === 'function') {
+    return client.screenshotKeepingCursorAlive();
+  }
+  return client.screenshot();
+}
+
 // ============================================================================
 // Stale-template-match guard.
 //
@@ -774,7 +793,7 @@ async function discoverOrigin(
         await sleep(80);
         await client.mouseMoveRelative(-attempt.dx, 0);
         await sleep(attempt.settleMs);
-        const shot = await decodeScreenshot((await client.screenshot()).buffer);
+        const shot = await decodeScreenshot((await screenshotForCursorDetection(client)).buffer);
         await saveDebug(`origin-shot-${attempt.label}`, shot.buffer);
         // Phase 131 (v0.5.123): tighten minScore from
         // findCursorByTemplateDecoded's default 0.83 to 0.85, AND
@@ -1420,7 +1439,7 @@ export async function moveToPixel(
 
   // shotA-pre captured BEFORE the calibration probe; shotA captured AFTER.
   // diff(shotA-pre, shotA) measures the calibration probe's effect.
-  const shotAPre = await decodeScreenshot((await client.screenshot()).buffer);
+  const shotAPre = await decodeScreenshot((await screenshotForCursorDetection(client)).buffer);
 
   // Phase 14: skip calibration probe entirely when locateCursor's
   // probe already gave us a ratio measurement.
@@ -1435,7 +1454,7 @@ export async function moveToPixel(
 
   // 3. Screenshot A — captured AFTER calibration probe. shotAPre vs shotA
   //    yields calibration ratio; shotA vs shotB yields open-loop ratio.
-  const shotA = await decodeScreenshot((await client.screenshot()).buffer);
+  const shotA = await decodeScreenshot((await screenshotForCursorDetection(client)).buffer);
 
   // postWarmupExpected: where the cursor is now, after the calibration
   // probe. Initial estimate uses fallback ratio; will be refined if
@@ -1537,7 +1556,7 @@ export async function moveToPixel(
   if (postSettleMs > 0) await sleep(postSettleMs);
 
   // 5. Screenshot B
-  const shotB = await decodeScreenshot((await client.screenshot()).buffer);
+  const shotB = await decodeScreenshot((await screenshotForCursorDetection(client)).buffer);
 
   // 6. Motion diff (open-loop)
   const corrections: CorrectionPass[] = [];
@@ -1824,7 +1843,7 @@ export async function moveToPixel(
 
       await emitChunked(client, corrMickeysX, corrMickeysY, usedChunkMag, usedChunkPaceMs);
       await sleep(postSettleMs);
-      const shotC = await decodeScreenshot((await client.screenshot()).buffer);
+      const shotC = await decodeScreenshot((await screenshotForCursorDetection(client)).buffer);
       if (debugDir) {
         const tag = String(totalPasses + 1).padStart(2, '0');
         const phaseTag = useLinear ? 'L' : 'G';
