@@ -114,6 +114,22 @@ describe('MCP tool schema and handler exposure', () => {
     });
   });
 
+  describe('pikvm_screenshot — Phase 202 keepalive variant exposed (Phase 246)', () => {
+    it('schema declares keepCursorAlive', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_screenshot');
+      expect(tool).toMatch(/keepCursorAlive:\s*\{[^}]*type:\s*'boolean'/);
+    });
+
+    it('handler routes to screenshotKeepingCursorAlive when keepCursorAlive is true', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_screenshot');
+      // Pattern: validateBoolean(args.keepCursorAlive) ? screenshotKeepingCursorAlive(opts) : screenshot(opts)
+      expect(handler).toMatch(/validateBoolean\(args\.keepCursorAlive\)/);
+      expect(handler).toMatch(/screenshotKeepingCursorAlive/);
+    });
+  });
+
   describe('pikvm_mouse_click_at — phase-tagged production options exposed', () => {
     // The four most-load-bearing options (each with measurable user
     // impact documented in its Phase troubleshooting note).
