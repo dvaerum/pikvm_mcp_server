@@ -501,7 +501,7 @@ const tools: Tool[] = [
         chunkMagnitude: { type: 'number', description: 'Per-call delta magnitude for chunking. Default 60.' },
         chunkPaceMs: { type: 'number', description: 'Milliseconds between chunked calls. Default 20.' },
         correct: { type: 'boolean', description: 'Enable motion-diff detection + correction. Default true.' },
-        maxCorrectionPasses: { type: 'number', description: 'Max correction passes. Default 2.' },
+        maxCorrectionPasses: { type: 'number', description: 'Max correction passes. Default 5.' },
         minResidualPx: { type: 'number', description: 'Early-exit threshold (px) for correction loop. Default 25.' },
         warmupMickeys: { type: 'number', description: 'Tiny move emitted before screenshot A so cursor renders. Default 8 mickeys.' },
       },
