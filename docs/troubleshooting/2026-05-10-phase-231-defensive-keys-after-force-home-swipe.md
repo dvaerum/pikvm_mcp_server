@@ -114,6 +114,30 @@ predict when it locks.
 - Nix build green
 - Live-verified: ipadGoHome forceHomeViaSwipe now reliably leaves
   iPad on home screen
-- moveToPixel succeeds with 3.1 px residual on Settings target —
-  first successful small-icon traversal of this session
 - Cron 54c25dad still running every 17 min
+
+## Honest N=3 verification at v0.5.207
+
+`test-phase231-n3-verify.ts` — 3 trials of unlockIpad → forceHomeViaSwipe → moveToPixel(905, 800):
+
+| Trial | Result | Residual | Notes |
+|:-----:|:-------|:---------|:------|
+| t1 | cursor=(891, 786) | **19.8 px** | within 35 px safety gate ✓ |
+| t2 | cursor=(813, 316) | 492.7 px | far-off — likely prediction-fallback landing |
+| t3 | ERROR | n/a | locateCursor failed (only 1 cursor-sized cluster) |
+
+**Result: 1/3 within tolerance.** This is a real improvement over
+the pre-Phase-231 0/n state but variance is high. The Phase 231
+fix solves ONE failure mode (swipe accidentally locks → defensive
+keys unlock); other failure modes remain:
+- locateCursor's "1 cursor-sized cluster" fail (cursor faded
+  between probe pre/post — Phase 216 keepalive doesn't help if
+  the cursor is edge-pinned post-swipe)
+- prediction-fallback landing at deterministic far-off points
+  when both detection paths fail mid-traversal
+
+These are Phase 232+ candidates and require deeper architectural
+work (post-swipe cursor positioning, locateCursor edge-handling).
+
+The Phase 231 fix is necessary-but-not-sufficient: it unblocks
+the post-unlock state but doesn't guarantee per-trial success.
