@@ -20,6 +20,7 @@ import { PiKVMClient } from './src/pikvm/client.js';
 import { moveToPixel } from './src/pikvm/move-to.js';
 import { loadProfile } from './src/pikvm/ballistics.js';
 import { ipadGoHome, unlockIpad } from './src/pikvm/ipad-unlock.js';
+import { VERSION } from './src/version.js';
 
 const cfg = loadConfig();
 const client = new PiKVMClient(cfg.pikvm);
@@ -29,7 +30,7 @@ const ROOT = './data/phase236-n10';
 await fs.rm(ROOT, { recursive: true, force: true }).catch(() => undefined);
 await fs.mkdir(ROOT, { recursive: true });
 
-console.error('=== Phase 236 N=10 evidence bench at v0.5.208 ===\n');
+console.error(`=== Phase 236 N=10 evidence bench at v${VERSION} ===\n`);
 
 await unlockIpad(client, { dragPx: 1500 });
 await new Promise(r => setTimeout(r, 800));
