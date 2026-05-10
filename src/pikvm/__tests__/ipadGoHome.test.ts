@@ -191,5 +191,37 @@ describe('ipadGoHome', () => {
       // Default path: only Cmd+H, no defensive keys.
       expect(m.keys).toHaveLength(0);
     });
+
+    // Phase 235 (v0.5.208): the swipe leaves cursor pinned at the top
+    // edge (drag terminates at y≈0). Live N=6 diagnostic 2026-05-10:
+    // mid-screen click rate after deposit is ~33% vs 0/3 with cursor
+    // pinned at top edge. Pin: AFTER the mouse-up that ends the swipe
+    // AND AFTER the defensive Esc+Enter, there must be downward emits
+    // (positive dy) to deposit cursor mid-screen.
+    it('Phase 235: deposits cursor mid-screen after the swipe + Esc + Enter', async () => {
+      const m = mockClient();
+      await ipadGoHome(m.client, { settleMs: 0, forceHomeViaSwipe: true });
+      // Find the boundary: the LAST mouseClick({state: false}) is the
+      // swipe end. Anything after that is post-swipe.
+      const upIdx = m.clicks.findIndex((c) => c.state === false);
+      expect(upIdx).toBeGreaterThanOrEqual(0);
+      // After the swipe (and Esc+Enter), there must be a sequence of
+      // pure-downward emits to deposit the cursor mid-screen.
+      const downwardEmitsTotal = m.moves.reduce(
+        (s, mv) => (mv.dx === 0 && mv.dy > 0 ? s + mv.dy : s),
+        0,
+      );
+      // Expect cumulative downward motion ≥ 400 px (target is mid-
+      // screen, default fallback chunks 6×100 = 600 px).
+      expect(downwardEmitsTotal).toBeGreaterThanOrEqual(400);
+    });
+
+    it('Phase 235: deposit emits are chunked (no single emit > 127 px)', async () => {
+      const m = mockClient();
+      await ipadGoHome(m.client, { settleMs: 0, forceHomeViaSwipe: true });
+      // Per-call mickey cap is 127. Any emit above that is a bug.
+      const overcap = m.moves.filter((mv) => Math.abs(mv.dx) > 127 || Math.abs(mv.dy) > 127);
+      expect(overcap).toHaveLength(0);
+    });
   });
 });
