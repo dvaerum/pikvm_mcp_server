@@ -1,8 +1,22 @@
 # Phase 211 — residual pattern reveals false-positive cluster lock-in
 
-**Date:** 2026-05-10  
+**Date:** 2026-05-10
 **Test:** `npx tsx test-residual-pattern.ts` — 10 trials of `moveToPixel`
 to (905, 800) Settings target, log each detected cursor.
+
+> **PARTIALLY SUPERSEDED by Phase 214 (2026-05-10).** This doc
+> attributes the deterministic clusters at (949, 795), (970, 771),
+> (972, 772) to "false-positive cluster lock-in" on UI features —
+> but Phase 214 found those measurements were taken against the
+> **App Switcher** (not the home screen) because `pikvm_ipad_home`
+> (Cmd+H) doesn't dismiss the App Switcher. The clusters coincide
+> with the Weather widget animation in App Switcher tile previews,
+> not stationary UI false-positives. Phase 212's stationary-cluster
+> rejection (which this doc inspired) still ships as a correct
+> safety mechanism, but the framing about "static UI features" is
+> wrong. See:
+> - `2026-05-10-phase-214-app-switcher-root-cause.md` — methodology fix
+> - `2026-05-10-phase-212-stationary-cluster-rejection.md` — what shipped
 
 ## Data
 
