@@ -372,6 +372,21 @@ export async function diffScreenshots(
 // ============================================================================
 
 async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
+  // Phase 216 (v0.5.204): prefer the Phase 202 keepalive screenshot
+  // if the client exposes it. The plain `client.screenshot()` returns
+  // a frame from the streamer's buffer that may be ~300+ ms stale,
+  // by which time the iPadOS cursor has often faded. Live-trace
+  // 2026-05-10 showed locateCursor returning "1 cursor-sized cluster
+  // (need ≥2)" because the BEFORE frame had no visible cursor.
+  // The keepalive variant emits a tiny ±1 px wake nudge before each
+  // capture so the cursor stays rendered. Falls back to the plain
+  // screenshot for back-compat with test mocks that don't expose the
+  // keepalive method.
+  const c = client as unknown as { screenshotKeepingCursorAlive?: () => Promise<{ buffer: Buffer }> };
+  if (typeof c.screenshotKeepingCursorAlive === 'function') {
+    const result = await c.screenshotKeepingCursorAlive();
+    return result.buffer;
+  }
   const result = await client.screenshot();
   return result.buffer;
 }
