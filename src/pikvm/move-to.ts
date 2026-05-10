@@ -1622,7 +1622,23 @@ export async function moveToPixel(
       )
     : null;
 
-  if (motionResult && motionResult.pair) {
+  // Phase 212 (v0.5.201): the open-loop motion-diff result anchors
+  // every subsequent correction pass via `prevPos`. If this first
+  // detection lands on a static-feature cluster (Phase 211), the whole
+  // call inherits the wrong position. Apply the same stationary-cluster
+  // gate here as in the correction pass — fall through to template-match
+  // when the candidate matches a prior observation after a real emit.
+  const openMotionRejectedAsStationary = !!(motionResult?.pair && client.wouldRejectAsStationary?.(
+    { x: motionResult.pair.post.centroidX, y: motionResult.pair.post.centroidY },
+  ));
+  if (openMotionRejectedAsStationary && verbose) {
+    const p = motionResult!.pair!.post;
+    console.error(
+      `[move-to] WARN open-loop: motion-diff returned static-feature cluster (${p.centroidX},${p.centroidY}) — same as prior observation after substantial emit; rejecting and trying template fallback`,
+    );
+  }
+
+  if (motionResult && motionResult.pair && !openMotionRejectedAsStationary) {
     const motion = motionResult.pair;
     currentPos = { x: motion.post.centroidX, y: motion.post.centroidY };
     // Update ratios from observed motion (only for the dominant axis).
@@ -1644,7 +1660,11 @@ export async function moveToPixel(
     await maybePersistTemplate(shotB, currentPos, shotA);
   } else {
     // Motion-diff failed. Try template matching as a fallback.
-    const motionFailReason = motionResult ? motionResult.reason : 'correction disabled';
+    // Phase 213: also reaches here when motion-diff returned a result
+    // that was rejected as a Phase 212 stationary cluster.
+    const motionFailReason = openMotionRejectedAsStationary
+      ? `static-feature cluster lock-in (Phase 213, open-loop)`
+      : (motionResult ? motionResult.reason : 'correction disabled');
     if (verbose && doCorrect) {
       console.error(`[move-to] motion-diff returned null: ${motionFailReason}`);
     }

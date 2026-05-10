@@ -302,6 +302,17 @@ export async function launchIpadApp(
 export interface IpadHomeOptions {
   /** Settle delay after the gesture before screenshotting. Default 800 ms. */
   settleMs?: number;
+  /** Phase 214 (v0.5.202): also do a slam-to-corner + swipe-up
+   *  after Cmd+H. Cmd+H alone DOES NOT dismiss the App Switcher
+   *  (only foreground apps); the swipe-up gesture does both.
+   *  Default false to preserve backward compatibility. Bench
+   *  scripts and any caller that needs a guaranteed home-screen
+   *  state should pass `true`. */
+  forceHomeViaSwipe?: boolean;
+  /** Pixels to drag upward on the swipe path. Default 1500 (matches
+   *  unlockIpad's tested-good value). Only used when
+   *  `forceHomeViaSwipe` is true. */
+  swipeDragPx?: number;
   verbose?: boolean;
 }
 
@@ -334,15 +345,56 @@ export async function ipadGoHome(
   await client.sendShortcut(['MetaLeft', 'KeyH']);
   await sleep(settleMs);
 
+  // Phase 214 (v0.5.202): Cmd+H dismisses foreground apps but NOT
+  // the App Switcher. A slam-to-corner + upward swipe does both
+  // (and is also safe on lock screen / home screen — idempotent).
+  // Live finding 2026-05-10: bench had been measuring against the
+  // App Switcher view for hours because Cmd+H couldn't exit it.
+  let messagePart = 'Sent Cmd+H to dismiss the foreground app.';
+  if (options.forceHomeViaSwipe) {
+    if (options.verbose) console.error('[ipad-home] swipe-up to force dismiss App Switcher');
+    const dragPx = options.swipeDragPx ?? 1500;
+    await slamToCorner(client, { corner: 'top-left', paceMs: 60 });
+    // Move down to the bottom-centre area so the swipe starts from
+    // a region where iPadOS expects the home gesture.
+    const bounds = await detectBoundsOrNull(client, {
+      verbose: options.verbose,
+      logPrefix: 'ipad-home',
+    });
+    const start = bounds ? unlockStartFromBounds(bounds) : LEGACY_PORTRAIT_UNLOCK_START;
+    const slamOrigin = bounds ? slamOriginFromBounds(bounds) : LEGACY_PORTRAIT_SLAM_ORIGIN;
+    let remX = Math.round(start.x - slamOrigin.x);
+    let remY = Math.round(start.y - slamOrigin.y);
+    while (remX > 0 || remY > 0) {
+      const stepX = remX > 0 ? Math.min(127, remX) : 0;
+      const stepY = remY > 0 ? Math.min(127, remY) : 0;
+      await client.mouseMoveRelative(stepX, stepY);
+      remX -= stepX;
+      remY -= stepY;
+      await sleep(20);
+    }
+    await sleep(200);
+    await client.mouseClick('left', { state: true });
+    let remDrag = dragPx;
+    while (remDrag > 0) {
+      const step = Math.min(30, remDrag);
+      await client.mouseMoveRelative(0, -step);
+      remDrag -= step;
+    }
+    await client.mouseClick('left', { state: false });
+    await sleep(1000);
+    messagePart += ' Followed by slam-corner + swipe-up to also dismiss App Switcher.';
+  }
+
   const shot = await client.screenshot();
   return {
     screenshot: shot.buffer,
     screenshotWidth: shot.screenshotWidth,
     screenshotHeight: shot.screenshotHeight,
     message:
-      'Sent Cmd+H to dismiss the foreground app. Inspect the screenshot to confirm ' +
-      'the iPad is on the home screen. (Cmd+H does not unlock the iPad — call ' +
-      'pikvm_ipad_unlock from the lock screen instead.)',
+      messagePart +
+      ' Inspect the screenshot to confirm the iPad is on the home screen.' +
+      ' (Cmd+H does not unlock the iPad — call pikvm_ipad_unlock from the lock screen instead.)',
   };
 }
 
