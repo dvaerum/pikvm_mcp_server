@@ -98,4 +98,57 @@ describe('PiKVMClient ↔ CursorBelief wiring', () => {
     await expect(c.mouseMoveRelative(15, 0)).resolves.toBeUndefined();
     expect(c.belief.position.x).toBeGreaterThan(0);
   });
+
+  // Phase 212/222: pin client.wouldRejectAsStationary delegates to belief
+  // and that observeCursor with rejectStationary forwards correctly.
+  describe('Phase 212/222: stationary-cluster rejection wiring', () => {
+    it('wouldRejectAsStationary returns false before any observation', () => {
+      const c = newClient();
+      c.resetBelief({ x: 0, y: 0 });
+      expect(c.wouldRejectAsStationary({ x: 100, y: 100 })).toBe(false);
+    });
+
+    it('wouldRejectAsStationary delegates to belief.wouldRejectAsStationary', async () => {
+      const c = newClient();
+      c.resetBelief({ x: 0, y: 0 });
+      // First observation establishes the lastObservation point.
+      c.observeCursor({ x: 970, y: 771 }, 0.9);
+      // Emit 50 mickeys (well over the 30-mickey gate).
+      await c.mouseMoveRelative(50, 0);
+      // Same point after a real emit → stationary lock-in.
+      expect(c.wouldRejectAsStationary({ x: 970, y: 771 })).toBe(true);
+      // A clearly-moved point → not stationary.
+      expect(c.wouldRejectAsStationary({ x: 1100, y: 770 })).toBe(false);
+    });
+
+    it('observeCursor with rejectStationary returns false on lock-in (no belief update)', async () => {
+      const c = newClient();
+      c.resetBelief({ x: 0, y: 0 });
+      c.observeCursor({ x: 970, y: 771 }, 0.9);
+      await c.mouseMoveRelative(50, 0);
+      const xAfterPredict = c.belief.position.x;
+      const accepted = c.observeCursor(
+        { x: 970, y: 771 },
+        0.9,
+        { rejectStationary: true },
+      );
+      expect(accepted).toBe(false);
+      // Belief NOT pulled back to (970, 771) — rejected observation has
+      // zero influence.
+      expect(c.belief.position.x).toBe(xAfterPredict);
+    });
+
+    it('observeCursor with rejectStationary returns true on a clearly-moved measurement', async () => {
+      const c = newClient();
+      c.resetBelief({ x: 0, y: 0 });
+      c.observeCursor({ x: 970, y: 771 }, 0.9);
+      await c.mouseMoveRelative(50, 0);
+      const accepted = c.observeCursor(
+        { x: 1100, y: 770 },
+        0.9,
+        { rejectStationary: true },
+      );
+      expect(accepted).toBe(true);
+    });
+  });
 });
