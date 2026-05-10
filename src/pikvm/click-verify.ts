@@ -715,6 +715,12 @@ export async function clickAtWithRetry(
         // protection that minScore alone used to give; matches at
         // 0.7+ within 200 px of target are real cursors, not false-
         // positives on far-away features.
+        // Phase 197b ATTEMPTED + REVERTED: tried adding
+        // requireWithinRadius=true here. n=5 bench at v0.5.194 showed
+        // overall 60% → 35% regression (Books 100→40, AppStore 60→0).
+        // Files improved 0→40 but the net was negative. The wake-
+        // recapture path benefits from the lax fallback for some
+        // recovery cases; restricting it cost more than it gained.
         const woken = findCursorByTemplateSet(wakeDecoded, sessionTemplates, {
           minScore: 0.7,
           expectedNear: target,
