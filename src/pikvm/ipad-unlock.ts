@@ -48,7 +48,9 @@ export interface IpadUnlockOptions {
    *  iPad's letterbox bounds (~45 px above the bottom edge, where the home
    *  indicator lives). */
   startY?: number;
-  /** Total pixel distance to drag upward. Default 800. */
+  /** Total pixel distance to drag upward. Default 1500 (Phase 209,
+   *  v0.5.198). Earlier default was 800 — found insufficient on
+   *  some iPads where even 1200 didn't clear the unlock threshold. */
   dragPx?: number;
   /** Per-call mickey size for the drag. Smaller = higher call rate = faster
    *  apparent motion. Default 30. */
@@ -83,7 +85,14 @@ export async function unlockIpad(
   options: IpadUnlockOptions = {},
 ): Promise<IpadUnlockResult> {
   const slamFirst = options.slamFirst ?? true;
-  const dragPx = options.dragPx ?? 800;
+  // Phase 209 (v0.5.198): default bumped 800 → 1500. Live test
+  // 2026-05-10 found dragPx=800 insufficient on this iPad — even
+  // 1200 didn't clear the unlock threshold. iPadOS unlock thresholds
+  // vary across devices and iPadOS versions; a generous default is
+  // safer than under-shooting. The cost of a too-large swipe is
+  // negligible (extra ~400ms HID emission); under-shooting wastes a
+  // full unlock attempt and confuses callers.
+  const dragPx = options.dragPx ?? 1500;
   const chunkMickeys = options.chunkMickeys ?? 30;
   const slamPaceMs = options.slamPaceMs ?? 60;
   const ppm = options.positionPxPerMickey ?? 1.0;

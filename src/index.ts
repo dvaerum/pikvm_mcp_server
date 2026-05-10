@@ -430,7 +430,7 @@ const tools: Tool[] = [
         slamFirst: { type: 'boolean', description: 'Slam to top-left corner first to establish a known cursor position. Default true.' },
         startX: { type: 'number', description: 'HDMI X of the unlock-swipe start. Default 955 (iPad portrait center).' },
         startY: { type: 'number', description: 'HDMI Y of the unlock-swipe start. Default 1035 (just above the home indicator bar).' },
-        dragPx: { type: 'number', description: 'Total pixel distance dragged upward. Default 800. If the swipe does not unlock, try 1000 or 1200.' },
+        dragPx: { type: 'number', description: 'Total pixel distance dragged upward. Default 1500 (Phase 209: bumped from 800 after live test 2026-05-10 found 1200 still insufficient on some iPads). If the swipe still does not unlock, try 2000.' },
         chunkMickeys: { type: 'number', description: 'Per-call mickey size for the drag. Smaller = faster apparent motion. Default 30.' },
       },
     },
