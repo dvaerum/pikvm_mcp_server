@@ -72,6 +72,28 @@ export interface CursorBeliefOptions {
   ratioClamp?: { min: number; max: number };
 }
 
+/** Phase 212: options to gate `observe()` against static-feature
+ *  lock-in (the "same pixel returned across consecutive detections
+ *  after a real emit" pattern measured in Phase 211).
+ *
+ *  When `rejectStationary` is true, `observe()` first checks the
+ *  measurement against the last accepted observation: if drift is
+ *  below `stationaryDriftPx` AND the accumulated emit magnitude
+ *  since that observation is at least `stationaryMinEmitMickeys`,
+ *  the new measurement is rejected (treated as a static-feature
+ *  match, not a real cursor move). The belief state is NOT updated
+ *  and `observe()` returns `false`. */
+export interface ObserveOptions {
+  rejectStationary?: boolean;
+  /** Drift threshold (px). Default 5 — matches `isStaleTemplateMatch`. */
+  stationaryDriftPx?: number;
+  /** Minimum emit magnitude (mickeys) between observations for the
+   *  stationary check to fire. Default 30 — matches
+   *  `isStaleTemplateMatch`. Smaller corrections may legitimately
+   *  not move the cursor enough to register a different match. */
+  stationaryMinEmitMickeys?: number;
+}
+
 export class CursorBelief {
   position: { x: number; y: number };
   velocity: { x: number; y: number };
@@ -99,6 +121,24 @@ export class CursorBelief {
     this.edgeClipVariance = opts.edgeClipVariance ?? 100;
     this.ratioClampMin = opts.ratioClamp?.min ?? 0.5;
     this.ratioClampMax = opts.ratioClamp?.max ?? 3.0;
+  }
+
+  /** Phase 212: query whether `measurement` looks like a static-feature
+   *  lock-in repeat of the last accepted observation. Pure / non-mutating;
+   *  callers can use this to decide whether to call `observe()` at all
+   *  or to fall back to a different detector. */
+  wouldRejectAsStationary(
+    measurement: { x: number; y: number },
+    opts?: { driftPx?: number; minEmitMickeys?: number },
+  ): boolean {
+    if (!this._lastObservation) return false;
+    const driftPx = opts?.driftPx ?? 5;
+    const minEmit = opts?.minEmitMickeys ?? 30;
+    const drift = Math.hypot(
+      measurement.x - this._lastObservation.x,
+      measurement.y - this._lastObservation.y,
+    );
+    return drift < driftPx && this._emitMagSinceLastObservation >= minEmit;
   }
 
   /**
@@ -168,6 +208,11 @@ export class CursorBelief {
     // ratio updates skip the clipped axis (cursor stopped at the
     // wall — not a valid ratio sample).
     this._lastEmit = { dx: emit.dx, dy: emit.dy, clippedX, clippedY, prePosX, prePosY };
+
+    // Phase 212: accumulate emit magnitude since the last accepted
+    // observation so `wouldRejectAsStationary` can decide whether the
+    // cursor was *expected* to have moved between observations.
+    this._emitMagSinceLastObservation += Math.hypot(emit.dx, emit.dy);
   }
 
   /**
@@ -180,8 +225,19 @@ export class CursorBelief {
    * the cursor moved per emitted mickey, fused with the prior via
    * the same Kalman-gain math on the ratio variable.
    */
-  observe(measurement: { x: number; y: number }, confidence: number): void {
-    if (confidence <= 0 || !Number.isFinite(confidence)) return;
+  observe(
+    measurement: { x: number; y: number },
+    confidence: number,
+    opts?: ObserveOptions,
+  ): boolean {
+    if (confidence <= 0 || !Number.isFinite(confidence)) return false;
+    // Phase 212: optionally short-circuit on a static-feature lock-in.
+    if (opts?.rejectStationary && this.wouldRejectAsStationary(measurement, {
+      driftPx: opts.stationaryDriftPx,
+      minEmitMickeys: opts.stationaryMinEmitMickeys,
+    })) {
+      return false;
+    }
     const c = Math.min(1, confidence);
     // Position update. Observation noise R is high when confidence is
     // low — at c=1 R is the floor; at c=0.01 R is large.
@@ -192,6 +248,11 @@ export class CursorBelief {
     if (this._lastEmit && (this._lastEmit.dx !== 0 || this._lastEmit.dy !== 0)) {
       this.kalmanUpdateRatio(measurement, c);
     }
+    // Phase 212: record the accepted observation so future observe()
+    // calls can detect stationary-cluster lock-in.
+    this._lastObservation = { x: measurement.x, y: measurement.y };
+    this._emitMagSinceLastObservation = 0;
+    return true;
   }
 
   /**
@@ -251,11 +312,19 @@ export class CursorBelief {
     this.variance.vy = 1;
     this.lastUpdateMs = Date.now();
     this._lastEmit = null;
+    // Phase 212: a fresh anchor invalidates the stationary-cluster
+    // history — we just collapsed belief to ground truth, future
+    // observations should be compared against THIS, not the pre-reset
+    // detection that may have been a false positive.
+    this._lastObservation = { x: observation.x, y: observation.y };
+    this._emitMagSinceLastObservation = 0;
   }
 
   // -- internals --------------------------------------------------------
 
   private _lastEmit: { dx: number; dy: number; clippedX: boolean; clippedY: boolean; prePosX: number; prePosY: number } | null = null;
+  private _lastObservation: { x: number; y: number } | null = null;
+  private _emitMagSinceLastObservation = 0;
 
   /** Map a confidence c ∈ (0, 1] to observation noise variance. Lower
    *  confidence → larger R → less weight on the measurement. */

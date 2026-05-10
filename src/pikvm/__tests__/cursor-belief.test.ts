@@ -376,4 +376,120 @@ describe('CursorBelief', () => {
       expect(b.ratio.x).toBeGreaterThan(0.5);
     });
   });
+
+  // Phase 212 — stationary-cluster rejection
+  describe('stationary-cluster rejection', () => {
+    it('observe() returns true on first acceptance and updates belief', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      const accepted = b.observe({ x: 100, y: 100 }, 0.9);
+      expect(accepted).toBe(true);
+      // Position pulled toward observation (Kalman gain on prior variance 25
+      // with c=0.9 gives K≈0.95 so position ≈ 95). Just check we moved.
+      expect(b.position.x).toBeGreaterThan(50);
+    });
+
+    it('wouldRejectAsStationary returns false before any observation', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      expect(b.wouldRejectAsStationary({ x: 50, y: 50 })).toBe(false);
+    });
+
+    it('wouldRejectAsStationary returns false when no emit happened between observations', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      b.observe({ x: 100, y: 100 }, 0.9);
+      // No predict() in between → no emit → not stationary lock-in.
+      expect(b.wouldRejectAsStationary({ x: 100, y: 100 })).toBe(false);
+    });
+
+    it('wouldRejectAsStationary returns true when same pixel returned after a real emit', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      b.observe({ x: 970, y: 771 }, 0.9);
+      b.predict({ dx: 50, dy: 0 }); // 50 mickeys ≥ 30 threshold
+      expect(b.wouldRejectAsStationary({ x: 970, y: 771 })).toBe(true);
+    });
+
+    it('wouldRejectAsStationary respects driftPx threshold', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      b.observe({ x: 970, y: 771 }, 0.9);
+      b.predict({ dx: 50, dy: 0 });
+      // 6 px drift (default threshold is 5) — outside the lock-in window.
+      expect(b.wouldRejectAsStationary({ x: 976, y: 771 })).toBe(false);
+      // Within 5 px — locked in.
+      expect(b.wouldRejectAsStationary({ x: 973, y: 773 })).toBe(true);
+    });
+
+    it('wouldRejectAsStationary respects minEmitMickeys threshold', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      b.observe({ x: 970, y: 771 }, 0.9);
+      b.predict({ dx: 10, dy: 0 }); // 10 mickeys < default 30 → no rejection
+      expect(b.wouldRejectAsStationary({ x: 970, y: 771 })).toBe(false);
+      b.predict({ dx: 25, dy: 0 }); // cumulative 35 ≥ 30 → rejection
+      expect(b.wouldRejectAsStationary({ x: 970, y: 771 })).toBe(true);
+    });
+
+    it('observe() with rejectStationary=false (default) does not gate', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      b.observe({ x: 970, y: 771 }, 0.9);
+      b.predict({ dx: 50, dy: 0 });
+      const accepted = b.observe({ x: 970, y: 771 }, 0.9);
+      expect(accepted).toBe(true);
+    });
+
+    it('observe() with rejectStationary=true returns false on lock-in and does not update belief', () => {
+      const b = new CursorBelief({ initialPosition: { x: 970, y: 771 } });
+      b.observe({ x: 970, y: 771 }, 0.9);
+      b.predict({ dx: 50, dy: 0 }); // belief moves to ~1035
+      const xAfterPredict = b.position.x;
+      const accepted = b.observe(
+        { x: 970, y: 771 },
+        0.9,
+        { rejectStationary: true },
+      );
+      expect(accepted).toBe(false);
+      // Position should NOT have been pulled back to 970 — the
+      // rejected observation has zero influence on belief.
+      expect(b.position.x).toBe(xAfterPredict);
+    });
+
+    it('observe() accepts a measurement that has clearly moved after an emit', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      b.observe({ x: 970, y: 771 }, 0.9);
+      b.predict({ dx: 50, dy: 0 });
+      const accepted = b.observe(
+        { x: 1035, y: 770 },
+        0.9,
+        { rejectStationary: true },
+      );
+      expect(accepted).toBe(true);
+    });
+
+    it('emit accumulator resets on accepted observation', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      b.observe({ x: 100, y: 100 }, 0.9);
+      b.predict({ dx: 50, dy: 0 });
+      b.observe({ x: 165, y: 100 }, 0.9); // accept — accumulator resets
+      // Now a smaller emit should NOT re-trigger rejection just because
+      // the prior emit accumulated past 30.
+      b.predict({ dx: 5, dy: 0 });
+      expect(b.wouldRejectAsStationary({ x: 165, y: 100 })).toBe(false);
+    });
+
+    it('reset() clears the stationary-cluster history', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      b.observe({ x: 970, y: 771 }, 0.9);
+      b.predict({ dx: 50, dy: 0 });
+      // Without reset, this would be rejected.
+      b.reset({ x: 500, y: 500 });
+      expect(b.wouldRejectAsStationary({ x: 970, y: 771 })).toBe(false);
+    });
+
+    it('configurable thresholds via options', () => {
+      const b = new CursorBelief({ initialPosition: { x: 0, y: 0 } });
+      b.observe({ x: 970, y: 771 }, 0.9);
+      b.predict({ dx: 100, dy: 0 });
+      // Tighter drift threshold (3 px) — 4 px counts as moved.
+      expect(b.wouldRejectAsStationary({ x: 974, y: 771 }, { driftPx: 3 })).toBe(false);
+      // Higher emit threshold (200) — 100 mickeys is too few to expect motion.
+      expect(b.wouldRejectAsStationary({ x: 970, y: 771 }, { minEmitMickeys: 200 })).toBe(false);
+    });
+  });
 });
