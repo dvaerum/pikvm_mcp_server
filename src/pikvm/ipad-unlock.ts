@@ -445,7 +445,11 @@ export async function ipadGoHome(
       }
     } else {
       // No detected iPad bounds — fall back to a fixed descent that
-      // works for the reference 1920x1080 iPad portrait layout.
+      // works for the reference iPad portrait layout (~1050 px tall
+      // in 1680x1050 HDMI capture or ~1080 px in 1920x1080). 600 px
+      // overshoots mid-screen on shorter frames but iPadOS clamps
+      // benign movement at the bottom edge — the deposit's goal is
+      // "not at top edge anymore", not pixel-perfect centering.
       for (let i = 0; i < 6; i++) {
         await client.mouseMoveRelative(0, 100);
         await sleep(40);
