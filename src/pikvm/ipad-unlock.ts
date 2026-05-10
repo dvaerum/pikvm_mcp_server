@@ -416,7 +416,16 @@ export async function ipadGoHome(
     }
     await client.mouseClick('left', { state: false });
     await sleep(1000);
-    messagePart += ' Followed by slam-corner + swipe-up to also dismiss App Switcher.';
+    // Phase 231 (v0.5.207): defensive Esc + Enter after the swipe.
+    // The swipe-up gesture sometimes re-locks an already-unlocked iPad
+    // (live-verified 2026-05-10) — same hazard Phase 219 fixed for
+    // unlockIpad. Esc + Enter is a no-op on home but unlocks if we
+    // accidentally locked. Cheap (~800 ms) belt-and-suspenders.
+    await client.sendKey('Escape');
+    await sleep(200);
+    await client.sendKey('Enter');
+    await sleep(600);
+    messagePart += ' Followed by slam-corner + swipe-up + defensive Esc+Enter (Phase 231 undoes accidental lock).';
   }
 
   const shot = await client.screenshot();
