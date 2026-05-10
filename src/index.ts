@@ -423,13 +423,15 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_unlock',
-    description: 'Unlock an iPad from its lock screen by emitting a USB HID swipe-up gesture at the home indicator bar. Moves the cursor to the bottom-center of the iPad display, presses the left button, rapid-fires upward relative deltas covering 800 px (default), then releases. Verified on an iPad displayed portrait in a 1920x1080 HDMI frame — a 400 px drag does NOT unlock; 800 px does. Returns a post-unlock screenshot so the caller can confirm the iPad is now on the home screen. SIDE EFFECTS: on an already-unlocked home screen this is a no-op (the swipe is interpreted as "go home" which is idempotent). On an already-unlocked iPad that is INSIDE AN APP, the same swipe will close the app and return to home — check with pikvm_screenshot before calling if app state matters.',
+    description: 'Unlock an iPad from its lock screen. Phase 217 (v0.5.205): tries `Escape` + `Enter` + `Space` keys in sequence FIRST — Enter is the actual unlock key on iPadOS 26 lock screens (Space alone stopped working between Phase 210 and 2026-05-10). When key presses succeed, no swipe is emitted (Phase 219 v0.5.206 default `swipeOnKeyPressFailure: true` only fires the swipe if keys don\'t unlock — protects already-unlocked iPads from being re-locked by a stray swipe). Falls back to a USB HID swipe-up gesture covering 1500 px (Phase 209 default). Returns a post-unlock screenshot so the caller can confirm the iPad is on the home screen. SIDE EFFECTS: idempotent on an already-unlocked iPad (keys are no-ops on home screen, swipe is skipped). Pass `tryKeyPressFirst: false` to force the legacy swipe-only path, or `swipeOnKeyPressFailure: false` to disable the fallback entirely.',
     inputSchema: {
       type: 'object',
       properties: {
-        slamFirst: { type: 'boolean', description: 'Slam to top-left corner first to establish a known cursor position. Default true.' },
-        startX: { type: 'number', description: 'HDMI X of the unlock-swipe start. Default 955 (iPad portrait center).' },
-        startY: { type: 'number', description: 'HDMI Y of the unlock-swipe start. Default 1035 (just above the home indicator bar).' },
+        tryKeyPressFirst: { type: 'boolean', description: 'Phase 217 v0.5.205: try Esc + Enter + Space keys FIRST. Default true. Set false to force the legacy swipe-only path.' },
+        swipeOnKeyPressFailure: { type: 'boolean', description: 'Phase 219 v0.5.206: emit the swipe fallback when keys don\'t unlock. Default true. Set false to suppress the swipe entirely (useful when iPad may already be unlocked — the swipe-from-home-screen sometimes re-locks the iPad).' },
+        slamFirst: { type: 'boolean', description: 'Slam to top-left corner first to establish a known cursor position before the swipe. Default true. Only used by the swipe path.' },
+        startX: { type: 'number', description: 'HDMI X of the unlock-swipe start. Default 955 (iPad portrait center). Only used by the swipe path.' },
+        startY: { type: 'number', description: 'HDMI Y of the unlock-swipe start. Default 1035 (just above the home indicator bar). Only used by the swipe path.' },
         dragPx: { type: 'number', description: 'Total pixel distance dragged upward. Default 1500 (Phase 209: bumped from 800 after live test 2026-05-10 found 1200 still insufficient on some iPads). If the swipe still does not unlock, try 2000.' },
         chunkMickeys: { type: 'number', description: 'Per-call mickey size for the drag. Smaller = faster apparent motion. Default 30.' },
       },
@@ -1133,6 +1135,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'pikvm_ipad_unlock': {
         const result = await unlockIpad(pikvm, {
+          tryKeyPressFirst: validateBoolean(args.tryKeyPressFirst),
+          swipeOnKeyPressFailure: validateBoolean(args.swipeOnKeyPressFailure),
           slamFirst: validateBoolean(args.slamFirst) ?? true,
           startX: validateNumber(args.startX, 0, 4000),
           startY: validateNumber(args.startY, 0, 4000),
