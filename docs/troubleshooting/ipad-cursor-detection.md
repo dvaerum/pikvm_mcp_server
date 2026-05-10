@@ -1820,20 +1820,28 @@ when the real issue was a methodology bug in my own benchmarking.
 
 ## 🎯 TL;DR — operational reliability summary
 
-> **HONESTY NOTE (Phase 214/219, 2026-05-10, v0.5.206):** the
+> **HONESTY NOTE (Phase 214/219/235/244, 2026-05-10, v0.5.211):** the
 > small-icon ~50-60% figure below was measured before Phase 214's
 > finding that `pikvm_ipad_home` (Cmd+H) does NOT dismiss the
 > App Switcher — many prior measurements may have been against
 > the App Switcher tile view (with Weather widget animation
 > noise) rather than the actual home screen. To measure honestly,
 > call `pikvm_ipad_unlock` then `pikvm_ipad_home({ forceHomeViaSwipe:
-> true })` before each click bench. Phase 219 also corrected a
-> separate hazard where `unlockIpad`'s legacy swipe re-locked an
-> already-unlocked iPad. The reliability rows below are NOT
-> re-measured here — they're the last-benched figures pending a
-> proper home-screen re-bench. See:
+> true })` before each click bench (Phase 235 v0.5.208 added a
+> chunked mid-screen cursor deposit baked into the swipe path so
+> moveToPixel doesn't start from the top-edge anymore). Phase 219
+> corrected a separate hazard where `unlockIpad`'s legacy swipe
+> re-locked an already-unlocked iPad. **Phase 244 (v0.5.211) extended
+> the Phase 197 locality gate to the correction-pass; the post-fix
+> N=10 shifts the failure mode from confident-wrong template matches
+> to safe nulls — see Phase 244 section above for the table.** The
+> reliability rows below are NOT re-measured here — they're the
+> last-benched figures pending a proper N≥30 home-screen re-bench
+> (per Phase 237's variance lesson). See:
 > - `2026-05-10-phase-214-app-switcher-root-cause.md`
 > - `2026-05-10-phase-219-unlock-from-home-locks-ipad.md`
+> - `2026-05-10-phase-235-mid-screen-deposit-after-swipe.md`
+> - `2026-05-10-phase-244-correction-pass-locality-gate.md`
 
 | Operation | Reliability |
 |-----------|------------|
