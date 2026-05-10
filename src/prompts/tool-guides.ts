@@ -440,18 +440,20 @@ PiKVM captures the full HDMI frame (e.g. 1920×1080), but an iPad displayed in p
             text: `# pikvm_ipad_unlock — Unlock the iPad from Lock Screen
 
 ## Purpose
-iPadOS requires a swipe-up-from-bottom gesture to dismiss the lock screen. With a USB HID mouse, this is emitted as: position cursor → press → rapid upward drag → release. This tool packages the verified gesture parameters so agents don't have to reinvent them.
+Dismiss the iPadOS lock screen and return to home. Current mechanism (Phase 217, v0.5.205): sends \`Escape\` → \`Enter\` → \`Space\` keys; \`Enter\` is the actual unlock key on iPadOS 26. The legacy 1500-px swipe-up gesture only runs when keys cannot be sent or the caller opts out via \`swipeOnKeyPressFailure: false\` (Phase 219, v0.5.206) — running the swipe after a successful key-press takes an already-unlocked home screen TO the lock screen.
 
 ## Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| slamFirst | boolean | true | Slam to top-left first for a known origin |
-| startX | number | auto | HDMI X of swipe start. Auto-detected from iPad letterbox bounds (centre X). Override only if detection misfires. |
-| startY | number | auto | HDMI Y of swipe start. Auto-detected from iPad letterbox bounds (~45 px above the iPad bottom edge). Override only if detection misfires. |
-| dragPx | number | 1500 | Total upward drag distance (Phase 209: bumped from 800; some iPads need ≥ 1500 to clear the unlock threshold) |
-| chunkMickeys | number | 30 | Per-call mickey size (smaller = faster motion) |
+| tryKeyPressFirst | boolean | true | Send Esc + Enter + Space before any swipe. Set false to skip keys (legacy callers / older iPadOS revisions). |
+| swipeOnKeyPressFailure | boolean | true | When keys ran successfully, SKIP the swipe. Set false to force the legacy keys-then-swipe sequence. |
+| slamFirst | boolean | true | Slam to top-left for a known cursor origin (only relevant when the swipe runs). |
+| startX | number | auto | HDMI X of swipe start. Auto-detected from iPad letterbox bounds (centre X). |
+| startY | number | auto | HDMI Y of swipe start. Auto-detected (~45 px above the iPad bottom edge). |
+| dragPx | number | 1500 | Total upward drag distance (Phase 209 raised default 800 → 1500). |
+| chunkMickeys | number | 30 | Per-call mickey size for the swipe (smaller = faster motion). |
 
-The unlock swipe origin is computed from \`pikvm_detect_orientation\` so it works for portrait or landscape iPads in any letterbox position without manual tuning. Pass explicit \`startX\`/\`startY\` only if auto-detection picks the wrong area (e.g. when the iPad's HDMI signal is partly black for non-letterbox reasons).
+The swipe origin is computed from \`pikvm_detect_orientation\` so it works for portrait or landscape iPads in any letterbox position. Pass explicit \`startX\`/\`startY\` only if auto-detection misfires.
 
 ## Example Call
 \`\`\`json
@@ -463,20 +465,12 @@ The unlock swipe origin is computed from \`pikvm_detect_orientation\` so it work
 - After a long period of inactivity (iPadOS auto-locks after 30 s – 2 min by default).
 
 ## Side Effects on Already-Unlocked iPads
-This tool emits the iPadOS swipe-up-from-home-indicator gesture. iPadOS interprets it differently depending on state:
-
-| State | Result |
-|---|---|
-| Lock screen | Unlocks → home screen (intended use) |
-| Home screen | No-op ("go home" is idempotent when already home) |
-| **Inside an app** | **Closes the app** and returns to home screen |
-
-**Check with \`pikvm_screenshot\` first** if there's a risk the iPad is inside an app you don't want to dismiss.
+- **Default behavior (keys + skip swipe)**: SAFE on home screen. Esc + Enter + Space are no-ops on home; the swipe is skipped because keys ran successfully.
+- **\`swipeOnKeyPressFailure: false\`** or **\`tryKeyPressFirst: false\`**: the swipe runs. **HAZARD**: a swipe-up from the bottom on an already-unlocked home screen is interpreted by iPadOS as a system gesture that takes the iPad TO THE LOCK SCREEN (live-verified Phase 219, 2026-05-10). Only enable when keys cannot reach the iPad.
 
 ## Tips
-- **Check the returned screenshot.** If the iPad is still on the lock screen, call again with \`dragPx: 2000\` (default 1500 is enough on most iPads after Phase 209; older default of 800 was insufficient).
-- If the swipe consistently fails, the iPad's letterbox offset may differ on your device. Measure where the home indicator actually is in your screenshots and override \`startX\`/\`startY\`.
-- Empirically verified: 400 px drag does NOT unlock; 800 px does. Speed matters less than total distance.`,
+- **Check the returned screenshot.** If the iPad is still on the lock screen, call again with \`tryKeyPressFirst: false\` to force the swipe-based unlock.
+- The Phase 210 doc claimed \`Space\` alone unlocks. That stopped working between Phase 210 and Phase 217; \`Enter\` is the current working key. The Esc + Enter + Space sequence is defensive — Esc closes any Control Centre / Notification Centre overlay that a prior failed gesture may have opened.`,
           },
         },
       ];
