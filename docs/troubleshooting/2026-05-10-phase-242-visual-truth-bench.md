@@ -31,17 +31,37 @@ Y is off by ~58 px** (alg says 933, visually 875).
 
 This isn't a template false-positive (the X is right) — it's a
 systematic Y-axis offset between the detection point and the cursor's
-visual centroid. Possible causes:
-- Template centroid is offset from cursor visual centroid (template
-  may be calibrated to the cursor's "hot spot" rather than its visual
-  center)
-- Motion-diff cluster centroid weighted differently than visual
-  cursor center
+visual centroid. Three competing hypotheses, in order of revised
+plausibility:
 
-Either way, the algorithm reports a position ~58 px BELOW the visible
-cursor — consistent across the 1 trial we could clearly see. Not
-enough N to confirm direction is consistent (could be sat/unsat
-asymmetry in the cursor template).
+1. **Cursor-visualization lag** (most likely on second thought).
+   moveToPixel returns immediately after its last detection probe;
+   the test code waits ~250 ms then takes a wake-nudge-snapshot.
+   In that window the cursor may visually drift as iPadOS settles
+   it into a stationary state (the well-known cursor "tail"
+   animation). The alg position (686, 933) is where the cursor
+   was during the algorithm's probe; the visual position
+   (685, 875) is where it ended up after settling. iPadOS
+   registers clicks at the THEN-CURRENT position, so alg's reading
+   is the operationally relevant one — the visual lag is
+   misleading, not the algorithm.
+2. Template centroid offset from cursor visual centroid (the
+   stored template may be calibrated to the cursor's "hot spot"
+   rather than visual center).
+3. Motion-diff cluster centroid weighted differently than visual
+   cursor center.
+
+If hypothesis 1 is right (likely), there's no detection bug to
+fix — the click coordinate the alg reports is correct. The Phase
+236 click-rate problem then reduces to plain "cursor lands far
+from target" which is a moveToPixel/per-call-cap problem, NOT a
+detection problem.
+
+Not enough N to discriminate between hypotheses. Phase 243 should
+distinguish: emit a controlled +Δy after deposit, screenshot
+WITHOUT delay (no settle), measure both alg and visual position.
+If they agree, hypothesis 1 wins; if they still differ by ~58 px,
+hypothesis 2 or 3.
 
 ## Diagnostic infrastructure improvement
 
