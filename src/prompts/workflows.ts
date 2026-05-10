@@ -349,7 +349,7 @@ The keyboard channel — \`pikvm_shortcut\`, \`pikvm_type\`, \`pikvm_key\` — i
    - **In-pane focus (with FKA on, Phase 62):** \`pikvm_key("Tab")\` cycles focus, \`pikvm_key("Enter")\`/\`pikvm_key("Space")\` activates / toggles. Without FKA only the sidebar is keyboard-reachable.
    - **Dismiss modal / cancel:** \`pikvm_key("Escape")\`.
    - **Go back / close:** \`pikvm_shortcut(["MetaLeft", "BracketLeft"])\` (Cmd+\`[\`) — back navigation in most stock apps.
-   - **Return to home:** \`pikvm_ipad_home\` (Cmd+H).
+   - **Return to home:** \`pikvm_ipad_home\` (Cmd+H). For guaranteed home-screen state when iPad may be in App Switcher mode (Cmd+H alone doesn't dismiss the App Switcher), pass \`forceHomeViaSwipe: true\` — Phase 214/231/235 add slam-corner + swipe-up + defensive Esc+Enter + mid-screen cursor deposit.
 4. **Cursor click ONLY needed?** Use \`pikvm_mouse_click_at\` with \`verifyClick: true\` (default) and the iPad default \`maxRetries: 3\` (auto-applied; pass \`0\` to opt out for one-shot toggles). For unknown lock-screen state, also pass \`autoUnlockOnDetectFail: true\` (Phase 72 opt-in self-recovery; note it calls \`ipadGoHome\` which exits any open app). Always inspect the returned screenshot.
 
 ## Worked example: open Settings and search
