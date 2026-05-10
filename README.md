@@ -147,7 +147,7 @@ Or if using the .env file:
 > UI elements with no keyboard equivalent. iPad-side settings checklist:
 > [docs/skills/ipad-setup.md](docs/skills/ipad-setup.md).
 
-- **`pikvm_ipad_unlock`** - Unlock an iPad from lock screen via a USB HID swipe-up gesture. Swipe origin auto-detected from the iPad letterbox bounds (works for portrait and landscape). Optional overrides: slamFirst, startX, startY, dragPx, chunkMickeys.
+- **`pikvm_ipad_unlock`** - Unlock an iPad from lock screen. Phase 210 (v0.5.199): now tries a `Space` key press FIRST (live-verified to wake iPadOS 26+ where HID-mouse swipes silently fail to register as the unlock gesture), then falls back to the legacy USB HID swipe-up. Default `dragPx` raised 800 → 1500 (Phase 209) for iPads with stricter swipe thresholds. Optional overrides: tryKeyPressFirst, slamFirst, startX, startY, dragPx, chunkMickeys.
 - **`pikvm_ipad_launch_app`** - Launch any iPad app via the verified keyboard pipeline: unlock (if locked) → Spotlight (Cmd+Space) → type the app name → Enter. Far more reliable than clicking an app icon (required: appName). Verified on iPadOS 26 for Files, Settings, App Store.
 - **`pikvm_ipad_home`** - Return the iPad to the home screen from any foreground app via Cmd+H. Idempotent on the home screen.
 - **`pikvm_ipad_app_switcher`** - Open the iPad App Switcher (Cmd+Tab) and capture a screenshot showing the available apps.
