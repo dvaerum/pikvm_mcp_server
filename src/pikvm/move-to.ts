@@ -1871,7 +1871,24 @@ export async function moveToPixel(
       let passMode: 'motion' | 'template' | 'predicted' = 'predicted';
       let passReason: string | null = null;
 
-      if (cResult.pair) {
+      // Phase 212: pure query — would the motion-diff pair be rejected
+      // as a static-feature lock-in (same pixel as prior detection
+      // after a real correction emit)? Phase 211 measured this on
+      // Settings target: 8 of 8 valid trials clustered at one of three
+      // fixed (x, y) coordinates tied to UI features, never the real
+      // cursor. If we'd reject, treat motion-diff as failed and fall
+      // through to template-match.
+      const motionRejectedAsStationary = !!(cResult.pair && client.wouldRejectAsStationary?.(
+        { x: cResult.pair.post.centroidX, y: cResult.pair.post.centroidY },
+      ));
+      if (motionRejectedAsStationary && verbose) {
+        const p = cResult.pair!.post;
+        console.error(
+          `[move-to] WARN pass ${totalPasses + 1}: motion-diff returned static-feature cluster (${p.centroidX},${p.centroidY}) — same as prior detection after correction emit; rejecting and trying template fallback`,
+        );
+      }
+
+      if (cResult.pair && !motionRejectedAsStationary) {
         const cMotion = cResult.pair;
         currentPos = { x: cMotion.post.centroidX, y: cMotion.post.centroidY };
         if (Math.abs(corrMickeysX) > Math.abs(corrMickeysY)) {
@@ -1888,8 +1905,12 @@ export async function moveToPixel(
         client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, 0.85);
       } else {
         // Motion-diff failed on correction — try template match before
-        // falling back to prediction.
-        const motionFailReason = cResult.reason ?? 'unknown';
+        // falling back to prediction. Phase 212: also reaches here when
+        // motion-diff returned a result that was rejected as a
+        // stationary cluster.
+        const motionFailReason = motionRejectedAsStationary
+          ? `static-feature cluster lock-in (Phase 212)`
+          : (cResult.reason ?? 'unknown');
         let templated = false;
         if (sessionTemplates.length > 0) {
           const found = findCursorByTemplateSet(shotC, sessionTemplates, {

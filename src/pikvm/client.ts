@@ -133,9 +133,30 @@ export class PiKVMClient {
   /** Phase 192-B: callers push successful cursor detections in.
    *  `confidence` ∈ [0, 1]: 1.0 for a slam-anchored ground truth,
    *  ~template-match-score for template detections, ~0.7 for
-   *  motion-diff cluster pairs. */
-  observeCursor(measurement: { x: number; y: number }, confidence: number): void {
-    this.belief.observe(measurement, confidence);
+   *  motion-diff cluster pairs.
+   *
+   *  Phase 212: pass `{ rejectStationary: true }` to gate the update
+   *  against static-feature lock-in. Returns `true` if the belief
+   *  was actually updated, `false` if the observation was rejected
+   *  (caller should treat detection as failed and try a different
+   *  detector / refresh cursor). */
+  observeCursor(
+    measurement: { x: number; y: number },
+    confidence: number,
+    opts?: { rejectStationary?: boolean; stationaryDriftPx?: number; stationaryMinEmitMickeys?: number },
+  ): boolean {
+    return this.belief.observe(measurement, confidence, opts);
+  }
+
+  /** Phase 212: pure query — would a measurement at this position be
+   *  rejected as a static-feature lock-in? Useful when the caller
+   *  needs to inspect detection quality without committing to an
+   *  observe() (e.g. to fall back to a different detector). */
+  wouldRejectAsStationary(
+    measurement: { x: number; y: number },
+    opts?: { driftPx?: number; minEmitMickeys?: number },
+  ): boolean {
+    return this.belief.wouldRejectAsStationary(measurement, opts);
   }
 
   /** Phase 192-B: collapse belief to a known position (post-slam,
