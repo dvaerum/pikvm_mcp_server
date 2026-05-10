@@ -70,9 +70,35 @@ Likely reasons:
 The exact cause matters less than the empirical fact: **each call
 gives ~52 px on x, ~135 px on y, regardless of mickey count.**
 
-## Algorithmic implication
+## REVISITED: the algorithm already implicitly handles this
 
-The fix is conceptually simple:
+After writing this up, I realized: the lookup table values were
+MEASURED against the per-call mechanism. So when the algorithm picks
+magnitude=80 → px/mickey=0.66 → 303 mickeys → 4 chunks of 80 →
+4 calls × 52 px = 208 px, that math works out CORRECTLY. The same
+target via magnitude=5 → 19 mickeys → 4 chunks of 5 → 4 calls × 52 px
+= 208 px ALSO correct.
+
+The per-call mechanism doesn't make the lookup-based algorithm wrong;
+it just describes WHY the per-mickey ratios scale as 1/magnitude.
+The algorithm gets the right number of calls regardless of magnitude
+choice, and each call gives its capped displacement.
+
+So the cursor-positioning bottleneck is NOT this. Real candidates:
+- Acceleration variance within a call sequence (first call vs last
+  call may differ — calibration medians out 5 reps but live moves
+  vary)
+- Cursor velocity coupling between back-to-back emits
+- Detection error compounding across correction passes
+- iPadOS Pointer Animations (snap/magnetic effect on top of raw
+  positioning)
+
+This Phase 206 finding is real and explains the data. It doesn't
+unlock a code change by itself.
+
+## Original (kept for context) algorithmic implication
+
+If we WERE going to use the per-call model directly:
 
 ```ts
 // Old: lookup table assuming linear scaling
