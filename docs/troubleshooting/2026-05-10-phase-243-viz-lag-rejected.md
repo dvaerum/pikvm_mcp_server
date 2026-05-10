@@ -51,22 +51,42 @@ a wrong-element click but not advancing the trial either.
 
 ## Phase 244+ candidates (revised)
 
-1. **Stricter template-match minScore.** Currently
-   pickNearestPlausibleMatch may accept matches below the cursor's
-   "real" template fingerprint. Raising minScore would reject
-   false-positives at the cost of more null detections (which is
-   strictly safer than confident-wrong).
-2. **Detection sanity check via motion-diff cross-validation.**
-   If template-match and motion-diff disagree by >100 px, treat as
-   detection-fail rather than picking one.
-3. **Per-frame template re-extraction with motion confirmation.**
-   When the algorithm reports a position, immediately emit a known
-   small Δ and re-detect. If the measured movement doesn't match
-   the emitted Δ, the original detection was on a static feature
-   (not the cursor).
+**Existing safeguards (already shipped):**
+- Phase 62 — Reject template-match positions that don't move after
+  significant emission (`move-to.ts:1625, 1895` static-feature
+  rejection).
+- Phase 63 — Raise template-match minScore to filter false positives
+  (current default `0.83` at `cursor-detect.ts:925, 1052`).
+- Phase 212 — Cursor-belief stationary-cluster rejection.
 
-Option 3 is the most robust but costs an extra detection round-trip
-per click. Option 1 is the cheapest but risks more null detections.
+The bimodal failure persists DESPITE these. The clock-widget
+false-positive at NCC ≥ 0.83 is admitted by the score gate, AND the
+"didn't move after emit" gate doesn't fire because moveToPixel's
+correction emits DO produce real cursor motion (cursor really
+crosses the screen) — but the algorithm tracks the clock-widget
+match instead, which appears to "move" because the clock face
+features change subtly between frames.
+
+**Genuinely new candidates:**
+1. **Score-margin gate.** If the second-best template match is
+   within 0.05 NCC of the best, treat as ambiguous (kill the
+   detection). False-positives on UI features tend to score similarly
+   to the cursor match; true cursor matches are usually significantly
+   higher than any UI feature.
+2. **Motion-diff and template-match must agree within K px.** Both
+   detection methods are run; if they disagree by >100 px, neither
+   is trusted. Increases null-detection rate but eliminates confident-
+   wrong from this failure mode.
+3. **Negative-template list.** Snapshot known UI-feature
+   false-positive locations (clock widget centre, calendar widget,
+   etc.) and reject template matches within K px of them.
+
+Option 1 is cheapest. Option 2 is most architecturally sound. Option
+3 is hacky but effective for this specific iPad's home screen.
+
+None implemented this cron tick — each needs careful design + live
+A/B with N ≥ 30 to overcome the per-trial variance documented in
+Phase 237.
 
 ## State
 
