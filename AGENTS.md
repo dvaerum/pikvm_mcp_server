@@ -94,8 +94,8 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 13. **`pikvm_auto_calibrate`** - Vision-based auto-calibration (preferred)
 
 ### Relative-Mouse Targets (iPad, etc. — `mouse.absolute=false`)
-14. **`pikvm_ipad_unlock`** - Unlock iPad via USB HID swipe-up gesture (800 px default). Verified on iPad portrait in 1920x1080 HDMI frame.
-14a. **`pikvm_ipad_home`** - Return to the iPad home screen via Cmd+H. Idempotent on the home screen; dismisses any foreground app; unlocks if currently on the lock screen.
+14. **`pikvm_ipad_unlock`** - Unlock iPad. Phase 217 (v0.5.205): sends Esc + Enter + Space first; Enter is the actual unlock key on iPadOS 26 lock screens (Space alone stopped working between Phase 210 and 2026-05-10). The 1500-px swipe-up gesture (Phase 209 default) only runs when keys fail or `swipeOnKeyPressFailure: false` (Phase 219 v0.5.206). Verified live on iPad portrait in 1920x1080 HDMI frame.
+14a. **`pikvm_ipad_home`** - Return to the iPad home screen via Cmd+H. Idempotent on the home screen; dismisses any foreground app. **Cmd+H does NOT dismiss the App Switcher** — pass `forceHomeViaSwipe: true` (Phase 214 v0.5.202) for guaranteed home-screen state when the iPad may be in App Switcher mode. Does NOT unlock the lock screen — call `pikvm_ipad_unlock` first.
 14b. **`pikvm_ipad_app_switcher`** - Open the iPad app-switcher (Cmd+\\ or hardware home gesture). Useful to verify which app is foreground or to switch between apps.
 14c. **`pikvm_ipad_launch_app`** - Launch any iPad app via the verified keyboard-first pipeline (unlock → Cmd+Space Spotlight → type → Enter). 100% reliable across Settings, Files, App Store, Maps, Safari (live-validated). Far more reliable than clicking icons.
 15. **`pikvm_mouse_move_to`** - Approximate move-to-pixel via slam-to-corner + delta emission. Returns screenshot for visual verification.
