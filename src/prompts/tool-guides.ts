@@ -448,7 +448,7 @@ iPadOS requires a swipe-up-from-bottom gesture to dismiss the lock screen. With 
 | slamFirst | boolean | true | Slam to top-left first for a known origin |
 | startX | number | auto | HDMI X of swipe start. Auto-detected from iPad letterbox bounds (centre X). Override only if detection misfires. |
 | startY | number | auto | HDMI Y of swipe start. Auto-detected from iPad letterbox bounds (~45 px above the iPad bottom edge). Override only if detection misfires. |
-| dragPx | number | 800 | Total upward drag distance |
+| dragPx | number | 1500 | Total upward drag distance (Phase 209: bumped from 800; some iPads need ≥ 1500 to clear the unlock threshold) |
 | chunkMickeys | number | 30 | Per-call mickey size (smaller = faster motion) |
 
 The unlock swipe origin is computed from \`pikvm_detect_orientation\` so it works for portrait or landscape iPads in any letterbox position without manual tuning. Pass explicit \`startX\`/\`startY\` only if auto-detection picks the wrong area (e.g. when the iPad's HDMI signal is partly black for non-letterbox reasons).
@@ -474,7 +474,7 @@ This tool emits the iPadOS swipe-up-from-home-indicator gesture. iPadOS interpre
 **Check with \`pikvm_screenshot\` first** if there's a risk the iPad is inside an app you don't want to dismiss.
 
 ## Tips
-- **Check the returned screenshot.** If the iPad is still on the lock screen, call again with \`dragPx: 1000\` or \`1200\`.
+- **Check the returned screenshot.** If the iPad is still on the lock screen, call again with \`dragPx: 2000\` (default 1500 is enough on most iPads after Phase 209; older default of 800 was insufficient).
 - If the swipe consistently fails, the iPad's letterbox offset may differ on your device. Measure where the home indicator actually is in your screenshots and override \`startX\`/\`startY\`.
 - Empirically verified: 400 px drag does NOT unlock; 800 px does. Speed matters less than total distance.`,
           },
