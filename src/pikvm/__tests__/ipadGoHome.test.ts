@@ -18,6 +18,7 @@ interface RecordedShortcut {
 
 function mockClient() {
   const shortcuts: RecordedShortcut[] = [];
+  const keys: string[] = [];
   const clicks: { button: string; state: boolean | undefined }[] = [];
   const moves: { dx: number; dy: number }[] = [];
   let screenshotCalls = 0;
@@ -31,8 +32,11 @@ function mockClient() {
     scaleY: 1,
   };
   const client = {
-    async sendShortcut(keys: string[]): Promise<void> {
-      shortcuts.push({ keys: [...keys], ts: Date.now() });
+    async sendShortcut(arr: string[]): Promise<void> {
+      shortcuts.push({ keys: [...arr], ts: Date.now() });
+    },
+    async sendKey(key: string): Promise<void> {
+      keys.push(key);
     },
     async screenshot(): Promise<typeof fakeShot> {
       screenshotCalls++;
@@ -55,6 +59,7 @@ function mockClient() {
   return {
     client,
     shortcuts,
+    keys,
     clicks,
     moves,
     getScreenshotCalls: () => screenshotCalls,
@@ -139,11 +144,13 @@ describe('ipadGoHome', () => {
       expect(upward.length).toBeGreaterThan(0);
     });
 
-    it('true: message records that the swipe was performed', async () => {
+    it('true: message records that the swipe and defensive keys were performed', async () => {
       const m = mockClient();
       const result = await ipadGoHome(m.client, { settleMs: 0, forceHomeViaSwipe: true });
       expect(result.message.toLowerCase()).toContain('swipe');
-      expect(result.message.toLowerCase()).toContain('app switcher');
+      // Phase 231: message now mentions the defensive Esc+Enter rather
+      // than "app switcher" exclusively.
+      expect(result.message.toLowerCase()).toMatch(/esc|enter|phase 231/);
     });
 
     it('respects custom swipeDragPx', async () => {
@@ -158,6 +165,31 @@ describe('ipadGoHome', () => {
       const totalUpward = m.moves.reduce((s, mv) => s + Math.min(0, mv.dy), 0);
       expect(downIdx).toBeGreaterThanOrEqual(0);
       expect(totalUpward).toBeLessThanOrEqual(-600);
+    });
+
+    // Phase 231 (v0.5.207): the swipe-up gesture sometimes re-locks an
+    // already-unlocked iPad (live-verified 2026-05-10 same hazard as
+    // Phase 219 fixed for unlockIpad). After the swipe, send Esc + Enter
+    // defensively — no-op on home, unlocks if accidentally locked.
+    it('Phase 231: forceHomeViaSwipe sends Esc + Enter AFTER the swipe (defensive unlock)', async () => {
+      const m = mockClient();
+      await ipadGoHome(m.client, { settleMs: 0, forceHomeViaSwipe: true });
+      // Both keys must appear in the order Esc → Enter, AFTER the
+      // mouse-up that ends the swipe.
+      const upIdx = m.clicks.findIndex((c) => c.state === false);
+      expect(upIdx).toBeGreaterThanOrEqual(0);
+      expect(m.keys).toContain('Escape');
+      expect(m.keys).toContain('Enter');
+      const escIdx = m.keys.indexOf('Escape');
+      const enterIdx = m.keys.indexOf('Enter');
+      expect(escIdx).toBeLessThan(enterIdx);
+    });
+
+    it('Phase 231: defensive Esc + Enter is NOT sent when forceHomeViaSwipe=false', async () => {
+      const m = mockClient();
+      await ipadGoHome(m.client, { settleMs: 0 });
+      // Default path: only Cmd+H, no defensive keys.
+      expect(m.keys).toHaveLength(0);
     });
   });
 });
