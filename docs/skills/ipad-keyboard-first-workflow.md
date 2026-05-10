@@ -27,8 +27,8 @@ is mandatory.
 
 | Operation | Tool / shortcut | Reliability |
 |---|---|---|
-| Unlock from lock screen | `pikvm_ipad_unlock` | High |
-| Return to home | `pikvm_ipad_home` (Cmd+H) | High |
+| Unlock from lock screen | `pikvm_ipad_unlock` | High (Phase 217: Esc + Enter + Space; swipe is opt-in fallback) |
+| Return to home | `pikvm_ipad_home` (Cmd+H) | High from a foreground app. **Does NOT dismiss the App Switcher** — pass `forceHomeViaSwipe: true` (Phase 214) for guaranteed home-screen state. |
 | Launch app | `pikvm_ipad_launch_app(name)` | High (4 apps verified) |
 | Focus in-app search | `pikvm_shortcut(["MetaLeft","KeyF"])` | App-dependent |
 | Cycle focus | `pikvm_key("Tab")` | App-dependent |
