@@ -447,11 +447,13 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_home',
-    description: 'Return the iPad to the home screen from any foreground app, by emitting the same swipe-up-from-home-indicator gesture used by pikvm_ipad_unlock. Idempotent on the home screen; dismisses any foreground app; unlocks if currently on the lock screen. Returns a post-gesture screenshot.',
+    description: 'Return the iPad to the home screen from any foreground app via Cmd+H. Idempotent on the home screen. **Cmd+H does NOT dismiss the App Switcher** (Phase 214 finding) — pass `forceHomeViaSwipe: true` for guaranteed home-screen state when the iPad may be in App Switcher mode. The swipe path also (Phase 231 v0.5.207) sends defensive Esc+Enter to undo accidental re-lock and (Phase 235 v0.5.208) deposits cursor mid-screen via 6×100 px chunked Y emits — without that deposit the cursor is pinned at the top edge after the swipe and subsequent moveToPixel calls to bottom-half targets fail. Does NOT unlock the lock screen — use pikvm_ipad_unlock for that.',
     inputSchema: {
       type: 'object',
       properties: {
         settleMs: { type: 'number', description: 'Settle delay after the gesture (ms). Default 800.' },
+        forceHomeViaSwipe: { type: 'boolean', description: 'Phase 214 v0.5.202: also send slam-corner + upward swipe + Phase 231 defensive Esc+Enter + Phase 235 mid-screen cursor deposit after Cmd+H. Use when iPad may be in App Switcher mode. Default false.' },
+        swipeDragPx: { type: 'number', description: 'Pixels to drag upward on the swipe path. Only used with forceHomeViaSwipe=true. Default 1500.' },
       },
     },
   },
@@ -1181,6 +1183,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'pikvm_ipad_home': {
         const result = await ipadGoHome(pikvm, {
           settleMs: validateNumber(args.settleMs, 0, 5000),
+          forceHomeViaSwipe: validateBoolean(args.forceHomeViaSwipe),
+          swipeDragPx: validateNumber(args.swipeDragPx, 100, 3000),
         });
         return {
           content: [
