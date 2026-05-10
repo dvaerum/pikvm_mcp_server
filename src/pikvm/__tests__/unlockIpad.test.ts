@@ -39,6 +39,9 @@ function mockClient() {
       else if (options?.state === false) calls.push({ type: 'mouseUp', detail: '' });
       else calls.push({ type: 'mouseDown', detail: 'tap' });
     },
+    async sendKey(key: string): Promise<void> {
+      calls.push({ type: 'sendKey', detail: key });
+    },
     async getResolution() {
       calls.push({ type: 'getResolution', detail: '' });
       return { width: 1920, height: 1080 };
@@ -218,5 +221,42 @@ describe('unlockIpad', () => {
     expect(r.dragPx).toBe(200);
     expect(r.chunkCount).toBe(8); // 200 / 25 = 8
     expect(typeof r.swipeDurationMs).toBe('number');
+  });
+
+  describe('Phase 210: tryKeyPressFirst', () => {
+    it('emits a Space key press BEFORE the swipe by default', async () => {
+      const m = mockClient();
+      await unlockIpad(m.client, {
+        slamFirst: false,
+        startX: 960,
+        startY: 800,
+        dragPx: 100,
+        chunkMickeys: 25,
+        slamPaceMs: 0,
+        postSettleMs: 0,
+      });
+      const keyIdx = m.calls.findIndex(c => c.type === 'sendKey');
+      const firstSwipeIdx = m.calls.findIndex(c => c.type === 'mouseDown');
+      expect(keyIdx).toBeGreaterThanOrEqual(0);
+      expect(keyIdx).toBeLessThan(firstSwipeIdx);
+      const keyCall = m.calls[keyIdx];
+      expect(keyCall.detail).toBe('Space');
+    });
+
+    it('skips the key press when tryKeyPressFirst=false', async () => {
+      const m = mockClient();
+      await unlockIpad(m.client, {
+        tryKeyPressFirst: false,
+        slamFirst: false,
+        startX: 960,
+        startY: 800,
+        dragPx: 100,
+        chunkMickeys: 25,
+        slamPaceMs: 0,
+        postSettleMs: 0,
+      });
+      const keyCalls = m.calls.filter(c => c.type === 'sendKey');
+      expect(keyCalls).toHaveLength(0);
+    });
   });
 });
