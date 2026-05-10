@@ -58,6 +58,10 @@ describe('unlockIpad', () => {
   it('issues mouse-down BEFORE the drag and mouse-up AFTER (sandwich invariant)', async () => {
     const m = mockClient();
     await unlockIpad(m.client, {
+      // Phase 219: tryKeyPressFirst false to bypass the
+      // skip-swipe-on-key-success branch, so the swipe mechanics
+      // run and can be inspected.
+      tryKeyPressFirst: false,
       slamFirst: false,        // skip slam so we don't generate noise
       startX: 960,
       startY: 800,
@@ -86,6 +90,7 @@ describe('unlockIpad', () => {
   it('drag direction is upward (negative Y)', async () => {
     const m = mockClient();
     await unlockIpad(m.client, {
+      tryKeyPressFirst: false,
       slamFirst: false,
       startX: 960,
       startY: 800,
@@ -110,6 +115,7 @@ describe('unlockIpad', () => {
   it('total drag distance equals dragPx', async () => {
     const m = mockClient();
     await unlockIpad(m.client, {
+      tryKeyPressFirst: false,
       slamFirst: false,
       startX: 960,
       startY: 800,
@@ -130,6 +136,7 @@ describe('unlockIpad', () => {
   it('each drag chunk is at most chunkMickeys', async () => {
     const m = mockClient();
     await unlockIpad(m.client, {
+      tryKeyPressFirst: false,
       slamFirst: false,
       startX: 960,
       startY: 800,
@@ -150,6 +157,7 @@ describe('unlockIpad', () => {
   it('chunkMickeys=30 over 800 px → ~27 chunks', async () => {
     const m = mockClient();
     const result = await unlockIpad(m.client, {
+      tryKeyPressFirst: false,
       slamFirst: false,
       startX: 960,
       startY: 800,
@@ -165,6 +173,7 @@ describe('unlockIpad', () => {
   it('slamFirst:true slams to top-left before swipe (many 127-mickey deltas)', async () => {
     const m = mockClient();
     await unlockIpad(m.client, {
+      tryKeyPressFirst: false,
       slamFirst: true,
       startX: 960,
       startY: 800,
@@ -193,6 +202,7 @@ describe('unlockIpad', () => {
   it('slamFirst:false skips slam (no -127, -127 calls)', async () => {
     const m = mockClient();
     await unlockIpad(m.client, {
+      tryKeyPressFirst: false,
       slamFirst: false,
       startX: 960,
       startY: 800,
@@ -210,6 +220,7 @@ describe('unlockIpad', () => {
   it('returns chunkCount, dragPx, swipeDurationMs in the result', async () => {
     const m = mockClient();
     const r = await unlockIpad(m.client, {
+      tryKeyPressFirst: false,
       slamFirst: false,
       startX: 960,
       startY: 800,
@@ -224,9 +235,12 @@ describe('unlockIpad', () => {
   });
 
   describe('Phase 210/217: tryKeyPressFirst', () => {
-    it('emits Escape, Enter, and Space key presses BEFORE the swipe by default', async () => {
+    it('emits Escape, Enter, and Space key presses BEFORE the swipe (legacy behavior with swipeOnKeyPressFailure=false)', async () => {
       const m = mockClient();
+      // Phase 219: with swipeOnKeyPressFailure=false, the swipe runs
+      // even after the keys. Lets us pin the keys-then-swipe ordering.
       await unlockIpad(m.client, {
+        swipeOnKeyPressFailure: false,
         slamFirst: false,
         startX: 960,
         startY: 800,
@@ -237,15 +251,13 @@ describe('unlockIpad', () => {
       });
       const keyCalls = m.calls.filter(c => c.type === 'sendKey');
       const firstSwipeIdx = m.calls.findIndex(c => c.type === 'mouseDown');
-      // All three keys must be sent before the swipe.
       const keyDetails = keyCalls.map(c => c.detail);
       expect(keyDetails).toContain('Escape');
       expect(keyDetails).toContain('Enter');
       expect(keyDetails).toContain('Space');
-      // Phase 217: Enter is the actual unlock key on iPadOS 26 — it
-      // must come before the swipe.
       const enterIdx = m.calls.findIndex(c => c.type === 'sendKey' && c.detail === 'Enter');
       expect(enterIdx).toBeGreaterThanOrEqual(0);
+      expect(firstSwipeIdx).toBeGreaterThan(0);
       expect(enterIdx).toBeLessThan(firstSwipeIdx);
     });
 
@@ -265,6 +277,46 @@ describe('unlockIpad', () => {
       expect(enterIdx).toBeGreaterThanOrEqual(0);
       expect(spaceIdx).toBeGreaterThanOrEqual(0);
       expect(enterIdx).toBeLessThan(spaceIdx);
+    });
+
+    // Phase 219: by default, when keys ran, the swipe is SKIPPED to
+    // avoid the home-screen-to-lock-screen artifact.
+    it('Phase 219: by default, swipe is SKIPPED after successful key press', async () => {
+      const m = mockClient();
+      await unlockIpad(m.client, {
+        slamFirst: false,
+        startX: 960,
+        startY: 800,
+        dragPx: 100,
+        chunkMickeys: 25,
+        slamPaceMs: 0,
+        postSettleMs: 0,
+      });
+      // Keys ran...
+      const keyCalls = m.calls.filter(c => c.type === 'sendKey');
+      expect(keyCalls.length).toBeGreaterThan(0);
+      // ...but no swipe (no mouseDown for the drag).
+      const mouseDowns = m.calls.filter(c => c.type === 'mouseDown');
+      expect(mouseDowns).toHaveLength(0);
+    });
+
+    it('Phase 219: swipeOnKeyPressFailure=false forces swipe even after keys', async () => {
+      const m = mockClient();
+      await unlockIpad(m.client, {
+        swipeOnKeyPressFailure: false,
+        slamFirst: false,
+        startX: 960,
+        startY: 800,
+        dragPx: 100,
+        chunkMickeys: 25,
+        slamPaceMs: 0,
+        postSettleMs: 0,
+      });
+      // Both keys AND swipe ran.
+      const keyCalls = m.calls.filter(c => c.type === 'sendKey');
+      const mouseDowns = m.calls.filter(c => c.type === 'mouseDown');
+      expect(keyCalls.length).toBeGreaterThan(0);
+      expect(mouseDowns).toHaveLength(1);
     });
 
     it('skips the key press when tryKeyPressFirst=false', async () => {

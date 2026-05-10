@@ -61,6 +61,18 @@ export interface IpadUnlockOptions {
    *  Space alone failed; Enter unlocks reliably from a fresh lock
    *  screen. */
   tryKeyPressFirst?: boolean;
+  /** Phase 219 (v0.5.206): when true (default), the swipe-based
+   *  fallback runs only when `tryKeyPressFirst` is false. The reason:
+   *  live test 2026-05-10 found that calling unlockIpad from the
+   *  HOME screen (where the keys are no-ops) followed by the swipe
+   *  TAKES THE iPad TO THE LOCK SCREEN — the click+drag from
+   *  bottom-center upward is interpreted as a gesture that ends
+   *  with the iPad locked. The keys (Esc + Enter + Space) are now
+   *  the primary unlock; the swipe is only useful when keys can't
+   *  reach the iPad (older iPadOS, no keyboard recognized, etc.).
+   *  Set this to false to force the legacy keys-then-swipe behavior
+   *  for back-compat. */
+  swipeOnKeyPressFailure?: boolean;
   /** Per-call mickey size for the drag. Smaller = higher call rate = faster
    *  apparent motion. Default 30. */
   chunkMickeys?: number;
@@ -107,6 +119,7 @@ export async function unlockIpad(
   // Cost: three HID key presses. The original swipe is still tried
   // as a final fallback below if all three keys leave us on the
   // lock screen.
+  let keyPressAttempted = false;
   if (options.tryKeyPressFirst !== false) {
     try {
       await client.sendKey('Escape');
@@ -117,9 +130,42 @@ export async function unlockIpad(
       // for some reason (test mocks not supplying Enter, etc.).
       await client.sendKey('Space');
       await sleep(400);
+      keyPressAttempted = true;
     } catch {
       // If sendKey fails, fall through to swipe-based unlock
     }
+  }
+
+  // Phase 219 (v0.5.206): when keys ran without throwing, SKIP the
+  // swipe by default. Live test 2026-05-10 showed that running the
+  // swipe AFTER the keys on a successfully-unlocked home-screen
+  // iPad TAKES IT BACK TO THE LOCK SCREEN — the click+drag from
+  // bottom-center upward is interpreted as a system-level gesture
+  // that ends with the iPad locked. The keys are now the primary
+  // unlock path; the swipe is only useful when keys can't reach
+  // the iPad. `swipeOnKeyPressFailure: false` forces the legacy
+  // always-swipe behavior for back-compat.
+  const swipeOnKeyPressFailure = options.swipeOnKeyPressFailure ?? true;
+  if (keyPressAttempted && swipeOnKeyPressFailure) {
+    // Skip the swipe — assume the keys did the work. Caller can
+    // inspect the returned screenshot to confirm and call again
+    // with `tryKeyPressFirst: false` if the iPad is still locked.
+    const shot = await client.screenshot();
+    return {
+      screenshot: shot.buffer,
+      screenshotWidth: shot.screenshotWidth,
+      screenshotHeight: shot.screenshotHeight,
+      dragPx: 0,
+      chunkCount: 0,
+      swipeDurationMs: 0,
+      bounds: null,
+      message:
+        'Sent Escape + Enter + Space (Phase 217). Swipe SKIPPED to avoid ' +
+        'the home-screen-to-lock-screen gesture artifact (Phase 219). ' +
+        'Inspect the screenshot to confirm the iPad is on the home screen ' +
+        '(if still on the lock screen, call again with ' +
+        'tryKeyPressFirst: false to force the swipe-based unlock).',
+    };
   }
   const slamFirst = options.slamFirst ?? true;
   // Phase 209 (v0.5.198): default bumped 800 → 1500. Live test
