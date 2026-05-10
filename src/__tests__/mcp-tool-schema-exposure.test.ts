@@ -113,4 +113,46 @@ describe('MCP tool schema and handler exposure', () => {
       expect(handler).toMatch(/swipeDragPx:\s*validateNumber\(args\.swipeDragPx/);
     });
   });
+
+  describe('pikvm_mouse_click_at — phase-tagged production options exposed', () => {
+    // The four most-load-bearing options (each with measurable user
+    // impact documented in its Phase troubleshooting note).
+    // Removing any would silently regress production behavior.
+
+    it('Phase 88 maxResidualPx is in the schema', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/maxResidualPx:\s*\{[^}]*type:\s*'number'/);
+    });
+
+    it('Phase 191 interRetryJitterMickeys is in the schema', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/interRetryJitterMickeys:\s*\{[^}]*type:\s*'number'/);
+    });
+
+    it('Phase 38 minBrightness is in the schema', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/minBrightness:\s*\{[^}]*type:\s*'number'/);
+    });
+
+    it('Phase 72 autoUnlockOnDetectFail is in the schema', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/autoUnlockOnDetectFail:\s*\{[^}]*type:\s*'boolean'/);
+    });
+
+    it('Phase 25 maxRetries is in the schema', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/maxRetries:\s*\{[^}]*type:\s*'number'/);
+    });
+
+    it('verifyClick (Phase 23 verification) is in the schema', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/verifyClick:\s*\{[^}]*type:\s*'boolean'/);
+    });
+  });
 });
