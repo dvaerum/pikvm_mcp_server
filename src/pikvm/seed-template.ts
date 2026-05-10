@@ -41,6 +41,13 @@ import {
  *  Defined as a structural type so tests can supply a small fake. */
 export interface SeedTemplateClient {
   screenshot(): Promise<{ buffer: Buffer; screenshotWidth: number; screenshotHeight: number }>;
+  /** Phase 205 (v0.5.197): if available, prefer this for the seed
+   *  before/after screenshots — it keeps the iPad cursor visible by
+   *  emitting a ±1px wake nudge before capture. Without it the
+   *  cursor frequently fades by the time the after frame is taken
+   *  and motion-diff finds zero clusters. Optional for back-compat
+   *  with test mocks that don't supply the new method. */
+  screenshotKeepingCursorAlive?(): Promise<{ buffer: Buffer; screenshotWidth: number; screenshotHeight: number }>;
   mouseMoveRelative(dx: number, dy: number): Promise<void>;
 }
 
@@ -92,10 +99,19 @@ export async function seedCursorTemplate(
   const loadExisting = options.loadExisting ?? loadTemplateSet;
   const persist = options.persist ?? persistTemplate;
 
-  const before = await client.screenshot();
+  // Phase 205 (v0.5.197): use keepalive screenshot when available so
+  // the cursor stays visible in both the before and after frames.
+  // The cursor fades within ~200ms of the last emit; PiKVM screenshot
+  // round-trip is 300-500ms — without keepalive, the after frame
+  // commonly has no visible cursor and motion-diff finds zero
+  // clusters (live failure observed 2026-05-10).
+  const grab = client.screenshotKeepingCursorAlive
+    ? client.screenshotKeepingCursorAlive.bind(client)
+    : client.screenshot.bind(client);
+  const before = await grab();
   await client.mouseMoveRelative(emitDx, emitDy);
   await sleep(settleMs);
-  const after = await client.screenshot();
+  const after = await grab();
 
   const decBefore = await decodeScreenshot(before.buffer);
   const decAfter = await decodeScreenshot(after.buffer);
