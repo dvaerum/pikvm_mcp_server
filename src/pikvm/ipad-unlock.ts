@@ -52,6 +52,11 @@ export interface IpadUnlockOptions {
    *  v0.5.198). Earlier default was 800 — found insufficient on
    *  some iPads where even 1200 didn't clear the unlock threshold. */
   dragPx?: number;
+  /** Phase 210 (v0.5.199): try a Space key press first. Default true.
+   *  iPadOS 26+ may not recognize HID-mouse swipes as the unlock
+   *  gesture (live test 2026-05-10), but a key press wakes the iPad
+   *  reliably. Set false to skip and go straight to swipe. */
+  tryKeyPressFirst?: boolean;
   /** Per-call mickey size for the drag. Smaller = higher call rate = faster
    *  apparent motion. Default 30. */
   chunkMickeys?: number;
@@ -84,6 +89,24 @@ export async function unlockIpad(
   client: PiKVMClient,
   options: IpadUnlockOptions = {},
 ): Promise<IpadUnlockResult> {
+  // Phase 210 (v0.5.199): try a Space key press FIRST. Live test
+  // 2026-05-10 on this iPad: dragPx values 800/1200/1500/2000 all
+  // FAILED to unlock (swipe was emitted but iPadOS didn't recognize
+  // it as the unlock gesture — likely an iPadOS 26+ behavior change
+  // where HID-mouse swipes no longer clear the lock). A simple
+  // `Space` key press unlocks immediately and reliably. Cost: one
+  // HID key press + a screenshot. If iPad isn't on lock screen,
+  // Space could insert a space character into a focused text field —
+  // documented risk; caller is supposed to call this only when on
+  // lock screen anyway.
+  if (options.tryKeyPressFirst !== false) {
+    try {
+      await client.sendKey('Space');
+      await sleep(600);  // settle for screen change
+    } catch {
+      // If sendKey fails, fall through to swipe-based unlock
+    }
+  }
   const slamFirst = options.slamFirst ?? true;
   // Phase 209 (v0.5.198): default bumped 800 → 1500. Live test
   // 2026-05-10 found dragPx=800 insufficient on this iPad — even
