@@ -75,6 +75,28 @@ inconsistency. Future template-match work (score-margin gate,
 motion-diff cross-validation, negative-template list — all Phase
 245+ candidates) builds on this consistent locality foundation.
 
+## Where this fix does NOT extend (Phase 197b caution)
+
+There are other `findCursorByTemplateSet` callsites in
+`click-verify.ts` (wake-recapture at line 724, micro-correction at
+line 982, pre-click agreement at lines 1956/1965). **Phase 197b**
+tested adding `requireWithinRadius: true` to the wake-recapture
+site and observed a 60% → 35% overall regression in N=5 bench
+(Books 100→40, AppStore 60→0, Files improved 0→40 — net negative).
+See `2026-05-10-phase-197b-click-verify.md`.
+
+Lesson: the locality gate is context-dependent. It works on the
+open-loop (Phase 197) and correction-pass (Phase 244) paths
+because those have strong `prevPos` priors. It HURTS on the
+wake-recapture path because that path is specifically a
+"detection failed — try harder with more permissive matching"
+recovery. Restricting recovery defeats its purpose.
+
+Before extending the gate to any new callsite, look at what the
+callsite is trying to do:
+- "I trust my prior — refuse far-away matches" → gate helps
+- "Detection just failed — try harder" → gate hurts
+
 ## State
 
 - v0.5.211 ships the fix
