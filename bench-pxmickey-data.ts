@@ -77,36 +77,54 @@ async function captureFrame(): Promise<{ buffer: Buffer; decoded: any }> {
   return { buffer: shot.buffer, decoded: await decodeScreenshot(shot.buffer) };
 }
 
-/** Find the cursor in a frame pair via motion-diff. Returns the
- *  centroid of the largest cluster in the cursor-size band. */
-function locateCursorByDiff(
-  pre: any, post: any,
-): { pre: { x: number; y: number }; post: { x: number; y: number } } | null {
-  const clusters = diffScreenshotsDecoded(pre, post, DEFAULT_DETECTION_CONFIG);
-  if (clusters.length < 2) return null;
-
-  // Take the two largest clusters — assume they are the cursor pre and post.
-  // The one closer to the center of the frame is "post" (cursor moved
-  // toward target). Without prior knowledge, pick the smaller-Y one as pre.
-  const sorted = [...clusters].sort((a, b) => b.size - a.size).slice(0, 2);
-  const [a, b] = sorted;
-  // Heuristic: pre is the one with smaller area or earlier in scan order.
-  // For axis=x emit, post.x > pre.x; for axis=y, post.y > pre.y.
-  // We don't know axis here, so just return both as an unordered pair.
-  return {
-    pre: { x: a.centroidX, y: a.centroidY },
-    post: { x: b.centroidX, y: b.centroidY },
-  };
+/** Phase 203b: locate the cursor in a SINGLE frame by diffing against
+ *  a static reference (no-cursor frame). The reference is captured
+ *  once at startup with the cursor allowed to fully fade. Each
+ *  measurement frame is compared to the reference: only the cursor
+ *  appears as motion-diff cluster. Picks the largest cursor-sized
+ *  cluster's centroid. Returns null if no cluster found. */
+function locateCursorInFrame(
+  reference: any, frame: any,
+): { x: number; y: number } | null {
+  const clusters = diffScreenshotsDecoded(reference, frame, DEFAULT_DETECTION_CONFIG);
+  if (clusters.length === 0) return null;
+  // Largest cluster = cursor (assumes cursor is the only thing that
+  // changed between reference and measurement).
+  const biggest = clusters.reduce((a, b) => (a.size > b.size ? a : b));
+  return { x: biggest.centroidX, y: biggest.centroidY };
 }
 
-async function setupCursorAtCenter(): Promise<void> {
-  // Move cursor to a known starting position. Use Cmd+H to go home,
-  // then a small move to wake the cursor.
+/** Capture a reference frame with NO cursor visible. Goes home, waits
+ *  for the cursor to fully fade (>1.5s of inactivity), then captures
+ *  a plain screenshot (no wake-nudge). All subsequent measurement
+ *  frames are diffed against this. */
+async function captureReferenceFrame(): Promise<any> {
   await ipadGoHome(client);
-  await new Promise(r => setTimeout(r, 600));
-  await client.mouseMoveRelative(1, 0);
-  await client.mouseMoveRelative(-1, 0);
-  await new Promise(r => setTimeout(r, 100));
+  await new Promise(r => setTimeout(r, 1800));  // wait for cursor to fade
+  const shot = await client.screenshot({ quality: 80 });
+  await fs.writeFile(path.join(ROOT, 'reference-no-cursor.jpg'), shot.buffer);
+  return decodeScreenshot(shot.buffer);
+}
+
+let reference: any = null;
+
+async function setupCursorAtAnchor(): Promise<void> {
+  // Move cursor to a known starting position. Slam-bottom-left is safe
+  // (no hot-corner re-lock — see Phase 32). Then a small move so we
+  // know it's somewhere reachable.
+  await ipadGoHome(client);
+  await new Promise(r => setTimeout(r, 400));
+  // Slam left+down to put cursor near bottom-left
+  await client.mouseMoveRelative(-127, 0);
+  await client.mouseMoveRelative(-127, 0);
+  await client.mouseMoveRelative(-127, 0);
+  await client.mouseMoveRelative(0, 127);
+  await client.mouseMoveRelative(0, 127);
+  await client.mouseMoveRelative(0, 127);
+  await new Promise(r => setTimeout(r, 200));
+  // Move back into the center area so the test moves stay on-screen
+  await client.mouseMoveRelative(60, -60);
+  await new Promise(r => setTimeout(r, 200));
 }
 
 async function runOneSample(
@@ -121,59 +139,47 @@ async function runOneSample(
   const trialDir = path.join(ROOT, slug);
   await fs.mkdir(trialDir, { recursive: true });
 
-  // Capture pre frame
+  // Capture pre frame (cursor visible due to keepalive)
   const pre = await captureFrame();
   await fs.writeFile(path.join(trialDir, 'pre.jpg'), pre.buffer);
+  const prePos = locateCursorInFrame(reference, pre.decoded);
 
-  // Emit ONE single-chunk move with the specified pace (no chunking,
-  // single mouseMoveRelative call so we measure the raw response).
+  // Emit ONE single-call move with the specified pace
   const dx = axis === 'x' ? magnitude : 0;
   const dy = axis === 'y' ? magnitude : 0;
   await client.mouseMoveRelative(dx, dy);
-
-  // Settle long enough to ensure motion is registered, but immediately
-  // followed by the keepalive screenshot's wake nudge to keep cursor
-  // visible.
   await new Promise(r => setTimeout(r, paceMs));
 
   // Capture post frame
   const post = await captureFrame();
   await fs.writeFile(path.join(trialDir, 'post.jpg'), post.buffer);
-
-  // Detect cursor positions via motion-diff
-  const detected = locateCursorByDiff(pre.decoded, post.decoded);
+  const postPos = locateCursorInFrame(reference, post.decoded);
 
   let sample: Sample;
-  if (!detected) {
+  if (!prePos || !postPos) {
     sample = {
       trial,
       axis,
       magnitude,
       pace_ms: paceMs,
-      pre: null,
-      post: null,
+      pre: prePos,
+      post: postPos,
       dx_actual: null,
       dy_actual: null,
       px_per_mickey: null,
-      notes: 'motion-diff failed to find a 2-cluster pair',
+      notes: !prePos && !postPos ? 'cursor not found in either frame' : (!prePos ? 'cursor not found in pre' : 'cursor not found in post'),
     };
   } else {
-    // Order pre/post: if axis=x, post should have larger x
-    // if axis=y, post should have larger y
-    let preP = detected.pre;
-    let postP = detected.post;
-    if (axis === 'x' && preP.x > postP.x) [preP, postP] = [postP, preP];
-    if (axis === 'y' && preP.y > postP.y) [preP, postP] = [postP, preP];
-    const dxActual = postP.x - preP.x;
-    const dyActual = postP.y - preP.y;
+    const dxActual = postPos.x - prePos.x;
+    const dyActual = postPos.y - prePos.y;
     const pxAlongAxis = axis === 'x' ? dxActual : dyActual;
     sample = {
       trial,
       axis,
       magnitude,
       pace_ms: paceMs,
-      pre: preP,
-      post: postP,
+      pre: prePos,
+      post: postPos,
       dx_actual: dxActual,
       dy_actual: dyActual,
       px_per_mickey: magnitude > 0 ? pxAlongAxis / magnitude : null,
@@ -193,11 +199,15 @@ async function runOneSample(
 async function main(): Promise<void> {
   console.error(`Phase 203 px/mickey data collection: ${MAGNITUDES.length} magnitudes × ${PACES_MS.length} paces × ${AXES.length} axes × ${REPS} reps = ${MAGNITUDES.length * PACES_MS.length * AXES.length * REPS} samples`);
 
+  console.error('Capturing reference frame (no cursor)...');
+  reference = await captureReferenceFrame();
+  console.error(`Reference saved to ${ROOT}/reference-no-cursor.jpg`);
+
   for (const axis of AXES) {
     for (const magnitude of MAGNITUDES) {
       for (const paceMs of PACES_MS) {
         for (let rep = 0; rep < REPS; rep++) {
-          await setupCursorAtCenter();
+          await setupCursorAtAnchor();
           await runOneSample(axis, magnitude, paceMs, rep);
         }
       }
