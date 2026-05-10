@@ -1776,13 +1776,28 @@ when the real issue was a methodology bug in my own benchmarking.
 
 ## 🎯 TL;DR — operational reliability summary
 
+> **HONESTY NOTE (Phase 214/219, 2026-05-10, v0.5.206):** the
+> small-icon ~50-60% figure below was measured before Phase 214's
+> finding that `pikvm_ipad_home` (Cmd+H) does NOT dismiss the
+> App Switcher — many prior measurements may have been against
+> the App Switcher tile view (with Weather widget animation
+> noise) rather than the actual home screen. To measure honestly,
+> call `pikvm_ipad_unlock` then `pikvm_ipad_home({ forceHomeViaSwipe:
+> true })` before each click bench. Phase 219 also corrected a
+> separate hazard where `unlockIpad`'s legacy swipe re-locked an
+> already-unlocked iPad. The reliability rows below are NOT
+> re-measured here — they're the last-benched figures pending a
+> proper home-screen re-bench. See:
+> - `2026-05-10-phase-214-app-switcher-root-cause.md`
+> - `2026-05-10-phase-219-unlock-from-home-locks-ipad.md`
+
 | Operation | Reliability |
 |-----------|------------|
 | Algorithm cursor verification | **100%** (mask-based templates) |
 | `pikvm_ipad_launch_app` (keyboard via Spotlight) | **100%** |
 | `click_at` on sidebar rows / large buttons (≥150 px) | ~99% |
 | `click_at` on app icons / mid-size targets (~100 px) | ~70-90% |
-| `click_at` on icon-sized targets (~70 px) | **~50-60%** |
+| `click_at` on icon-sized targets (~70 px) | **~50-60%** (pre-Phase-214 — re-bench needed) |
 | `click_at` on toggle switches / tiny icons (<50 px) | **<50%** |
 | Multi-step iPad UI nav via click_at | **~17%** per attempt (compound) |
 | `pikvm_dismiss_popup` clearing iOS HDMI-blocked popup | high (Escape live-validated dismisses Low Battery 10% and 5% modals) |
