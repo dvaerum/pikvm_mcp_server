@@ -1948,6 +1948,16 @@ export async function moveToPixel(
             // last verified position is much more likely the cursor
             // than a UI element. minScore lowered 0.95 → 0.88.
             minScore: 0.88,
+            // Phase 244 (v0.5.211): mirror Phase 197's open-loop guard.
+            // Without this flag, when no match falls within 150 px of
+            // prevPos, findCursorByTemplateSet falls back to the highest-
+            // scoring match anywhere on screen — exactly the iPad UI
+            // false-positive class (clock widget, calendar, etc., live-
+            // verified Phase 243). With requireWithinRadius=true, the
+            // correction pass returns null when no near-cursor match
+            // exists, falling through to predicted-position trust below
+            // (anchored to expected cursor location, not a UI feature).
+            requireWithinRadius: true,
             verbose,
           });
           if (found) {
