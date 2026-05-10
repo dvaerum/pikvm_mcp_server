@@ -191,4 +191,42 @@ describe('looksLikeCursor', () => {
     });
     expect(looksLikeCursor(t)).toBe(false);
   });
+
+  // Phase 215 (v0.5.203): per-pixel saturation gate raised 30 → 80.
+  // Live capture 2026-05-10 of an iPadOS cursor over a teal wallpaper
+  // showed cursor pixels with saturation 60-110 (the wallpaper bled
+  // through JPEG anti-aliasing). The previous strict gate of 30
+  // rejected every cursor template extracted on the home screen,
+  // breaking seedCursorTemplate. Frame-mean meanSat (>=50 → reject)
+  // remains the primary defense against multi-color icons.
+  it("REGRESSION (Phase 215): accepts a teal-tinted iPad cursor (per-pixel sat ~60-100, masked-zero background)", () => {
+    // 24×24 masked template:
+    //   - Background: zero (mask cleared non-changed pixels)
+    //   - Cursor: 5×5 blob of teal-tinted gray pixels with sat ~70
+    //     (R=140, G=200, B=210 → cMin=140, cMax=210, sat=70)
+    // Bright achromatic gate: cMin=140 ≥ 100 ✓, sat=70 ≤ 80 ✓ (Phase 215);
+    // would FAIL with the pre-Phase-215 sat ≤ 30 gate.
+    // Frame-mean: ~5/576 = 0.9% pixels at sat 70 + 99% pixels at sat 0
+    // → mean sat ≈ 0.6 (well under 50).
+    // Cursor blob is 25 pixels (4.3% of 576) — within the 4-18% gate.
+    const t = template(24, 24, (i) => {
+      const x = i % 24, y = Math.floor(i / 24);
+      const inCursor = x >= 10 && x < 15 && y >= 10 && y < 15;
+      return inCursor ? [140, 200, 210] : [0, 0, 0];
+    });
+    expect(looksLikeCursor(t)).toBe(true);
+  });
+
+  it("REGRESSION (Phase 215): still rejects multi-color icon at saturated pixels (frame-mean meanSat gate)", () => {
+    // A colored icon — every pixel has high saturation. Frame-mean
+    // meanSat exceeds 50 → reject. This is what Phase 215 had to
+    // preserve while loosening the per-pixel gate: icons remain
+    // rejected via the meanSat gate, not the per-pixel sat gate.
+    const t = template(24, 24, (i) => {
+      const x = i % 24;
+      // Every pixel is colorful — half red-shifted, half blue-shifted.
+      return x < 12 ? [220, 100, 60] : [50, 100, 220];
+    });
+    expect(looksLikeCursor(t)).toBe(false);
+  });
 });
