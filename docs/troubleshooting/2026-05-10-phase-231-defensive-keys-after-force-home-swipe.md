@@ -139,5 +139,10 @@ keys unlock); other failure modes remain:
 These are Phase 232+ candidates and require deeper architectural
 work (post-swipe cursor positioning, locateCursor edge-handling).
 
+**Update:** the post-swipe cursor positioning candidate shipped as
+Phase 235 (v0.5.208) — 6×100 px chunked Y emits with 40 ms settle
+between deposits the cursor mid-screen after the swipe + Esc +
+Enter. See `2026-05-10-phase-235-mid-screen-deposit-after-swipe.md`.
+
 The Phase 231 fix is necessary-but-not-sufficient: it unblocks
 the post-unlock state but doesn't guarantee per-trial success.

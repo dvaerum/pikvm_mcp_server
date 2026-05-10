@@ -1,8 +1,19 @@
 # Phase 232 (attempted, reverted) — mid-screen deposit after forceHomeViaSwipe
 
+> **SUPERSEDED by Phase 235 (v0.5.208).** Phase 232's hypothesis
+> (deposit cursor at mid-screen after the swipe) was correct.
+> Phase 232's IMPLEMENTATION (2 single emits totaling ~140 px
+> commanded) was wrong because of the per-call cap (~52 px x-axis,
+> ~135 px y-axis on this iPad) — see "Why this didn't work" below.
+> Phase 235 retried with the right approach: 6×100 px chunked Y
+> emits with 40 ms settle between, totaling ~600 px commanded with
+> per-emit registration. Live N=6 confirmed the fix works.
+> See `2026-05-10-phase-235-mid-screen-deposit-after-swipe.md` for
+> the shipped version.
+
 **Date:** 2026-05-10
 **Version:** attempted at v0.5.208, reverted to v0.5.207
-**Status:** Behavior regressed in live test. Reverted same turn.
+**Status:** Behavior regressed in live test. Reverted same turn. Superseded by Phase 235 (correct chunked implementation).
 
 ## Hypothesis
 
