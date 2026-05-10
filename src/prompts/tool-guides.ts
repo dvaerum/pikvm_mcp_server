@@ -603,16 +603,20 @@ Single-digit residuals are achievable when motion-diff succeeds (Phase 69 measur
 ## Purpose
 On a PiKVM target in relative mouse mode (iPad), move the pointer to an approximate target pixel and click. Internally: \`pikvm_mouse_move_to\` → brief settle → \`mouseClick\`. Returns a post-click screenshot.
 
-## Reliability (Phase 70-72 measurements)
+## Reliability (revised post-Phase 199, v0.5.195)
 
-| Target width | Per-attempt hit | 3-attempt hit | Examples |
-|--------------|-----------------|---------------|----------|
-| ≥ 200 px | ~80% | ~99% | Sidebar rows, large buttons |
-| 100-200 px | ~70% | ~97% | App icons, search fields |
-| 50-100 px | ~60% | **~50-60%** | Standard buttons, page tabs, ~70 px iPad icons (Phase 111 measured) |
-| < 50 px | ~50% | ~88% | Back arrows, X buttons, toggles |
+| Target width | 3-attempt CORRECT-element hit | Examples |
+|--------------|-------------------------------|----------|
+| ≥ 200 px | ~95-99% | Sidebar rows, large buttons |
+| 100-200 px | ~80-95% | App icons (large), search fields |
+| 50-100 px | **~5-15%** + ~85-95% explicit skips | ~70 px iPad app icons |
+| < 50 px | ~88% | Back arrows, X buttons, toggles |
 
-**Phase 94 / Phase 142 default**: \`maxRetries\` defaults to 3 on iPad (relative-mouse) targets (originally 2; Phase 142 bumped to 3 for the Phase 141 hidden-popup auto-dismiss recipe to have an extra round). Turns ~50% per-attempt into ~88% reliable end-to-end on tiny targets. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
+**For ~70 px iPad app icons, USE \`pikvm_ipad_launch_app\` instead** — it's 100% reliable via Spotlight and avoids the ~95% skip / ~5% hit reality of small-icon clicks via cursor positioning. Phase 199 production-bench measured this.
+
+The earlier "~50-60% small-icon hit" figure was based on screen-changed checks that counted clicks landing on adjacent icons as hits. The MCP server's default safety gate (\`maxResidualPx: 35\`) properly refuses those, so the real correct-element rate is much lower. The user-side Pointer Animations toggle (Settings → Accessibility → Touch → Pointer Control) lifts small-icon hit rate to ≥ 90% — see \`docs/troubleshooting/2026-04-30-phase-194h-disable-pointer-animations.md\`.
+
+**Phase 94 / Phase 142 default**: \`maxRetries\` defaults to 3 on iPad (relative-mouse) targets. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
 
 **Silent failure remedy**: when click_at returns success but the post-click screenshot shows no UI change, the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating input. Call \`pikvm_dismiss_popup\` to fire the documented Escape → Enter recipe, then retry. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly with one Escape).
 
@@ -653,6 +657,7 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 With \`maxResidualPx: 25\`, attempts that land more than 25 px from the target are skipped (counts as a retry). Trades absolute hit rate for "I clicked the right thing" confidence — useful when the target is near other clickable elements that could be accidentally hit.
 
 ## When NOT to Use
+- **iPad app icons on the home screen**: use \`pikvm_ipad_launch_app\` (Spotlight + type) — 100% reliable vs ~5-15% for cursor-clicking 70 px icons. This is the dominant case where users reach for click_at and shouldn't.
 - Tiny targets (< 30 px): even with retries, hit rate drops below 80%. Use keyboard navigation if available — see \`ipad-keyboard-workflow\`.
 - Anywhere a keyboard shortcut exists: keyboard input has 100% reliability vs cursor's ~80-99%.
 
