@@ -223,8 +223,8 @@ describe('unlockIpad', () => {
     expect(typeof r.swipeDurationMs).toBe('number');
   });
 
-  describe('Phase 210: tryKeyPressFirst', () => {
-    it('emits a Space key press BEFORE the swipe by default', async () => {
+  describe('Phase 210/217: tryKeyPressFirst', () => {
+    it('emits Escape, Enter, and Space key presses BEFORE the swipe by default', async () => {
       const m = mockClient();
       await unlockIpad(m.client, {
         slamFirst: false,
@@ -235,12 +235,36 @@ describe('unlockIpad', () => {
         slamPaceMs: 0,
         postSettleMs: 0,
       });
-      const keyIdx = m.calls.findIndex(c => c.type === 'sendKey');
+      const keyCalls = m.calls.filter(c => c.type === 'sendKey');
       const firstSwipeIdx = m.calls.findIndex(c => c.type === 'mouseDown');
-      expect(keyIdx).toBeGreaterThanOrEqual(0);
-      expect(keyIdx).toBeLessThan(firstSwipeIdx);
-      const keyCall = m.calls[keyIdx];
-      expect(keyCall.detail).toBe('Space');
+      // All three keys must be sent before the swipe.
+      const keyDetails = keyCalls.map(c => c.detail);
+      expect(keyDetails).toContain('Escape');
+      expect(keyDetails).toContain('Enter');
+      expect(keyDetails).toContain('Space');
+      // Phase 217: Enter is the actual unlock key on iPadOS 26 — it
+      // must come before the swipe.
+      const enterIdx = m.calls.findIndex(c => c.type === 'sendKey' && c.detail === 'Enter');
+      expect(enterIdx).toBeGreaterThanOrEqual(0);
+      expect(enterIdx).toBeLessThan(firstSwipeIdx);
+    });
+
+    it('Enter precedes Space (the documented Phase 217 ordering)', async () => {
+      const m = mockClient();
+      await unlockIpad(m.client, {
+        slamFirst: false,
+        startX: 960,
+        startY: 800,
+        dragPx: 100,
+        chunkMickeys: 25,
+        slamPaceMs: 0,
+        postSettleMs: 0,
+      });
+      const enterIdx = m.calls.findIndex(c => c.type === 'sendKey' && c.detail === 'Enter');
+      const spaceIdx = m.calls.findIndex(c => c.type === 'sendKey' && c.detail === 'Space');
+      expect(enterIdx).toBeGreaterThanOrEqual(0);
+      expect(spaceIdx).toBeGreaterThanOrEqual(0);
+      expect(enterIdx).toBeLessThan(spaceIdx);
     });
 
     it('skips the key press when tryKeyPressFirst=false', async () => {
