@@ -15,13 +15,20 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 
 ## Reliability (Phase 70-78 measurements, v0.5.69)
 
-> **HONESTY NOTE (Phase 214/219, 2026-05-10, v0.5.206):** the rows
-> below predate Phase 214's finding that prior measurements may have
-> been against the App Switcher state (because Cmd+H doesn't dismiss
-> the App Switcher — `pikvm_ipad_home` now exposes
-> `forceHomeViaSwipe: true` for guaranteed home-screen state). The
-> 50-100 px row in particular needs re-measurement on a confirmed
-> home screen. See `docs/troubleshooting/2026-05-10-phase-214-app-switcher-root-cause.md`.
+> **HONESTY NOTE (Phase 214/219/235/244, 2026-05-10, v0.5.211):**
+> the rows below predate Phase 214's finding that prior measurements
+> may have been against the App Switcher state (because Cmd+H doesn't
+> dismiss the App Switcher — `pikvm_ipad_home` now exposes
+> `forceHomeViaSwipe: true` for guaranteed home-screen state, with
+> Phase 235 mid-screen cursor deposit baked in). Phase 244 added the
+> Phase 197 locality-gate to the correction-pass; net effect is fewer
+> confident-wrong template matches but more null detections. Recent
+> short-N runs show ~20-33% within 35 px on first-attempt, but Phase
+> 237's variance lesson means any single N=10 isn't conclusive. Treat
+> the rates below as pre-Phase-214 historical numbers; the 50-100 px
+> row in particular needs N≥30 re-measurement on a confirmed home
+> screen. See `docs/troubleshooting/2026-05-10-phase-214-app-switcher-root-cause.md`
+> and `2026-05-10-phase-244-correction-pass-locality-gate.md`.
 
 | Target width | Per-attempt hit | 3-attempt hit | Examples |
 |--------------|-----------------|---------------|----------|
