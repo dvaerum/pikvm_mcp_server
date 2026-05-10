@@ -1832,8 +1832,14 @@ export function summariseFailureClass(
     case 'residual-too-large':
       return (
         `All ${n} attempts skipped: cursor landing exceeded maxResidualPx ` +
-        `on every attempt. Loosen maxResidualPx if near-target clicks are ` +
-        `acceptable, or use keyboard navigation for tiny targets.`
+        `on every attempt. The safety gate prevented likely wrong-element ` +
+        `clicks (Phase 199 production bench measured ~95% skip on small ` +
+        `iPad icons). Recommended actions: (1) for iPad app icons, use ` +
+        `pikvm_ipad_launch_app (Spotlight + type, 100% reliable). (2) For ` +
+        `≥90% small-icon click rate, ask the user to toggle iPadOS ` +
+        `Pointer Animations OFF at Settings → Accessibility → Touch → ` +
+        `Pointer Control (Phase 194-H, user-side lever). (3) Loosen ` +
+        `maxResidualPx if near-target wrong-element clicks are acceptable.`
       );
     case 'cursor-not-verified':
       return (
