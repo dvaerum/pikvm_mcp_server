@@ -559,16 +559,9 @@ export function looksLikeCursor(t: CursorTemplate): boolean {
     const cMax = Math.max(r, g, b);
     const sat = cMax - cMin;
     totalSaturation += sat;
-    // Phase 215 (v0.5.203): per-pixel sat gate raised 30 → 80 to admit
-    // color-tinted iPad cursors. Live capture 2026-05-10 over a teal
-    // wallpaper produced cursor pixels with sat ~ 60-110 (the wallpaper
-    // color bled through anti-aliasing/JPEG). The previous strict 30
-    // rejected the entire cursor template, breaking seedCursorTemplate.
-    // The frame-mean gate (`meanSat >= 50` below) now does the
-    // saturated-icon rejection: a template that is mostly cursor
-    // pixels (4-18 % coverage) over a saturated wallpaper has frame-mean
-    // sat ~ 30 (most pixels are non-cursor and zeroed by the mask, hence
-    // sat ~0); a colored icon is sat across the whole template.
+    // Per-pixel sat ≤ 80 admits color-tinted iPad cursors (wallpaper
+    // bleed through anti-aliasing pushes sat to 60-110); the
+    // frame-mean meanSat ≥ 50 gate below is the actual icon rejector.
     if (cMin >= CURSOR_BRIGHTNESS_FLOOR && sat <= 80) bright[i] = 1;
     if (cMax < CURSOR_DARKNESS_CEILING && sat <= 80) dark[i] = 1;
   }
