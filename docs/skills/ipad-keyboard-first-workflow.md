@@ -17,6 +17,15 @@ iPadOS pointer-acceleration variance (~6× run-to-run) and motion-diff
 noise on animated UI are the underlying limits — see
 `docs/troubleshooting/ipad-cursor-detection.md` § "Current state".
 
+> **HONESTY NOTE (Phase 214/244, 2026-05-10, v0.5.211):** the Phase 70
+> numbers above predate Phase 214's finding that prior measurements
+> may have been against the App Switcher rather than the home screen.
+> Recent post-Phase-214/235/244 short-N runs show lower per-attempt
+> hit rates (~20-33% within 35 px). True distributions need N≥30 per
+> Phase 237's variance lesson. Treat the rates above as pre-Phase-214
+> historical numbers; the underlying recommendation (prefer keyboard
+> over cursor) is still correct and is the operative point.
+
 **Prefer this pattern over `pikvm_mouse_click_at` for any iPad
 target where a keyboard equivalent exists.** Reach for cursor clicks
 only when no keyboard equivalent exists; the iPad-default
