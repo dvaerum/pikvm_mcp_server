@@ -371,7 +371,7 @@ export async function diffScreenshots(
 // Helpers for ballistics / move-to
 // ============================================================================
 
-async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
+export async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
   // Phase 216 (v0.5.204): prefer the Phase 202 keepalive screenshot
   // if the client exposes it. The plain `client.screenshot()` returns
   // a frame from the streamer's buffer that may be ~300+ ms stale,
