@@ -1,7 +1,19 @@
 # Phase 210 (v0.5.199) — Space key press unlocks iPad reliably; HID-mouse swipe doesn't work on this iPad
 
-**Date:** 2026-05-10  
+**Date:** 2026-05-10
 **Discovery:** Critical production reliability finding via live test.
+
+> **SUPERSEDED by Phase 217 (2026-05-10, v0.5.205) and Phase 219 (v0.5.206).**
+> The `Space` key alone stopped unlocking iPadOS 26 lock screens later
+> the same day. Current `unlockIpad` sequence is **Esc → Enter →
+> Space**, with `Enter` being the actual unlock key. The follow-up
+> swipe is now SKIPPED by default (`swipeOnKeyPressFailure: true`)
+> because running the swipe on an already-unlocked home screen
+> takes the iPad back to the lock screen. See:
+> - `2026-05-10-phase-217-enter-key-unlocks-ipad.md`
+> - `2026-05-10-phase-219-unlock-from-home-locks-ipad.md`
+>
+> This Phase 210 doc is preserved as historical record.
 
 ## Background
 
