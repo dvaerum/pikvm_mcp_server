@@ -6,6 +6,50 @@ what didn't, and the long-term direction. Written so the next person
 who touches `move-to.ts` doesn't have to re-derive everything from
 commit messages.
 
+## Phase 244 (2026-05-10, v0.5.211): correction-pass locality gate
+
+Phase 197 (v0.5.193) introduced `requireWithinRadius: true` on the
+**open-loop** template-search path so when no template match falls
+within `expectedNearRadius` of the cursor hint, the function returns
+null instead of falling back to the highest-scoring match anywhere
+on screen (which is the iPad UI false-positive class — clock widget,
+calendar, etc., live-verified Phase 243).
+
+The **correction-pass** template fallback at `move-to.ts:1925` set
+`expectedNear: prevPos` with radius 150 but **didn't** pass the same
+flag. So when no template match landed within 150 px of the cursor
+hint, it fell back to the highest-score match anywhere — exactly the
+bimodal failure mode Phase 243 documented (correct ≤5 px OR
+confident-wrong 100+ px on UI features).
+
+Phase 244 fix: one-line addition of `requireWithinRadius: true` to
+the correction-pass call. When no near-cursor match exists, returns
+null and falls through to predicted-position trust (anchored to
+expected cursor location, not a UI feature).
+
+**Live N=10 at v0.5.211** vs the v0.5.208 baseline:
+
+| metric           | v0.5.208 baseline | v0.5.211 Phase 244 |
+|:-----------------|:-----------------:|:------------------:|
+| within 35 px     |       2/9         |        1/5         |
+| within 75 px     |       3/9         |        2/5         |
+| null detections  |       1/10        |        5/10        |
+| confident-wrong  |       6/9         |        2/5         |
+| good outcomes    |       3/10        |        6/10        |
+
+The shift from confident-wrong → null is the semantically correct
+direction. moveToPixel falls back to predicted-position (anchored
+to expected cursor), not chasing a UI feature. Per Phase 237's
+variance lesson, single N=10 isn't conclusive on click rate; the
+failure-mode shift is the architectural win.
+
+Regression test: `src/pikvm/__tests__/locality-gate-pinning.test.ts`
+asserts `requireWithinRadius: true` appears in BOTH paths.
+
+See `2026-05-10-phase-244-correction-pass-locality-gate.md` for the
+full write-up, and `2026-05-10-phase-243-viz-lag-rejected.md` for
+the bimodal-detection finding that motivated it.
+
 ## Phase 193 (2026-04-30, v0.5.186): the detection layer was lying
 
 After shipping Phase 192-A through D (cursor-belief), a tightened-verify
