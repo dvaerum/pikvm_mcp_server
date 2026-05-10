@@ -212,7 +212,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_screenshot',
-    description: 'Capture a screenshot from the PiKVM video stream. Returns the current screen as a JPEG image.',
+    description: 'Capture a screenshot from the PiKVM video stream. Returns the current screen as a JPEG image. On iPad targets, iPadOS fades the cursor after a few seconds of inactivity — pass `keepCursorAlive: true` (Phase 202 v0.5.197) to emit a ±1 px wake nudge immediately before the snapshot so the cursor stays visible. The nudge displaces by 0 net px (no UI side effects). Critical for visual cursor verification or any human-in-the-loop debugging of click_at residuals.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -227,6 +227,10 @@ const tools: Tool[] = [
         quality: {
           type: 'number',
           description: 'JPEG quality 1-100 (optional, default 80)',
+        },
+        keepCursorAlive: {
+          type: 'boolean',
+          description: 'Phase 202 v0.5.197: emit a ±1 px mouse nudge immediately before the snapshot so the iPad cursor stays visible (iPadOS auto-fades stationary cursors after a few seconds). Net displacement is zero. Default false. Set true when you need a screenshot for cursor verification or to visually confirm where the cursor landed after a click_at.',
         },
       },
     },
@@ -883,11 +887,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'pikvm_screenshot': {
-        const result = await pikvm.screenshot({
+        const opts = {
           maxWidth: validateNumber(args.maxWidth, 1, 10000),
           maxHeight: validateNumber(args.maxHeight, 1, 10000),
           quality: validateNumber(args.quality, 1, 100),
-        });
+        };
+        const result = validateBoolean(args.keepCursorAlive)
+          ? await pikvm.screenshotKeepingCursorAlive(opts)
+          : await pikvm.screenshot(opts);
 
         // Build informative message about the screenshot
         let infoText = `Screenshot captured (${result.screenshotWidth}x${result.screenshotHeight}`;
