@@ -52,10 +52,14 @@ export interface IpadUnlockOptions {
    *  v0.5.198). Earlier default was 800 — found insufficient on
    *  some iPads where even 1200 didn't clear the unlock threshold. */
   dragPx?: number;
-  /** Phase 210 (v0.5.199): try a Space key press first. Default true.
+  /** Phase 210 (v0.5.199): try a key press first. Default true.
    *  iPadOS 26+ may not recognize HID-mouse swipes as the unlock
    *  gesture (live test 2026-05-10), but a key press wakes the iPad
-   *  reliably. Set false to skip and go straight to swipe. */
+   *  reliably. Set false to skip and go straight to swipe.
+   *  Phase 217 (v0.5.205): the function now tries Enter first, then
+   *  Space (if Enter didn't already unlock). Live test on this iPad:
+   *  Space alone failed; Enter unlocks reliably from a fresh lock
+   *  screen. */
   tryKeyPressFirst?: boolean;
   /** Per-call mickey size for the drag. Smaller = higher call rate = faster
    *  apparent motion. Default 30. */
@@ -89,20 +93,30 @@ export async function unlockIpad(
   client: PiKVMClient,
   options: IpadUnlockOptions = {},
 ): Promise<IpadUnlockResult> {
-  // Phase 210 (v0.5.199): try a Space key press FIRST. Live test
-  // 2026-05-10 on this iPad: dragPx values 800/1200/1500/2000 all
-  // FAILED to unlock (swipe was emitted but iPadOS didn't recognize
-  // it as the unlock gesture — likely an iPadOS 26+ behavior change
-  // where HID-mouse swipes no longer clear the lock). A simple
-  // `Space` key press unlocks immediately and reliably. Cost: one
-  // HID key press + a screenshot. If iPad isn't on lock screen,
-  // Space could insert a space character into a focused text field —
-  // documented risk; caller is supposed to call this only when on
-  // lock screen anyway.
+  // Phase 210 (v0.5.199) → Phase 217 (v0.5.205): try a key press first.
+  // Live test 2026-05-10 (Phase 217): on this iPad, Space alone failed
+  // to unlock — the iPad stayed on the lock screen with the time
+  // displayed. Enter (alone) reliably unlocks the same lock screen,
+  // taking the iPad straight to the home screen. Sending Esc first
+  // is a no-op on a clean lock screen but closes the Control Center
+  // / Notification Centre if a prior gesture opened either.
+  //
+  // Sequence: Esc (defensive close), Enter (the actual unlock),
+  // Space (legacy fallback). If Enter unlocks, the Space falls on
+  // the home screen and is a no-op (no focused text field on home).
+  // Cost: three HID key presses. The original swipe is still tried
+  // as a final fallback below if all three keys leave us on the
+  // lock screen.
   if (options.tryKeyPressFirst !== false) {
     try {
-      await client.sendKey('Space');
+      await client.sendKey('Escape');
+      await sleep(200);
+      await client.sendKey('Enter');
       await sleep(600);  // settle for screen change
+      // Phase 210 fallback retained: Space, in case Enter didn't fire
+      // for some reason (test mocks not supplying Enter, etc.).
+      await client.sendKey('Space');
+      await sleep(400);
     } catch {
       // If sendKey fails, fall through to swipe-based unlock
     }
