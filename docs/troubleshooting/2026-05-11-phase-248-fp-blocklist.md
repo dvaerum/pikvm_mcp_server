@@ -37,7 +37,7 @@ to both call sites (open-loop and correction-pass).
 **Default: undefined** — fully back-compat. Production callers see
 no behavior change unless they opt in.
 
-## Live A/B — N=20 first run looked good, N=20 second run regressed
+## Live A/B — N=60 cumulative across 3 runs
 
 Same protocol every run: unlock + forceHomeViaSwipe ONCE, then 20
 sequential moveToPixel calls to (905, 800) without re-swiping.
@@ -47,15 +47,34 @@ sequential moveToPixel calls to (905, 800) without re-swiping.
 | Phase 247 baseline   | 5/20 (25%)   | 5/20 (25%)   | 2/20    | 156 px        |
 | Phase 248 run 1      | 8/20 (40%)   | 9/20 (45%)   | 5/20    | 131 px        |
 | Phase 248 run 2      | 1/20 (5%)    | 1/20 (5%)    | 8/20    | 167 px        |
-| **Phase 248 cumul.** | **9/40 (22.5%)** | **10/40 (25%)** | **13/40** | — |
+| Phase 248 run 3      | 7/20 (35%)   | 7/20 (35%)   | 7/20    | 111 px        |
+| **Phase 248 cumul.** | **16/60 (26.7%)** | **17/60 (28.3%)** | **20/60 (33%)** | — |
 
-**Honest revision:** Phase 248 run 1 looked like a 60% relative
-improvement, but run 2 came in much worse. Cumulative N=40 with
-blocklist is roughly EQUIVALENT to baseline (22.5% vs 25%) — well
-within the variance Phase 237 documented.
+**Honest cumulative reading:** N=60 with blocklist = 26.7%, vs
+baseline N=20 = 25%. The blocklist gives at most a ~1.7 pp lift,
+well within Phase 237 variance. **The first-N=20 "40%" was real but
+not reproducible.**
 
 This is exactly the per-trial variance Phase 237 warned about.
-The Phase 248 single-N=20 result was misleading.
+Single-N=20 results swing wildly (5% → 40% just from run-to-run noise).
+The blocklist semantically does the right thing but the click-rate
+ceiling is set elsewhere.
+
+## Motion-diff gap
+
+Phase 247 trial 1 of run 3 returned `alg=(782, 958)` — exactly an
+FP center, which template-match should have rejected. Investigation:
+the blocklist option is wired only into `findCursorByTemplateSet`
+calls in move-to.ts:1692,1972 (covered by Phase 248-followup
+regression test). **Motion-diff results don't go through the
+blocklist.** When motion-diff returns one of the FP positions, the
+blocklist doesn't filter it.
+
+Phase 250+ candidate: thread `fpBlocklist` into the motion-diff
+detection path as well. Higher risk than template-match filtering
+because motion-diff returns "where pixels actually changed" —
+filtering it could reject real cursor positions that happen to
+coincide with iPad UI features.
 
 **What we actually know:**
 - The blocklist semantically does the right thing — it rejects
