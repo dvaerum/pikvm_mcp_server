@@ -33,8 +33,13 @@ const cfg = loadConfig();
 const client = new PiKVMClient(cfg.pikvm);
 const profile = await loadProfile('./data/ballistics.json').catch(() => null);
 
-const ROOT = './data/phase262-click-rate';
-await fs.rm(ROOT, { recursive: true, force: true }).catch(() => undefined);
+// Phase 237 / Phase 262: bench is non-destructive — each run lands
+// in its own timestamped subdir so variance across runs is
+// observable in the data tree itself. Don't `rm -rf` previous
+// runs.
+const ROOT_BASE = './data/phase262-click-rate';
+const RUN_ID = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+const ROOT = `${ROOT_BASE}/${RUN_ID}`;
 await fs.mkdir(ROOT, { recursive: true });
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
