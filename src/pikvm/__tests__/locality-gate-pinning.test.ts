@@ -76,6 +76,17 @@ describe('moveToPixel locality-gate pinning', () => {
     expect(matches.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('Phase 251: topK diagnostic option threaded into BOTH call sites', async () => {
+    const src = await readMoveToTs();
+    // Phase 251 introduced topK on FindCursorOptions (diagnostic-only,
+    // logs per-template top-K with verbose) and threaded it through
+    // MoveToOptions. Same shape as Phase 248/250. If a future refactor
+    // drops the threading, verbose logs lose the top-K context and
+    // future template-match investigations lose the lever.
+    const matches = src.match(/topK:\s*options\.topK/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('expectedNearRadius is set on both paths (anchors the locality check)', async () => {
     const src = await readMoveToTs();
     // The locality gate is meaningless without a radius. Both call

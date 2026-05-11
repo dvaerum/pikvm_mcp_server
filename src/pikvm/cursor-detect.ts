@@ -912,6 +912,17 @@ export interface FindCursorOptions {
    *  alternative matches at the same true cursor from being
    *  treated as a competitor. Default undefined = disabled. */
   scoreMargin?: number;
+  /** Phase 251 (v0.5.216): when set together with `verbose`, log the
+   *  top-K highest-scoring positions in this template's correlation
+   *  surface. Diagnostic only — does NOT change selection. Used to
+   *  answer "does this template return multiple confident matches at
+   *  distinct positions?" (intra-template ambiguity). Phase 250
+   *  scoreMargin gate is cross-template and so cannot see this. If
+   *  the diagnostic shows clusters of ≥minScore matches at distinct
+   *  positions inside a single template, a per-template top-K
+   *  selection rule becomes the next concrete lever. Default
+   *  undefined = no extra logging. */
+  topK?: number;
   verbose?: boolean;
 }
 
@@ -955,6 +966,16 @@ export function findCursorByTemplateDecoded(
   let bestScore = -Infinity;
   let bestX = 0;
   let bestY = 0;
+  // Phase 251: optional intra-template top-K heap (verbose diagnostic
+  // only). We dedupe candidates within `step*2` px so we don't
+  // surface 5 sub-pixel-adjacent peaks of the same correlation hill —
+  // we want distinct positions. Suppression radius is intentionally
+  // proportional to scan step.
+  const wantTopK = options.topK !== undefined && options.verbose === true;
+  const topK = wantTopK ? Math.max(1, options.topK!) : 0;
+  const dedupeRadius = step * 2;
+  type Cand = { score: number; x: number; y: number };
+  const candidates: Cand[] = [];
   for (let y = yMin; y <= yMax; y += step) {
     for (let x = xMin; x <= xMax; x += step) {
       const score = correlateAt(screenshot.rgb, screenshot.width, stats, x, y);
@@ -962,6 +983,27 @@ export function findCursorByTemplateDecoded(
         bestScore = score;
         bestX = x;
         bestY = y;
+      }
+      if (wantTopK) {
+        let merged = false;
+        for (const c of candidates) {
+          if (Math.abs(c.x - x) <= dedupeRadius && Math.abs(c.y - y) <= dedupeRadius) {
+            if (score > c.score) {
+              c.score = score;
+              c.x = x;
+              c.y = y;
+            }
+            merged = true;
+            break;
+          }
+        }
+        if (!merged) {
+          candidates.push({ score, x, y });
+          if (candidates.length > topK * 4) {
+            candidates.sort((a, b) => b.score - a.score);
+            candidates.length = topK * 2;
+          }
+        }
       }
     }
   }
@@ -983,6 +1025,19 @@ export function findCursorByTemplateDecoded(
       `[template-match] best score=${bestScore.toFixed(3)} at (${bestX + hs.x}, ` +
         `${bestY + hs.y}) hotspot=(${hs.x},${hs.y}) (window=${xMin}-${xMax}×${yMin}-${yMax}, step=${step})`,
     );
+    if (wantTopK) {
+      candidates.sort((a, b) => b.score - a.score);
+      const topList = candidates.slice(0, topK);
+      console.error(
+        `[template-match] top-${topList.length}:` +
+          topList
+            .map(
+              (c, i) =>
+                ` ${i + 1}=${c.score.toFixed(3)}@(${c.x + hs.x},${c.y + hs.y})`,
+            )
+            .join(''),
+      );
+    }
   }
 
   if (bestScore < minScore) return null;

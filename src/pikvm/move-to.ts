@@ -203,6 +203,14 @@ export interface MoveToOptions {
    *  = disabled (back-compat). */
   scoreMargin?: number;
 
+  /** Phase 251 (v0.5.216): when set together with `verbose`, threaded
+   *  into internal findCursorByTemplateSet calls so each template's
+   *  top-K candidate positions are logged. Diagnostic only — does
+   *  NOT change selection. Used to investigate intra-template
+   *  ambiguity (Phase 250 scoreMargin gate operates cross-template
+   *  and so cannot see this). Default undefined. */
+  topK?: number;
+
   /** Phase 22: when true, the big open-loop emit is zeroed out; the
    *  correction loop emits the full distance via small verifiable
    *  chunks. Each chunk's emit (capped by Phase 9's per-pass cap)
@@ -1701,6 +1709,8 @@ export async function moveToPixel(
         fpBlocklist: options.fpBlocklist,
         // Phase 250 (v0.5.215): caller-provided score-margin gate.
         scoreMargin: options.scoreMargin,
+        // Phase 251 (v0.5.216): caller-provided top-K diagnostic.
+        topK: options.topK,
         verbose,
       });
       if (found) {
@@ -1983,6 +1993,8 @@ export async function moveToPixel(
             fpBlocklist: options.fpBlocklist,
             // Phase 250 (v0.5.215): caller-provided score-margin gate.
             scoreMargin: options.scoreMargin,
+            // Phase 251 (v0.5.216): caller-provided top-K diagnostic.
+            topK: options.topK,
             verbose,
           });
           if (found) {
