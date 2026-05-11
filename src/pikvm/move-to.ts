@@ -43,6 +43,7 @@ import {
   takeRawScreenshot,
 } from './cursor-detect.js';
 import { extractMaskedTemplate } from './seed-template.js';
+import { findCursorByShape } from './cursor-shape-detect.js';
 import {
   DEFAULT_TEMPLATE_DIR,
   LEGACY_TEMPLATE_PATH,
@@ -221,7 +222,7 @@ export interface CorrectionPass {
    *  diff succeeded. `template`: motion-diff failed and template-match
    *  succeeded. `predicted`: both detection paths failed; we trusted
    *  the open-loop prediction (and probably introduced error). */
-  mode: 'motion' | 'template' | 'predicted';
+  mode: 'motion' | 'template' | 'predicted' | 'shape';
   /** Free-form diagnostic: failure reason when motion-diff returned
    *  null, template-match score when fallback fired, etc. */
   reason: string | null;
@@ -234,7 +235,7 @@ export interface MovePassDiagnostic {
   /** 0 = the initial open-loop emission; 1..N = correction passes. */
   pass: number;
   /** Which detection path produced the post-position estimate. */
-  mode: 'motion' | 'template' | 'predicted';
+  mode: 'motion' | 'template' | 'predicted' | 'shape';
   /** Position estimate after this pass (motion-diff post centroid,
    *  template-match centre, or open-loop prediction). */
   detectedAt: { x: number; y: number };
@@ -1884,7 +1885,7 @@ export async function moveToPixel(
         sessionTemplates,     // Phase 2 + 3
       );
 
-      let passMode: 'motion' | 'template' | 'predicted' = 'predicted';
+      let passMode: 'motion' | 'template' | 'predicted' | 'shape' = 'predicted';
       let passReason: string | null = null;
 
       // Phase 212: pure query — would the motion-diff pair be rejected
@@ -2003,6 +2004,40 @@ export async function moveToPixel(
           }
         }
         if (!templated) {
+          // Phase 267 (v0.5.221): shape-detector fallback when both
+          // motion-diff and NCC template-match failed. Phase 266-267
+          // bench (20/20 within 30 px, median 6 px) confirmed shape +
+          // locality hint at radius 80-150 px finds the cursor
+          // reliably in clear-wallpaper regions. Less reliable in
+          // dock/widget zones — but only fires when the other two
+          // detectors have already given up, so a third option here
+          // can only help. Trust requires shapeScore ≥ 0.05 (dim-
+          // cursor cutoff; 0.31 noise floor for true negatives).
+          try {
+            const shapeShot = await client.screenshotKeepingCursorAlive();
+            const shapeDec = await decodeScreenshot(shapeShot.buffer);
+            const shape = findCursorByShape(shapeDec.rgb, shapeDec.width, shapeDec.height, {
+              expectedNear: newPredicted,
+              expectedNearRadius: 100,
+            });
+            if (shape && shape.shapeScore >= 0.05) {
+              currentPos = { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) };
+              finalDetectedPosition = { ...currentPos };
+              passMode = 'shape';
+              passReason = `shape score=${shape.shapeScore.toFixed(3)} (motion: ${motionFailReason}, template: null)`;
+              templated = true;
+              client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.min(0.9, shape.shapeScore * 5));
+              if (verbose) {
+                console.error(
+                  `[move-to] WARN pass ${totalPasses + 1}: motion-diff + template-match failed; shape-detect recovered at (${currentPos.x},${currentPos.y}) score=${shape.shapeScore.toFixed(3)}`,
+                );
+              }
+            }
+          } catch {
+            // shape-detect failed; fall through to predicted
+          }
+        }
+        if (!templated) {
           currentPos = newPredicted;
           passMode = 'predicted';
           passReason = `motion: ${motionFailReason}; no template fallback`;
@@ -2048,7 +2083,9 @@ export async function moveToPixel(
       }
 
       // Phase 24: update verification-lag counter based on this pass's mode.
-      if (passMode === 'motion' || passMode === 'template') {
+      // Phase 267 (v0.5.221): 'shape' joins motion/template as a real
+      // detection (not just predicted-trust).
+      if (passMode === 'motion' || passMode === 'template' || passMode === 'shape') {
         passesSinceLastVerification = 0;
       } else {
         passesSinceLastVerification++;
