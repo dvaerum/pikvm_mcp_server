@@ -95,3 +95,32 @@ search would be the most direct fix — Phase 244 cross-link "Where
 this fix does NOT extend" notes that the locality gate alone isn't
 the right tool for the wake-recapture path; same here for
 cross-call FPs.
+
+## Phase 248 visual inspection of the FP locations
+
+`test-phase248-fp-inspect.ts` snapshotted the iPad home screen at
+1680×1050 with the cursor verifiably parked at the right edge
+(~1145, 776 visible thanks to Phase 246 keepalive). At the FP
+locations:
+- **(852, 941)**: between the icons row (y≈810) and the dock
+  (y≈970) — pure background, no UI element present, yet template-
+  match returns this position with score ≥ 0.83 in 3/20 trials
+- **(773, 769)**: directly on the **TV app icon** — the dark "tv"
+  glyph probably correlates with the cursor template's dark blob.
+  3/20 trials.
+- **(782, 958)**: dock area near the page-indicator dots. 2/20
+  trials.
+
+The cursor at (~1145, 776) is NOT at any of these FP locations,
+confirming the algorithm is confidently wrong, not the cursor
+actually being there.
+
+The (852, 941) case is particularly telling — there's no UI
+feature there at all. Likely a wallpaper-gradient false-positive
+that scores high enough to pass the 0.83 minScore floor but isn't
+visually distinguishable from background.
+
+This concrete evidence supports the Phase 248+ negative-template
+list candidate: a manually-or-automatically-curated "known FP
+locations on this iPad's home screen" list, with template-match
+results at those positions rejected.
