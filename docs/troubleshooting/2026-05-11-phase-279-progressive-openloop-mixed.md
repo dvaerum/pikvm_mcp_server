@@ -146,10 +146,53 @@ None of these are being pursued this tick. Per the cron rule
 ("Do NOT pivot strategies without explicit user direction"), we
 stop here and report the honest finding.
 
+## Addendum — frame-by-frame diagnostic on a failing trial
+
+Sampled trial `on/far/t001` (residual reported 44 px, classified MISS at
+35 px threshold):
+
+| Frame | Cursor visible? | Approx position |
+|---|---|---|
+| `01-shotAPre-preCalib` | YES | ~(1005, 805) — far right of Settings |
+| `03-shotB-postOpenLoop` | YES | ~(1005, 805) — unchanged (progressive=on zeros big emit) |
+| `04-G-pass-shotC` | YES | ~(810, 875) — between Books/TV in dock row, ~70 px from target |
+| `08-L-pass-shotC` (final) | **NO** | cursor not visible anywhere on screen |
+
+Algorithm reported a final residual of 44 px (cursor at ~(799, 829)).
+But the visible cursor by the final pass is gone — there is nothing
+visible on the iPad screen that resembles a cursor.
+
+This implies the real failure mode is:
+
+1. Chunked emits move the cursor close to target (within ~70 px by pass 4).
+2. Subsequent emits push the cursor into a state where it disappears
+   — possibly edge-clamped, possibly behind a dock-icon snap zone,
+   possibly faded under a stationary-cursor timeout.
+3. The detector then locks onto whatever wallpaper/icon pattern looks
+   cursor-ish in the final frame and reports an honest-looking but
+   wrong residual.
+
+**This is the Phase 211/212 stationary-cursor failure mode reasserting
+itself across chunked passes, not a cursor-shape-detect discriminator
+problem.** The detector module is doing its job; the cursor just
+isn't present to be detected by the final pass.
+
+Actionable directions (NOT pursued this phase — would require user
+direction per cron rule "do not pivot strategies"):
+
+1. Add a keepalive wiggle between chunked passes to prevent fade
+2. Detect the "cursor visible at pass N, invisible at pass N+1"
+   transition and bail with belief-from-pass-N
+3. Diagnose specifically what makes the cursor disappear — edge
+   clamp vs fade vs dock-icon occlusion
+4. Move the same cursor-shape-detect to a different point in the
+   pipeline (e.g., evaluate at every pass and keep best-scoring
+   landing, not just the final pass)
+
 ## State at end of phase
 
 - v0.5.225 (unchanged)
 - 713/713 tests
 - nix build green
 - 160-trial dataset preserved
-- This phase: bench harness + doc only
+- This phase: bench harness + doc + frame-by-frame diagnostic only
