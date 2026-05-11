@@ -37,28 +37,52 @@ to both call sites (open-loop and correction-pass).
 **Default: undefined** — fully back-compat. Production callers see
 no behavior change unless they opt in.
 
-## Live A/B (N=20 each)
+## Live A/B — N=20 first run looked good, N=20 second run regressed
 
-Same protocol both runs: unlock + forceHomeViaSwipe ONCE, then 20
+Same protocol every run: unlock + forceHomeViaSwipe ONCE, then 20
 sequential moveToPixel calls to (905, 800) without re-swiping.
 
-| Metric           | Phase 247 baseline | Phase 248 blocklist | delta |
-|:-----------------|:------------------:|:-------------------:|:-----:|
-| within 35 px     | 5/20 (25%)         | **8/20 (40%)**      | +60% relative |
-| within 75 px     | 5/20 (25%)         | **9/20 (45%)**      | +80% relative |
-| null detections  | 2/20 (10%)         | 5/20 (25%)          | +15 pp |
-| mean residual    | 156 px             | **131 px**          | -16% |
+| Run                  | within 35 px | within 75 px | nulls   | mean residual |
+|:---------------------|:------------:|:------------:|:-------:|:-------------:|
+| Phase 247 baseline   | 5/20 (25%)   | 5/20 (25%)   | 2/20    | 156 px        |
+| Phase 248 run 1      | 8/20 (40%)   | 9/20 (45%)   | 5/20    | 131 px        |
+| Phase 248 run 2      | 1/20 (5%)    | 1/20 (5%)    | 8/20    | 167 px        |
+| **Phase 248 cumul.** | **9/40 (22.5%)** | **10/40 (25%)** | **13/40** | — |
 
-**Headline: hit rate within icon tolerance jumped 25% → 40% on
-single-attempt.** The blocklist prevents the algorithm from
-selecting the 3 known UI false-positive positions; instead it
-either finds a real cursor match or returns null (fallback to
-predicted position).
+**Honest revision:** Phase 248 run 1 looked like a 60% relative
+improvement, but run 2 came in much worse. Cumulative N=40 with
+blocklist is roughly EQUIVALENT to baseline (22.5% vs 25%) — well
+within the variance Phase 237 documented.
 
-Per Phase 237's variance lesson, single N=20 isn't conclusive,
-but a 15 percentage-point lift in hit rate is large enough that
-the directional signal is meaningful. Subsequent benches across
-different cron sessions can accumulate evidence.
+This is exactly the per-trial variance Phase 237 warned about.
+The Phase 248 single-N=20 result was misleading.
+
+**What we actually know:**
+- The blocklist semantically does the right thing — it rejects
+  template matches at 3 visually-confirmed FP locations
+- It doesn't materially change end-to-end click rate at this N
+- It DOES shift the failure mode: more nulls (correct rejections),
+  fewer confident-wrong template matches at the FP locations
+- Whether the failure-mode shift translates to long-run click-rate
+  improvement remains unproven
+
+The option is still useful for callers who specifically want to
+avoid landing clicks at the known FP locations (different concern
+from raw hit-rate-near-target). It's opt-in default-off, so
+shipping it carries no production risk.
+
+**True per-attempt rate at v0.5.214 across 60 trials:**
+- Phase 247 (no blocklist) N=20: 25%
+- Phase 248 cumulative (blocklist) N=40: 22.5%
+- All within ±5 pp of each other — **the click-rate ceiling is
+  set by the bimodal detection failure, not by the blocklist.**
+
+To meaningfully test whether the blocklist helps, we'd need:
+- Multiple N=20+ runs across different sessions
+- Different starting cursor positions / targets
+- A/B with proper randomization between blocklist and no-blocklist
+  in alternating trials within one session
+- N≥100 cumulative
 
 ## Tests
 

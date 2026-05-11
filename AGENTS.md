@@ -117,12 +117,13 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 > rates below predate Phase 214's App Switcher root-cause finding,
 > Phase 235's chunked mid-screen cursor deposit, Phase 244's
 > correction-pass locality gate, and Phase 248/249's opt-in
-> `useKnownFpBlocklist` (live N=20: 25% → 40% within-35-px hit rate).
-> Per Phase 237's variance lesson, they need an N≥30 re-bench before
-> they should be trusted as current.
-> See `docs/troubleshooting/ipad-cursor-detection.md` § "Phase 244"
-> for the latest architectural state and `2026-05-11-phase-248-fp-blocklist.md`
-> for the Phase 248 A/B data.
+> `useKnownFpBlocklist`. Phase 248 first N=20 looked like 25% → 40%
+> with-blocklist, but second N=20 regressed to 5%; cumulative N=40
+> with blocklist is 22.5% vs baseline 25% — within Phase 237 variance.
+> Per Phase 237's lesson: ALL the rates below need an N≥30 re-bench
+> before being trusted. See `docs/troubleshooting/ipad-cursor-detection.md`
+> § "Phase 244" for the latest architectural state and
+> `2026-05-11-phase-248-fp-blocklist.md` for the Phase 248 cumulative data.
 
 | Target width | Hit rate (per attempt) | Hit rate (3 attempts) | Examples |
 |--------------|------------------------|----------------------|----------|
