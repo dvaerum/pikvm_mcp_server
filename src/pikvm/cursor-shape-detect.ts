@@ -139,6 +139,12 @@ export function findCursorByShape(
   // Per-candidate shape descriptors. We re-scan the mask within a
   // 25-px box around each centroid to get bbox + 4-quadrant mass
   // (the mergeClusters output doesn't carry these).
+  // Phase 259 (v0.5.219): also accumulate per-channel sums for
+  // grayscale-ness check. The iPad cursor is grayscale (R ≈ G ≈ B);
+  // dock icons (App Store blue, AppTV) and notification badges (red
+  // numbers) are NOT, even when they have small dark sub-regions.
+  // Reject candidates whose dominant pixels show high chromatic
+  // variation.
   const candidates: ShapeCandidate[] = [];
   for (const c of merged) {
     const cx = Math.round(c.centroidX);
@@ -146,6 +152,7 @@ export function findCursorByShape(
     const R = 25;
     let minX = cx, maxX = cx, minY = cy, maxY = cy;
     let qNW = 0, qNE = 0, qSW = 0, qSE = 0;
+    let sumR = 0, sumG = 0, sumB = 0, darkCount = 0;
     for (let dy = -R; dy <= R; dy++) {
       const y = cy + dy;
       if (y < 0 || y >= height) continue;
@@ -157,6 +164,11 @@ export function findCursorByShape(
         if (x > maxX) maxX = x;
         if (y < minY) minY = y;
         if (y > maxY) maxY = y;
+        const ri = (y * width + x) * 3;
+        sumR += rgb[ri];
+        sumG += rgb[ri + 1];
+        sumB += rgb[ri + 2];
+        darkCount++;
         if (dx < 0 && dy < 0) qNW++;
         else if (dx >= 0 && dy < 0) qNE++;
         else if (dx < 0 && dy >= 0) qSW++;
@@ -172,11 +184,30 @@ export function findCursorByShape(
     const bboxCenterY = (minY + maxY) / 2;
     const centroidOffset = Math.hypot(c.centroidX - bboxCenterX, c.centroidY - bboxCenterY);
 
+    // Phase 259: grayscale-ness penalty. The iPad cursor is dark
+    // gray (R ≈ G ≈ B). Dock-icon dark sub-regions usually have a
+    // colour cast (App Store blue, AppTV dark-with-rendered-logo,
+    // badge red). Penalise shapeScore by chroma — soft penalty
+    // (vs hard reject) so coloured candidates can still win when
+    // nothing better is available.
+    let chroma = 0;
+    if (darkCount > 0) {
+      const mR = sumR / darkCount;
+      const mG = sumG / darkCount;
+      const mB = sumB / darkCount;
+      chroma = Math.max(mR, mG, mB) - Math.min(mR, mG, mB);
+    }
+    // Chroma penalty halves the score at chroma=20 (mild colour
+    // cast), reduces to ~10% at chroma=50 (clearly coloured icon).
+    const chromaPenalty = Math.exp(-chroma / 20);
+
     candidates.push({
       centroidX: c.centroidX,
       centroidY: c.centroidY,
       pixels: c.pixels,
-      shapeScore: shapeScoreFor(c.pixels, asymmetry, centroidOffset, aspectRatio),
+      shapeScore:
+        shapeScoreFor(c.pixels, asymmetry, centroidOffset, aspectRatio) *
+        chromaPenalty,
     });
   }
 
