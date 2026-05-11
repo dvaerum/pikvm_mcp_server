@@ -194,6 +194,15 @@ export interface MoveToOptions {
    *  custom list. Default undefined = no rejection (back-compat). */
   fpBlocklist?: { centers: { x: number; y: number }[]; radius: number };
 
+  /** Phase 250 (v0.5.215): when set, threaded into all internal
+   *  findCursorByTemplateSet calls. Targets Phase 243's bimodal FP
+   *  pattern: iPad UI features score similarly to each other; the
+   *  real cursor dominates cleanly. If best - runnerUp (at >30 px
+   *  from best) < scoreMargin, the match is treated as ambiguous
+   *  and rejected. Recommended starting value 0.03. Default undefined
+   *  = disabled (back-compat). */
+  scoreMargin?: number;
+
   /** Phase 22: when true, the big open-loop emit is zeroed out; the
    *  correction loop emits the full distance via small verifiable
    *  chunks. Each chunk's emit (capped by Phase 9's per-pass cap)
@@ -1690,6 +1699,8 @@ export async function moveToPixel(
         requireWithinRadius: true,
         // Phase 248 (v0.5.213): caller-provided known-FP blocklist.
         fpBlocklist: options.fpBlocklist,
+        // Phase 250 (v0.5.215): caller-provided score-margin gate.
+        scoreMargin: options.scoreMargin,
         verbose,
       });
       if (found) {
@@ -1970,6 +1981,8 @@ export async function moveToPixel(
             requireWithinRadius: true,
             // Phase 248 (v0.5.213): caller-provided known-FP blocklist.
             fpBlocklist: options.fpBlocklist,
+            // Phase 250 (v0.5.215): caller-provided score-margin gate.
+            scoreMargin: options.scoreMargin,
             verbose,
           });
           if (found) {

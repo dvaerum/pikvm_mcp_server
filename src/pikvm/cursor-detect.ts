@@ -902,6 +902,16 @@ export interface FindCursorOptions {
    *  reference iPad (1680×1050) blocklist. Default undefined =
    *  no rejection, fully back-compat. */
   fpBlocklist?: { centers: Point[]; radius: number };
+  /** Phase 250 (v0.5.215): when set, reject the winning template
+   *  match if the second-best non-overlapping match's score is
+   *  within `scoreMargin` NCC of it. Targets Phase 243's bimodal-
+   *  FP pattern: iPad UI features (clock widget, app icons,
+   *  wallpaper gradients) score similarly to each other but the
+   *  real cursor dominates cleanly. Recommended starting value
+   *  0.03. Self-exclusion radius 30 px prevents nearby grid-step
+   *  alternative matches at the same true cursor from being
+   *  treated as a competitor. Default undefined = disabled. */
+  scoreMargin?: number;
   verbose?: boolean;
 }
 
@@ -1069,6 +1079,27 @@ export function findCursorByTemplateSet(
       if (dx * dx + dy * dy <= options.fpBlocklist.radius * options.fpBlocklist.radius) {
         return null;
       }
+    }
+  }
+  // Phase 250 (v0.5.215): score-margin ambiguity gate. Bimodal FPs
+  // (Phase 243) cluster at similar scores; the real cursor tends to
+  // dominate. If the runner-up at >30 px from `best` is within
+  // `scoreMargin` of `best`, treat the match as ambiguous and return
+  // null. Caller (moveToPixel) then falls back to predicted-position
+  // (same path Phase 244 documented as safe).
+  if (options.scoreMargin !== undefined && allMatches.length >= 2) {
+    const sorted = [...allMatches].sort((a, b) => b.score - a.score);
+    const runnerUp = sorted.find((m) =>
+      Math.hypot(m.position.x - best!.position.x, m.position.y - best!.position.y) > 30,
+    );
+    if (runnerUp && best.score - runnerUp.score < options.scoreMargin) {
+      if (options.verbose) {
+        console.error(
+          `[template-match] AMBIGUOUS: best=${best.score.toFixed(3)} ` +
+            `runnerUp=${runnerUp.score.toFixed(3)} margin=${(best.score - runnerUp.score).toFixed(3)} < ${options.scoreMargin}`,
+        );
+      }
+      return null;
     }
   }
   return best;

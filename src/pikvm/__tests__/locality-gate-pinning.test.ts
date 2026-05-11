@@ -68,6 +68,14 @@ describe('moveToPixel locality-gate pinning', () => {
     expect(matches.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('Phase 250: scoreMargin option threaded into BOTH call sites', async () => {
+    const src = await readMoveToTs();
+    // Phase 250 introduced scoreMargin on FindCursorOptions and
+    // threaded it through MoveToOptions. Same shape as Phase 248.
+    const matches = src.match(/scoreMargin:\s*options\.scoreMargin/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('expectedNearRadius is set on both paths (anchors the locality check)', async () => {
     const src = await readMoveToTs();
     // The locality gate is meaningless without a radius. Both call
