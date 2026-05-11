@@ -136,12 +136,14 @@ work that could lift production click rate:
    (40% spread). A tighter calibration on the Y axis would let
    cursor land closer to targets.
 
-2. **Iterative chunk-and-detect.** Instead of one big open-loop
-   emit, do many small (20-30 px) emits each followed by detection.
-   Each cycle keeps the cursor in shape-detect's locality range. The
-   chunked-pacing approach already exists in moveToPixel (Phase 22);
-   making each chunk shorter and adding shape-detect between chunks
-   could converge to small residuals.
+2. **Iterative chunk-and-detect.** ~~Instead of one big open-loop
+   emit, do many small (20-30 px) emits each followed by detection.~~
+   **Phase 279 tested this (`progressiveOpenLoop: true`, N=160
+   interleaved A/B). Result: +5 pp on near (within variance), 0% on
+   far in both arms.** The 12-chunk small-step approach can't
+   escape FP traps that single-shot mode falls into — detectors
+   agree on the wrong answer rather than catching each other's
+   mistakes. Ruled out as a lever for the far-target failure class.
 
 3. **Pre-position cursor to a known mid-screen anchor first.**
    The post-home position (1150, 780) is far from many targets.
