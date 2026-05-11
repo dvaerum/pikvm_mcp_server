@@ -20,13 +20,14 @@ noise on animated UI are the underlying limits — see
 > **HONESTY NOTE (Phase 214/244/248-249, 2026-05-11, v0.5.214):** the Phase 70
 > numbers above predate Phase 214's App Switcher finding, Phase 235's
 > chunked-deposit fix, Phase 244's locality gate extension, and
-> Phase 248/249's opt-in fp-blocklist. Recent post-Phase-244 N=10/20
-> runs show ~20-25% per-attempt within 35 px on the cursor path;
-> with `useKnownFpBlocklist: true` enabled (Phase 248 N=20), that
-> rises to 40%. True distributions still need N≥30 per Phase 237's
-> variance lesson. Treat the rates above as pre-Phase-214 historical
-> numbers; the underlying recommendation (prefer keyboard over cursor)
-> is still correct and is the operative point.
+> Phase 248/249's opt-in fp-blocklist. Recent post-Phase-244 cumulative
+> N=60 runs show ~22-25% per-attempt within 35 px on the cursor path
+> regardless of whether useKnownFpBlocklist is enabled (first N=20
+> with-blocklist showed 40% but second N=20 regressed to 5% —
+> cumulative within Phase 237 variance). Treat the rates above as
+> pre-Phase-214 historical numbers; the underlying recommendation
+> (prefer keyboard over cursor) is still correct and is even more
+> compelling now that the cursor-path ceiling is empirically ~25%.
 
 **Prefer this pattern over `pikvm_mouse_click_at` for any iPad
 target where a keyboard equivalent exists.** Reach for cursor clicks

@@ -58,7 +58,7 @@ The iPad MUST be unlocked. Detect-then-move can't find the cursor against the lo
 | maxRetries | number | 3 (iPad) / 0 (desktop) | Phase 94/142: auto-defaults to 3 on iPad (relative-mouse, bumped from 2 → 3 in Phase 142 for Phase 141 dismiss-recipe headroom) / 0 on desktop. Pass 0 explicitly to opt out of retries on iPad. |
 | autoUnlockOnDetectFail | boolean | false | Phase 72 opt-in lock-screen recovery |
 | maxResidualPx | number | *(unset)* | Phase 88: skip the click if cursor lands more than N px from target. Set to 25 for strict icon-tolerance (refuses imprecise clicks that risk hitting adjacent UI elements). Leave unset for permissive behaviour. |
-| useKnownFpBlocklist | boolean | false | Phase 248/249 (v0.5.213/v0.5.214): when true, reject template-match cursor positions in 50 px of known UI false-positive locations on the reference iPad (1680×1050 portrait, default wallpaper). Live A/B at Phase 248: 25%→40% within-35-px hit rate. **Only enable if your iPad layout matches the reference** — different wallpaper/layout has different FPs. |
+| useKnownFpBlocklist | boolean | false | Phase 248/249 (v0.5.213/v0.5.214): when true, reject template-match cursor positions in 50 px of known UI false-positive locations on the reference iPad (1680×1050 portrait, default wallpaper). **Honest data:** Phase 248 first N=20 = 40% within 35 px; second N=20 = 5%; cumulative N=40 = 22.5% vs baseline 25% — **no material click-rate change at this N**. Failure mode shifts (more safe nulls, fewer confident-wrong matches at FP locations). **Only enable if your iPad layout matches the reference** — different wallpaper/layout has different FPs. |
 | verifyClick | boolean | true | Pre/post screenshot diff confirms click landed |
 | strategy | string | detect-then-move | DO NOT use slam-then-move on iPad — re-locks via hot corner |
 
@@ -80,11 +80,11 @@ The iPad MUST be unlocked. Detect-then-move can't find the cursor against the lo
 ```
 With `maxResidualPx: 25`, attempts that land more than 25 px from the target are skipped (counts as a retry). Trades absolute hit rate for "I clicked the right thing" confidence — useful when the target is near other clickable elements that could be accidentally hit.
 
-**Click on the reference iPad with known-FP rejection:**
+**Click on the reference iPad with known-FP rejection (caveat: see honesty note):**
 ```json
 { "name": "pikvm_mouse_click_at", "arguments": { "x": 905, "y": 800, "useKnownFpBlocklist": true } }
 ```
-Phase 248/249 opt-in. Live N=20 against (905,800): hit rate 25% → 40%. Rejects template matches at 3 known iPad-UI false-positive locations (wallpaper-gradient FP at (852,941), TV icon glyph at (773,769), dock area at (782,958)). Don't enable on a different iPad layout / wallpaper — the FPs may not be the same.
+Phase 248/249 opt-in. Rejects template matches at 3 known iPad-UI false-positive locations (wallpaper-gradient FP at (852,941), TV icon glyph at (773,769), dock area at (782,958)). **Cumulative N=40 doesn't show click-rate improvement** (22.5% vs 25% baseline) — semantically correct rejection without proven hit-rate lift. May still be useful when callers specifically want to avoid landing at known-bad positions. Don't enable on a different iPad layout / wallpaper — the FPs may not be the same.
 
 ## When NOT to Use
 - Tiny targets (< 30 px): even with retries, hit rate drops below 80%. Use keyboard navigation if available — see [ipad-keyboard-workflow.md](ipad-keyboard-workflow.md).
