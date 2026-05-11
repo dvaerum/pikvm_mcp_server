@@ -186,29 +186,10 @@ export interface MoveToOptions {
    *  (only safe if the iPad has its hot-corners disabled). Default true. */
   forbidSlamOnIpad?: boolean;
 
-  /** Phase 248 (v0.5.213): when set, threaded into all internal
-   *  findCursorByTemplateSet calls to reject template-match positions
-   *  in known-FP locations on the target's UI. Use the
-   *  `KNOWN_HOME_SCREEN_FPS_1680x1050` constant from
-   *  `cursor-fp-blocklist.ts` for the reference iPad, or supply a
-   *  custom list. Default undefined = no rejection (back-compat). */
-  fpBlocklist?: { centers: { x: number; y: number }[]; radius: number };
-
-  /** Phase 250 (v0.5.215): when set, threaded into all internal
-   *  findCursorByTemplateSet calls. Targets Phase 243's bimodal FP
-   *  pattern: iPad UI features score similarly to each other; the
-   *  real cursor dominates cleanly. If best - runnerUp (at >30 px
-   *  from best) < scoreMargin, the match is treated as ambiguous
-   *  and rejected. Recommended starting value 0.03. Default undefined
-   *  = disabled (back-compat). */
-  scoreMargin?: number;
-
   /** Phase 251 (v0.5.216): when set together with `verbose`, threaded
    *  into internal findCursorByTemplateSet calls so each template's
    *  top-K candidate positions are logged. Diagnostic only — does
-   *  NOT change selection. Used to investigate intra-template
-   *  ambiguity (Phase 250 scoreMargin gate operates cross-template
-   *  and so cannot see this). Default undefined. */
+   *  NOT change selection. Default undefined. */
   topK?: number;
 
   /** Phase 22: when true, the big open-loop emit is zeroed out; the
@@ -1705,10 +1686,6 @@ export async function moveToPixel(
         // (line 1672 ELSE branch), which at least anchors clicks to
         // the intended target instead of a confident-wrong location.
         requireWithinRadius: true,
-        // Phase 248 (v0.5.213): caller-provided known-FP blocklist.
-        fpBlocklist: options.fpBlocklist,
-        // Phase 250 (v0.5.215): caller-provided score-margin gate.
-        scoreMargin: options.scoreMargin,
         // Phase 251 (v0.5.216): caller-provided top-K diagnostic.
         topK: options.topK,
         verbose,
@@ -1989,10 +1966,6 @@ export async function moveToPixel(
             // exists, falling through to predicted-position trust below
             // (anchored to expected cursor location, not a UI feature).
             requireWithinRadius: true,
-            // Phase 248 (v0.5.213): caller-provided known-FP blocklist.
-            fpBlocklist: options.fpBlocklist,
-            // Phase 250 (v0.5.215): caller-provided score-margin gate.
-            scoreMargin: options.scoreMargin,
             // Phase 251 (v0.5.216): caller-provided top-K diagnostic.
             topK: options.topK,
             verbose,

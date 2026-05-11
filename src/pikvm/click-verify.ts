@@ -185,19 +185,6 @@ export interface ClickAtWithRetryOptions {
   /** Max additional attempts after the first one. 0 = single-shot
    *  (preserves pre-Phase-25 behavior). Default 0. */
   maxRetries?: number;
-  /** Phase 191 (v0.5.180): inter-retry approach randomization
-   *  magnitude in mickeys. Before each attempt > 1, the cursor is
-   *  displaced by `jitterOffsetForAttempt(attempt, this)` — a
-   *  deterministic 8-step compass rosette starting at NE diagonals.
-   *  This breaks iPadOS pointer-effect snap-zone CORRELATED failures
-   *  across retries: each attempt approaches target from a fresh
-   *  trajectory, sampling a different snap zone. Default resolved by
-   *  `defaultInterRetryJitterFor(mouseAbsoluteMode)`: 50 on iPad
-   *  relative mode, 0 (disabled) on desktop absolute mode. Set 0
-   *  explicitly to opt out. The jitter is a single relative-emit
-   *  per retry (no slam, no corner approach) so Phase 32
-   *  forbidSlamFallback is untouched. */
-  interRetryJitterMickeys?: number;
   /** Mouse button. Default 'left'. */
   button?: MouseButton;
   /** Brief pause between move-to-target completion and click, so iPadOS
@@ -439,12 +426,6 @@ export async function clickAtWithRetry(
   const microCorrectionIterations = options.microCorrectionIterations ?? 8;
   const microConvergePx = options.microConvergePx ?? 8;
   const minLivePxPerMickey = options.minLivePxPerMickey ?? 0.4;
-  // Phase 191 (v0.5.180): inter-retry approach randomization. Default
-  // 0 (off) at this layer — the MCP `pikvm_mouse_click_at` handler in
-  // src/index.ts resolves the iPad-aware default via
-  // `defaultInterRetryJitterFor(mouseAbsoluteMode)` and passes it in.
-  // This mirrors the `maxRetries`/`defaultMaxRetriesFor` pattern.
-  const interRetryJitterMickeys = options.interRetryJitterMickeys ?? 0;
   // Load cursor templates ONCE outside the retry loop. Empty set →
   // pre-click template check is a no-op (graceful degradation).
   // Phase 194-A (v0.5.187): validate at load time so contaminated
@@ -517,27 +498,6 @@ export async function clickAtWithRetry(
 
   let lastMoveError: Error | null = null;
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-    // Phase 191 (v0.5.180): inter-retry approach randomization. Before
-    // every retry > 1, displace the cursor by a deterministic 8-step
-    // compass-rosette offset so this attempt's moveToPixel plots a
-    // FRESH approach trajectory to the target. Breaks iPadOS pointer-
-    // effect snap-zone CORRELATED failures across retries.
-    //
-    // No-op on attempt 1 (baseline preserved) and when the resolved
-    // magnitude is 0 (opt-out / desktop default). Uses ONLY
-    // `mouseMoveRelative` — never approaches a corner, so Phase 32
-    // forbidSlamFallback is not invoked.
-    if (attempt > 1 && interRetryJitterMickeys > 0) {
-      const { dx: jdx, dy: jdy } = jitterOffsetForAttempt(
-        attempt,
-        interRetryJitterMickeys,
-      );
-      if (jdx !== 0 || jdy !== 0) {
-        await client.mouseMoveRelative(jdx, jdy);
-        await sleepMs(30); // brief settle so cursor renders before detect
-      }
-    }
-
     // Phase 192-D (v0.5.184): if the cursor belief reports the
     // cursor is pinned to an iPad edge, emit a small unstick move
     // BEFORE moveToPixel so the next detect-then-move starts in a
@@ -1538,64 +1498,6 @@ export function chunkMickeys(rawMickeys: number, maxMickeys: number): number {
 }
 
 /**
- * Phase 191 (v0.5.180) — deterministic 8-step compass rosette for
- * inter-retry approach randomization. iPadOS pointer-effect snap zones
- * are axis-aligned; correlated retry failures previously stuck on the
- * same snap zone because each retry approached from a similar
- * trajectory to the target. Displacing the cursor's starting position
- * before retry N forces moveToPixel to plot a fresh approach
- * trajectory, sampling a different snap zone.
- *
- * Pattern (1-based attempt index):
- *   1     → no jitter (baseline; preserves single-shot behaviour)
- *   2     → NE  (+,+)   — diagonals first; they cross the axis-aligned
- *   3     → SE  (+,-)     snap zones obliquely
- *   4     → SW  (-,-)
- *   5     → NW  (-,+)
- *   6     → E   (+,0)   — cardinals only after all 4 diagonals tried
- *   7     → S   (0,-)
- *   8     → W   (-,0)
- *   9     → N   (0,+)
- *   10..  → wraps every 8
- *
- * Magnitudes routed through the same ±127 clamp as `chunkMickeys`,
- * so a magnitude of 200 still produces a single-call mouseMoveRelative
- * inside PiKVM's protocol bounds.
- *
- * Pure: deterministic, no I/O.
- */
-export function jitterOffsetForAttempt(
-  attemptIndex: number,
-  magnitude: number,
-): { dx: number; dy: number } {
-  if (attemptIndex <= 1) return { dx: 0, dy: 0 };
-  if (!Number.isFinite(magnitude) || magnitude <= 0) return { dx: 0, dy: 0 };
-  // 8 unit vectors, diagonals first (NE/SE/SW/NW) then cardinals (E/S/W/N).
-  // Storing as exact integers / sentinels avoids floating-point rounding
-  // surprises at magnitude=50 (cos45°*50 = 35.355...; we want stable 35).
-  const ROSETTE: ReadonlyArray<readonly [number, number]> = [
-    [+1, +1], [+1, -1], [-1, -1], [-1, +1], // diagonals — components scaled by cos45°
-    [+1,  0], [ 0, -1], [-1,  0], [ 0, +1], // cardinals — components scaled by 1.0
-  ];
-  const i = (attemptIndex - 2) % ROSETTE.length;
-  const [ux, uy] = ROSETTE[i];
-  // Diagonal entries multiply both axes by cos45°≈0.7071; cardinals leave
-  // the magnitude on the single non-zero axis untouched.
-  const isDiagonal = ux !== 0 && uy !== 0;
-  const scale = isDiagonal ? Math.cos(Math.PI / 4) : 1;
-  // Round-to-nearest BEFORE clamping. chunkMickeys uses ceil internally,
-  // which would inflate 35.355 to 36; we want the closer 35 for predictable
-  // rosette positions. The chunkMickeys clamp still applies the ±127
-  // PiKVM-protocol bound when magnitude is large.
-  const rawDx = Math.round(ux * magnitude * scale);
-  const rawDy = Math.round(uy * magnitude * scale);
-  return {
-    dx: chunkMickeys(rawDx, 127),
-    dy: chunkMickeys(rawDy, 127),
-  };
-}
-
-/**
  * Phase 156 (v0.5.146) — pure helper: pick the open-loop chunk pace
  * default given the target's mouse mode. Phase 136 (v0.5.128) measured
  * a 167-mickey Y emit landing 60 px past target on iPad at 30 ms
@@ -1617,30 +1519,6 @@ export function jitterOffsetForAttempt(
  */
 export function defaultChunkPaceMsFor(mouseAbsoluteMode: boolean): number | undefined {
   return mouseAbsoluteMode ? undefined : 100;
-}
-
-/**
- * Phase 191 (v0.5.180) — pure helper: pick the inter-retry jitter
- * magnitude default given the target's mouse mode.
- *
- * Phase 192-D (v0.5.184) — flipped iPad default 50 → 0. Live A/B
- * (5 trials per side, 2026-05-09) showed jitter-on at -20 pp vs
- * baseline (4/5 success vs 5/5). The premise — that retry failures
- * are correlated by similar trajectories — was based on indirect
- * reasoning, not measured data. The principled replacement is
- * Phase 192-D's `client.belief.isAtEdge()` unstick at retry start,
- * which fires only when the belief actually reports the cursor is
- * pinned and emits a directed unstick instead of a generic rosette.
- *
- * Helper preserved as opt-in escape hatch — passing
- * `interRetryJitterMickeys: 50` re-enables the old rosette
- * behaviour for callers who want to experiment.
- *
- * Pure: deterministic, no I/O.
- */
-export function defaultInterRetryJitterFor(mouseAbsoluteMode: boolean): number {
-  void mouseAbsoluteMode; // arg retained for API compatibility
-  return 0;
 }
 
 /**

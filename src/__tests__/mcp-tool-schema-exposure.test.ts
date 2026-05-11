@@ -141,12 +141,6 @@ describe('MCP tool schema and handler exposure', () => {
       expect(tool).toMatch(/maxResidualPx:\s*\{[^}]*type:\s*'number'/);
     });
 
-    it('Phase 191 interRetryJitterMickeys is in the schema', async () => {
-      const src = await readIndexTs();
-      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
-      expect(tool).toMatch(/interRetryJitterMickeys:\s*\{[^}]*type:\s*'number'/);
-    });
-
     it('Phase 38 minBrightness is in the schema', async () => {
       const src = await readIndexTs();
       const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
@@ -171,18 +165,5 @@ describe('MCP tool schema and handler exposure', () => {
       expect(tool).toMatch(/verifyClick:\s*\{[^}]*type:\s*'boolean'/);
     });
 
-    it('Phase 249 useKnownFpBlocklist is in the schema', async () => {
-      const src = await readIndexTs();
-      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
-      expect(tool).toMatch(/useKnownFpBlocklist:\s*\{[^}]*type:\s*'boolean'/);
-    });
-
-    it('handler routes useKnownFpBlocklist=true to KNOWN_HOME_SCREEN_FPS_1680x1050', async () => {
-      const src = await readIndexTs();
-      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
-      // Pattern: validateBoolean(args.useKnownFpBlocklist) ? KNOWN_HOME_SCREEN_FPS_1680x1050 : undefined
-      expect(handler).toMatch(/validateBoolean\(args\.useKnownFpBlocklist\)/);
-      expect(handler).toMatch(/KNOWN_HOME_SCREEN_FPS_1680x1050/);
-    });
   });
 });

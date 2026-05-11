@@ -56,26 +56,6 @@ describe('moveToPixel locality-gate pinning', () => {
     expect(src).toMatch(/Phase 244[^\n]*\n[\s\S]{0,800}requireWithinRadius:\s*true/);
   });
 
-  it('Phase 248: fpBlocklist option threaded into BOTH call sites', async () => {
-    const src = await readMoveToTs();
-    // Phase 248 introduced fpBlocklist on FindCursorOptions and
-    // threaded it through MoveToOptions. Both findCursorByTemplateSet
-    // call sites in move-to.ts must pass `fpBlocklist:
-    // options.fpBlocklist` so callers' blocklists actually apply.
-    // If someone removes one of the two lines, the option silently
-    // stops working at that callsite.
-    const matches = src.match(/fpBlocklist:\s*options\.fpBlocklist/g) ?? [];
-    expect(matches.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('Phase 250: scoreMargin option threaded into BOTH call sites', async () => {
-    const src = await readMoveToTs();
-    // Phase 250 introduced scoreMargin on FindCursorOptions and
-    // threaded it through MoveToOptions. Same shape as Phase 248.
-    const matches = src.match(/scoreMargin:\s*options\.scoreMargin/g) ?? [];
-    expect(matches.length).toBeGreaterThanOrEqual(2);
-  });
-
   it('Phase 251: topK diagnostic option threaded into BOTH call sites', async () => {
     const src = await readMoveToTs();
     // Phase 251 introduced topK on FindCursorOptions (diagnostic-only,
