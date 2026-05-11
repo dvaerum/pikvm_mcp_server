@@ -101,6 +101,8 @@ and is the production recommendation for small-icon iPad targets.
 | 271 | Cursor pix distribution | sizeFit is correctly tuned |
 | 272 | Verbose far-target diagnostic | Y-axis ballistic shortfall, not detector miss |
 
+| 274 | Multi-cycle averaging (5 frames, median) | Outlier rejection works, but median agrees on wrong answer when cursor isn't where algorithm is looking (dominant failure) |
+
 ## What has been ruled out (do not re-try without new evidence)
 
 - **Wider locality radius**: admits dock-area false positives
@@ -117,6 +119,10 @@ and is the production recommendation for small-icon iPad targets.
   intra-template (Phase 251)
 - **Phase 191 jitter / Phase 248 fpBlocklist / Phase 250 scoreMargin**:
   shipped opt-in, no measurable benefit, removed in Phase 255
+- **Multi-cycle averaging (Phase 274)**: outlier rejection works
+  but median agrees on wrong answer when cursor isn't where the
+  algorithm is looking (the dominant failure mode). Adds ~1.5s
+  latency per correction-pass for no production benefit.
 
 ## Open paths that would need user direction to pivot to
 
