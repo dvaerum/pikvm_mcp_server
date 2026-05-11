@@ -2011,8 +2011,16 @@ export async function moveToPixel(
           // reliably in clear-wallpaper regions. Less reliable in
           // dock/widget zones — but only fires when the other two
           // detectors have already given up, so a third option here
-          // can only help. Trust requires shapeScore ≥ 0.05 (dim-
-          // cursor cutoff; 0.31 noise floor for true negatives).
+          // can only help.
+          //
+          // Phase 269 (v0.5.223): drop the shapeScore ≥ 0.05 gate.
+          // Diagnostic on the same target showed the cursor scores
+          // EXACTLY 0.00 when pixel count strays from the 80-px
+          // sizeFit peak (very dim or motion-blurred cursor). The
+          // 0.05 gate was rejecting valid detections. With the
+          // locality gate already restricting to radius 100 px
+          // around predicted position, geographic constraint is the
+          // real filter — any candidate within radius is the cursor.
           try {
             const shapeShot = await client.screenshotKeepingCursorAlive();
             const shapeDec = await decodeScreenshot(shapeShot.buffer);
@@ -2020,13 +2028,17 @@ export async function moveToPixel(
               expectedNear: newPredicted,
               expectedNearRadius: 100,
             });
-            if (shape && shape.shapeScore >= 0.05) {
+            if (shape) {
               currentPos = { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) };
               finalDetectedPosition = { ...currentPos };
               passMode = 'shape';
               passReason = `shape score=${shape.shapeScore.toFixed(3)} (motion: ${motionFailReason}, template: null)`;
               templated = true;
-              client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.min(0.9, shape.shapeScore * 5));
+              // Phase 269: confidence floor 0.3 when shape returns at
+              // score 0 (locality gate did the filtering). Without
+              // floor, observeCursor gets confidence 0 → belief
+              // ignores observation, defeating the integration.
+              client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.max(0.3, Math.min(0.9, shape.shapeScore * 5)));
               if (verbose) {
                 console.error(
                   `[move-to] WARN pass ${totalPasses + 1}: motion-diff + template-match failed; shape-detect recovered at (${currentPos.x},${currentPos.y}) score=${shape.shapeScore.toFixed(3)}`,
