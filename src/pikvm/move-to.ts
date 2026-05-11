@@ -2028,11 +2028,31 @@ export async function moveToPixel(
               expectedNear: newPredicted,
               expectedNearRadius: 100,
             });
-            if (shape) {
+            // Phase 276 (v0.5.224): proximity gate for low-score
+            // shape candidates. Phase 275 diagnostic at near target
+            // found shape returning bogus picks at score 0.038-0.061
+            // with residual 400+ px from target. These passed the
+            // dropped score gate (Phase 269) because the locality
+            // radius (100 px) admitted them. Phase 269's
+            // legitimate-dim-cursor case scored 0.00 but was within
+            // 25 px of newPredicted. Score alone doesn't separate
+            // legitimate dim from bogus drifters. Proximity does:
+            //   - Legitimate dim cursor: low score, close to newPredicted
+            //   - Bogus pick: low score, far from newPredicted (drifted
+            //     within the 100 px locality radius to a wallpaper or
+            //     icon feature)
+            // Gate: reject if score < 0.05 AND |pos - newPredicted|
+            // > 30 px. High-score detections always pass; low-score
+            // detections must be near where the algorithm predicted.
+            const proxToPred = shape
+              ? Math.hypot(shape.centroidX - newPredicted.x, shape.centroidY - newPredicted.y)
+              : 0;
+            const proxAccept = shape && (shape.shapeScore >= 0.05 || proxToPred <= 30);
+            if (shape && proxAccept) {
               currentPos = { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) };
               finalDetectedPosition = { ...currentPos };
               passMode = 'shape';
-              passReason = `shape score=${shape.shapeScore.toFixed(3)} (motion: ${motionFailReason}, template: null)`;
+              passReason = `shape score=${shape.shapeScore.toFixed(3)} prox=${proxToPred.toFixed(0)} (motion: ${motionFailReason}, template: null)`;
               templated = true;
               // Phase 269: confidence floor 0.3 when shape returns at
               // score 0 (locality gate did the filtering). Without
@@ -2041,9 +2061,13 @@ export async function moveToPixel(
               client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.max(0.3, Math.min(0.9, shape.shapeScore * 5)));
               if (verbose) {
                 console.error(
-                  `[move-to] WARN pass ${totalPasses + 1}: motion-diff + template-match failed; shape-detect recovered at (${currentPos.x},${currentPos.y}) score=${shape.shapeScore.toFixed(3)}`,
+                  `[move-to] WARN pass ${totalPasses + 1}: motion-diff + template-match failed; shape-detect recovered at (${currentPos.x},${currentPos.y}) score=${shape.shapeScore.toFixed(3)} prox=${proxToPred.toFixed(0)}`,
                 );
               }
+            } else if (shape && verbose) {
+              console.error(
+                `[move-to] Phase 276 pass ${totalPasses + 1}: shape candidate REJECTED — score=${shape.shapeScore.toFixed(3)} < 0.05 AND prox=${proxToPred.toFixed(0)} > 30 from newPredicted (${newPredicted.x},${newPredicted.y})`,
+              );
             }
           } catch {
             // shape-detect failed; fall through to predicted
