@@ -101,10 +101,13 @@ export async function seedCursorTemplate(
 
   // Phase 205 (v0.5.197): use keepalive screenshot when available so
   // the cursor stays visible in both the before and after frames.
-  // The cursor fades within ~200ms of the last emit; PiKVM screenshot
-  // round-trip is 300-500ms — without keepalive, the after frame
-  // commonly has no visible cursor and motion-diff finds zero
-  // clusters (live failure observed 2026-05-10).
+  // Phase 256 (v0.5.217): the "fades within ~200ms" claim was WRONG —
+  // empirical measurement (test-phase256-fade-time-v2.ts) showed the
+  // cursor stays visible for ≥ 10 seconds after the last emit, not
+  // ~200 ms. The keepalive screenshot is still useful: PiKVM HDMI
+  // capture sometimes drops frames or the iPad rate-limits cursor
+  // re-render during the screenshot grab. But the architectural
+  // assumption "cursor fades fast → must keepalive" was overstated.
   const grab = client.screenshotKeepingCursorAlive
     ? client.screenshotKeepingCursorAlive.bind(client)
     : client.screenshot.bind(client);
