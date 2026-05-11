@@ -101,6 +101,25 @@ export function shapeScoreFor(
 }
 
 /**
+ * Find the top-K shape candidates without picking a single winner.
+ * Returns up to `k` candidates (within the locality gate if
+ * `expectedNear` set), sorted by shape score descending.
+ *
+ * Phase 260 use: hand the top-K to a motion-diff verifier that
+ * picks the one that actually moves between two frames.
+ */
+export function findCursorShapeCandidates(
+  rgb: Buffer,
+  width: number,
+  height: number,
+  k: number = 5,
+  options: ShapeOptions = {},
+): ShapeCandidate[] {
+  const all = findAllShapeCandidates(rgb, width, height, options);
+  return all.slice(0, k);
+}
+
+/**
  * Find the cursor in a screenshot by shape, not by template
  * matching.
  *
@@ -118,6 +137,19 @@ export function findCursorByShape(
   height: number,
   options: ShapeOptions = {},
 ): ShapeCandidate | null {
+  const sorted = findAllShapeCandidates(rgb, width, height, options);
+  return sorted.length > 0 ? sorted[0] : null;
+}
+
+/** Internal: find ALL shape candidates, locality-filtered and
+ *  sorted by score descending. Pure / no-IO. Both public entry
+ *  points use this. */
+function findAllShapeCandidates(
+  rgb: Buffer,
+  width: number,
+  height: number,
+  options: ShapeOptions = {},
+): ShapeCandidate[] {
   const darkThreshold = options.darkThreshold ?? 100;
   const minPx = options.minClusterPixels ?? 15;
   const maxPx = options.maxClusterPixels ?? 250;
@@ -224,7 +256,6 @@ export function findCursorByShape(
     });
   }
 
-  if (pool.length === 0) return null;
   pool.sort((a, b) => b.shapeScore - a.shapeScore);
-  return pool[0];
+  return pool;
 }
