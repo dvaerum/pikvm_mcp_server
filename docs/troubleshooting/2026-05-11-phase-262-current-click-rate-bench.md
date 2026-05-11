@@ -106,6 +106,48 @@ small-icon iPad targets. The mouse path has improved over many
 phases but still has a known bimodal failure that no detection-
 side parameter sweep has fixed.
 
+## Second N=20 run (same tick, immediately after) — Phase 237 variance
+
+Re-ran the same bench on the same target to test whether 55% was
+real or variance. Second run, same protocol, ~25 min apart:
+
+```
+Trials:  20 total, 6 null, 14 valid
+Passed:  4/20 (20.0%) within 35 px
+Median residual: 151 px (vs first run: 27 px)
+P95 residual:    493 px (vs first run: 191 px)
+
+Residuals: 19, 27, 27, 33, 40, 117, 151, 151, 172, 210, 210, 382,
+           382, 493, plus 6 nulls
+```
+
+First run: 55%. Second run: 20%. **Combined N=40 = 15/40 = 37.5%.**
+
+Phase 237 variance lesson exemplified one more time: single N=20
+runs can't be trusted. The honest current state is the COMBINED
+rate across multiple runs.
+
+Notable: trial 20 of run 2 reported detected=(852, 941) — the
+SAME false-positive position Phase 247/248 documented at this
+location. The Phase 248 fpBlocklist (which would have rejected
+this) was correctly removed in Phase 255 cleanup because it
+showed no aggregate click-rate benefit; but the underlying FP
+location is still real. The locality gate at radius 150 isn't
+catching it because the cursor-belief hint must have drifted close
+to (852, 941) when the algorithm rejected the cluster.
+
+## Combined honest estimate at v0.5.220
+
+| Phase   | N  | Within-35-px | Cumulative N | Cumulative % |
+|---------|----|--------------|--------------|--------------|
+| 247     | 20 | 25%          | 20           | 25%          |
+| 248-blk | 60 | 26.7%        | 80           | 26.3%        |
+| 262 r1  | 20 | 55%          | 100          | 32%          |
+| 262 r2  | 20 | 20%          | 120          | 30%          |
+
+**~30% within 35 px** is the honest single-attempt rate across
+N=120 trials at v0.5.220. NOT 55% (that was a single lucky run).
+
 ## State
 
 - v0.5.220
@@ -113,4 +155,18 @@ side parameter sweep has fixed.
 - nix build green
 - Bench script `test-phase262-current-click-rate.ts` retained for
   future bench runs
-- Trial frames at `data/phase262-click-rate/`
+- Trial frames at `data/phase262-click-rate/` (second run; first
+  run's frames overwritten by re-running the script — bench is
+  destructive)
+
+## Lesson re-learned
+
+ALWAYS run a bench at least twice before reporting a result. The
+Phase 237 lesson keeps resurfacing because the click pipeline's
+detection layer is genuinely bimodal and single N=20 lands in
+either the good half or the bad half by chance.
+
+For future benches: extend the script to optionally append data
+across runs instead of overwriting (or use timestamped run-id
+subdirectories). That way variance is observable directly in the
+data.
