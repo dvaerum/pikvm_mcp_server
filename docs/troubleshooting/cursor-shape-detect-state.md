@@ -1,6 +1,6 @@
-# cursor-shape-detect — state of the detector at v0.5.223
+# cursor-shape-detect — state of the detector at v0.5.224
 
-**Last updated:** 2026-05-11 (Phase 273 consolidation of Phases 257-272)
+**Last updated:** 2026-05-11 (Phase 276 — proximity gate, +20.8 pp total at near targets)
 
 This document is a single-page reference for the cursor-shape-detect
 work. Replaces the need to read the 16 troubleshooting docs from
@@ -70,11 +70,13 @@ penalties stack down a high sizeFit value).
 
 | Target | Distance from post-home | N | Within 35 px |
 |--------|------------------------:|--:|-------------:|
-| (905, 800) | ~150 px | 60 | **50%** |
-| (757, 832) | ~300 px | 40 | **2.5%** |
+| (905, 800) at v0.5.220 baseline | ~150 px | 60 | 37.5% |
+| (905, 800) at v0.5.223 (Phase 269)| ~150 px | 60 | 50.0% (+12.5 pp) |
+| **(905, 800) at v0.5.224 (Phase 276)** | **~150 px** | **60** | **58.3% (+20.8 pp total)** |
+| (757, 832) at v0.5.224 | ~300 px | 40 | 0-2.5% (ballistic bottleneck) |
 
 With `clickAtWithRetry maxRetries: 2` (iPad default), binomial:
-- Near-target: 1 − (1−0.5)³ = **87.5%** end-to-end
+- Near-target: 1 − (1−0.583)³ = **92.7%** end-to-end
 - Far-target: 1 − (1−0.025)³ = **7.3%** end-to-end
 
 The 4-icon keyboard workflow (`launchIpadApp`) remains 100% reliable
