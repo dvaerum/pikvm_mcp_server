@@ -1,0 +1,183 @@
+/**
+ * Phase 258 — unit tests for the shape-based cursor detector.
+ *
+ * Pin BOTH the pure shape-score helper (numeric expectations on
+ * stable inputs) and the integration `findCursorByShape` against
+ * synthetic frames + the existing Phase 251 trial frames.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'fs';
+import path from 'path';
+import sharp from 'sharp';
+import { findCursorByShape, shapeScoreFor } from '../cursor-shape-detect.js';
+
+function repoRoot(): string {
+  const here = path.dirname(new URL(import.meta.url).pathname);
+  return path.resolve(here, '..', '..', '..');
+}
+
+describe('shapeScoreFor', () => {
+  it('peaks for cursor-sized asymmetric off-centre clusters', () => {
+    // Real iPad cursor: ~80 px, asymmetry ~2-3, centroid offset ~3-8 px,
+    // aspect ratio ~0.8-1.2. Should score well above noise.
+    const cursorScore = shapeScoreFor(80, 2.5, 5, 0.9);
+    expect(cursorScore).toBeGreaterThan(0.8);
+  });
+
+  it('penalises clusters far from cursor size', () => {
+    const tiny = shapeScoreFor(15, 2.5, 5, 0.9);
+    const huge = shapeScoreFor(250, 2.5, 5, 0.9);
+    const cursor = shapeScoreFor(80, 2.5, 5, 0.9);
+    expect(tiny).toBeLessThan(cursor / 4);
+    expect(huge).toBeLessThan(cursor / 4);
+  });
+
+  it('caps asymmetry contribution to prevent tiny-blob runaway', () => {
+    // A 15-px noise blob with all mass in one quadrant has asymmetry → ∞.
+    // Cap prevents that from beating a cursor-sized 80 px candidate.
+    const noise = shapeScoreFor(15, 1000, 0, 1.0);
+    const cursor = shapeScoreFor(80, 2.5, 5, 0.9);
+    expect(noise).toBeLessThan(cursor);
+  });
+
+  it('penalises elongated bboxes (aspect ratio far from 1.0)', () => {
+    const square = shapeScoreFor(80, 2.5, 5, 1.0);
+    const elongated = shapeScoreFor(80, 2.5, 5, 3.0);
+    expect(elongated).toBeLessThan(square / 2);
+  });
+
+  it('symmetric blob (zero asymmetry, zero offset) scores low even at perfect size', () => {
+    const symmetric = shapeScoreFor(80, 1.0, 0, 1.0);
+    const cursorlike = shapeScoreFor(80, 2.5, 5, 1.0);
+    expect(symmetric).toBeLessThan(cursorlike);
+  });
+});
+
+describe('findCursorByShape — synthetic frames', () => {
+  /** Build a 200x200 white frame with a synthetic cursor blob at (cx, cy). */
+  async function frameWithCursor(cx: number, cy: number, radius = 6): Promise<Buffer> {
+    const w = 200, h = 200;
+    const rgb = Buffer.alloc(w * h * 3, 240); // light gray background (not dark)
+    // Asymmetric arrow-ish blob: filled triangle with tip at (cx, cy)
+    for (let dy = 0; dy < radius * 2; dy++) {
+      const y = cy + dy;
+      if (y < 0 || y >= h) continue;
+      const lineWidth = Math.max(1, radius * 2 - dy);
+      for (let dx = 0; dx < lineWidth; dx++) {
+        const x = cx + dx;
+        if (x < 0 || x >= w) continue;
+        const o = (y * w + x) * 3;
+        rgb[o] = 30;     // dark
+        rgb[o + 1] = 30;
+        rgb[o + 2] = 30;
+      }
+    }
+    return rgb;
+  }
+
+  it('finds a synthetic dark blob', async () => {
+    const rgb = await frameWithCursor(100, 100);
+    const r = findCursorByShape(rgb, 200, 200);
+    expect(r).not.toBeNull();
+    expect(Math.abs(r!.centroidX - 100)).toBeLessThan(15);
+    expect(Math.abs(r!.centroidY - 100)).toBeLessThan(15);
+  });
+
+  it('returns null when no cluster passes the dark threshold', async () => {
+    const w = 200, h = 200;
+    const rgb = Buffer.alloc(w * h * 3, 240); // uniformly light
+    const r = findCursorByShape(rgb, w, h);
+    expect(r).toBeNull();
+  });
+
+  it('locality gate rejects when no candidate falls within radius', async () => {
+    const rgb = await frameWithCursor(150, 150);
+    const r = findCursorByShape(rgb, 200, 200, {
+      expectedNear: { x: 30, y: 30 },
+      expectedNearRadius: 50, // cursor at (150,150) is far outside this
+    });
+    expect(r).toBeNull();
+  });
+
+  it('locality gate accepts when candidate is within radius', async () => {
+    const rgb = await frameWithCursor(150, 150);
+    const r = findCursorByShape(rgb, 200, 200, {
+      expectedNear: { x: 145, y: 145 },
+      expectedNearRadius: 30,
+    });
+    expect(r).not.toBeNull();
+    expect(Math.abs(r!.centroidX - 150)).toBeLessThan(15);
+  });
+
+  it('locality gate disambiguates when there are MULTIPLE dark blobs', async () => {
+    // Two cursor-like blobs in the frame — locality gate picks the
+    // one near the hint.
+    const w = 200, h = 200;
+    const rgb = Buffer.alloc(w * h * 3, 240);
+    // Blob A at (50, 50)
+    for (let dy = 0; dy < 12; dy++)
+      for (let dx = 0; dx < 12; dx++) {
+        const o = ((50 + dy) * w + (50 + dx)) * 3;
+        rgb[o] = 30; rgb[o + 1] = 30; rgb[o + 2] = 30;
+      }
+    // Blob B at (150, 150)
+    for (let dy = 0; dy < 12; dy++)
+      for (let dx = 0; dx < 12; dx++) {
+        const o = ((150 + dy) * w + (150 + dx)) * 3;
+        rgb[o] = 30; rgb[o + 1] = 30; rgb[o + 2] = 30;
+      }
+    // Hint near A → expect candidate near A.
+    const ra = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 55, y: 55 },
+      expectedNearRadius: 30,
+    });
+    expect(ra).not.toBeNull();
+    expect(ra!.centroidX).toBeLessThan(75);
+    expect(ra!.centroidY).toBeLessThan(75);
+    // Hint near B → expect candidate near B.
+    const rb = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 155, y: 155 },
+      expectedNearRadius: 30,
+    });
+    expect(rb).not.toBeNull();
+    expect(rb!.centroidX).toBeGreaterThan(125);
+    expect(rb!.centroidY).toBeGreaterThan(125);
+  });
+});
+
+describe('findCursorByShape — Phase 251 saved frames', () => {
+  // The Phase 251 frames are real iPad home-screen captures with the
+  // cursor visually verified at (~1063, 778). NCC failed on every
+  // template against these (max top-1 = 0.819 < 0.83 minScore).
+  // Phase 258 acceptance: shape detector + locality gate must pick
+  // a candidate within 30 px of (1063, 778) for ALL 5 trials.
+  const FRAMES = [1, 2, 3, 4, 5];
+  const EXPECTED = { x: 1063, y: 778 };
+
+  for (const t of FRAMES) {
+    it(`picks the cursor on trial${t}.jpg with hint`, async () => {
+      const buf = await fs.readFile(
+        path.join(repoRoot(), 'data', 'phase251-topk', `trial${t}.jpg`),
+      );
+      const { data, info } = await sharp(buf).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const r = findCursorByShape(data, info.width, info.height, {
+        expectedNear: EXPECTED,
+        expectedNearRadius: 200,
+      });
+      expect(r, `trial${t}.jpg should yield a candidate`).not.toBeNull();
+      const dist = Math.hypot(r!.centroidX - EXPECTED.x, r!.centroidY - EXPECTED.y);
+      expect(dist, `trial${t}.jpg dist ${dist.toFixed(0)} px`).toBeLessThan(30);
+    });
+  }
+
+  it('returns null on bad hint far from real cursor', async () => {
+    const buf = await fs.readFile(path.join(repoRoot(), 'data', 'phase251-topk', 'trial1.jpg'));
+    const { data, info } = await sharp(buf).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const r = findCursorByShape(data, info.width, info.height, {
+      expectedNear: { x: 200, y: 200 },
+      expectedNearRadius: 100,
+    });
+    expect(r).toBeNull();
+  });
+});
