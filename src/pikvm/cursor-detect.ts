@@ -894,24 +894,6 @@ export interface FindCursorOptions {
    *  target on every trial). Default false for back-compat; callers
    *  that have a strong locality prior should opt in. */
   requireWithinRadius?: boolean;
-  /** Phase 248 (v0.5.213): when set, reject any template-match
-   *  whose position falls within `radius` of any blocklist center.
-   *  Use to filter known iPad-UI false positives (e.g. wallpaper-
-   *  gradient FPs, app-icon glyph correlations) identified by
-   *  visual inspection. See `cursor-fp-blocklist.ts` for the
-   *  reference iPad (1680×1050) blocklist. Default undefined =
-   *  no rejection, fully back-compat. */
-  fpBlocklist?: { centers: Point[]; radius: number };
-  /** Phase 250 (v0.5.215): when set, reject the winning template
-   *  match if the second-best non-overlapping match's score is
-   *  within `scoreMargin` NCC of it. Targets Phase 243's bimodal-
-   *  FP pattern: iPad UI features (clock widget, app icons,
-   *  wallpaper gradients) score similarly to each other but the
-   *  real cursor dominates cleanly. Recommended starting value
-   *  0.03. Self-exclusion radius 30 px prevents nearby grid-step
-   *  alternative matches at the same true cursor from being
-   *  treated as a competitor. Default undefined = disabled. */
-  scoreMargin?: number;
   /** Phase 251 (v0.5.216): when set together with `verbose`, log the
    *  top-K highest-scoring positions in this template's correlation
    *  surface. Diagnostic only — does NOT change selection. Used to
@@ -1124,39 +1106,6 @@ export function findCursorByTemplateSet(
 
   const minScore = options.minScore ?? 0.83;
   if (best.score < minScore) return null;
-  // Phase 248 (v0.5.213): reject if matched position is in the
-  // caller's known-false-positive blocklist (wallpaper gradient FPs,
-  // icon-glyph correlations, etc. — see cursor-fp-blocklist.ts).
-  if (options.fpBlocklist) {
-    for (const fp of options.fpBlocklist.centers) {
-      const dx = best.position.x - fp.x;
-      const dy = best.position.y - fp.y;
-      if (dx * dx + dy * dy <= options.fpBlocklist.radius * options.fpBlocklist.radius) {
-        return null;
-      }
-    }
-  }
-  // Phase 250 (v0.5.215): score-margin ambiguity gate. Bimodal FPs
-  // (Phase 243) cluster at similar scores; the real cursor tends to
-  // dominate. If the runner-up at >30 px from `best` is within
-  // `scoreMargin` of `best`, treat the match as ambiguous and return
-  // null. Caller (moveToPixel) then falls back to predicted-position
-  // (same path Phase 244 documented as safe).
-  if (options.scoreMargin !== undefined && allMatches.length >= 2) {
-    const sorted = [...allMatches].sort((a, b) => b.score - a.score);
-    const runnerUp = sorted.find((m) =>
-      Math.hypot(m.position.x - best!.position.x, m.position.y - best!.position.y) > 30,
-    );
-    if (runnerUp && best.score - runnerUp.score < options.scoreMargin) {
-      if (options.verbose) {
-        console.error(
-          `[template-match] AMBIGUOUS: best=${best.score.toFixed(3)} ` +
-            `runnerUp=${runnerUp.score.toFixed(3)} margin=${(best.score - runnerUp.score).toFixed(3)} < ${options.scoreMargin}`,
-        );
-      }
-      return null;
-    }
-  }
   return best;
 }
 
