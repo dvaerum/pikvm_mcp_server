@@ -2026,6 +2026,15 @@ export async function moveToPixel(
             const shapeDec = await decodeScreenshot(shapeShot.buffer);
             const shape = findCursorByShape(shapeDec.rgb, shapeDec.width, shapeDec.height, {
               expectedNear: newPredicted,
+              // Phase 277 attempt+revert: tried 130 to catch a
+              // marginal near-target case (cursor at 101 px from
+              // newPredicted, just 1 px outside this radius). Bench
+              // showed -18 pp regression at near target (40% vs
+              // Phase 276's 58.3% N=60). The Phase 276 proximity
+              // gate only catches LOW-score (<0.05) bogus picks;
+              // mid-score (0.05-0.15) bogus picks in the new 30-130
+              // ring were admitted and contributed wrong matches.
+              // Reverted to 100. Same v0.5.225 behaviour as v0.5.224.
               expectedNearRadius: 100,
             });
             // Phase 276 (v0.5.224): proximity gate for low-score
