@@ -1820,8 +1820,8 @@ when the real issue was a methodology bug in my own benchmarking.
 
 ## 🎯 TL;DR — operational reliability summary
 
-> **HONESTY NOTE (Phase 214/219/235/244, 2026-05-10, v0.5.211):** the
-> small-icon ~50-60% figure below was measured before Phase 214's
+> **HONESTY NOTE (Phase 214/219/235/244/248-249, 2026-05-11, v0.5.214):**
+> the small-icon ~50-60% figure below was measured before Phase 214's
 > finding that `pikvm_ipad_home` (Cmd+H) does NOT dismiss the
 > App Switcher — many prior measurements may have been against
 > the App Switcher tile view (with Weather widget animation
@@ -1831,17 +1831,21 @@ when the real issue was a methodology bug in my own benchmarking.
 > chunked mid-screen cursor deposit baked into the swipe path so
 > moveToPixel doesn't start from the top-edge anymore). Phase 219
 > corrected a separate hazard where `unlockIpad`'s legacy swipe
-> re-locked an already-unlocked iPad. **Phase 244 (v0.5.211) extended
+> re-locked an already-unlocked iPad. Phase 244 (v0.5.211) extended
 > the Phase 197 locality gate to the correction-pass; the post-fix
 > N=10 shifts the failure mode from confident-wrong template matches
-> to safe nulls — see Phase 244 section above for the table.** The
-> reliability rows below are NOT re-measured here — they're the
-> last-benched figures pending a proper N≥30 home-screen re-bench
-> (per Phase 237's variance lesson). See:
+> to safe nulls. **Phase 248/249 (v0.5.213/v0.5.214): opt-in
+> `useKnownFpBlocklist: true` rejects 3 known iPad-UI false-positive
+> locations — live N=20 A/B showed 25% → 40% hit rate within 35 px
+> (60% relative improvement).** The reliability rows below are NOT
+> re-measured here — they're the last-benched figures pending a
+> proper N≥30 home-screen re-bench (per Phase 237's variance lesson).
+> See:
 > - `2026-05-10-phase-214-app-switcher-root-cause.md`
 > - `2026-05-10-phase-219-unlock-from-home-locks-ipad.md`
 > - `2026-05-10-phase-235-mid-screen-deposit-after-swipe.md`
 > - `2026-05-10-phase-244-correction-pass-locality-gate.md`
+> - `2026-05-11-phase-248-fp-blocklist.md`
 
 | Operation | Reliability |
 |-----------|------------|
