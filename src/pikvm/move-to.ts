@@ -186,6 +186,14 @@ export interface MoveToOptions {
    *  (only safe if the iPad has its hot-corners disabled). Default true. */
   forbidSlamOnIpad?: boolean;
 
+  /** Phase 248 (v0.5.213): when set, threaded into all internal
+   *  findCursorByTemplateSet calls to reject template-match positions
+   *  in known-FP locations on the target's UI. Use the
+   *  `KNOWN_HOME_SCREEN_FPS_1680x1050` constant from
+   *  `cursor-fp-blocklist.ts` for the reference iPad, or supply a
+   *  custom list. Default undefined = no rejection (back-compat). */
+  fpBlocklist?: { centers: { x: number; y: number }[]; radius: number };
+
   /** Phase 22: when true, the big open-loop emit is zeroed out; the
    *  correction loop emits the full distance via small verifiable
    *  chunks. Each chunk's emit (capped by Phase 9's per-pass cap)
@@ -1680,6 +1688,8 @@ export async function moveToPixel(
         // (line 1672 ELSE branch), which at least anchors clicks to
         // the intended target instead of a confident-wrong location.
         requireWithinRadius: true,
+        // Phase 248 (v0.5.213): caller-provided known-FP blocklist.
+        fpBlocklist: options.fpBlocklist,
         verbose,
       });
       if (found) {
@@ -1958,6 +1968,8 @@ export async function moveToPixel(
             // exists, falling through to predicted-position trust below
             // (anchored to expected cursor location, not a UI feature).
             requireWithinRadius: true,
+            // Phase 248 (v0.5.213): caller-provided known-FP blocklist.
+            fpBlocklist: options.fpBlocklist,
             verbose,
           });
           if (found) {

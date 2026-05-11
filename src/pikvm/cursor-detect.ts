@@ -894,6 +894,14 @@ export interface FindCursorOptions {
    *  target on every trial). Default false for back-compat; callers
    *  that have a strong locality prior should opt in. */
   requireWithinRadius?: boolean;
+  /** Phase 248 (v0.5.213): when set, reject any template-match
+   *  whose position falls within `radius` of any blocklist center.
+   *  Use to filter known iPad-UI false positives (e.g. wallpaper-
+   *  gradient FPs, app-icon glyph correlations) identified by
+   *  visual inspection. See `cursor-fp-blocklist.ts` for the
+   *  reference iPad (1680×1050) blocklist. Default undefined =
+   *  no rejection, fully back-compat. */
+  fpBlocklist?: { centers: Point[]; radius: number };
   verbose?: boolean;
 }
 
@@ -1051,6 +1059,18 @@ export function findCursorByTemplateSet(
 
   const minScore = options.minScore ?? 0.83;
   if (best.score < minScore) return null;
+  // Phase 248 (v0.5.213): reject if matched position is in the
+  // caller's known-false-positive blocklist (wallpaper gradient FPs,
+  // icon-glyph correlations, etc. — see cursor-fp-blocklist.ts).
+  if (options.fpBlocklist) {
+    for (const fp of options.fpBlocklist.centers) {
+      const dx = best.position.x - fp.x;
+      const dy = best.position.y - fp.y;
+      if (dx * dx + dy * dy <= options.fpBlocklist.radius * options.fpBlocklist.radius) {
+        return null;
+      }
+    }
+  }
   return best;
 }
 
