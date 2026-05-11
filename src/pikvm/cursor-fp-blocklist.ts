@@ -22,7 +22,7 @@
  * positions and add them to the blocklist. Out of scope here.
  */
 
-import type { Point } from './client.js';
+import type { Point } from './cursor-detect.js';
 
 export interface FpBlocklist {
   centers: Point[];

@@ -40,6 +40,7 @@ import {
   formatDismissResult,
 } from './pikvm/click-verify.js';
 import { seedCursorTemplate } from './pikvm/seed-template.js';
+import { KNOWN_HOME_SCREEN_FPS_1680x1050 } from './pikvm/cursor-fp-blocklist.js';
 import { VERSION } from './version.js';
 import {
   unlockIpad,
@@ -541,6 +542,7 @@ const tools: Tool[] = [
         autoUnlockOnDetectFail: { type: 'boolean', description: 'Phase 72: when an attempt fails because the iPad is on the lock screen (Phase 70 found this is the dominant detect-then-move failure mode), automatically call ipadGoHome to unlock and retry once before giving up on this attempt. SIDE EFFECT: if the iPad is INSIDE AN APP and detect-then-move fails for some other reason, this will exit the app to home — not what you want for in-app clicks. Default false (preserve manual control). Set true for fire-and-forget click_at on a fresh iPad target where you don\'t care about app state.' },
         maxResidualPx: { type: 'number', description: 'Phase 88: skip the click if the verified cursor is more than this many pixels from the target. Useful when callers care about CORRECT element hit, not just "screen changed". Live-verified failure mode (2026-04-27): residual 78 px caused a click targeting Settings → Software Update to instead activate the Apple Account sidebar row. Set to e.g. 25 for strict icon-tolerance clicks, 50 for "near-enough is fine". Default unset (preserves prior behaviour: any cursor-verified attempt clicks regardless of residual).' },
         interRetryJitterMickeys: { type: 'number', description: 'Phase 191: inter-retry approach randomization magnitude in mickeys. Before each retry > 1, the cursor is displaced by a deterministic 8-step compass rosette (NE → SE → SW → NW → E → S → W → N → wrap) so each attempt approaches the target on a fresh trajectory. Breaks iPadOS pointer-effect snap-zone CORRELATED failures across retries — pushes cumulative success rate closer to the binomial limit. Default 50 on iPad relative-mouse targets, 0 on desktop (no pointer-effect snap zones to break). Pass 0 explicitly to opt out.' },
+        useKnownFpBlocklist: { type: 'boolean', description: 'Phase 248 v0.5.213 / Phase 249 v0.5.214: when true, reject template-match cursor positions falling within 50 px of the reference iPad\'s known false-positive locations (wallpaper-gradient FP at (852,941), TV icon glyph at (773,769), dock area at (782,958)). Live A/B at Phase 248: hit rate within 35 px jumped 25% → 40% on N=20 single-attempt against (905,800). Default false because the FP locations are calibrated against the reference iPad on pikvm01.bb.vcamp.dk at 1680×1050 portrait — a different iPad / wallpaper / app layout would have DIFFERENT FPs and the wrong blocklist could reject real cursor matches. Set true if you know your iPad layout matches the reference.' },
       },
       required: ['x', 'y'],
     },
@@ -1304,12 +1306,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // open-loop default; desktop uses caller's default. Helper is
         // regression-pinned by defaultChunkPaceMsFor.test.ts.
         const chunkPace = defaultChunkPaceMsFor(mouseAbsoluteMode);
+        // Phase 248 (v0.5.213) / Phase 249 (v0.5.214): opt-in known-FP
+        // blocklist for the reference iPad. Caller passes
+        // useKnownFpBlocklist:true to enable rejection of template-match
+        // results at known wallpaper/icon-glyph false-positive locations.
+        // Live A/B (Phase 248): 25% → 40% within-35-px hit rate when
+        // enabled. Default false because the FP locations are calibrated
+        // against the reference iPad (1680×1050, specific wallpaper);
+        // a different iPad / wallpaper / layout would have DIFFERENT
+        // FPs and the wrong blocklist could reject real cursor matches.
+        const fpBlocklist = validateBoolean(args.useKnownFpBlocklist)
+          ? KNOWN_HOME_SCREEN_FPS_1680x1050
+          : undefined;
         const moveOpts = {
           strategy: strategyStr,
           assumeCursorAt,
           profile: cachedProfile,
           forbidSlamFallback: !mouseAbsoluteMode,
           ...(chunkPace !== undefined ? { chunkPaceMs: chunkPace } : {}),
+          ...(fpBlocklist ? { fpBlocklist } : {}),
         };
         const verifyOpts = {
           ...(verifyRegionHalfPx !== undefined
