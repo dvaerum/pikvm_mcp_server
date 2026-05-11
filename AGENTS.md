@@ -113,13 +113,16 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 
 **iPad must be UNLOCKED before bench/click_at use.** Lock-screen frames have no cursor, all detect-then-move calls fail. After Phases 65/68/69 + clean state:
 
-> **HONESTY NOTE (Phase 214/235/244, 2026-05-10, v0.5.211):** the
+> **HONESTY NOTE (Phase 214/235/244/248-249, 2026-05-11, v0.5.214):** the
 > rates below predate Phase 214's App Switcher root-cause finding,
-> Phase 235's chunked mid-screen cursor deposit, and Phase 244's
-> correction-pass locality gate. Per Phase 237's variance lesson,
-> they need an N≥30 re-bench before they should be trusted as current.
+> Phase 235's chunked mid-screen cursor deposit, Phase 244's
+> correction-pass locality gate, and Phase 248/249's opt-in
+> `useKnownFpBlocklist` (live N=20: 25% → 40% within-35-px hit rate).
+> Per Phase 237's variance lesson, they need an N≥30 re-bench before
+> they should be trusted as current.
 > See `docs/troubleshooting/ipad-cursor-detection.md` § "Phase 244"
-> for the latest architectural state.
+> for the latest architectural state and `2026-05-11-phase-248-fp-blocklist.md`
+> for the Phase 248 A/B data.
 
 | Target width | Hit rate (per attempt) | Hit rate (3 attempts) | Examples |
 |--------------|------------------------|----------------------|----------|
