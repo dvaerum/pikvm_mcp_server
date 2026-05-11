@@ -49,7 +49,17 @@ console.error(`=== Phase 262 current click rate at v${VERSION} ===\n`);
 await unlockIpad(client, { dragPx: 1500 });
 await sleep(800);
 
-const TARGET = { x: 905, y: 800 };
+// Phase 270: parameterised target so we can validate detector lift
+// across multiple targets without forking the script. Defaults to
+// Phase 247 Settings-vicinity target for back-compat.
+const argTarget = process.argv[2];
+const TARGET = argTarget
+  ? (() => {
+      const [xs, ys] = argTarget.split(',');
+      return { x: parseInt(xs, 10), y: parseInt(ys, 10) };
+    })()
+  : { x: 905, y: 800 };
+console.error(`Target: (${TARGET.x}, ${TARGET.y})`);
 const N = 20;
 const TOLERANCE_PX = 35;
 
