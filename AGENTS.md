@@ -119,8 +119,9 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 > correction-pass locality gate, and Phase 248/249's opt-in
 > `useKnownFpBlocklist`. Phase 248 first N=20 looked like 25% → 40%
 > with-blocklist, but second N=20 regressed to 5%, third N=20 = 35%;
-> cumulative N=60 with blocklist is 26.7% vs baseline 25% — at most a
-> ~1.7 pp lift, well within Phase 237 variance (runs swing 5%→40%).
+> cumulative N=60 with blocklist is 26.7% vs cumulative N=40 baseline
+> = 30% — blocklist slightly WORSE in aggregate, both within Phase
+> 237 per-run variance (5%→40% range on identical protocol).
 > Per Phase 237's lesson: ALL the rates below need an N≥30 re-bench
 > before being trusted. See `docs/troubleshooting/ipad-cursor-detection.md`
 > § "Phase 244" for the latest architectural state and

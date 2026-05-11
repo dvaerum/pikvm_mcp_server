@@ -1837,7 +1837,7 @@ when the real issue was a methodology bug in my own benchmarking.
 > to safe nulls. **Phase 248/249 (v0.5.213/v0.5.214): opt-in
 > `useKnownFpBlocklist: true` rejects 3 known iPad-UI false-positive
 > locations. First N=20 with-blocklist looked like 25% → 40%, but
-> second N=20 regressed to 5%, third N=20 = 35%; cumulative N=60 = 26.7% vs baseline
+> second N=20 regressed to 5%, third N=20 = 35%; cumulative N=60 = 26.7% vs cumulative N=40 baseline = 30%
 > 25% — within Phase 237 per-trial variance. The blocklist
 > semantically does the right thing (rejects visually-confirmed FPs)
 > but doesn't move the click-rate ceiling at this N.** The reliability rows below are NOT

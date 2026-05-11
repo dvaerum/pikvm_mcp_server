@@ -37,23 +37,30 @@ to both call sites (open-loop and correction-pass).
 **Default: undefined** — fully back-compat. Production callers see
 no behavior change unless they opt in.
 
-## Live A/B — N=60 cumulative across 3 runs
+## Live A/B — N=40 baseline + N=60 blocklist across 5 runs
 
 Same protocol every run: unlock + forceHomeViaSwipe ONCE, then 20
 sequential moveToPixel calls to (905, 800) without re-swiping.
 
 | Run                  | within 35 px | within 75 px | nulls   | mean residual |
 |:---------------------|:------------:|:------------:|:-------:|:-------------:|
-| Phase 247 baseline   | 5/20 (25%)   | 5/20 (25%)   | 2/20    | 156 px        |
-| Phase 248 run 1      | 8/20 (40%)   | 9/20 (45%)   | 5/20    | 131 px        |
-| Phase 248 run 2      | 1/20 (5%)    | 1/20 (5%)    | 8/20    | 167 px        |
-| Phase 248 run 3      | 7/20 (35%)   | 7/20 (35%)   | 7/20    | 111 px        |
-| **Phase 248 cumul.** | **16/60 (26.7%)** | **17/60 (28.3%)** | **20/60 (33%)** | — |
+| Baseline run 1       | 5/20 (25%)   | 5/20 (25%)   | 2/20    | 156 px        |
+| Baseline run 2       | 7/20 (35%)   | 8/20 (40%)   | 5/20    | 79 px         |
+| **Baseline cumul.**  | **12/40 (30%)** | **13/40 (32.5%)** | **7/40 (17.5%)** | — |
+| Blocklist run 1      | 8/20 (40%)   | 9/20 (45%)   | 5/20    | 131 px        |
+| Blocklist run 2      | 1/20 (5%)    | 1/20 (5%)    | 8/20    | 167 px        |
+| Blocklist run 3      | 7/20 (35%)   | 7/20 (35%)   | 7/20    | 111 px        |
+| **Blocklist cumul.** | **16/60 (26.7%)** | **17/60 (28.3%)** | **20/60 (33%)** | — |
 
-**Honest cumulative reading:** N=60 with blocklist = 26.7%, vs
-baseline N=20 = 25%. The blocklist gives at most a ~1.7 pp lift,
-well within Phase 237 variance. **The first-N=20 "40%" was real but
-not reproducible.**
+**Honest cumulative reading:** baseline N=40 = 30% within 35 px;
+blocklist N=60 = 26.7%. The blocklist appears slightly WORSE at
+this N, though both numbers are within Phase 237 variance (individual
+runs swing 5%→40%).
+
+**This is exactly what Phase 237 warned about.** The Phase 248 first-
+N=20 result (40% with blocklist vs 25% single-run baseline) suggested
+a 60% relative improvement. With more data (N=40 baseline, N=60
+blocklist), the apparent improvement vanishes — possibly inverts.
 
 This is exactly the per-trial variance Phase 237 warned about.
 Single-N=20 results swing wildly (5% → 40% just from run-to-run noise).
