@@ -1837,47 +1837,65 @@ export async function moveToPixel(
     predicted: { x: number; y: number },
   ): Promise<{ pos: { x: number; y: number }; score: number; prox: number } | null> {
     try {
-      let shape = findCursorByShape(shot.rgb, shot.width, shot.height, {
+      // Phase 299 (v0.5.231): try BOTH dark and bright candidates, in
+      // descending score order. Wiggle-verify each in turn. The first
+      // that passes wins. Previously (Phase 297) only the top candidate
+      // (dark, with bright fallback only if dark was lost) was wiggle-
+      // tested. If the top candidate was a label-text FP, wiggle
+      // correctly rejected it, but the bright path was never tried —
+      // potentially missing a real cursor in pointer-effect mode.
+      const dark = findCursorByShape(shot.rgb, shot.width, shot.height, {
         expectedNear: predicted,
         expectedNearRadius: 100,
       });
-      const darkPredDist = shape
-        ? Math.hypot(shape.centroidX - predicted.x, shape.centroidY - predicted.y)
-        : Infinity;
-      const darkLost = !shape || (shape.shapeScore < 0.05 && darkPredDist > 30);
-      if (darkLost) {
-        const brightShape = findCursorByShape(shot.rgb, shot.width, shot.height, {
-          expectedNear: predicted,
-          expectedNearRadius: 100,
-          brightThreshold: 120,
-        });
-        if (brightShape && (!shape || brightShape.shapeScore > shape.shapeScore)) {
-          shape = brightShape;
+      const bright = findCursorByShape(shot.rgb, shot.width, shot.height, {
+        expectedNear: predicted,
+        expectedNearRadius: 100,
+        brightThreshold: 120,
+      });
+
+      type Candidate = { pos: { x: number; y: number }; score: number; prox: number; source: 'dark' | 'bright' };
+      const candidates: Candidate[] = [];
+      const proxOf = (p: { x: number; y: number }) => Math.hypot(p.x - predicted.x, p.y - predicted.y);
+      if (dark) {
+        const pos = { x: Math.round(dark.centroidX), y: Math.round(dark.centroidY) };
+        const prox = proxOf(pos);
+        if (dark.shapeScore >= 0.05 || prox <= 30) {
+          candidates.push({ pos, score: dark.shapeScore, prox, source: 'dark' });
         }
       }
-      if (!shape) return null;
-      const prox = Math.hypot(shape.centroidX - predicted.x, shape.centroidY - predicted.y);
-      const accept = shape.shapeScore >= 0.05 || prox <= 30;
-      if (!accept) return null;
-
-      const initialPos = { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) };
-
-      // Phase 297: wiggle-verify. The cursor moves with an emit; static
-      // FPs (icon label text, dock chars) do not.
-      const wiggleVerified = await wiggleVerifyCandidate(initialPos, shape.shapeScore);
-      if (!wiggleVerified) {
+      if (bright) {
+        const pos = { x: Math.round(bright.centroidX), y: Math.round(bright.centroidY) };
+        const prox = proxOf(pos);
+        // Dedup: if same as dark candidate (within 5 px), skip.
+        const sameAsDark = candidates.some((c) => Math.hypot(c.pos.x - pos.x, c.pos.y - pos.y) <= 5);
+        if (!sameAsDark && (bright.shapeScore >= 0.05 || prox <= 30)) {
+          candidates.push({ pos, score: bright.shapeScore, prox, source: 'bright' });
+        }
+      }
+      // Try candidates in descending score order.
+      candidates.sort((a, b) => b.score - a.score);
+      for (const c of candidates) {
+        const wiggleVerified = await wiggleVerifyCandidate(c.pos, c.score);
+        if (wiggleVerified) {
+          if (verbose) {
+            console.error(
+              `[move-to] Phase 299 shape candidate (${c.source}) ACCEPTED — (${c.pos.x},${c.pos.y}) score=${c.score.toFixed(3)} prox=${c.prox.toFixed(0)} wiggle verified`,
+            );
+          }
+          return {
+            pos: wiggleVerified.pos,
+            score: c.score,
+            prox: c.prox,
+          };
+        }
         if (verbose) {
           console.error(
-            `[move-to] Phase 297 shape candidate REJECTED — wiggle didn't move it from (${initialPos.x},${initialPos.y}) score=${shape.shapeScore.toFixed(3)} → likely static FP (label text / dock char)`,
+            `[move-to] Phase 297 shape candidate (${c.source}) REJECTED — (${c.pos.x},${c.pos.y}) score=${c.score.toFixed(3)} didn't move → static FP`,
           );
         }
-        return null;
       }
-      return {
-        pos: wiggleVerified.pos,
-        score: shape.shapeScore,
-        prox,
-      };
+      return null;
     } catch {
       return null;
     }
@@ -2252,103 +2270,58 @@ export async function moveToPixel(
           try {
             const shapeShot = await client.screenshotKeepingCursorAlive();
             const shapeDec = await decodeScreenshot(shapeShot.buffer);
-            let shape = findCursorByShape(shapeDec.rgb, shapeDec.width, shapeDec.height, {
+            // Phase 299 (v0.5.231): try BOTH dark and bright shape
+            // candidates, wiggle-verify each, accept first that passes.
+            // See tryOpenLoopShapeDetect docstring for the rationale.
+            const dark = findCursorByShape(shapeDec.rgb, shapeDec.width, shapeDec.height, {
               expectedNear: newPredicted,
-              // Phase 277 attempt+revert: tried 130 to catch a
-              // marginal near-target case (cursor at 101 px from
-              // newPredicted, just 1 px outside this radius). Bench
-              // showed -18 pp regression at near target (40% vs
-              // Phase 276's 58.3% N=60). The Phase 276 proximity
-              // gate only catches LOW-score (<0.05) bogus picks;
-              // mid-score (0.05-0.15) bogus picks in the new 30-130
-              // ring were admitted and contributed wrong matches.
-              // Reverted to 100. Same v0.5.225 behaviour as v0.5.224.
               expectedNearRadius: 100,
             });
-            // Phase 293 (v0.5.228): bright-mask rescue. When the
-            // dark-mask path returns null OR a candidate with very
-            // low score (< 0.05) that is FAR from prediction (>30 px),
-            // the cursor may be in iPadOS pointer-effect-snap mode
-            // rendering LIGHT gray over medium wallpaper instead of
-            // dark. Retry with brightThreshold=120; that mask catches
-            // the light cursor's interior (Phase 293 N=4 saved frames
-            // showed it picks at 7-39 px of truth when dark fails).
-            //
-            // Critically the rescue is GATED to skip the Phase 269
-            // legitimate-dim-cursor case: when dark returns a low-
-            // score candidate that IS close to prediction (≤30 px),
-            // it's the real cursor in a faint rendering — don't
-            // displace it with a bright FP. Phase 293 first-pass
-            // bench showed an unguarded rescue regresses near-target
-            // by 10-25 pp because the bright rescue's high-score
-            // wallpaper FPs out-scored the legitimate dim-cursor.
-            const darkPredDist = shape
-              ? Math.hypot(shape.centroidX - newPredicted.x, shape.centroidY - newPredicted.y)
-              : Infinity;
-            const darkLost = !shape || (shape.shapeScore < 0.05 && darkPredDist > 30);
-            if (darkLost) {
-              const brightShape = findCursorByShape(shapeDec.rgb, shapeDec.width, shapeDec.height, {
-                expectedNear: newPredicted,
-                expectedNearRadius: 100,
-                brightThreshold: 120,
-              });
-              if (brightShape && (!shape || brightShape.shapeScore > shape.shapeScore)) {
-                shape = brightShape;
+            const bright = findCursorByShape(shapeDec.rgb, shapeDec.width, shapeDec.height, {
+              expectedNear: newPredicted,
+              expectedNearRadius: 100,
+              brightThreshold: 120,
+            });
+            type Cand = { pos: { x: number; y: number }; score: number; prox: number; source: 'dark' | 'bright' };
+            const cands: Cand[] = [];
+            const proxOf = (p: { x: number; y: number }) => Math.hypot(p.x - newPredicted.x, p.y - newPredicted.y);
+            if (dark) {
+              const pos = { x: Math.round(dark.centroidX), y: Math.round(dark.centroidY) };
+              const prox = proxOf(pos);
+              if (dark.shapeScore >= 0.05 || prox <= 30) {
+                cands.push({ pos, score: dark.shapeScore, prox, source: 'dark' });
               }
             }
-            // Phase 276 (v0.5.224): proximity gate for low-score
-            // shape candidates. Phase 275 diagnostic at near target
-            // found shape returning bogus picks at score 0.038-0.061
-            // with residual 400+ px from target. These passed the
-            // dropped score gate (Phase 269) because the locality
-            // radius (100 px) admitted them. Phase 269's
-            // legitimate-dim-cursor case scored 0.00 but was within
-            // 25 px of newPredicted. Score alone doesn't separate
-            // legitimate dim from bogus drifters. Proximity does:
-            //   - Legitimate dim cursor: low score, close to newPredicted
-            //   - Bogus pick: low score, far from newPredicted (drifted
-            //     within the 100 px locality radius to a wallpaper or
-            //     icon feature)
-            // Gate: reject if score < 0.05 AND |pos - newPredicted|
-            // > 30 px. High-score detections always pass; low-score
-            // detections must be near where the algorithm predicted.
-            const proxToPred = shape
-              ? Math.hypot(shape.centroidX - newPredicted.x, shape.centroidY - newPredicted.y)
-              : 0;
-            const proxAccept = shape && (shape.shapeScore >= 0.05 || proxToPred <= 30);
-            if (shape && proxAccept) {
-              const initialShapePos = { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) };
-              // Phase 297 (v0.5.230): wiggle-verify correction-pass
-              // shape pick. Phase 296 visual inspection showed the
-              // algorithm was consistently picking "Settings"/"Books"/
-              // etc. app-icon LABEL TEXT as the cursor in correction
-              // passes (e.g. trial 3 at (906, 824) score 0.31 = Settings
-              // label; real cursor at (1030, 850), 130 px away). Wiggle
-              // distinguishes static FP from real cursor: emit small
-              // diagonal move and re-detect; label text stays put, real
-              // cursor moves.
-              const verified = await wiggleVerifyCandidate(initialShapePos, shape.shapeScore);
+            if (bright) {
+              const pos = { x: Math.round(bright.centroidX), y: Math.round(bright.centroidY) };
+              const prox = proxOf(pos);
+              const sameAsDark = cands.some((c) => Math.hypot(c.pos.x - pos.x, c.pos.y - pos.y) <= 5);
+              if (!sameAsDark && (bright.shapeScore >= 0.05 || prox <= 30)) {
+                cands.push({ pos, score: bright.shapeScore, prox, source: 'bright' });
+              }
+            }
+            cands.sort((a, b) => b.score - a.score);
+            for (const c of cands) {
+              const verified = await wiggleVerifyCandidate(c.pos, c.score);
               if (verified) {
                 currentPos = verified.pos;
                 finalDetectedPosition = { ...currentPos };
                 passMode = 'shape';
-                passReason = `shape+wiggle score=${shape.shapeScore.toFixed(3)} prox=${proxToPred.toFixed(0)} (motion: ${motionFailReason}, template: null)`;
+                passReason = `shape+wiggle (${c.source}) score=${c.score.toFixed(3)} prox=${c.prox.toFixed(0)} (motion: ${motionFailReason}, template: null)`;
                 templated = true;
-                client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.max(0.3, Math.min(0.9, shape.shapeScore * 5)));
+                client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.max(0.3, Math.min(0.9, c.score * 5)));
                 if (verbose) {
                   console.error(
-                    `[move-to] WARN pass ${totalPasses + 1}: shape-detect+wiggle recovered cursor at (${currentPos.x},${currentPos.y}) score=${shape.shapeScore.toFixed(3)} prox=${proxToPred.toFixed(0)}`,
+                    `[move-to] Phase 299 pass ${totalPasses + 1}: shape-detect+wiggle (${c.source}) recovered cursor at (${currentPos.x},${currentPos.y}) score=${c.score.toFixed(3)} prox=${c.prox.toFixed(0)}`,
                   );
                 }
-              } else if (verbose) {
+                break;
+              }
+              if (verbose) {
                 console.error(
-                  `[move-to] Phase 297 pass ${totalPasses + 1}: shape candidate REJECTED by wiggle — (${initialShapePos.x},${initialShapePos.y}) score=${shape.shapeScore.toFixed(3)} didn't move → likely static FP (label text / dock char)`,
+                  `[move-to] Phase 297 pass ${totalPasses + 1}: shape (${c.source}) (${c.pos.x},${c.pos.y}) score=${c.score.toFixed(3)} REJECTED by wiggle — likely static FP`,
                 );
               }
-            } else if (shape && verbose) {
-              console.error(
-                `[move-to] Phase 276 pass ${totalPasses + 1}: shape candidate REJECTED — score=${shape.shapeScore.toFixed(3)} < 0.05 AND prox=${proxToPred.toFixed(0)} > 30 from newPredicted (${newPredicted.x},${newPredicted.y})`,
-              );
             }
           } catch {
             // shape-detect failed; fall through to predicted
