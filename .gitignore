@@ -38,7 +38,15 @@ test-client.ts
 test_prompt.txt
 
 # Device-specific calibration data
-data/
+# Phase 284 (2026-05-12): bundle starter cursor templates so a fresh
+# deploy has working NCC out of the box. Without this, NCC silently
+# returns null on every iPad home-screen frame (Phase 281) and the
+# pipeline drops to ~0% click rate until templates are re-seeded.
+# Templates were extracted from Phase 280 frames where the cursor was
+# visibly identifiable; they score 0.85-0.90 against current iPadOS
+# cursor. Gitignore everything in data/ EXCEPT cursor-templates/.
+data/*
+!data/cursor-templates/
 
 # Code Assistants
 .mcp.json
