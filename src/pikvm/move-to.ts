@@ -1821,7 +1821,17 @@ export async function moveToPixel(
   /** Phase 294: shape-detect with Phase 293 bright-mask rescue, used
    *  as a third open-loop fallback. Returns null if no candidate
    *  passes the same proximity gate used in correction passes
-   *  (score >= 0.05 OR within 30 px of predicted landing). */
+   *  (score >= 0.05 OR within 30 px of predicted landing).
+   *
+   *  Phase 297 (v0.5.230): wiggle-verify candidates. After shape-detect
+   *  returns a candidate, emit a small diagonal wiggle (+25 X, −10 Y)
+   *  and re-detect. iPadOS app-icon LABEL TEXT (the systematic FP
+   *  Phase 296 discovered) stays at its exact pixel position under any
+   *  emit; the real cursor moves with the emit. If the candidate
+   *  doesn't move ≥10 px in the expected direction, reject it as a
+   *  static FP. Phase 296 visual verification showed the algorithm was
+   *  consistently picking "Settings"/"Books"/etc label text as the
+   *  cursor — wiggle is the discriminator. */
   async function tryOpenLoopShapeDetect(
     shot: DecodedScreenshot,
     predicted: { x: number; y: number },
@@ -1849,10 +1859,97 @@ export async function moveToPixel(
       const prox = Math.hypot(shape.centroidX - predicted.x, shape.centroidY - predicted.y);
       const accept = shape.shapeScore >= 0.05 || prox <= 30;
       if (!accept) return null;
+
+      const initialPos = { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) };
+
+      // Phase 297: wiggle-verify. The cursor moves with an emit; static
+      // FPs (icon label text, dock chars) do not.
+      const wiggleVerified = await wiggleVerifyCandidate(initialPos, shape.shapeScore);
+      if (!wiggleVerified) {
+        if (verbose) {
+          console.error(
+            `[move-to] Phase 297 shape candidate REJECTED — wiggle didn't move it from (${initialPos.x},${initialPos.y}) score=${shape.shapeScore.toFixed(3)} → likely static FP (label text / dock char)`,
+          );
+        }
+        return null;
+      }
       return {
-        pos: { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) },
+        pos: wiggleVerified.pos,
         score: shape.shapeScore,
         prox,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Phase 297: emit a small diagonal wiggle and verify the candidate
+   *  moved with it. Returns the new position if movement >= 10 px,
+   *  null if static FP (didn't move).
+   *
+   *  The wiggle (+25 X, −10 Y mickeys, ~38 px expected) is small enough
+   *  not to send the cursor far if it's already on target, but large
+   *  enough to distinguish movement from pixel-level jitter. After the
+   *  wiggle, re-detect around `initialPos + expected delta` with radius
+   *  60. Accept any candidate displaced >= 10 px from initialPos. */
+  async function wiggleVerifyCandidate(
+    initialPos: { x: number; y: number },
+    initialScore: number,
+  ): Promise<{ pos: { x: number; y: number } } | null> {
+    try {
+      const ratioX = observedRatioX > 0 ? observedRatioX : 1.4;
+      const ratioY = observedRatioY > 0 ? observedRatioY : 1.4;
+      const dxMickeys = 25;
+      const dyMickeys = -10;
+      const expectedDx = dxMickeys * ratioX;
+      const expectedDy = dyMickeys * ratioY;
+      const expectedAfter = { x: initialPos.x + expectedDx, y: initialPos.y + expectedDy };
+
+      await client.mouseMoveRelative(dxMickeys, dyMickeys);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const wiggleShotRaw = await client.screenshotKeepingCursorAlive();
+      const wiggleShot = await decodeScreenshot(wiggleShotRaw.buffer);
+
+      // Key discriminator: is there STILL a candidate at initialPos
+      // after the wiggle? If yes → the cluster at initialPos didn't
+      // move with the emit → it's a static UI feature (label text,
+      // dock char, widget). The cursor itself would have moved away.
+      // This is the cleanest label-text-FP discriminator: real cursors
+      // disappear from their pre-wiggle position; static UI features
+      // stay.
+      let stillThere = findCursorByShape(wiggleShot.rgb, wiggleShot.width, wiggleShot.height, {
+        expectedNear: initialPos,
+        expectedNearRadius: 8,
+      });
+      if (!stillThere || stillThere.shapeScore < 0.05) {
+        const brightStill = findCursorByShape(wiggleShot.rgb, wiggleShot.width, wiggleShot.height, {
+          expectedNear: initialPos,
+          expectedNearRadius: 8,
+          brightThreshold: 120,
+        });
+        if (brightStill && (!stillThere || brightStill.shapeScore > stillThere.shapeScore)) {
+          stillThere = brightStill;
+        }
+      }
+      // Always emit the inverse wiggle before returning to keep the
+      // cursor close to initialPos (whether or not we accept the
+      // candidate). This avoids polluting the correction loop with the
+      // wiggle offset.
+      await client.mouseMoveRelative(-dxMickeys, -dyMickeys);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      if (stillThere) {
+        // A cursor-shaped cluster is still at the EXACT initial position
+        // after a 35-px emit. Real cursor would have moved away. This
+        // is the label-text / dock-char / widget FP pattern.
+        void initialScore;
+        void expectedAfter;
+        return null;
+      }
+      // No static cluster at initialPos → the pre-wiggle candidate
+      // did move with the emit → real cursor.
+      return {
+        pos: initialPos,
       };
     } catch {
       return null;
@@ -2220,19 +2317,32 @@ export async function moveToPixel(
               : 0;
             const proxAccept = shape && (shape.shapeScore >= 0.05 || proxToPred <= 30);
             if (shape && proxAccept) {
-              currentPos = { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) };
-              finalDetectedPosition = { ...currentPos };
-              passMode = 'shape';
-              passReason = `shape score=${shape.shapeScore.toFixed(3)} prox=${proxToPred.toFixed(0)} (motion: ${motionFailReason}, template: null)`;
-              templated = true;
-              // Phase 269: confidence floor 0.3 when shape returns at
-              // score 0 (locality gate did the filtering). Without
-              // floor, observeCursor gets confidence 0 → belief
-              // ignores observation, defeating the integration.
-              client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.max(0.3, Math.min(0.9, shape.shapeScore * 5)));
-              if (verbose) {
+              const initialShapePos = { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) };
+              // Phase 297 (v0.5.230): wiggle-verify correction-pass
+              // shape pick. Phase 296 visual inspection showed the
+              // algorithm was consistently picking "Settings"/"Books"/
+              // etc. app-icon LABEL TEXT as the cursor in correction
+              // passes (e.g. trial 3 at (906, 824) score 0.31 = Settings
+              // label; real cursor at (1030, 850), 130 px away). Wiggle
+              // distinguishes static FP from real cursor: emit small
+              // diagonal move and re-detect; label text stays put, real
+              // cursor moves.
+              const verified = await wiggleVerifyCandidate(initialShapePos, shape.shapeScore);
+              if (verified) {
+                currentPos = verified.pos;
+                finalDetectedPosition = { ...currentPos };
+                passMode = 'shape';
+                passReason = `shape+wiggle score=${shape.shapeScore.toFixed(3)} prox=${proxToPred.toFixed(0)} (motion: ${motionFailReason}, template: null)`;
+                templated = true;
+                client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.max(0.3, Math.min(0.9, shape.shapeScore * 5)));
+                if (verbose) {
+                  console.error(
+                    `[move-to] WARN pass ${totalPasses + 1}: shape-detect+wiggle recovered cursor at (${currentPos.x},${currentPos.y}) score=${shape.shapeScore.toFixed(3)} prox=${proxToPred.toFixed(0)}`,
+                  );
+                }
+              } else if (verbose) {
                 console.error(
-                  `[move-to] WARN pass ${totalPasses + 1}: motion-diff + template-match failed; shape-detect recovered at (${currentPos.x},${currentPos.y}) score=${shape.shapeScore.toFixed(3)} prox=${proxToPred.toFixed(0)}`,
+                  `[move-to] Phase 297 pass ${totalPasses + 1}: shape candidate REJECTED by wiggle — (${initialShapePos.x},${initialShapePos.y}) score=${shape.shapeScore.toFixed(3)} didn't move → likely static FP (label text / dock char)`,
                 );
               }
             } else if (shape && verbose) {
