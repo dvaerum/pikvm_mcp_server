@@ -14,7 +14,15 @@ const c = (
   pixels: number,
   color?: { r: number; g: number; b: number },
 ): Cluster => {
-  const cluster: Cluster = { centroidX, centroidY, pixels };
+  const cluster: Cluster = {
+    centroidX,
+    centroidY,
+    pixels,
+    bboxMinX: centroidX,
+    bboxMaxX: centroidX,
+    bboxMinY: centroidY,
+    bboxMaxY: centroidY,
+  };
   if (color) {
     cluster.meanR = color.r;
     cluster.meanG = color.g;
