@@ -1613,7 +1613,7 @@ export async function moveToPixel(
   let observedRatioX = calibratedRatioX;
   let observedRatioY = calibratedRatioY;
   let currentPos: { x: number; y: number };
-  let openLoopMode: 'motion' | 'template' | 'predicted' = 'predicted';
+  let openLoopMode: 'motion' | 'template' | 'predicted' | 'shape' = 'predicted';
   let openLoopReason: string | null = null;
   // Phase 24: track how many predicted-mode passes have run since the
   // last verified detection, so the operator-facing message can flag a
@@ -1760,24 +1760,102 @@ export async function moveToPixel(
           );
         }
       } else {
-        currentPos = { ...predictedPostOpen };
-        openLoopMode = 'predicted';
-        openLoopReason = `template-match below threshold across ${sessionTemplates.length} templates (motion: ${motionFailReason})`;
-        if (verbose) {
-          console.error(
-            `[move-to] WARN open-loop: motion-diff (${motionFailReason}) AND template-match (${sessionTemplates.length} cached) both failed; trusting prediction`,
-          );
+        // Phase 294 (v0.5.229): shape-detect fallback at open-loop
+        // (p0). Previously the chain was motion → template → predicted;
+        // shape only ran at correction passes (p1+). Phase 294 diagnostic
+        // showed near-target trials regularly fall to "predicted only"
+        // at p0 because motion + template both fail, leaving the entire
+        // move blind. Adding shape (with the Phase 293 bright rescue)
+        // here gives the open-loop a third detection chance.
+        const shapeResult = await tryOpenLoopShapeDetect(shotB, predictedPostOpen);
+        if (shapeResult) {
+          currentPos = shapeResult.pos;
+          openLoopMode = 'shape';
+          openLoopReason = `shape score=${shapeResult.score.toFixed(3)} prox=${shapeResult.prox.toFixed(0)} (motion: ${motionFailReason}, template: null)`;
+          client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.max(0.3, Math.min(0.9, shapeResult.score * 5)));
+          finalDetectedPosition = { ...currentPos };
+          if (verbose) {
+            console.error(
+              `[move-to] motion-diff + template failed at p0; shape-detect recovered at (${currentPos.x},${currentPos.y}) score=${shapeResult.score.toFixed(3)} prox=${shapeResult.prox.toFixed(0)}`,
+            );
+          }
+        } else {
+          currentPos = { ...predictedPostOpen };
+          openLoopMode = 'predicted';
+          openLoopReason = `template-match below threshold across ${sessionTemplates.length} templates (motion: ${motionFailReason})`;
+          if (verbose) {
+            console.error(
+              `[move-to] WARN open-loop: motion-diff (${motionFailReason}) AND template-match (${sessionTemplates.length} cached) AND shape-detect all failed; trusting prediction`,
+            );
+          }
         }
       }
     } else {
-      currentPos = { ...predictedPostOpen };
-      openLoopMode = 'predicted';
-      openLoopReason = `no template cached (motion: ${motionFailReason})`;
-      if (verbose && doCorrect) {
-        console.error(
-          `[move-to] WARN open-loop: motion-diff failed (${motionFailReason}) and no cursor template cached; trusting prediction`,
-        );
+      // Phase 294: shape-detect fallback at p0 even when no templates
+      // are cached (motion failed, no template path available).
+      const shapeResult = await tryOpenLoopShapeDetect(shotB, predictedPostOpen);
+      if (shapeResult) {
+        currentPos = shapeResult.pos;
+        openLoopMode = 'shape';
+        openLoopReason = `shape score=${shapeResult.score.toFixed(3)} prox=${shapeResult.prox.toFixed(0)} (motion: ${motionFailReason}, no templates)`;
+        client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, Math.max(0.3, Math.min(0.9, shapeResult.score * 5)));
+        finalDetectedPosition = { ...currentPos };
+        if (verbose) {
+          console.error(
+            `[move-to] motion-diff failed at p0; no templates cached; shape-detect recovered at (${currentPos.x},${currentPos.y}) score=${shapeResult.score.toFixed(3)}`,
+          );
+        }
+      } else {
+        currentPos = { ...predictedPostOpen };
+        openLoopMode = 'predicted';
+        openLoopReason = `no template cached (motion: ${motionFailReason})`;
+        if (verbose && doCorrect) {
+          console.error(
+            `[move-to] WARN open-loop: motion-diff failed (${motionFailReason}) and no cursor template cached and shape-detect failed; trusting prediction`,
+          );
+        }
       }
+    }
+  }
+
+  /** Phase 294: shape-detect with Phase 293 bright-mask rescue, used
+   *  as a third open-loop fallback. Returns null if no candidate
+   *  passes the same proximity gate used in correction passes
+   *  (score >= 0.05 OR within 30 px of predicted landing). */
+  async function tryOpenLoopShapeDetect(
+    shot: DecodedScreenshot,
+    predicted: { x: number; y: number },
+  ): Promise<{ pos: { x: number; y: number }; score: number; prox: number } | null> {
+    try {
+      let shape = findCursorByShape(shot.rgb, shot.width, shot.height, {
+        expectedNear: predicted,
+        expectedNearRadius: 100,
+      });
+      const darkPredDist = shape
+        ? Math.hypot(shape.centroidX - predicted.x, shape.centroidY - predicted.y)
+        : Infinity;
+      const darkLost = !shape || (shape.shapeScore < 0.05 && darkPredDist > 30);
+      if (darkLost) {
+        const brightShape = findCursorByShape(shot.rgb, shot.width, shot.height, {
+          expectedNear: predicted,
+          expectedNearRadius: 100,
+          brightThreshold: 120,
+        });
+        if (brightShape && (!shape || brightShape.shapeScore > shape.shapeScore)) {
+          shape = brightShape;
+        }
+      }
+      if (!shape) return null;
+      const prox = Math.hypot(shape.centroidX - predicted.x, shape.centroidY - predicted.y);
+      const accept = shape.shapeScore >= 0.05 || prox <= 30;
+      if (!accept) return null;
+      return {
+        pos: { x: Math.round(shape.centroidX), y: Math.round(shape.centroidY) },
+        score: shape.shapeScore,
+        prox,
+      };
+    } catch {
+      return null;
     }
   }
 
