@@ -280,6 +280,14 @@ export interface MoveToResult {
    *  it is now. Phase 24 partial Direction 3 — exposes the stale-
    *  verification signal without changing exit-condition semantics. */
   passesSinceLastVerification: number;
+  /** Phase 285 (v0.5.226): true when the algorithm returned an earlier
+   *  pass's verified position because the final pass either failed
+   *  detection or had a substantially worse residual than an earlier
+   *  verified landing. iPad cursor frequently disappears during late
+   *  chunked passes (Phase 280); the earlier verified detection was
+   *  often within usable residual of target. The returned position is
+   *  from a mid-move snapshot, not the latest state. */
+  bailedToBestPass: boolean;
   resolution: ScreenResolution;
   message: string;
 }
@@ -416,6 +424,51 @@ export function shouldAbortBlindCorrections(diagnostics: MovePassDiagnostic[]): 
   const last = diagnostics[diagnostics.length - 1];
   const secondLast = diagnostics[diagnostics.length - 2];
   return last.mode === 'predicted' && secondLast.mode === 'predicted';
+}
+
+/** Phase 285 (v0.5.226): bail-with-best-pass-landing.
+ *
+ *  Given a `diagnostics` array and the current `finalResidualPx`,
+ *  return the index of the verified earlier pass that should replace
+ *  the final position, or -1 if no bail should occur.
+ *
+ *  Verified passes = mode !== 'predicted' (motion / template / shape
+ *  all qualify).
+ *
+ *  **Bails only when `finalResidualPx === Infinity`** — i.e. the
+ *  final pass returned no detection. When any finite final residual
+ *  exists, we trust it over earlier passes. Live N=60 bench
+ *  (2026-05-12) showed that bailing on a "smaller claimed residual"
+ *  by an earlier pass dragged the click rate down 20 pp because the
+ *  detector's residual claim can be wrong — a high-score widget FP
+ *  has a small claimed residual but the click lands at the FP, not
+ *  the cursor. Bailing only on null preserves the original semantics
+ *  for the common path while still recovering the not-uncommon case
+ *  where the final detector returns nothing at all (Phase 280 frame-
+ *  by-frame finding: cursor often visually present at intermediate
+ *  passes but missing in the final frame).
+ *
+ *  Pure function. Exported for unit tests.
+ */
+export function pickBailPass(
+  diagnostics: MovePassDiagnostic[],
+  finalResidualPx: number,
+): number {
+  // Only bail when the final pass produced no detection. A finite
+  // residual — even a large one — means the freshest signal said
+  // something specific; trust it.
+  if (finalResidualPx !== Infinity) return -1;
+  let bestIdx = -1;
+  let bestResidual = Infinity;
+  for (let i = 0; i < diagnostics.length; i++) {
+    const d = diagnostics[i];
+    if (d.mode === 'predicted') continue;
+    if (d.residualPx < bestResidual) {
+      bestResidual = d.residualPx;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
 }
 
 /** Returns true if `current` should be rejected as a stale repeat of
@@ -2213,6 +2266,30 @@ export async function moveToPixel(
 
   const shot = await client.screenshot();
 
+  // Phase 285 (v0.5.226): bail-with-best-pass-landing.
+  //
+  // iPad cursor frequently disappears during late chunked passes
+  // (Phase 280 finding) — but earlier verified detections often had
+  // usable residuals (~50-70 px from target). When the final pass
+  // either returned null or scored substantially worse than an
+  // earlier verified pass, return the better earlier landing.
+  let bailedToBestPass = false;
+  let bailedFromPassIdx = -1;
+  const currentFinalResidualForBail = finalDetectedPosition
+    ? Math.hypot(finalDetectedPosition.x - targetX, finalDetectedPosition.y - targetY)
+    : Infinity;
+  const bailIdx = pickBailPass(diagnostics, currentFinalResidualForBail);
+  if (bailIdx !== -1) {
+    finalDetectedPosition = { ...diagnostics[bailIdx].detectedAt };
+    bailedToBestPass = true;
+    bailedFromPassIdx = bailIdx;
+    // When bailing, passesSinceLastVerification should reflect the
+    // staleness of the returned position relative to algorithm
+    // activity, not the most recent pass — the caller may want to
+    // know "you're getting a position from N passes ago".
+    passesSinceLastVerification = diagnostics.length - 1 - bailIdx;
+  }
+
   const finalResidualPx = finalDetectedPosition
     ? Math.hypot(finalDetectedPosition.x - targetX, finalDetectedPosition.y - targetY)
     : null;
@@ -2245,9 +2322,12 @@ export async function moveToPixel(
       passesSinceLastVerification > 0
         ? ` (last verified ${passesSinceLastVerification} pass(es) ago — ${passesSinceLastVerification === 1 ? '1 predicted pass' : `${passesSinceLastVerification} predicted passes`} since; cursor may have drifted, accuracy uncertain)`
         : '';
+    const bail = bailedToBestPass
+      ? ` (bailed to earlier verified pass ${bailedFromPassIdx} — Phase 285; final pass either failed detection or had worse residual)`
+      : '';
     parts.push(
       `Final cursor at (${finalDetectedPosition.x},${finalDetectedPosition.y}); ` +
-        `residual (${finalDetectedPosition.x - targetX},${finalDetectedPosition.y - targetY}) = ${finalResidualPx.toFixed(1)}px${stale}.`,
+        `residual (${finalDetectedPosition.x - targetX},${finalDetectedPosition.y - targetY}) = ${finalResidualPx.toFixed(1)}px${stale}${bail}.`,
     );
   } else if (doCorrect) {
     parts.push('Final position not detected — click accuracy uncertain.');
@@ -2271,6 +2351,7 @@ export async function moveToPixel(
     finalDetectedPosition,
     finalResidualPx,
     passesSinceLastVerification,
+    bailedToBestPass,
     resolution,
     message: parts.join(' '),
   };
