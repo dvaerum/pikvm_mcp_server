@@ -110,6 +110,44 @@ describe('findCursorByShape — synthetic frames', () => {
     expect(Math.abs(r!.centroidX - 150)).toBeLessThan(15);
   });
 
+  it('cluster-bbox-aware scoring penalises thin elongated strokes (clock-hand)', async () => {
+    // Phase 290: builds a frame with two clusters of similar pixel count.
+    // (A) compact cursor-like blob (~80 px, square-ish bbox)
+    // (B) thin elongated stroke (~80 px, narrow 3×30 bbox — like a
+    // clock hand)
+    // With cluster-bbox-aware features the elongated stroke must score
+    // lower than the compact blob. Before Phase 290 the fixed 25-px
+    // rescan inflated the stroke's bbox to ~50×51 and gave it a square
+    // aspect ratio, letting it match cursor scores.
+    const w = 300, h = 300;
+    const rgb = Buffer.alloc(w * h * 3, 240);
+    // Compact arrow at (80, 80): asymmetric triangle ~12×12 bbox, ~78 px
+    for (let dy = 0; dy < 12; dy++) {
+      const ly = 80 + dy;
+      const lineW = Math.max(1, 12 - dy);
+      for (let dx = 0; dx < lineW; dx++) {
+        const o = (ly * w + (80 + dx)) * 3;
+        rgb[o] = 20; rgb[o + 1] = 20; rgb[o + 2] = 20;
+      }
+    }
+    // Thin stroke at (220, 100): 3×27 vertical bar, ~81 px solid
+    for (let dy = 0; dy < 27; dy++) {
+      for (let dx = 0; dx < 3; dx++) {
+        const o = ((100 + dy) * w + (220 + dx)) * 3;
+        rgb[o] = 20; rgb[o + 1] = 20; rgb[o + 2] = 20;
+      }
+    }
+    const candsCompact = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 85, y: 85 }, expectedNearRadius: 30,
+    });
+    const candsStroke = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 221, y: 115 }, expectedNearRadius: 30,
+    });
+    expect(candsCompact).not.toBeNull();
+    expect(candsStroke).not.toBeNull();
+    expect(candsCompact!.shapeScore).toBeGreaterThan(candsStroke!.shapeScore * 2);
+  });
+
   it('locality gate disambiguates when there are MULTIPLE dark blobs', async () => {
     // Two cursor-like blobs in the frame — locality gate picks the
     // one near the hint.

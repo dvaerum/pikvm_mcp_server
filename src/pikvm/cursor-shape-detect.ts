@@ -165,73 +165,58 @@ function findAllShapeCandidates(
     mask[i] = gray[i] < darkThreshold;
   }
 
-  const rawClusters = findClusters(mask, width, height, minPx, maxPx, rgb);
+  const rawClusters = findClusters(mask, width, height, minPx, maxPx, rgb, { keepMembers: true });
   const merged = mergeClusters(rawClusters, 8);
 
-  // Per-candidate shape descriptors. We re-scan the mask within a
-  // 25-px box around each centroid to get bbox + 4-quadrant mass
-  // (the mergeClusters output doesn't carry these).
-  // Phase 259 (v0.5.219): also accumulate per-channel sums for
-  // grayscale-ness check. The iPad cursor is grayscale (R ≈ G ≈ B);
-  // dock icons (App Store blue, AppTV) and notification badges (red
-  // numbers) are NOT, even when they have small dark sub-regions.
-  // Reject candidates whose dominant pixels show high chromatic
-  // variation.
+  // Phase 290 (v0.5.227): compute shape descriptors from each cluster's
+  // ACTUAL member pixels + true bbox, not a fixed-radius rescan around
+  // the centroid. The old 25-px rescan would saturate the clock-widget
+  // FP's bbox at ~50×51 (covering the whole scan window) because the
+  // clock-face area has many isolated dark UI elements (digits, dial
+  // marks, two hands) within 25 px of any single hand's centroid. That
+  // gave clock-FP an aspectFactor of ~1.0 — matching the cursor's
+  // square-ish bbox — and let it consistently out-score the cursor.
+  //
+  // Per-cluster bbox is tight to the connected component: a thin clock
+  // hand has bbox ~5×35 (aspect 0.14 → strong aspectPenalty), and the
+  // cursor's bbox is ~14×20 (aspect 0.70 → small penalty). Member-pixel
+  // quadrants give true asymmetry/offset undiluted by neighbouring
+  // unrelated dark pixels.
   const candidates: ShapeCandidate[] = [];
   for (const c of merged) {
-    const cx = Math.round(c.centroidX);
-    const cy = Math.round(c.centroidY);
-    const R = 25;
-    let minX = cx, maxX = cx, minY = cy, maxY = cy;
+    const bboxW = c.bboxMaxX - c.bboxMinX + 1;
+    const bboxH = c.bboxMaxY - c.bboxMinY + 1;
+    const aspectRatio = bboxW / Math.max(1, bboxH);
+    const bboxCenterX = (c.bboxMinX + c.bboxMaxX) / 2;
+    const bboxCenterY = (c.bboxMinY + c.bboxMaxY) / 2;
+    const centroidOffset = Math.hypot(c.centroidX - bboxCenterX, c.centroidY - bboxCenterY);
+
     let qNW = 0, qNE = 0, qSW = 0, qSE = 0;
-    let sumR = 0, sumG = 0, sumB = 0, darkCount = 0;
-    for (let dy = -R; dy <= R; dy++) {
-      const y = cy + dy;
-      if (y < 0 || y >= height) continue;
-      for (let dx = -R; dx <= R; dx++) {
-        const x = cx + dx;
-        if (x < 0 || x >= width) continue;
-        if (!mask[y * width + x]) continue;
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-        const ri = (y * width + x) * 3;
-        sumR += rgb[ri];
-        sumG += rgb[ri + 1];
-        sumB += rgb[ri + 2];
-        darkCount++;
-        if (dx < 0 && dy < 0) qNW++;
-        else if (dx >= 0 && dy < 0) qNE++;
-        else if (dx < 0 && dy >= 0) qSW++;
+    if (c.members) {
+      for (const idx of c.members) {
+        const px = idx % width;
+        const py = (idx - px) / width;
+        if (px < c.centroidX && py < c.centroidY) qNW++;
+        else if (px >= c.centroidX && py < c.centroidY) qNE++;
+        else if (px < c.centroidX && py >= c.centroidY) qSW++;
         else qSE++;
       }
     }
-    const bboxW = maxX - minX + 1;
-    const bboxH = maxY - minY + 1;
-    const aspectRatio = bboxW / Math.max(1, bboxH);
     const quadMasses = [qNW, qNE, qSW, qSE].sort((a, b) => b - a);
     const asymmetry = quadMasses[3] === 0 ? 0 : quadMasses[0] / Math.max(1, quadMasses[3]);
-    const bboxCenterX = (minX + maxX) / 2;
-    const bboxCenterY = (minY + maxY) / 2;
-    const centroidOffset = Math.hypot(c.centroidX - bboxCenterX, c.centroidY - bboxCenterY);
 
-    // Phase 259: grayscale-ness penalty. The iPad cursor is dark
-    // gray (R ≈ G ≈ B). Dock-icon dark sub-regions usually have a
-    // colour cast (App Store blue, AppTV dark-with-rendered-logo,
-    // badge red). Penalise shapeScore by chroma — soft penalty
-    // (vs hard reject) so coloured candidates can still win when
-    // nothing better is available.
+    // Chroma from cluster's own meanR/G/B (computed by findClusters
+    // over cluster members only — no neighbour pollution). Phase 290
+    // softens the chroma penalty from /20 to /40 because cluster-only
+    // chroma is much lower than the old rescan-based chroma (the old
+    // rescan accumulated nearby wallpaper-tinted dark pixels). With
+    // the softer penalty the cursor-on-busy-wallpaper case still
+    // competes against grayscale FPs.
     let chroma = 0;
-    if (darkCount > 0) {
-      const mR = sumR / darkCount;
-      const mG = sumG / darkCount;
-      const mB = sumB / darkCount;
-      chroma = Math.max(mR, mG, mB) - Math.min(mR, mG, mB);
+    if (c.meanR !== undefined && c.meanG !== undefined && c.meanB !== undefined) {
+      chroma = Math.max(c.meanR, c.meanG, c.meanB) - Math.min(c.meanR, c.meanG, c.meanB);
     }
-    // Chroma penalty halves the score at chroma=20 (mild colour
-    // cast), reduces to ~10% at chroma=50 (clearly coloured icon).
-    const chromaPenalty = Math.exp(-chroma / 20);
+    const chromaPenalty = Math.exp(-chroma / 40);
 
     candidates.push({
       centroidX: c.centroidX,

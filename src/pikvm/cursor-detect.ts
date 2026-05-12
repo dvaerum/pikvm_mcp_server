@@ -22,6 +22,21 @@ export interface Cluster {
   pixels: number;
   centroidX: number;
   centroidY: number;
+  /** Tight axis-aligned bounding box of the connected component, in
+   *  source-image pixel coordinates. Populated by findClusters and
+   *  preserved through mergeClusters. Used by cursor-shape-detect to
+   *  compute aspect ratio and bbox-relative features without polluting
+   *  via a fixed-radius rescan. */
+  bboxMinX: number;
+  bboxMaxX: number;
+  bboxMinY: number;
+  bboxMaxY: number;
+  /** Cluster member pixel indices (flat: y*width + x). Optional — only
+   *  populated when findClusters is called with `keepMembers: true`.
+   *  Use for per-cluster geometric features that can't be derived from
+   *  centroid + bbox alone (e.g. quadrant mass, moment-based asymmetry).
+   *  mergeClusters concatenates members[] when merging clusters. */
+  members?: number[];
   /** Mean R over the cluster's pixels in the source RGB frame. Populated
    *  only when `findClusters` is called with a `sourceRgb` argument.
    *  Used by detectMotion's optional achromatic filter to reject colored
@@ -189,9 +204,16 @@ export function findClusters(
    *  provided, each cluster gets `meanR`, `meanG`, `meanB` populated
    *  by averaging the source pixels covered by the cluster. */
   sourceRgb?: Buffer,
+  /** When true, each returned cluster carries `members[]` — the flat
+   *  pixel indices of the connected component. Defaults to false (no
+   *  extra allocation). Used by cursor-shape-detect to compute true
+   *  per-cluster geometric features (quadrant mass, moment-based
+   *  asymmetry) without polluting via a fixed-radius rescan. */
+  opts?: { keepMembers?: boolean },
 ): Cluster[] {
   const visited = new Uint8Array(width * height);
   const clusters: Cluster[] = [];
+  const keepMembers = opts?.keepMembers === true;
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -206,6 +228,8 @@ export function findClusters(
       let sumG = 0;
       let sumB = 0;
       let count = 0;
+      let bMinX = x, bMaxX = x, bMinY = y, bMaxY = y;
+      const members: number[] | undefined = keepMembers ? [] : undefined;
 
       while (queue.length > 0) {
         const ci = queue.pop()!;
@@ -213,12 +237,17 @@ export function findClusters(
         const cy = (ci - cx) / width;
         sumX += cx;
         sumY += cy;
+        if (cx < bMinX) bMinX = cx;
+        if (cx > bMaxX) bMaxX = cx;
+        if (cy < bMinY) bMinY = cy;
+        if (cy > bMaxY) bMaxY = cy;
         if (sourceRgb) {
           const off = ci * 3;
           sumR += sourceRgb[off];
           sumG += sourceRgb[off + 1];
           sumB += sourceRgb[off + 2];
         }
+        if (members) members.push(ci);
         count++;
 
         for (let dy = -1; dy <= 1; dy++) {
@@ -240,12 +269,17 @@ export function findClusters(
           pixels: count,
           centroidX: Math.round(sumX / count),
           centroidY: Math.round(sumY / count),
+          bboxMinX: bMinX,
+          bboxMaxX: bMaxX,
+          bboxMinY: bMinY,
+          bboxMaxY: bMaxY,
         };
         if (sourceRgb) {
           c.meanR = sumR / count;
           c.meanG = sumG / count;
           c.meanB = sumB / count;
         }
+        if (members) c.members = members;
         clusters.push(c);
       }
     }
@@ -292,7 +326,7 @@ export function mergeClusters(clusters: Cluster[], mergeRadius: number): Cluster
   }
 
   const merged: Cluster[] = [];
-  for (const members of groups.values()) {
+  for (const groupMembers of groups.values()) {
     let totalPixels = 0;
     let weightedX = 0;
     let weightedY = 0;
@@ -300,7 +334,9 @@ export function mergeClusters(clusters: Cluster[], mergeRadius: number): Cluster
     let weightedG = 0;
     let weightedB = 0;
     let haveColor = true;
-    for (const idx of members) {
+    let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity;
+    let combinedMembers: number[] | undefined;
+    for (const idx of groupMembers) {
       const c = clusters[idx];
       totalPixels += c.pixels;
       weightedX += c.centroidX * c.pixels;
@@ -312,17 +348,30 @@ export function mergeClusters(clusters: Cluster[], mergeRadius: number): Cluster
       } else {
         haveColor = false;
       }
+      if (c.bboxMinX < bMinX) bMinX = c.bboxMinX;
+      if (c.bboxMaxX > bMaxX) bMaxX = c.bboxMaxX;
+      if (c.bboxMinY < bMinY) bMinY = c.bboxMinY;
+      if (c.bboxMaxY > bMaxY) bMaxY = c.bboxMaxY;
+      if (c.members) {
+        if (!combinedMembers) combinedMembers = [];
+        for (const p of c.members) combinedMembers.push(p);
+      }
     }
     const m: Cluster = {
       pixels: totalPixels,
       centroidX: Math.round(weightedX / totalPixels),
       centroidY: Math.round(weightedY / totalPixels),
+      bboxMinX: bMinX,
+      bboxMaxX: bMaxX,
+      bboxMinY: bMinY,
+      bboxMaxY: bMaxY,
     };
     if (haveColor) {
       m.meanR = weightedR / totalPixels;
       m.meanG = weightedG / totalPixels;
       m.meanB = weightedB / totalPixels;
     }
+    if (combinedMembers) m.members = combinedMembers;
     merged.push(m);
   }
 
