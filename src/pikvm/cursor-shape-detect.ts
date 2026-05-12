@@ -57,6 +57,17 @@ export interface ShapeOptions {
    *  Default 100 — admits anti-aliased iPadOS arrow shadow while
    *  excluding most wallpapers (teal/blue ~150-200). */
   darkThreshold?: number;
+  /** Phase 293: BRIGHT-pixel threshold (0-255). When set, also run a
+   *  second cluster-extraction pass with mask = brightness > this.
+   *  Returned clusters from both passes are scored uniformly and
+   *  competed against each other. Default undefined = dark-only
+   *  (back-compat). Set 120-140 to catch iPadOS pointer-effect-snap
+   *  cursors that render as LIGHT gray (~150-200 brightness) over
+   *  medium wallpaper (~50-100). Phase 293 N=4 frames showed
+   *  brightThreshold=120 picks the cursor within 7-39 px of truth
+   *  when the dark-only path failed entirely (cursor invisible to
+   *  dark mask in pointer-effect mode). */
+  brightThreshold?: number;
   /** Min cluster size in pixels. Default 15 — excludes JPEG noise. */
   minClusterPixels?: number;
   /** Max cluster size in pixels. Default 250 — admits cursor with
@@ -151,6 +162,7 @@ function findAllShapeCandidates(
   options: ShapeOptions = {},
 ): ShapeCandidate[] {
   const darkThreshold = options.darkThreshold ?? 100;
+  const brightThreshold = options.brightThreshold;
   const minPx = options.minClusterPixels ?? 15;
   const maxPx = options.maxClusterPixels ?? 250;
 
@@ -160,13 +172,27 @@ function findAllShapeCandidates(
     gray[i] = Math.round(rgb[o] * 0.299 + rgb[o + 1] * 0.587 + rgb[o + 2] * 0.114);
   }
 
-  const mask: boolean[] = new Array(width * height);
-  for (let i = 0; i < width * height; i++) {
-    mask[i] = gray[i] < darkThreshold;
-  }
+  // Phase 293: dual-pass cluster extraction. Dark mask catches the
+  // classic dark cursor over light wallpaper; bright mask (when
+  // enabled) catches the iPadOS pointer-effect-snap cursor which
+  // renders LIGHT (~150-200) over medium wallpaper (~50-100). The
+  // two cluster sets are processed INDEPENDENTLY (different mergeClusters
+  // calls) so dark-mask clusters and bright-mask clusters don't
+  // accidentally merge into single objects with double-counted pixels.
+  // Their scored candidates compete in the locality pool.
+  const darkMask: boolean[] = new Array(width * height);
+  for (let i = 0; i < width * height; i++) darkMask[i] = gray[i] < darkThreshold;
+  const darkClusters = findClusters(darkMask, width, height, minPx, maxPx, rgb, { keepMembers: true });
+  const darkMerged = mergeClusters(darkClusters, 8);
 
-  const rawClusters = findClusters(mask, width, height, minPx, maxPx, rgb, { keepMembers: true });
-  const merged = mergeClusters(rawClusters, 8);
+  let brightMerged: typeof darkMerged = [];
+  if (brightThreshold !== undefined) {
+    const brightMask: boolean[] = new Array(width * height);
+    for (let i = 0; i < width * height; i++) brightMask[i] = gray[i] > brightThreshold;
+    const brightClusters = findClusters(brightMask, width, height, minPx, maxPx, rgb, { keepMembers: true });
+    brightMerged = mergeClusters(brightClusters, 8);
+  }
+  const merged = [...darkMerged, ...brightMerged];
 
   // Phase 290 (v0.5.227): compute shape descriptors from each cluster's
   // ACTUAL member pixels + true bbox, not a fixed-radius rescan around

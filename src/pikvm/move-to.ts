@@ -2077,7 +2077,7 @@ export async function moveToPixel(
           try {
             const shapeShot = await client.screenshotKeepingCursorAlive();
             const shapeDec = await decodeScreenshot(shapeShot.buffer);
-            const shape = findCursorByShape(shapeDec.rgb, shapeDec.width, shapeDec.height, {
+            let shape = findCursorByShape(shapeDec.rgb, shapeDec.width, shapeDec.height, {
               expectedNear: newPredicted,
               // Phase 277 attempt+revert: tried 130 to catch a
               // marginal near-target case (cursor at 101 px from
@@ -2090,6 +2090,37 @@ export async function moveToPixel(
               // Reverted to 100. Same v0.5.225 behaviour as v0.5.224.
               expectedNearRadius: 100,
             });
+            // Phase 293 (v0.5.228): bright-mask rescue. When the
+            // dark-mask path returns null OR a candidate with very
+            // low score (< 0.05) that is FAR from prediction (>30 px),
+            // the cursor may be in iPadOS pointer-effect-snap mode
+            // rendering LIGHT gray over medium wallpaper instead of
+            // dark. Retry with brightThreshold=120; that mask catches
+            // the light cursor's interior (Phase 293 N=4 saved frames
+            // showed it picks at 7-39 px of truth when dark fails).
+            //
+            // Critically the rescue is GATED to skip the Phase 269
+            // legitimate-dim-cursor case: when dark returns a low-
+            // score candidate that IS close to prediction (≤30 px),
+            // it's the real cursor in a faint rendering — don't
+            // displace it with a bright FP. Phase 293 first-pass
+            // bench showed an unguarded rescue regresses near-target
+            // by 10-25 pp because the bright rescue's high-score
+            // wallpaper FPs out-scored the legitimate dim-cursor.
+            const darkPredDist = shape
+              ? Math.hypot(shape.centroidX - newPredicted.x, shape.centroidY - newPredicted.y)
+              : Infinity;
+            const darkLost = !shape || (shape.shapeScore < 0.05 && darkPredDist > 30);
+            if (darkLost) {
+              const brightShape = findCursorByShape(shapeDec.rgb, shapeDec.width, shapeDec.height, {
+                expectedNear: newPredicted,
+                expectedNearRadius: 100,
+                brightThreshold: 120,
+              });
+              if (brightShape && (!shape || brightShape.shapeScore > shape.shapeScore)) {
+                shape = brightShape;
+              }
+            }
             // Phase 276 (v0.5.224): proximity gate for low-score
             // shape candidates. Phase 275 diagnostic at near target
             // found shape returning bogus picks at score 0.038-0.061
