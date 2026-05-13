@@ -30,7 +30,7 @@ import type { PiKVMClient, MouseButton } from './client.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
 import { detectIpadBoundsFromBuffer } from './orientation.js';
 import { loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './template-set.js';
-import { ipadGoHome, isLikelyLockScreen } from './ipad-unlock.js';
+import { ipadGoHome } from './ipad-unlock.js';
 import { keepCursorAlive } from './cursor-keepalive.js';
 import { slamToCorner } from './ballistics.js';
 
@@ -591,28 +591,13 @@ export async function clickAtWithRetry(
     }
   }
 
-  // Phase 318 (v0.5.245): lock-screen precheck. iPad lock screen has
-  // normal brightness (won't trip the Phase 38 gate) but contains no
-  // interactive elements. Running 4 retries against it wastes ~5 min
-  // and produces tautological "cursor on icon" reports (Phase 310
-  // pattern, see v0.5.241 Settings bench). Phase 318 isLikelyLockScreen
-  // analyses the dock-strip region; when it returns true, throw a
-  // "lock screen" error that Phase 72 auto-recovery (or the operator)
-  // can act on.
-  try {
-    const shot = await client.screenshot();
-    if (await isLikelyLockScreen(shot.buffer)) {
-      throw new Error(
-        `clickAtWithRetry: iPad appears to be on the lock screen ` +
-        `(dock-strip stddev below threshold — no app icons visible). ` +
-        `Run pikvm_ipad_unlock to unlock, then retry the click.`,
-      );
-    }
-  } catch (err) {
-    if ((err as Error).message.includes('lock screen')) throw err;
-    // Other errors (screenshot RPC, sharp extract failure) — let the
-    // main loop surface them.
-  }
+  // Phase 321 (v0.5.248): Phase 318's isLikelyLockScreen precheck
+  // removed. The dock-strip heuristic produced false positives on
+  // legitimate non-home screens (App Library, app-internal views with
+  // no dock visible). Lock-state determination is now the AI/caller's
+  // responsibility via visual inspection of screenshots; the underlying
+  // retry loop's "no cursor position" error already triggers Phase 72
+  // auto-recovery via the "lock screen" regex.
 
   const attemptHistory: ClickAtWithRetryResult['attemptHistory'] = [];
   let lastMoveResult: MoveToResult | null = null;

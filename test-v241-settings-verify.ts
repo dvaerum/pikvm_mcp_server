@@ -1,15 +1,16 @@
 /**
- * v0.5.241 short bench with lock-contamination guards.
+ * v0.5.241 Settings bench with visual ground truth.
  *
- * Phase 318 fix for Phase 317 verification: keep bench short enough
- * to finish before iPad re-locks (~5 min idle window). 3 trials × 60s
- * = ~3 min. Also detect "stuck detection" pattern: if 2 consecutive
- * trials report identical detected position (within 5 px), abort —
- * that's the lock-screen tautology pattern from the v0.5.241
- * 10-trial bench.
+ * Phase 317 added ML wiggle-verify gated on proximity ≤ 30 px.
+ * Hypothesis: Phase 310 tautologies (residual=19 px on Settings)
+ * that v0.5.240 reported as detection successes will be REJECTED
+ * by wiggle-verify, surfacing as either:
+ *  - Lower confidence ML alternates
+ *  - Fall-through to shape-detect (then null)
+ *  - NULL detection (honest)
  *
- * If detection is real, residuals/positions will vary across trials.
- * If detection is tautology, positions will be identical.
+ * N=10 trials. Save pre-click frame for every trial so visual GT
+ * can confirm the residual story.
  */
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -25,23 +26,14 @@ const client = new PiKVMClient(cfg.pikvm);
 const profile = await loadProfile('./data/ballistics.json').catch(() => null);
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-const ROOT = `./data/v241-short/${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)}`;
+const ROOT = `./data/v241-settings/${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)}`;
 await fs.mkdir(ROOT, { recursive: true });
 
-console.error(`=== v0.5.241 short bench at v${VERSION} ===`);
+console.error(`=== v0.5.241 Settings verify at v${VERSION} ===`);
 console.error(`Output: ${ROOT}\n`);
 
-// Allow target override via CLI arg: `tsx test-v241-short-bench.ts books`
-const TARGETS_BY_NAME = {
-  settings: { name: 'Settings', x: 905, y: 800 },
-  books:    { name: 'Books',    x: 640, y: 800 },
-  tv:       { name: 'TV',       x: 773, y: 800 },
-  appstore: { name: 'AppStore', x: 905, y: 680 },
-};
-const targetKey = (process.argv[2] ?? 'settings').toLowerCase() as keyof typeof TARGETS_BY_NAME;
-const TARGET = TARGETS_BY_NAME[targetKey] ?? TARGETS_BY_NAME.settings;
-// Allow N override via second CLI arg: `tsx test-v241-short-bench.ts settings 10`
-const N = Number(process.argv[3] ?? 3);
+const TARGET = { name: 'Settings', x: 905, y: 800 };
+const N = 10;
 
 interface Trial {
   trial: number;
@@ -67,13 +59,9 @@ for (let i = 1; i <= N; i++) {
   }
   await sleep(1500);
 
+  // Pre-click screenshot for visual GT
   const pre = await client.screenshot();
   await fs.writeFile(path.join(ROOT, `t${i}-pre.jpg`), pre.buffer);
-
-  // Phase 321: no auto-lock detection. If the iPad re-locks mid-bench,
-  // clickAtWithRetry will fail with a "lock screen" error that Phase 72
-  // auto-recovery catches; or the AI inspecting the saved pre-frame
-  // will see the lock screen visually.
 
   const start = Date.now();
   let result;
@@ -97,13 +85,16 @@ for (let i = 1; i <= N; i++) {
       trial: i, residualPx: null, detectedPos: null, attempts: 0, success: false,
       duration: Date.now() - start,
     });
-    break;
+    await unlockIpad(client, { dragPx: 1500 }).catch(() => undefined);
+    await sleep(800);
+    continue;
   }
 
   const dur = Date.now() - start;
   const success = result.success && (result.finalVerification?.screenChanged ?? false);
   const detectedPos = result.finalMoveResult.finalDetectedPosition ?? null;
 
+  // Post-click screenshot
   const post = await client.screenshot();
   await fs.writeFile(path.join(ROOT, `t${i}-post.jpg`), post.buffer);
 
@@ -120,32 +111,17 @@ for (let i = 1; i <= N; i++) {
     `detected=${detectedPos ? `(${detectedPos.x},${detectedPos.y})` : 'NULL'} ` +
     `attempts=${result.attempts} click=${success ? '✓' : '✗'} ${dur}ms`,
   );
-
-  // Phase 318 stuck-detection guard: if 2 consecutive trials report
-  // identical detected position (within 5 px), abort — the iPad is
-  // likely locked or stuck in a state where detection is tautological.
-  if (i >= 2) {
-    const prev = trials[trials.length - 2];
-    if (prev.detectedPos && detectedPos) {
-      const motionBetweenTrials = Math.hypot(
-        prev.detectedPos.x - detectedPos.x,
-        prev.detectedPos.y - detectedPos.y,
-      );
-      if (motionBetweenTrials < 5) {
-        console.error(`  ⚠ Detected position identical to previous trial (Δ=${motionBetweenTrials.toFixed(1)}px). Likely lock-screen contamination — aborting.`);
-        break;
-      }
-    }
-  }
 }
 
 await fs.writeFile(path.join(ROOT, 'results.json'), JSON.stringify({ version: VERSION, trials }, null, 2));
 
-const successes = trials.filter(t => t.success).length;
+console.error('\n=== Aggregate ===');
 const detected = trials.filter(t => t.detectedPos !== null).length;
-console.error(`\n=== Aggregate ===`);
-console.error(`Trials run:   ${trials.length}/${N}`);
-console.error(`Detected:     ${detected}/${trials.length}`);
-console.error(`Click hits:   ${successes}/${trials.length}`);
-console.error(`Results: ${ROOT}/results.json`);
+const tautologySuspects = trials.filter(t => t.residualPx !== null && t.residualPx <= 30).length;
+const successes = trials.filter(t => t.success).length;
+console.error(`Detected:        ${detected}/${N}`);
+console.error(`Residual ≤ 30px: ${tautologySuspects}/${N}  (tautology suspects)`);
+console.error(`Click success:   ${successes}/${N}`);
+console.error(`\nResults: ${ROOT}/results.json`);
+console.error(`Visual GT: inspect t*-pre.jpg to verify cursor location.`);
 process.exit(0);
