@@ -81,6 +81,15 @@ export interface DetectOptions {
    *  rather than letterbox black. Default 60 — well above JPEG noise on
    *  near-black bars (~5–15) and below the dimmest visible UI elements. */
   brightnessSum?: number;
+  /** Minimum number of pixels per column/row that must exceed
+   *  `brightnessSum` for the column/row to count as iPad content.
+   *  Default 10. Phase 320 (v0.5.247): lock-screen JPEG noise put
+   *  1-pixel-bright columns in the letterbox region, which the
+   *  previous "any 1 pixel above threshold" rule mis-identified as
+   *  content — inflating bounds to nearly full frame and breaking
+   *  the portrait/landscape decision. Content columns have 945/1050
+   *  pixels above threshold (~90%); noise columns have ≤1. */
+  minContentPixels?: number;
   verbose?: boolean;
 }
 
@@ -97,18 +106,34 @@ export async function detectIpadBoundsFromBuffer(
   // indicator, app chrome — even in dark-mode apps). This is more robust
   // than a pure brightness-bounding-box because dark-themed apps with mostly
   // black canvas still get correctly bounded by the iPad's edge UI.
+  // Phase 320 (v0.5.247): require ≥ minContentPixels above threshold
+  // per row/column. Previously "any 1 pixel above threshold" — JPEG
+  // noise on lock-screen wallpaper produces ~1 pixel/column with
+  // RGB-sum just above 60, which inflated bounds to full frame.
+  // Live data 2026-05-13 (lock-screen frame, 1680×1050):
+  //   x=1200 had 1/1050 px above threshold (max RGB sum 63)
+  //   x=1670 had 1/1050 px above threshold (max RGB sum 63)
+  //   true content columns: 945/1050 px above threshold
+  // A 10-pixel floor cleanly separates noise (≤1) from content (≥900).
+  const minContentPixels = options.minContentPixels ?? 10;
   const isContentColumn = (x: number): boolean => {
+    let n = 0;
     for (let y = 0; y < height; y++) {
       const i = (y * width + x) * 3;
-      if (data[i] + data[i + 1] + data[i + 2] > threshold) return true;
+      if (data[i] + data[i + 1] + data[i + 2] > threshold) {
+        if (++n >= minContentPixels) return true;
+      }
     }
     return false;
   };
   const isContentRow = (y: number): boolean => {
     const rowOff = y * width * 3;
+    let n = 0;
     for (let x = 0; x < width; x++) {
       const i = rowOff + x * 3;
-      if (data[i] + data[i + 1] + data[i + 2] > threshold) return true;
+      if (data[i] + data[i + 1] + data[i + 2] > threshold) {
+        if (++n >= minContentPixels) return true;
+      }
     }
     return false;
   };
