@@ -1979,39 +1979,53 @@ export async function moveToPixel(
       await client.mouseMoveRelative(dxMickeys, dyMickeys);
       await new Promise((r) => setTimeout(r, 80));
       const wiggleShotRaw = await client.screenshot();
-      // Hint at expected post-wiggle position. Real cursor will be
-      // there (moved with the wiggle). Static FP (icon) won't — the
-      // icon stays at initial position.
+      // Phase 319 (v0.5.246): TWO checks. Real cursor satisfies both;
+      // static FP satisfies neither (or only one).
+      //
+      // A. Cursor at EXPECTED post-wiggle position (initial + emit·ratio).
+      //    Real cursor moved with the wiggle and is there.
+      // B. Initial position is now EMPTY (real cursor moved away from it).
+      //    Static FP would still be at initial.
+      //
+      // v0.5.243 only checked (A) with a 30-px tolerance. Live bench at
+      // v0.5.245 showed Phase 310 tautology slipping through: in a dense
+      // icon grid, ML often finds *something* high-conf within 30 px of
+      // any test point. Require (A) AND (B) together for accept.
       const cursorAtExpected = await findCursorByML(
         wiggleShotRaw.buffer,
         wiggleShotRaw.screenshotWidth,
         wiggleShotRaw.screenshotHeight,
         { hint: expectedPostPos, minConfidence: 0.5 },
       );
+      const stillAtInitial = await findCursorByML(
+        wiggleShotRaw.buffer,
+        wiggleShotRaw.screenshotWidth,
+        wiggleShotRaw.screenshotHeight,
+        { hint: { x: initial.x, y: initial.y }, minConfidence: 0.5 },
+      );
       // Always inverse-wiggle to restore cursor near initial pos
       await client.mouseMoveRelative(-dxMickeys, -dyMickeys);
       await new Promise((r) => setTimeout(r, 80));
 
-      if (!cursorAtExpected) {
-        // Nothing high-conf at expected post-wiggle position. The
-        // initial detection was a static FP (icon doesn't move).
+      // Check B: was the initial position vacated?
+      const initialNowEmpty = !stillAtInitial
+        || Math.hypot(stillAtInitial.x - initial.x, stillAtInitial.y - initial.y) > 20;
+      if (!initialNowEmpty) {
+        // Initial still occupied → static FP (icon didn't move).
         return null;
       }
-      // Distance from cursorAtExpected to expectedPostPos. Real
-      // cursor that moved by the wiggle would be within ~20 px of
-      // expectedPostPos (ratio is approximate; pointer-effect snap
-      // adds noise).
+      // Check A: did the cursor appear at the expected post-wiggle position?
+      if (!cursorAtExpected) {
+        return null;
+      }
       const offsetFromExpected = Math.hypot(
         cursorAtExpected.x - expectedPostPos.x,
         cursorAtExpected.y - expectedPostPos.y,
       );
       if (offsetFromExpected > 30) {
-        // Found something high-conf in the crop but far from expected
-        // position — it's a different feature (e.g. ML found a
-        // neighboring icon). Not the cursor moving with the wiggle.
         return null;
       }
-      // Cursor at expected post-wiggle position — real detection.
+      // Both checks passed — real cursor.
       return initial;
     } catch {
       return initial;
