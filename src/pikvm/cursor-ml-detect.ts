@@ -177,6 +177,45 @@ export async function findCursorByML(
 }
 
 /**
+ * Try multiple hint positions and return the highest-confidence
+ * result. Useful when the cursor may be at one of several plausible
+ * locations (e.g. predicted target, current belief, or home position
+ * after a rate-limited emit).
+ *
+ * Hints are deduplicated by ~256 px proximity (no point running ML
+ * on overlapping crops). Returns null if every hint yielded null
+ * (cursor not found in any crop with confidence ≥ minConfidence).
+ */
+export async function findCursorByMLMultiHint(
+  jpegBuffer: Buffer,
+  frameWidth: number,
+  frameHeight: number,
+  hints: Array<{ x: number; y: number }>,
+  options: Omit<MLCursorOptions, 'hint'> = {},
+): Promise<MLCursorResult | null> {
+  // Dedup: keep only hints that are > 200 px apart (so crops don't
+  // overlap substantially).
+  const dedupedHints: Array<{ x: number; y: number }> = [];
+  for (const h of hints) {
+    if (dedupedHints.every((d) => Math.hypot(d.x - h.x, d.y - h.y) > 200)) {
+      dedupedHints.push(h);
+    }
+  }
+
+  let best: MLCursorResult | null = null;
+  for (const hint of dedupedHints) {
+    const r = await findCursorByML(jpegBuffer, frameWidth, frameHeight, {
+      ...options,
+      hint,
+    });
+    if (r !== null && (best === null || r.confidence > best.confidence)) {
+      best = r;
+    }
+  }
+  return best;
+}
+
+/**
  * Drop the cached session. Useful for tests that swap models, or
  * to release memory when ML detection is not actively used.
  */
