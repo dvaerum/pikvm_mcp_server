@@ -44,7 +44,7 @@ import {
 } from './cursor-detect.js';
 import { extractMaskedTemplate } from './seed-template.js';
 import { findCursorByShape } from './cursor-shape-detect.js';
-import { findCursorByML, findCursorByMLMultiHint, buildMLHints } from './cursor-ml-detect.js';
+import { findCursorByML, findCursorByMLMultiHint, buildMLHints, type MLCursorResult } from './cursor-ml-detect.js';
 import {
   DEFAULT_TEMPLATE_DIR,
   LEGACY_TEMPLATE_PATH,
@@ -1858,16 +1858,37 @@ export async function moveToPixel(
         minConfidence: 0.5,
       });
       if (ml) {
-        const prox = Math.hypot(ml.x - predicted.x, ml.y - predicted.y);
-        if (verbose) {
-          console.error(
-            `[move-to] ML detect ACCEPTED — (${ml.x},${ml.y}) conf=${ml.confidence.toFixed(3)} prox=${prox.toFixed(0)}`,
-          );
+        const mlProx = Math.hypot(ml.x - predicted.x, ml.y - predicted.y);
+        // Phase 317 (v0.5.241): wiggle-verify suspicious ML detections.
+        // The home-zone multi-hint (Phase 315) lands ML crops on
+        // dock/icon areas, where ML confidently picks icon features
+        // as the cursor when the real cursor is parked elsewhere
+        // (Phase 310 tautology, visually verified at v0.5.240). Only
+        // verify when ML claims cursor is near target (proximity ≤ 30
+        // px) — those are the tautology suspects. Large-residual
+        // detections are more likely real cursor positions far from
+        // target and don't need the wiggle-cost overhead (~700 ms).
+        const TAUTOLOGY_PROX_THRESHOLD = 30;
+        let verified: MLCursorResult | null = ml;
+        if (mlProx <= TAUTOLOGY_PROX_THRESHOLD) {
+          verified = await mlWiggleVerify(ml, hints);
         }
-        // Score field: report ML confidence as score. Downstream code
-        // uses score for proximity-gating; ML's confidence is in [0,1]
-        // and behaves similarly.
-        return { pos: { x: ml.x, y: ml.y }, score: ml.confidence, prox };
+        if (!verified) {
+          if (verbose) {
+            console.error(
+              `[move-to] ML detect REJECTED — wiggle-verify failed (static FP at ${ml.x},${ml.y} prox=${mlProx.toFixed(0)})`,
+            );
+          }
+          // Fall through to heuristic shape-detect
+        } else {
+          if (verbose) {
+            const tag = mlProx <= TAUTOLOGY_PROX_THRESHOLD ? ' (wiggle-verified)' : '';
+            console.error(
+              `[move-to] ML detect ACCEPTED — (${verified.x},${verified.y}) conf=${verified.confidence.toFixed(3)} prox=${mlProx.toFixed(0)}${tag}`,
+            );
+          }
+          return { pos: { x: verified.x, y: verified.y }, score: verified.confidence, prox: mlProx };
+        }
       }
       if (verbose) {
         console.error('[move-to] ML detect returned null (model missing or low confidence); falling back to shape detect');
@@ -1934,6 +1955,57 @@ export async function moveToPixel(
       return null;
     } catch {
       return null;
+    }
+  }
+
+  /** Phase 317 (v0.5.241): wiggle-verify an ML detection.
+   *
+   *  ML returns position P with confidence C. We emit a small wiggle
+   *  (25, -10 mickeys), re-run ML with the SAME hints, and check if
+   *  the new prediction has moved.
+   *
+   *  - Position moved ≥ 15 px  → real cursor (cursor went with the wiggle)
+   *  - Position moved < 15 px → static FP (icon feature; didn't move)
+   *  - No re-detection         → real cursor moved out of crop (accept)
+   *
+   *  Always emits inverse wiggle to restore cursor to original position.
+   *  Returns the verified ML result (original detection) or null. */
+  async function mlWiggleVerify(
+    initial: MLCursorResult,
+    hints: Array<{ x: number; y: number }>,
+  ): Promise<MLCursorResult | null> {
+    const dxMickeys = 25;
+    const dyMickeys = -10;
+    try {
+      await client.mouseMoveRelative(dxMickeys, dyMickeys);
+      await new Promise((r) => setTimeout(r, 80));
+      const wiggleShotRaw = await client.screenshot();
+      const reDetect = await findCursorByMLMultiHint(
+        wiggleShotRaw.buffer,
+        wiggleShotRaw.screenshotWidth,
+        wiggleShotRaw.screenshotHeight,
+        hints,
+        { minConfidence: 0.5 },
+      );
+      // Always inverse-wiggle to restore cursor near initial pos
+      await client.mouseMoveRelative(-dxMickeys, -dyMickeys);
+      await new Promise((r) => setTimeout(r, 80));
+
+      if (!reDetect) {
+        // ML lost the previous "cursor" after the wiggle — most likely
+        // the real cursor moved out of crop or under pointer-effect.
+        // Accept the original detection.
+        return initial;
+      }
+      const motion = Math.hypot(reDetect.x - initial.x, reDetect.y - initial.y);
+      if (motion < 15) {
+        // Static — same position after a 25-mickey x-axis wiggle.
+        // This is the Phase 310 tautology: ML matching an icon feature.
+        return null;
+      }
+      return initial;
+    } catch {
+      return initial;
     }
   }
 
@@ -2313,17 +2385,25 @@ export async function moveToPixel(
             const correctionHints = buildMLHints(
               newPredicted, shapeDec.width, shapeDec.height, client.belief?.position,
             );
-            const mlCorrection = await findCursorByMLMultiHint(
+            const mlCorrectionRaw = await findCursorByMLMultiHint(
               shapeDec.buffer, shapeDec.width, shapeDec.height,
               correctionHints,
               { minConfidence: 0.5 },
             );
+            // Phase 317: wiggle-verify correction-pass ML pick when it
+            // claims to be near target (tautology suspect range).
+            const correctionProx = mlCorrectionRaw
+              ? Math.hypot(mlCorrectionRaw.x - newPredicted.x, mlCorrectionRaw.y - newPredicted.y)
+              : Infinity;
+            const mlCorrection = mlCorrectionRaw && correctionProx <= 30
+              ? await mlWiggleVerify(mlCorrectionRaw, correctionHints)
+              : mlCorrectionRaw;
             if (mlCorrection) {
               const prox = Math.hypot(mlCorrection.x - newPredicted.x, mlCorrection.y - newPredicted.y);
               currentPos = { x: mlCorrection.x, y: mlCorrection.y };
               finalDetectedPosition = { ...currentPos };
               passMode = 'shape';
-              passReason = `ML conf=${mlCorrection.confidence.toFixed(3)} prox=${prox.toFixed(0)} (motion: ${motionFailReason}, template: null)`;
+              passReason = `ML conf=${mlCorrection.confidence.toFixed(3)} prox=${prox.toFixed(0)} wiggle-verified (motion: ${motionFailReason}, template: null)`;
               templated = true;
               client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, mlCorrection.confidence);
               if (verbose) {
