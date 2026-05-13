@@ -89,6 +89,24 @@ describe('PiKVMClient ↔ CursorBelief wiring', () => {
     expect(region.ry).toBeGreaterThan(150);
   });
 
+  it('Phase 315: default bounds prevent belief.position drift to extreme negatives', async () => {
+    // Without default bounds, predict() with no setBeliefBounds call
+    // would let unlock/home swipe emits drift the belief to off-screen
+    // negative coords (Phase 315 diagnostic: -3051, -4130 after one
+    // unlock+home cycle). The constructor now sets wide bounds
+    // (4096×2160) so predict() clips even before letterbox detection.
+    const c = newClient();
+    c.resetBelief({ x: 100, y: 100 });
+    // Simulate a huge unlock-swipe magnitude (1500 mickeys of leftward
+    // emit, like dragPx=1500 chunked). Even at 1.3 px/mickey ratio
+    // that's ~2000 px — would drift to negative without clip.
+    for (let i = 0; i < 12; i++) {
+      await c.mouseMoveRelative(-127, 0);
+    }
+    expect(c.belief.position.x).toBeGreaterThanOrEqual(0);
+    expect(c.belief.position.y).toBeGreaterThanOrEqual(0);
+  });
+
   it('emits to mouseMoveRelative still advance the keepalive clock (Phase 187 not regressed)', async () => {
     // We don't reach into recordEmit's internals here — just verify
     // that the call doesn't throw and belief gets updated, proving the
