@@ -219,3 +219,117 @@ describe('findCursorByShape — Phase 251 saved frames', () => {
     expect(r).toBeNull();
   });
 });
+
+describe('Phase 307 — co-linearity penalty for text-row siblings', () => {
+  it('penalises a candidate with 3 co-linear similar-sized siblings', async () => {
+    // Build a frame with FOUR cursor-sized asymmetric blobs all at the
+    // same Y, spaced 60-80 px apart horizontally — a "word" of letters.
+    // Each individual blob looks like a cursor on its own, but the
+    // co-linearity context tells us it's text. Phase 307 should
+    // downrank each.
+    const w = 600, h = 200;
+    const rgb = Buffer.alloc(w * h * 3, 240);
+    function placeBlob(cx: number, cy: number) {
+      for (let dy = 0; dy < 12; dy++) {
+        const lineW = Math.max(1, 12 - dy);
+        for (let dx = 0; dx < lineW; dx++) {
+          const o = ((cy + dy) * w + (cx + dx)) * 3;
+          rgb[o] = 20; rgb[o + 1] = 20; rgb[o + 2] = 20;
+        }
+      }
+    }
+    // Word "Text" — 4 blobs at the same Y
+    placeBlob(100, 100);
+    placeBlob(170, 100);
+    placeBlob(240, 100);
+    placeBlob(310, 100);
+    // Isolated cursor at (500, 50) — same shape, no co-linear siblings
+    placeBlob(500, 50);
+
+    // Look at all candidates by querying both regions.
+    const textCand = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 105, y: 105 },
+      expectedNearRadius: 30,
+    });
+    const isoCand = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 505, y: 55 },
+      expectedNearRadius: 30,
+    });
+    expect(textCand).not.toBeNull();
+    expect(isoCand).not.toBeNull();
+    // Isolated cursor must outscore the text-row member by at least 3x.
+    // Pre-Phase-307: both scored identically (~same shape). Post-Phase-307:
+    // text member has 3 co-linear siblings → exp(-3/1.5) = 0.135 penalty,
+    // isolated has 0 siblings → 1.0.
+    expect(isoCand!.shapeScore).toBeGreaterThan(textCand!.shapeScore * 3);
+  });
+
+  it('does not penalise isolated cursors', async () => {
+    // A single asymmetric blob with no neighbors — full score retained.
+    const w = 200, h = 200;
+    const rgb = Buffer.alloc(w * h * 3, 240);
+    for (let dy = 0; dy < 12; dy++) {
+      const lineW = Math.max(1, 12 - dy);
+      for (let dx = 0; dx < lineW; dx++) {
+        const o = ((100 + dy) * w + (100 + dx)) * 3;
+        rgb[o] = 20; rgb[o + 1] = 20; rgb[o + 2] = 20;
+      }
+    }
+    const r = findCursorByShape(rgb, w, h);
+    expect(r).not.toBeNull();
+    // Isolated asymmetric blob should produce a high score.
+    expect(r!.shapeScore).toBeGreaterThan(0.8);
+  });
+
+  it('does not penalise vertically-stacked candidates (only horizontal rows)', async () => {
+    // 4 blobs in a VERTICAL column. Vertical stacking is NOT a text-row
+    // pattern (text is horizontal). Penalty should not fire.
+    const w = 200, h = 600;
+    const rgb = Buffer.alloc(w * h * 3, 240);
+    function placeBlob(cx: number, cy: number) {
+      for (let dy = 0; dy < 12; dy++) {
+        const lineW = Math.max(1, 12 - dy);
+        for (let dx = 0; dx < lineW; dx++) {
+          const o = ((cy + dy) * w + (cx + dx)) * 3;
+          rgb[o] = 20; rgb[o + 1] = 20; rgb[o + 2] = 20;
+        }
+      }
+    }
+    placeBlob(100, 100);
+    placeBlob(100, 200);
+    placeBlob(100, 300);
+    placeBlob(100, 400);
+    // Vertical stack — Y differs by 100 per blob, so dy>15 for every
+    // pair. No co-linear neighbors. No penalty fired.
+    const r = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 100, y: 100 },
+      expectedNearRadius: 20,
+    });
+    expect(r).not.toBeNull();
+    expect(r!.shapeScore).toBeGreaterThan(0.8);
+  });
+
+  it('does not penalise widely-spaced co-linear candidates (>300 px apart)', async () => {
+    // Cursor + a single far-away cluster on the same Y, but 400 px apart
+    // — out of letter-spacing range. No penalty.
+    const w = 800, h = 200;
+    const rgb = Buffer.alloc(w * h * 3, 240);
+    function placeBlob(cx: number, cy: number) {
+      for (let dy = 0; dy < 12; dy++) {
+        const lineW = Math.max(1, 12 - dy);
+        for (let dx = 0; dx < lineW; dx++) {
+          const o = ((cy + dy) * w + (cx + dx)) * 3;
+          rgb[o] = 20; rgb[o + 1] = 20; rgb[o + 2] = 20;
+        }
+      }
+    }
+    placeBlob(100, 100);
+    placeBlob(600, 100); // 500 px away — out of range (max 300)
+    const r = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 105, y: 105 },
+      expectedNearRadius: 20,
+    });
+    expect(r).not.toBeNull();
+    expect(r!.shapeScore).toBeGreaterThan(0.8);
+  });
+});

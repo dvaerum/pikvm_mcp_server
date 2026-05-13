@@ -254,6 +254,52 @@ function findAllShapeCandidates(
     });
   }
 
+  // Phase 307 (v0.5.233): co-linearity penalty. Text characters (label
+  // text under app icons, navigation-bar items, status-bar digits, dock
+  // text) come in HORIZONTAL ROWS with REGULAR SPACING. Each individual
+  // letter passes the size+asymmetry+chroma filters because letters
+  // look like cursors (small isolated dark cluster, asymmetric mass,
+  // square-ish bbox). A real cursor is ISOLATED — no similar-sized
+  // sibling clusters at the same vertical position.
+  //
+  // For each candidate, count siblings within a text-row window:
+  //   - dy ≤ 15 px (same baseline within anti-alias tolerance)
+  //   - 30 ≤ dx ≤ 300 px (letter-spacing through word-spacing range)
+  //   - pixel count within 0.5× to 2× of this candidate's
+  //
+  // Apply a multiplicative penalty: factor = exp(-count / 1.5)
+  //   0 siblings → 1.00 (no penalty, isolated cursor)
+  //   1 sibling  → 0.51
+  //   2 siblings → 0.26
+  //   3 siblings → 0.13
+  //   5 siblings → 0.04 (a word of letters)
+  //
+  // Phase 306 diagnostic: dock features at y=962 had 3-4 mutual
+  // siblings → would drop from 1.06 to <0.10. "Select" word in Photos
+  // nav bar has 5-7 letter siblings → drops from 0.98 to <0.05. Real
+  // cursor in mid-screen had 0 siblings → keeps 0.23.
+  //
+  // Cost: O(N²) where N ≤ ~50 typical candidates. Negligible.
+  const coLinearCounts: number[] = new Array(candidates.length).fill(0);
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    for (let j = 0; j < candidates.length; j++) {
+      if (j === i) continue;
+      const o = candidates[j];
+      const dy = Math.abs(o.centroidY - c.centroidY);
+      if (dy > 15) continue;
+      const dx = Math.abs(o.centroidX - c.centroidX);
+      if (dx < 30 || dx > 300) continue;
+      const ratio = c.pixels === 0 ? 0 : o.pixels / c.pixels;
+      if (ratio < 0.5 || ratio > 2.0) continue;
+      coLinearCounts[i]++;
+    }
+  }
+  for (let i = 0; i < candidates.length; i++) {
+    const penalty = Math.exp(-coLinearCounts[i] / 1.5);
+    candidates[i].shapeScore *= penalty;
+  }
+
   // Locality gate.
   let pool = candidates;
   if (options.expectedNear) {
