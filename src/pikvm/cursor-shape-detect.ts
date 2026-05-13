@@ -73,6 +73,22 @@ export interface ShapeOptions {
   /** Max cluster size in pixels. Default 250 — admits cursor with
    *  generous edge-tolerance (cursor measured ~80 px Phase 104). */
   maxClusterPixels?: number;
+  /** Phase 313 (v0.5.236): minimum shape score for a candidate to be
+   *  considered. Below this, the candidate is dropped from the pool.
+   *  Default 0.10 — empirically: cursor-shape-typical scores after
+   *  all penalties (Phase 307+308+311) are 0.20-0.33; calendar
+   *  widget FP and other "best of bad options" picks land at 0.077-
+   *  0.078. A 0.10 threshold cleanly separates real cursor detections
+   *  from cursor-absent fallback picks.
+   *
+   *  Set 0 to disable (return any candidate that survives other
+   *  filters). Useful for diagnostic benches that want raw top-K
+   *  output even when nothing scores well.
+   *
+   *  Phase 312 live verification: 3/5 trials had cursor (scores
+   *  0.228-0.334, all pass); 2/5 had cursor-absent → top-1 calendar
+   *  widget at 0.077-0.078 → would correctly return null. */
+  minShapeScore?: number;
 }
 
 /**
@@ -385,8 +401,14 @@ function findAllShapeCandidates(
     candidates[i].shapeScore *= penalty;
   }
 
+  // Phase 313 (v0.5.236): minimum-score gate. Drop candidates below
+  // the threshold BEFORE locality filtering. This converts "cursor
+  // absent → top-1 is a low-score widget FP" into "no candidates"
+  // (null detection) — safer in production with requireVerifiedCursor.
+  const minShapeScore = options.minShapeScore ?? 0.10;
+  let pool = minShapeScore > 0 ? candidates.filter((c) => c.shapeScore >= minShapeScore) : candidates;
+
   // Locality gate.
-  let pool = candidates;
   if (options.expectedNear) {
     const hint = options.expectedNear;
     const r = options.expectedNearRadius ?? 200;

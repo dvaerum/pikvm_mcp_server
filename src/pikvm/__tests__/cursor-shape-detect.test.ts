@@ -348,6 +348,54 @@ describe('Phase 307 — co-linearity penalty for text-row siblings', () => {
     expect(isoCand!.shapeScore).toBeGreaterThan(denseCand!.shapeScore * 3);
   });
 
+  it('Phase 313: minimum-score gate returns null when no candidate clears threshold', async () => {
+    // Build a frame where every candidate is heavily penalized (4×3 grid
+    // of similar clusters → radial-density penalty kills them all). The
+    // global top-1 score should fall below the default 0.10 threshold,
+    // so findCursorByShape returns null.
+    const w = 200, h = 200;
+    const rgb = Buffer.alloc(w * h * 3, 150);
+    function placeBlob(cx: number, cy: number) {
+      for (let dy = 0; dy < 12; dy++) {
+        const lineW = Math.max(1, 12 - dy);
+        for (let dx = 0; dx < lineW; dx++) {
+          const o = ((cy + dy) * w + (cx + dx)) * 3;
+          rgb[o] = 20; rgb[o + 1] = 20; rgb[o + 2] = 20;
+        }
+      }
+    }
+    // 4×3 grid of cursor-sized blobs within 50 px radius → density
+    // penalty exp(-11/2) ≈ 0.004 on each.
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 4; col++) {
+        placeBlob(30 + col * 18, 30 + row * 18);
+      }
+    }
+    // With default minShapeScore=0.10, all candidates should be filtered
+    // → null.
+    expect(findCursorByShape(rgb, w, h)).toBeNull();
+
+    // With minShapeScore=0, the same frame returns a candidate (the
+    // raw top-pick before threshold).
+    expect(findCursorByShape(rgb, w, h, { minShapeScore: 0 })).not.toBeNull();
+  });
+
+  it('Phase 313: isolated cursor passes the default minScore threshold', async () => {
+    // A single asymmetric cursor on wallpaper: score ~0.8, well above 0.10.
+    const w = 200, h = 200;
+    const rgb = Buffer.alloc(w * h * 3, 150);
+    for (let dy = 0; dy < 12; dy++) {
+      const lineW = Math.max(1, 12 - dy);
+      for (let dx = 0; dx < lineW; dx++) {
+        const o = ((100 + dy) * w + (100 + dx)) * 3;
+        rgb[o] = 20; rgb[o + 1] = 20; rgb[o + 2] = 20;
+      }
+    }
+    const r = findCursorByShape(rgb, w, h);
+    expect(r).not.toBeNull();
+    expect(r!.shapeScore).toBeGreaterThan(0.10);
+  });
+
   it('does not penalise widely-spaced co-linear candidates (>300 px apart)', async () => {
     // Cursor + a single far-away cluster on the same Y, but 400 px apart
     // — out of letter-spacing range. No penalty.
