@@ -244,13 +244,48 @@ function findAllShapeCandidates(
     }
     const chromaPenalty = Math.exp(-chroma / 40);
 
+    // Phase 308 (v0.5.234): bright-background penalty. Bold dark text
+    // on a white widget card (calendar widget "13" digit, "Notes"
+    // header, weather digits) passes every other filter: cursor-sized,
+    // asymmetric, off-centre, low chroma. The discriminator that
+    // remains is the BACKGROUND CONTEXT. A cursor on the iPad's
+    // wallpaper sits on mid-brightness pixels (~50-180). Text on a
+    // white widget card sits on near-white pixels (~240-255).
+    //
+    // Sample a 16-point ring just outside the cluster's bbox. If mean
+    // brightness ≥ 180, apply factor = exp(-(mean - 180) / 20):
+    //   - ring=180: factor 1.00 (typical wallpaper, no penalty)
+    //   - ring=220: factor 0.135
+    //   - ring=240: factor 0.050
+    //   - ring=255: factor 0.024 (pure white widget card)
+    //
+    // Phase 308 diagnostic on saved Phase 305 frame a1 confirmed:
+    // calendar widget "13" digit (619,261) sits on white card with
+    // ring brightness ~250. Expected post-penalty score: 1.24 × 0.03
+    // = 0.037. Cursor at (1139,934) on wallpaper has ring brightness
+    // ~150 → factor 1.0 → score unchanged.
+    const ringRadius = Math.max(bboxW, bboxH) / 2 + 10;
+    let ringSum = 0;
+    let ringCount = 0;
+    for (let k = 0; k < 16; k++) {
+      const angle = (k / 16) * Math.PI * 2;
+      const rx = Math.round(c.centroidX + ringRadius * Math.cos(angle));
+      const ry = Math.round(c.centroidY + ringRadius * Math.sin(angle));
+      if (rx < 0 || rx >= width || ry < 0 || ry >= height) continue;
+      ringSum += gray[ry * width + rx];
+      ringCount++;
+    }
+    const ringBrightness = ringCount === 0 ? 128 : ringSum / ringCount;
+    const brightBgPenalty = Math.exp(-Math.max(0, ringBrightness - 180) / 20);
+
     candidates.push({
       centroidX: c.centroidX,
       centroidY: c.centroidY,
       pixels: c.pixels,
       shapeScore:
         shapeScoreFor(c.pixels, asymmetry, centroidOffset, aspectRatio) *
-        chromaPenalty,
+        chromaPenalty *
+        brightBgPenalty,
     });
   }
 

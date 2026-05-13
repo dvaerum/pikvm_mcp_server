@@ -58,7 +58,7 @@ describe('findCursorByShape — synthetic frames', () => {
   /** Build a 200x200 white frame with a synthetic cursor blob at (cx, cy). */
   async function frameWithCursor(cx: number, cy: number, radius = 6): Promise<Buffer> {
     const w = 200, h = 200;
-    const rgb = Buffer.alloc(w * h * 3, 240); // light gray background (not dark)
+    const rgb = Buffer.alloc(w * h * 3, 150); // light gray background (not dark)
     // Asymmetric arrow-ish blob: filled triangle with tip at (cx, cy)
     for (let dy = 0; dy < radius * 2; dy++) {
       const y = cy + dy;
@@ -86,7 +86,7 @@ describe('findCursorByShape — synthetic frames', () => {
 
   it('returns null when no cluster passes the dark threshold', async () => {
     const w = 200, h = 200;
-    const rgb = Buffer.alloc(w * h * 3, 240); // uniformly light
+    const rgb = Buffer.alloc(w * h * 3, 150); // uniformly light
     const r = findCursorByShape(rgb, w, h);
     expect(r).toBeNull();
   });
@@ -120,7 +120,7 @@ describe('findCursorByShape — synthetic frames', () => {
     // rescan inflated the stroke's bbox to ~50×51 and gave it a square
     // aspect ratio, letting it match cursor scores.
     const w = 300, h = 300;
-    const rgb = Buffer.alloc(w * h * 3, 240);
+    const rgb = Buffer.alloc(w * h * 3, 150);
     // Compact arrow at (80, 80): asymmetric triangle ~12×12 bbox, ~78 px
     for (let dy = 0; dy < 12; dy++) {
       const ly = 80 + dy;
@@ -152,7 +152,7 @@ describe('findCursorByShape — synthetic frames', () => {
     // Two cursor-like blobs in the frame — locality gate picks the
     // one near the hint.
     const w = 200, h = 200;
-    const rgb = Buffer.alloc(w * h * 3, 240);
+    const rgb = Buffer.alloc(w * h * 3, 150);
     // Blob A at (50, 50)
     for (let dy = 0; dy < 12; dy++)
       for (let dx = 0; dx < 12; dx++) {
@@ -228,7 +228,7 @@ describe('Phase 307 — co-linearity penalty for text-row siblings', () => {
     // co-linearity context tells us it's text. Phase 307 should
     // downrank each.
     const w = 600, h = 200;
-    const rgb = Buffer.alloc(w * h * 3, 240);
+    const rgb = Buffer.alloc(w * h * 3, 150);
     function placeBlob(cx: number, cy: number) {
       for (let dy = 0; dy < 12; dy++) {
         const lineW = Math.max(1, 12 - dy);
@@ -267,7 +267,7 @@ describe('Phase 307 — co-linearity penalty for text-row siblings', () => {
   it('does not penalise isolated cursors', async () => {
     // A single asymmetric blob with no neighbors — full score retained.
     const w = 200, h = 200;
-    const rgb = Buffer.alloc(w * h * 3, 240);
+    const rgb = Buffer.alloc(w * h * 3, 150);
     for (let dy = 0; dy < 12; dy++) {
       const lineW = Math.max(1, 12 - dy);
       for (let dx = 0; dx < lineW; dx++) {
@@ -285,7 +285,7 @@ describe('Phase 307 — co-linearity penalty for text-row siblings', () => {
     // 4 blobs in a VERTICAL column. Vertical stacking is NOT a text-row
     // pattern (text is horizontal). Penalty should not fire.
     const w = 200, h = 600;
-    const rgb = Buffer.alloc(w * h * 3, 240);
+    const rgb = Buffer.alloc(w * h * 3, 150);
     function placeBlob(cx: number, cy: number) {
       for (let dy = 0; dy < 12; dy++) {
         const lineW = Math.max(1, 12 - dy);
@@ -313,7 +313,7 @@ describe('Phase 307 — co-linearity penalty for text-row siblings', () => {
     // Cursor + a single far-away cluster on the same Y, but 400 px apart
     // — out of letter-spacing range. No penalty.
     const w = 800, h = 200;
-    const rgb = Buffer.alloc(w * h * 3, 240);
+    const rgb = Buffer.alloc(w * h * 3, 150);
     function placeBlob(cx: number, cy: number) {
       for (let dy = 0; dy < 12; dy++) {
         const lineW = Math.max(1, 12 - dy);
