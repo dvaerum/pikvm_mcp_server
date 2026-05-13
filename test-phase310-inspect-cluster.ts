@@ -1,0 +1,91 @@
+/**
+ * Phase 310: inspect the 226-pixel cluster issue.
+ *
+ * In Phase 309, r2_Settings_03 (cursor near Settings target ~(905, 800))
+ * had cluster at (906, 825) with pixels=226 — too large for sizeFit.
+ *
+ * 1. Crop the frame around (906, 825) to a 200x200 view
+ * 2. Save it as a zoomed PNG so I can SEE what's there
+ * 3. Also extract the cluster members to compute the bbox and verify
+ *    the cursor really is merged with icon edge
+ */
+import { promises as fs } from 'fs';
+import path from 'path';
+import sharp from 'sharp';
+import { findClusters, mergeClusters, decodeScreenshot } from './src/pikvm/cursor-detect.js';
+
+const FRAME = './data/phase308-instrumented/2026-05-13_04-29-06/r2_Settings_03.jpg';
+const TARGET = { x: 905, y: 800 };
+const CLUSTER_CENTER = { x: 906, y: 825 };
+const CROP_HALF = 100;
+
+const buf = await fs.readFile(FRAME);
+const decoded = await decodeScreenshot(buf);
+const { width, height, rgb } = decoded;
+console.error(`Frame: ${width}x${height}`);
+
+// Crop around cluster center
+const cropL = Math.max(0, CLUSTER_CENTER.x - CROP_HALF);
+const cropT = Math.max(0, CLUSTER_CENTER.y - CROP_HALF);
+const cropW = Math.min(width - cropL, CROP_HALF * 2);
+const cropH = Math.min(height - cropT, CROP_HALF * 2);
+
+const OUT = './data/phase310-inspect';
+await fs.mkdir(OUT, { recursive: true });
+
+// Save 4x-upscaled crop
+const cropPath = path.join(OUT, 'crop-around-cluster.png');
+await sharp(buf)
+  .extract({ left: cropL, top: cropT, width: cropW, height: cropH })
+  .resize(cropW * 4, cropH * 4, { kernel: 'nearest' })
+  .png()
+  .toFile(cropPath);
+console.error(`Saved crop: ${cropPath}`);
+
+// Compute dark mask + clusters in the cropped region only
+const gray = Buffer.alloc(width * height);
+for (let i = 0; i < width * height; i++) {
+  const o = i * 3;
+  gray[i] = Math.round(rgb[o] * 0.299 + rgb[o + 1] * 0.587 + rgb[o + 2] * 0.114);
+}
+const darkMask = new Array(width * height);
+for (let i = 0; i < width * height; i++) darkMask[i] = gray[i] < 100;
+
+// Build dark-pixel-only visualization for the cropped area (white=dark mask, black=not)
+const darkVizRgb = Buffer.alloc(cropW * cropH * 3);
+for (let dy = 0; dy < cropH; dy++) {
+  for (let dx = 0; dx < cropW; dx++) {
+    const srcIdx = (cropT + dy) * width + (cropL + dx);
+    const dstIdx = (dy * cropW + dx) * 3;
+    const v = darkMask[srcIdx] ? 255 : 0;
+    darkVizRgb[dstIdx] = v; darkVizRgb[dstIdx + 1] = v; darkVizRgb[dstIdx + 2] = v;
+  }
+}
+await sharp(darkVizRgb, { raw: { width: cropW, height: cropH, channels: 3 } })
+  .resize(cropW * 4, cropH * 4, { kernel: 'nearest' })
+  .png()
+  .toFile(path.join(OUT, 'dark-mask.png'));
+console.error(`Saved dark mask: ${path.join(OUT, 'dark-mask.png')}`);
+
+// Find clusters globally then inspect ones near CLUSTER_CENTER
+const clusters = findClusters(darkMask, width, height, 15, 250, rgb, { keepMembers: true });
+const merged = mergeClusters(clusters, 8);
+
+console.error(`\nMerged clusters near (${CLUSTER_CENTER.x},${CLUSTER_CENTER.y}):`);
+const nearby = merged
+  .filter((c) => Math.hypot(c.centroidX - CLUSTER_CENTER.x, c.centroidY - CLUSTER_CENTER.y) <= 100)
+  .sort((a, b) => Math.hypot(a.centroidX - CLUSTER_CENTER.x, a.centroidY - CLUSTER_CENTER.y) - Math.hypot(b.centroidX - CLUSTER_CENTER.x, b.centroidY - CLUSTER_CENTER.y));
+for (const c of nearby.slice(0, 5)) {
+  console.error(`  (${Math.round(c.centroidX)},${Math.round(c.centroidY)}) pixels=${c.pixels} bbox=${c.bboxMinX}-${c.bboxMaxX}, ${c.bboxMinY}-${c.bboxMaxY} (${c.bboxMaxX - c.bboxMinX + 1}x${c.bboxMaxY - c.bboxMinY + 1})`);
+}
+
+// Find clusters before merge — see if there's a small cursor cluster + a separate icon-edge cluster
+console.error(`\nRAW clusters (before merge) near (${CLUSTER_CENTER.x},${CLUSTER_CENTER.y}):`);
+const rawNearby = clusters
+  .filter((c) => Math.hypot(c.centroidX - CLUSTER_CENTER.x, c.centroidY - CLUSTER_CENTER.y) <= 100)
+  .sort((a, b) => Math.hypot(a.centroidX - CLUSTER_CENTER.x, a.centroidY - CLUSTER_CENTER.y) - Math.hypot(b.centroidX - CLUSTER_CENTER.x, b.centroidY - CLUSTER_CENTER.y));
+for (const c of rawNearby.slice(0, 10)) {
+  console.error(`  (${Math.round(c.centroidX)},${Math.round(c.centroidY)}) pixels=${c.pixels} bbox=${c.bboxMinX}-${c.bboxMaxX}, ${c.bboxMinY}-${c.bboxMaxY}`);
+}
+
+process.exit(0);
