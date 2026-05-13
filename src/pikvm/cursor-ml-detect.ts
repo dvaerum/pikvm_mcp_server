@@ -216,6 +216,51 @@ export async function findCursorByMLMultiHint(
 }
 
 /**
+ * Build a multi-hint set for ML cursor detection.
+ *
+ * Always includes `predicted`. Conditionally adds:
+ *  - `beliefPos` if it's inside the frame AND > 200 px from existing hints.
+ *    (v0.5.238 multi-hint included belief unconditionally, but v0.5.239
+ *    diagnostic showed belief can drift off-screen after unlock/home
+ *    swipes when bounds=null — using such a hint clamps the crop to
+ *    the top-left corner of the frame, wasting an inference.)
+ *  - A "home-zone" hint at (frameWidth × 0.625, frameHeight × 0.75) —
+ *    the typical post-navigation cursor location on iPad (right-bottom
+ *    quadrant). Added when > 200 px from all existing hints. v0.5.239
+ *    diagnostic at Books target: cursor was at (1170, 892) with home
+ *    hint giving ML conf 0.968, while predicted-only crops at (640, 800)
+ *    yielded conf 0.143 (random).
+ */
+export function buildMLHints(
+  predicted: { x: number; y: number },
+  frameWidth: number,
+  frameHeight: number,
+  beliefPos?: { x: number; y: number } | null,
+): Array<{ x: number; y: number }> {
+  const hints: Array<{ x: number; y: number }> = [predicted];
+  const minSep = 200;
+  const farFromAll = (p: { x: number; y: number }): boolean =>
+    hints.every((h) => Math.hypot(h.x - p.x, h.y - p.y) > minSep);
+
+  if (
+    beliefPos !== undefined && beliefPos !== null
+    && beliefPos.x >= 0 && beliefPos.x < frameWidth
+    && beliefPos.y >= 0 && beliefPos.y < frameHeight
+  ) {
+    const beliefRounded = { x: Math.round(beliefPos.x), y: Math.round(beliefPos.y) };
+    if (farFromAll(beliefRounded)) hints.push(beliefRounded);
+  }
+
+  const homeHint = {
+    x: Math.round(frameWidth * 0.625),
+    y: Math.round(frameHeight * 0.75),
+  };
+  if (farFromAll(homeHint)) hints.push(homeHint);
+
+  return hints;
+}
+
+/**
  * Drop the cached session. Useful for tests that swap models, or
  * to release memory when ML detection is not actively used.
  */
