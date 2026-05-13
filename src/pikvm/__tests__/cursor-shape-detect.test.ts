@@ -309,6 +309,45 @@ describe('Phase 307 — co-linearity penalty for text-row siblings', () => {
     expect(r!.shapeScore).toBeGreaterThan(0.8);
   });
 
+  it('Phase 311: penalises candidates in dark-cluster-dense regions (icon-internal)', async () => {
+    // Build a frame mimicking an iPad icon's internal dark features:
+    // a 4×3 grid of cursor-sized dark clusters within a 50 px radius
+    // (like gear teeth or icon glyph strokes). All 12 clusters should
+    // get strong radial density penalty.
+    const w = 400, h = 400;
+    const rgb = Buffer.alloc(w * h * 3, 150);
+    function placeBlob(cx: number, cy: number) {
+      for (let dy = 0; dy < 12; dy++) {
+        const lineW = Math.max(1, 12 - dy);
+        for (let dx = 0; dx < lineW; dx++) {
+          const o = ((cy + dy) * w + (cx + dx)) * 3;
+          rgb[o] = 20; rgb[o + 1] = 20; rgb[o + 2] = 20;
+        }
+      }
+    }
+    // Dense grid at top-left (simulating gear teeth)
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 4; col++) {
+        placeBlob(60 + col * 18, 60 + row * 18);
+      }
+    }
+    // Isolated cursor at (300, 300) — far from the dense grid
+    placeBlob(300, 300);
+
+    const denseCand = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 78, y: 78 },
+      expectedNearRadius: 30,
+    });
+    const isoCand = findCursorByShape(rgb, w, h, {
+      expectedNear: { x: 305, y: 305 },
+      expectedNearRadius: 30,
+    });
+    expect(denseCand).not.toBeNull();
+    expect(isoCand).not.toBeNull();
+    // Isolated cursor should outscore the dense-grid member by ≥ 3x.
+    expect(isoCand!.shapeScore).toBeGreaterThan(denseCand!.shapeScore * 3);
+  });
+
   it('does not penalise widely-spaced co-linear candidates (>300 px apart)', async () => {
     // Cursor + a single far-away cluster on the same Y, but 400 px apart
     // — out of letter-spacing range. No penalty.
