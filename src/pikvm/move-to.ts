@@ -44,7 +44,7 @@ import {
 } from './cursor-detect.js';
 import { extractMaskedTemplate } from './seed-template.js';
 import { findCursorByShape } from './cursor-shape-detect.js';
-import { findCursorByML } from './cursor-ml-detect.js';
+import { findCursorByML, findCursorByMLMultiHint } from './cursor-ml-detect.js';
 import {
   DEFAULT_TEMPLATE_DIR,
   LEGACY_TEMPLATE_PATH,
@@ -1844,8 +1844,19 @@ export async function moveToPixel(
       // ground truth (vs heuristic ~10-30 px). If ML returns null or
       // model not loaded, falls through to the existing Phase 299
       // dark+bright shape detector with wiggle-verify.
-      const ml = await findCursorByML(shot.buffer, shot.width, shot.height, {
-        hint: predicted,
+      //
+      // v0.5.238: try MULTIPLE hints (predicted target AND current
+      // cursor-belief position). Phase 314 bench at v0.5.237 showed
+      // Books 10/10 NULL because cursor didn't reach predicted target
+      // (iPad rate-limit) and ML's crop at predicted missed the cursor
+      // still near home. Multi-hint covers both "cursor reached
+      // target" and "cursor stuck near belief" cases.
+      const beliefPos = client.belief?.position;
+      const hints = [predicted];
+      if (beliefPos && Math.hypot(beliefPos.x - predicted.x, beliefPos.y - predicted.y) > 200) {
+        hints.push({ x: Math.round(beliefPos.x), y: Math.round(beliefPos.y) });
+      }
+      const ml = await findCursorByMLMultiHint(shot.buffer, shot.width, shot.height, hints, {
         minConfidence: 0.5,
       });
       if (ml) {
@@ -2299,10 +2310,17 @@ export async function moveToPixel(
             const shapeShot = await client.screenshotKeepingCursorAlive();
             const shapeDec = await decodeScreenshot(shapeShot.buffer);
 
-            // v0.5.237: ML detector PRIMARY at correction-pass too.
-            const mlCorrection = await findCursorByML(
+            // v0.5.238: ML detector PRIMARY at correction-pass too,
+            // with multi-hint (predicted + belief).
+            const correctionBeliefPos = client.belief?.position;
+            const correctionHints = [newPredicted];
+            if (correctionBeliefPos && Math.hypot(correctionBeliefPos.x - newPredicted.x, correctionBeliefPos.y - newPredicted.y) > 200) {
+              correctionHints.push({ x: Math.round(correctionBeliefPos.x), y: Math.round(correctionBeliefPos.y) });
+            }
+            const mlCorrection = await findCursorByMLMultiHint(
               shapeDec.buffer, shapeDec.width, shapeDec.height,
-              { hint: newPredicted, minConfidence: 0.5 },
+              correctionHints,
+              { minConfidence: 0.5 },
             );
             if (mlCorrection) {
               const prox = Math.hypot(mlCorrection.x - newPredicted.x, mlCorrection.y - newPredicted.y);
