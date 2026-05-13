@@ -1,6 +1,6 @@
 {
   "name": "pikvm-mcp-server",
-  "version": "0.5.236",
+  "version": "0.5.237",
   "description": "MCP server for controlling remote machines via PiKVM",
   "main": "dist/index.js",
   "bin": {
@@ -28,6 +28,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "dotenv": "^17.2.3",
+    "onnxruntime-node": "^1.26.0",
     "sharp": "^0.33.0",
     "undici": "^7.19.1"
   },

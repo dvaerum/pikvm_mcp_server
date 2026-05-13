@@ -56,7 +56,13 @@ GAUSSIAN_SIGMA = 2.0  # px in heatmap space
 BATCH_SIZE = 32
 LR = 1e-3
 EPOCHS = 30
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    DEVICE = torch.device("mps")
+else:
+    DEVICE = torch.device("cpu")
+print(f"device: {DEVICE}")
 
 
 class CursorDataset(Dataset):
@@ -64,6 +70,7 @@ class CursorDataset(Dataset):
 
     def __init__(self, root: Path, split: str = "train"):
         self.root = root
+        self.is_train = split == "train"
         labels = []
         for json_path in sorted(root.glob("*.json")):
             if json_path.name == "index.json":
@@ -92,11 +99,13 @@ class CursorDataset(Dataset):
         img = Image.open(img_path).convert("RGB")
         cx, cy = label["cursor"]["x"], label["cursor"]["y"]
 
-        # Crop 256x256 around cursor with random jitter (training only)
-        jitter_x = np.random.randint(-40, 40) if self.training_mode else 0
-        jitter_y = np.random.randint(-40, 40) if self.training_mode else 0
-        # Wait — need to know training vs val. Pass via constructor.
-        # For now, no jitter.
+        # Crop 256x256 around cursor with random jitter on train only
+        if self.is_train:
+            jitter_x = int(np.random.randint(-40, 40))
+            jitter_y = int(np.random.randint(-40, 40))
+        else:
+            jitter_x = 0
+            jitter_y = 0
         crop_cx = cx + jitter_x
         crop_cy = cy + jitter_y
         crop_left = max(0, crop_cx - CROP_SIZE // 2)
