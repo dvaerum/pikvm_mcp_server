@@ -1,5 +1,12 @@
 # cursor-shape-detect — state of the detector at v0.5.224
 
+> **SUPERSEDED 2026-05-13.** This document captures cursor-shape-detect
+> state at v0.5.224 (Phase 276). At v0.5.237 the user directed a pivot
+> to ML-based detection (`src/pikvm/cursor-ml-detect.ts`); the shape
+> detector is now the FALLBACK, not the primary path. For the current
+> architecture see [`ml-detector-state-v245.md`](./ml-detector-state-v245.md)
+> covering Phases 315-318 (v0.5.239 → v0.5.245).
+
 **Last updated:** 2026-05-11 (Phase 276 — proximity gate, +20.8 pp total at near targets)
 
 This document is a single-page reference for the cursor-shape-detect
