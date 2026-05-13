@@ -1958,51 +1958,75 @@ export async function moveToPixel(
     }
   }
 
-  /** Phase 317 (v0.5.241): wiggle-verify an ML detection.
+  /** Phase 317 (v0.5.241/242/243): wiggle-verify an ML detection.
    *
-   *  ML returns position P with confidence C. We emit a small wiggle
-   *  (25, -10 mickeys), re-run ML with the SAME hints, and check if
-   *  the new prediction has moved.
+   *  Test: after emitting wiggle, is the cursor visible at the EXPECTED
+   *  post-wiggle position (initial + emit · ratio)? If yes → real cursor
+   *  (moved with wiggle). If no → static FP (something else was at
+   *  initial; the real cursor is elsewhere).
    *
-   *  - Position moved ≥ 15 px  → real cursor (cursor went with the wiggle)
-   *  - Position moved < 15 px → static FP (icon feature; didn't move)
-   *  - No re-detection         → real cursor moved out of crop (accept)
+   *  Iteration history:
+   *  - v0.5.241: multi-hint re-detection + motion-distance test.
+   *    Fooled when pre/post return different objects (icon vs cursor).
+   *  - v0.5.242: single-hint AT initial + still-there test.
+   *    Fooled when ML conf on icon drops slightly post-wiggle to below
+   *    threshold — code accepted the (wrong) initial position.
+   *  - v0.5.243: single-hint at EXPECTED post-wiggle position. Real
+   *    cursor will be there with wiggle motion; icon static FP will not
+   *    (icon doesn't move, so it's not at the post-wiggle position).
    *
-   *  Always emits inverse wiggle to restore cursor to original position.
-   *  Returns the verified ML result (original detection) or null. */
+   *  Always emits inverse wiggle to restore cursor. */
   async function mlWiggleVerify(
     initial: MLCursorResult,
-    hints: Array<{ x: number; y: number }>,
+    _hints: Array<{ x: number; y: number }>,
   ): Promise<MLCursorResult | null> {
+    void _hints;
     const dxMickeys = 25;
     const dyMickeys = -10;
+    // Use ~1.4 px/mickey as nominal iPad ratio (Phase 192 measurement).
+    const expectedDx = dxMickeys * 1.4;
+    const expectedDy = dyMickeys * 1.4;
+    const expectedPostPos = {
+      x: Math.round(initial.x + expectedDx),
+      y: Math.round(initial.y + expectedDy),
+    };
     try {
       await client.mouseMoveRelative(dxMickeys, dyMickeys);
       await new Promise((r) => setTimeout(r, 80));
       const wiggleShotRaw = await client.screenshot();
-      const reDetect = await findCursorByMLMultiHint(
+      // Hint at expected post-wiggle position. Real cursor will be
+      // there (moved with the wiggle). Static FP (icon) won't — the
+      // icon stays at initial position.
+      const cursorAtExpected = await findCursorByML(
         wiggleShotRaw.buffer,
         wiggleShotRaw.screenshotWidth,
         wiggleShotRaw.screenshotHeight,
-        hints,
-        { minConfidence: 0.5 },
+        { hint: expectedPostPos, minConfidence: 0.5 },
       );
       // Always inverse-wiggle to restore cursor near initial pos
       await client.mouseMoveRelative(-dxMickeys, -dyMickeys);
       await new Promise((r) => setTimeout(r, 80));
 
-      if (!reDetect) {
-        // ML lost the previous "cursor" after the wiggle — most likely
-        // the real cursor moved out of crop or under pointer-effect.
-        // Accept the original detection.
-        return initial;
-      }
-      const motion = Math.hypot(reDetect.x - initial.x, reDetect.y - initial.y);
-      if (motion < 15) {
-        // Static — same position after a 25-mickey x-axis wiggle.
-        // This is the Phase 310 tautology: ML matching an icon feature.
+      if (!cursorAtExpected) {
+        // Nothing high-conf at expected post-wiggle position. The
+        // initial detection was a static FP (icon doesn't move).
         return null;
       }
+      // Distance from cursorAtExpected to expectedPostPos. Real
+      // cursor that moved by the wiggle would be within ~20 px of
+      // expectedPostPos (ratio is approximate; pointer-effect snap
+      // adds noise).
+      const offsetFromExpected = Math.hypot(
+        cursorAtExpected.x - expectedPostPos.x,
+        cursorAtExpected.y - expectedPostPos.y,
+      );
+      if (offsetFromExpected > 30) {
+        // Found something high-conf in the crop but far from expected
+        // position — it's a different feature (e.g. ML found a
+        // neighboring icon). Not the cursor moving with the wiggle.
+        return null;
+      }
+      // Cursor at expected post-wiggle position — real detection.
       return initial;
     } catch {
       return initial;
