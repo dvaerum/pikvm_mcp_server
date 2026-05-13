@@ -1871,7 +1871,7 @@ export async function moveToPixel(
         const TAUTOLOGY_PROX_THRESHOLD = 30;
         let verified: MLCursorResult | null = ml;
         if (mlProx <= TAUTOLOGY_PROX_THRESHOLD) {
-          verified = await mlWiggleVerify(ml, hints);
+          verified = await mlWiggleVerify(ml);
         }
         if (!verified) {
           if (verbose) {
@@ -1958,29 +1958,14 @@ export async function moveToPixel(
     }
   }
 
-  /** Phase 317 (v0.5.241/242/243): wiggle-verify an ML detection.
+  /** Phase 317: reject Phase 310 tautologies in ML detections.
    *
-   *  Test: after emitting wiggle, is the cursor visible at the EXPECTED
-   *  post-wiggle position (initial + emit · ratio)? If yes → real cursor
-   *  (moved with wiggle). If no → static FP (something else was at
-   *  initial; the real cursor is elsewhere).
-   *
-   *  Iteration history:
-   *  - v0.5.241: multi-hint re-detection + motion-distance test.
-   *    Fooled when pre/post return different objects (icon vs cursor).
-   *  - v0.5.242: single-hint AT initial + still-there test.
-   *    Fooled when ML conf on icon drops slightly post-wiggle to below
-   *    threshold — code accepted the (wrong) initial position.
-   *  - v0.5.243: single-hint at EXPECTED post-wiggle position. Real
-   *    cursor will be there with wiggle motion; icon static FP will not
-   *    (icon doesn't move, so it's not at the post-wiggle position).
+   *  After emit (+25, -10 mickeys), re-detect at the expected post-
+   *  wiggle position. Real cursor moved with the wiggle and is there.
+   *  Static FP (icon) didn't move and isn't at the expected position.
    *
    *  Always emits inverse wiggle to restore cursor. */
-  async function mlWiggleVerify(
-    initial: MLCursorResult,
-    _hints: Array<{ x: number; y: number }>,
-  ): Promise<MLCursorResult | null> {
-    void _hints;
+  async function mlWiggleVerify(initial: MLCursorResult): Promise<MLCursorResult | null> {
     const dxMickeys = 25;
     const dyMickeys = -10;
     // Use ~1.4 px/mickey as nominal iPad ratio (Phase 192 measurement).
@@ -2420,7 +2405,7 @@ export async function moveToPixel(
               ? Math.hypot(mlCorrectionRaw.x - newPredicted.x, mlCorrectionRaw.y - newPredicted.y)
               : Infinity;
             const mlCorrection = mlCorrectionRaw && correctionProx <= 30
-              ? await mlWiggleVerify(mlCorrectionRaw, correctionHints)
+              ? await mlWiggleVerify(mlCorrectionRaw)
               : mlCorrectionRaw;
             if (mlCorrection) {
               const prox = Math.hypot(mlCorrection.x - newPredicted.x, mlCorrection.y - newPredicted.y);
