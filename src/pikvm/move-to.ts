@@ -1905,11 +1905,12 @@ export async function moveToPixel(
    *  moved with it. Returns the new position if movement >= 10 px,
    *  null if static FP (didn't move).
    *
-   *  The wiggle (+25 X, −10 Y mickeys, ~38 px expected) is small enough
-   *  not to send the cursor far if it's already on target, but large
-   *  enough to distinguish movement from pixel-level jitter. After the
-   *  wiggle, re-detect around `initialPos + expected delta` with radius
-   *  60. Accept any candidate displaced >= 10 px from initialPos. */
+   *  Phase 300 (v0.5.232) attempt + revert: tried 50/-20 mickey wiggle
+   *  thinking the 25-mickey version was too small to escape pointer-
+   *  effect snap. Live N=20 × 2 showed Settings dropped from 50%
+   *  (Phase 299) to 25% — bigger wiggle pushed cursor too far,
+   *  inverse compensation introduced drift, net worse. Reverted to
+   *  Phase 297/299's 25/-10 amplitude. */
   async function wiggleVerifyCandidate(
     initialPos: { x: number; y: number },
     initialScore: number,
