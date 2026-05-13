@@ -335,6 +335,56 @@ function findAllShapeCandidates(
     candidates[i].shapeScore *= penalty;
   }
 
+  // Phase 311 (v0.5.235): radial cluster-density penalty. iPad app
+  // icons have multiple internal dark features (gear teeth in
+  // Settings, glyph strokes in Books/TV/AppStore, dial marks in
+  // analog clock widget). When the cursor is ABSENT from a frame,
+  // the detector picks an icon-internal feature near the target and
+  // reports a small residual — a false positive that looks like a
+  // successful detection (Phase 310 finding: r2_Settings_03 had no
+  // cursor but production reported "detected at 7 px" because the
+  // gear-tooth pixel passed the filters).
+  //
+  // Distinguishing feature: icon-internal clusters live in
+  // HIGH-CLUSTER-DENSITY neighbourhoods (many similar-sized dark
+  // clusters within 50 px). A real cursor on wallpaper is isolated.
+  //
+  // For each candidate, count other candidate clusters with:
+  //   - centroid within 50 px Euclidean distance
+  //   - pixel count within 0.3× to 3.0× (loose, since gear teeth
+  //     and cursor can have similar sizes)
+  //
+  // Apply factor = exp(-count / 2):
+  //   0 neighbors → 1.00 (isolated cursor)
+  //   1 neighbor  → 0.61 (cursor near a single widget edge)
+  //   2 neighbors → 0.37
+  //   3 neighbors → 0.22
+  //   5 neighbors → 0.08 (deep inside icon, multiple internal features)
+  //
+  // Risk: cursor genuinely on an icon (real success case) also gets
+  // penalty if surrounded by icon-internal clusters. Mitigation: the
+  // penalty is the SAME multiplier for the cursor and the gear-tooth
+  // FP. If both are present, cursor's higher base score (real cursor
+  // shape) preserves the ranking.
+  const densityCounts: number[] = new Array(candidates.length).fill(0);
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    for (let j = 0; j < candidates.length; j++) {
+      if (j === i) continue;
+      const o = candidates[j];
+      const dy = o.centroidY - c.centroidY;
+      const dx = o.centroidX - c.centroidX;
+      if (dx * dx + dy * dy > 50 * 50) continue;
+      const ratio = c.pixels === 0 ? 0 : o.pixels / c.pixels;
+      if (ratio < 0.3 || ratio > 3.0) continue;
+      densityCounts[i]++;
+    }
+  }
+  for (let i = 0; i < candidates.length; i++) {
+    const penalty = Math.exp(-densityCounts[i] / 2);
+    candidates[i].shapeScore *= penalty;
+  }
+
   // Locality gate.
   let pool = candidates;
   if (options.expectedNear) {
