@@ -23,6 +23,7 @@
  * distance. The drag takes ~400 ms end-to-end including HTTP latency.
  */
 
+import sharp from 'sharp';
 import { PiKVMClient, ScreenResolution } from './client.js';
 import { slamToCorner } from './ballistics.js';
 import {
@@ -520,4 +521,62 @@ export async function ipadOpenAppSwitcher(
       'was held; Cmd has now been released which selects the highlighted app. ' +
       'For multi-step switching, use pikvm_key with state=true/false manually.',
   };
+}
+
+/**
+ * Phase 318 (v0.5.244): heuristic lock-screen detection from a
+ * screenshot. Calibrated 2026-05-13 on 8 frames (4 home, 4 lock)
+ * showing clean separation on the dock-strip brightness/stddev:
+ *
+ *   Home screen (dock with icons): mean ≈ 83, stddev ≈ 68
+ *   Lock screen (just wallpaper):  mean ≈ 59, stddev ≈ 43
+ *
+ * The discriminator threshold (stddev = 55) sits cleanly between
+ * the two clusters. Bench scripts use this to detect when the iPad
+ * has re-locked mid-run (the failure mode that contaminated the
+ * Phase 317 v0.5.241 Settings bench).
+ *
+ * Returns true if the dock-strip stddev is low enough to suggest
+ * no app icons (lock-screen wallpaper). Default region targets the
+ * iPad portrait dock area in a 1680×1050 PiKVM capture; callers can
+ * override for other resolutions/orientations.
+ *
+ * Pure data — input is a screenshot buffer, no I/O against the
+ * client. Tests can pin behaviour without spinning up the MCP.
+ */
+export async function isLikelyLockScreen(
+  screenshotBuffer: Buffer,
+  options: {
+    /** Region to analyse. Default targets iPad portrait dock area
+     *  on a 1680×1050 PiKVM frame. */
+    region?: { x: number; y: number; width: number; height: number };
+    /** stddev threshold below which the frame is judged "lock". */
+    minStddev?: number;
+  } = {},
+): Promise<boolean> {
+  const region = options.region ?? { x: 540, y: 950, width: 600, height: 80 };
+  const minStddev = options.minStddev ?? 55;
+  try {
+    const raw = await sharp(screenshotBuffer)
+      .extract({ left: region.x, top: region.y, width: region.width, height: region.height })
+      .raw()
+      .removeAlpha()
+      .toBuffer({ resolveWithObject: true });
+    const data = raw.data;
+    let sum = 0, sumSq = 0;
+    const n = data.length / 3;
+    for (let i = 0; i < data.length; i += 3) {
+      const l = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      sum += l;
+      sumSq += l * l;
+    }
+    const mean = sum / n;
+    const variance = sumSq / n - mean * mean;
+    const stddev = Math.sqrt(Math.max(0, variance));
+    return stddev < minStddev;
+  } catch {
+    // On extract error (frame size mismatch, etc.), default to
+    // "not locked" so callers don't false-trigger recovery.
+    return false;
+  }
 }
