@@ -98,9 +98,11 @@ export class PiKVMClient {
    * during Phase C; this phase ships predict-only.
    *
    * Initialised at (0, 0) with a wide variance (10⁴ ≈ σ=100 px) so
-   * the belief is "I don't know yet" until first reset / observe. No
-   * bounds at construction — set via `setBeliefBounds` once iPad
-   * letterbox is detected.
+   * the belief is "I don't know yet" until first reset / observe.
+   * Wide default bounds (4096×2160) at construction prevent
+   * predict() drift to extreme negative coords during pre-orientation
+   * navigation emits (Phase 315 finding). Tighter iPad letterbox
+   * bounds replace these via `setBeliefBounds`.
    */
   belief: CursorBelief;
 
@@ -121,6 +123,13 @@ export class PiKVMClient {
     this.belief = new CursorBelief({
       initialPosition: { x: 0, y: 0 },
       initialPositionVariance: 10000, // wide — caller should reset on first known position
+      // v0.5.240: wide default bounds prevent belief.predict() from
+      // drifting off-screen during unlock/home swipe emits that fire
+      // before orientation detection's setBeliefBounds call. Phase 315
+      // diagnostic showed belief at (-3051, -4130) after a single
+      // unlock+home cycle. Tighter iPad letterbox bounds replace this
+      // via setBeliefBounds once known.
+      bounds: { x: 0, y: 0, width: 4096, height: 2160 },
     });
   }
 
