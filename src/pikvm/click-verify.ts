@@ -30,7 +30,7 @@ import type { PiKVMClient, MouseButton } from './client.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
 import { detectIpadBoundsFromBuffer } from './orientation.js';
 import { loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './template-set.js';
-import { ipadGoHome } from './ipad-unlock.js';
+import { ipadGoHome, isLikelyLockScreen } from './ipad-unlock.js';
 import { keepCursorAlive } from './cursor-keepalive.js';
 import { slamToCorner } from './ballistics.js';
 
@@ -589,6 +589,29 @@ export async function clickAtWithRetry(
       // Re-throw the dim-screen error since that's the diagnostic we want.
       if ((err as Error).message.includes('screen too dim')) throw err;
     }
+  }
+
+  // Phase 318 (v0.5.245): lock-screen precheck. iPad lock screen has
+  // normal brightness (won't trip the Phase 38 gate) but contains no
+  // interactive elements. Running 4 retries against it wastes ~5 min
+  // and produces tautological "cursor on icon" reports (Phase 310
+  // pattern, see v0.5.241 Settings bench). Phase 318 isLikelyLockScreen
+  // analyses the dock-strip region; when it returns true, throw a
+  // "lock screen" error that Phase 72 auto-recovery (or the operator)
+  // can act on.
+  try {
+    const shot = await client.screenshot();
+    if (await isLikelyLockScreen(shot.buffer)) {
+      throw new Error(
+        `clickAtWithRetry: iPad appears to be on the lock screen ` +
+        `(dock-strip stddev below threshold — no app icons visible). ` +
+        `Run pikvm_ipad_unlock to unlock, then retry the click.`,
+      );
+    }
+  } catch (err) {
+    if ((err as Error).message.includes('lock screen')) throw err;
+    // Other errors (screenshot RPC, sharp extract failure) — let the
+    // main loop surface them.
   }
 
   const attemptHistory: ClickAtWithRetryResult['attemptHistory'] = [];

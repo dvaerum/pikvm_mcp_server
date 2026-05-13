@@ -63,6 +63,16 @@ describe('isLockScreenRecoveryError', () => {
     expect(isLockScreenRecoveryError('')).toBe(false);
   });
 
+  it('Phase 318 (v0.5.245) precheck error string matches', () => {
+    // The new lock-screen precheck added in clickAtWithRetry must
+    // produce a message that triggers Phase 72 auto-recovery.
+    const precheckMsg =
+      'clickAtWithRetry: iPad appears to be on the lock screen ' +
+      '(dock-strip stddev below threshold — no app icons visible). ' +
+      'Run pikvm_ipad_unlock to unlock, then retry the click.';
+    expect(isLockScreenRecoveryError(precheckMsg)).toBe(true);
+  });
+
   it('REGRESSION: collapsing the OR to single-alternative regex must fail', () => {
     // If a refactor narrows the regex to ONLY match "lock screen"
     // (dropping the tool-name fallback), this assertion catches it
