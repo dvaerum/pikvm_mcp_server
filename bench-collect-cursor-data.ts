@@ -175,11 +175,28 @@ for (let i = 0; i < N; i++) {
     const c2 = top2[1];
     const sizeRatio = c1.pixels / Math.max(1, c2.pixels);
 
-    // Determine which is "before" and which is "after" by emit direction.
-    // emit.dx = +20 → cursor moved right → post-emit has larger X.
-    const before = c1.centroidX < c2.centroidX ? c1 : c2;
-    const after = c1.centroidX < c2.centroidX ? c2 : c1;
+    // Determine "before" and "after" by projecting onto the emit
+    // direction. Phase pivot bug fix: previously used X-only comparison
+    // which mislabels Y-axis-rate-limited cases (cursor moved less in
+    // X than expected, more in Y, OR iPad inverted Y mapping). The
+    // projection onto emit direction is rotation-invariant and works
+    // for any emit angle.
+    const emitMag = Math.hypot(emit.dx, emit.dy);
+    const emitDirX = emit.dx / emitMag;
+    const emitDirY = emit.dy / emitMag;
+    const dx21 = c2.centroidX - c1.centroidX;
+    const dy21 = c2.centroidY - c1.centroidY;
+    const projection21 = dx21 * emitDirX + dy21 * emitDirY;
+    // If c2 is "more in emit direction" than c1, c2 is the after.
+    const before = projection21 > 0 ? c1 : c2;
+    const after = projection21 > 0 ? c2 : c1;
     const sep = Math.hypot(after.centroidX - before.centroidX, after.centroidY - before.centroidY);
+    // Also require that the projection signal is strong — if abs(proj)
+    // is < 5 px the two clusters are roughly perpendicular to emit
+    // (not the cursor moving along emit direction). Reject as noise.
+    if (Math.abs(projection21) < 5) {
+      confidence = 'low';
+    }
 
     if (sizeRatio < 2.5 && sep > 5 && sep < 100) {
       // Good signal: two similar-sized clusters in expected direction
