@@ -540,6 +540,14 @@ async function getCachedTemplates(): Promise<CursorTemplate[]> {
  *  Exported for unit tests.
  */
 const CURSOR_BRIGHTNESS_FLOOR = 100;
+
+/** Phase 317 (v0.5.243): proximity threshold below which an ML
+ *  detection is suspect for Phase 310 tautology (icon-feature FP
+ *  reported as cursor on target). Detections within this distance
+ *  of the predicted target are passed through wiggle-verify before
+ *  acceptance. Larger residuals skip the ~700 ms verify overhead
+ *  since they're unlikely to be on-icon FPs. */
+const TAUTOLOGY_PROX_THRESHOLD = 30;
 // Phase 194-B (v0.5.188): also accept dark cursor patterns. The iPad
 // in this user's deployment renders the cursor as DARK (~50-100 px
 // brightness) on a LIGHT teal wallpaper. The original looksLikeCursor
@@ -1859,16 +1867,8 @@ export async function moveToPixel(
       });
       if (ml) {
         const mlProx = Math.hypot(ml.x - predicted.x, ml.y - predicted.y);
-        // Phase 317 (v0.5.241): wiggle-verify suspicious ML detections.
-        // The home-zone multi-hint (Phase 315) lands ML crops on
-        // dock/icon areas, where ML confidently picks icon features
-        // as the cursor when the real cursor is parked elsewhere
-        // (Phase 310 tautology, visually verified at v0.5.240). Only
-        // verify when ML claims cursor is near target (proximity ≤ 30
-        // px) — those are the tautology suspects. Large-residual
-        // detections are more likely real cursor positions far from
-        // target and don't need the wiggle-cost overhead (~700 ms).
-        const TAUTOLOGY_PROX_THRESHOLD = 30;
+        // Phase 317 (v0.5.243): wiggle-verify suspicious ML detections.
+        // See TAUTOLOGY_PROX_THRESHOLD docstring at module top.
         let verified: MLCursorResult | null = ml;
         if (mlProx <= TAUTOLOGY_PROX_THRESHOLD) {
           verified = await mlWiggleVerify(ml);
@@ -2404,7 +2404,7 @@ export async function moveToPixel(
             const correctionProx = mlCorrectionRaw
               ? Math.hypot(mlCorrectionRaw.x - newPredicted.x, mlCorrectionRaw.y - newPredicted.y)
               : Infinity;
-            const mlCorrection = mlCorrectionRaw && correctionProx <= 30
+            const mlCorrection = mlCorrectionRaw && correctionProx <= TAUTOLOGY_PROX_THRESHOLD
               ? await mlWiggleVerify(mlCorrectionRaw)
               : mlCorrectionRaw;
             if (mlCorrection) {
