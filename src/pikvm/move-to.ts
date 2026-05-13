@@ -44,6 +44,7 @@ import {
 } from './cursor-detect.js';
 import { extractMaskedTemplate } from './seed-template.js';
 import { findCursorByShape } from './cursor-shape-detect.js';
+import { findCursorByML } from './cursor-ml-detect.js';
 import {
   DEFAULT_TEMPLATE_DIR,
   LEGACY_TEMPLATE_PATH,
@@ -1837,6 +1838,32 @@ export async function moveToPixel(
     predicted: { x: number; y: number },
   ): Promise<{ pos: { x: number; y: number }; score: number; prox: number } | null> {
     try {
+      // v0.5.237: ML detector PRIMARY. Trained CenterNet-style heatmap
+      // model (ml/cursor-v0.onnx) on 478 self-supervised wiggle-labeled
+      // frames. Phase 312 saved-frame tests showed 3/4 within 7 px of
+      // ground truth (vs heuristic ~10-30 px). If ML returns null or
+      // model not loaded, falls through to the existing Phase 299
+      // dark+bright shape detector with wiggle-verify.
+      const ml = await findCursorByML(shot.buffer, shot.width, shot.height, {
+        hint: predicted,
+        minConfidence: 0.5,
+      });
+      if (ml) {
+        const prox = Math.hypot(ml.x - predicted.x, ml.y - predicted.y);
+        if (verbose) {
+          console.error(
+            `[move-to] ML detect ACCEPTED — (${ml.x},${ml.y}) conf=${ml.confidence.toFixed(3)} prox=${prox.toFixed(0)}`,
+          );
+        }
+        // Score field: report ML confidence as score. Downstream code
+        // uses score for proximity-gating; ML's confidence is in [0,1]
+        // and behaves similarly.
+        return { pos: { x: ml.x, y: ml.y }, score: ml.confidence, prox };
+      }
+      if (verbose) {
+        console.error('[move-to] ML detect returned null (model missing or low confidence); falling back to shape detect');
+      }
+
       // Phase 299 (v0.5.231): try BOTH dark and bright candidates, in
       // descending score order. Wiggle-verify each in turn. The first
       // that passes wins. Previously (Phase 297) only the top candidate
@@ -2271,6 +2298,28 @@ export async function moveToPixel(
           try {
             const shapeShot = await client.screenshotKeepingCursorAlive();
             const shapeDec = await decodeScreenshot(shapeShot.buffer);
+
+            // v0.5.237: ML detector PRIMARY at correction-pass too.
+            const mlCorrection = await findCursorByML(
+              shapeDec.buffer, shapeDec.width, shapeDec.height,
+              { hint: newPredicted, minConfidence: 0.5 },
+            );
+            if (mlCorrection) {
+              const prox = Math.hypot(mlCorrection.x - newPredicted.x, mlCorrection.y - newPredicted.y);
+              currentPos = { x: mlCorrection.x, y: mlCorrection.y };
+              finalDetectedPosition = { ...currentPos };
+              passMode = 'shape';
+              passReason = `ML conf=${mlCorrection.confidence.toFixed(3)} prox=${prox.toFixed(0)} (motion: ${motionFailReason}, template: null)`;
+              templated = true;
+              client.observeCursor?.({ x: currentPos.x, y: currentPos.y }, mlCorrection.confidence);
+              if (verbose) {
+                console.error(
+                  `[move-to] correction pass ${totalPasses + 1}: ML recovered cursor at (${currentPos.x},${currentPos.y}) conf=${mlCorrection.confidence.toFixed(3)} prox=${prox.toFixed(0)}`,
+                );
+              }
+              break;
+            }
+
             // Phase 299 (v0.5.231): try BOTH dark and bright shape
             // candidates, wiggle-verify each, accept first that passes.
             // See tryOpenLoopShapeDetect docstring for the rationale.
