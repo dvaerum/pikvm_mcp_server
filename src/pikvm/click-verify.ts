@@ -15,6 +15,8 @@
  * keeps it pure and testable without any client/network mock.
  */
 
+import { promises as fs } from 'fs';
+import path from 'path';
 import {
   cursorMovedAsExpected,
   decodeScreenshot,
@@ -30,6 +32,7 @@ import { detectIpadBoundsFromBuffer } from './orientation.js';
 import { loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './template-set.js';
 import { ipadGoHome } from './ipad-unlock.js';
 import { keepCursorAlive } from './cursor-keepalive.js';
+import { slamToCorner } from './ballistics.js';
 
 /**
  * Phase 127 — sanity-clamp the live px/mickey ratio reported by
@@ -59,6 +62,79 @@ export function clampPxPerMickeyRatio(
   if (live === undefined || !Number.isFinite(live)) return fallback;
   if (live < min || live > max) return fallback;
   return live;
+}
+
+/**
+ * Phase 305 (v0.5.232): save a screenshot + JSON sidecar each time
+ * cursor detection failed at click time. The frame is exactly what a
+ * future ML cursor detector would want to train on — moveToPixel
+ * returned null, so the algorithm doesn't know where the cursor is
+ * but a human could find it by eye.
+ *
+ * Files land under `data/null-detection-snapshots/{date}_{time}/`.
+ */
+export async function captureNullDetectionEvidence(
+  client: PiKVMClient,
+  target: { x: number; y: number },
+  attempt: number,
+  lastMoveResult: MoveToResult | null,
+): Promise<void> {
+  try {
+    const shot = await client.screenshot();
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+    const dir = path.resolve(process.cwd(), 'data', 'null-detection-snapshots');
+    await fs.mkdir(dir, { recursive: true });
+    const base = `${ts}_t${target.x}-${target.y}_a${attempt}`;
+    await fs.writeFile(path.join(dir, `${base}.jpg`), shot.buffer);
+    const beliefPos = client.belief?.position ?? null;
+    const beliefVar = client.belief?.variance ?? null;
+    const sidecar = {
+      target,
+      attempt,
+      timestampISO: new Date().toISOString(),
+      version: '0.5.232',
+      belief: beliefPos ? { position: beliefPos, variance: beliefVar } : null,
+      moveResult: lastMoveResult
+        ? {
+            predicted: lastMoveResult.predicted,
+            emittedMickeys: lastMoveResult.emittedMickeys,
+            usedPxPerMickey: lastMoveResult.usedPxPerMickey,
+            chunkCount: lastMoveResult.chunkCount,
+            strategy: lastMoveResult.strategy,
+            finalDetectedPosition: lastMoveResult.finalDetectedPosition,
+            finalResidualPx: lastMoveResult.finalResidualPx,
+            passesSinceLastVerification: lastMoveResult.passesSinceLastVerification,
+            bailedToBestPass: lastMoveResult.bailedToBestPass,
+            diagnostics: lastMoveResult.diagnostics,
+          }
+        : null,
+    };
+    await fs.writeFile(path.join(dir, `${base}.json`), JSON.stringify(sidecar, null, 2));
+  } catch (e) {
+    // Capture must never break the click path. Best-effort only.
+    console.error(`[click-verify] failed to capture null-detection evidence: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Phase 305 (v0.5.232): slam cursor to top-left corner + reset belief.
+ * Used as recovery when cursor detection failed and the algorithm
+ * doesn't know where the cursor is. After slam, the cursor is at
+ * (0, 0) (clamped by iPad screen edge), so the next moveToPixel can
+ * plan a fresh emit from a known origin.
+ *
+ * Uses 60ms pace per slamToCorner doc — slow enough for iPadOS to
+ * treat as ordinary pointer movement, not a system gesture.
+ */
+export async function slamUnstick(client: PiKVMClient): Promise<void> {
+  try {
+    await slamToCorner(client, { corner: 'top-left', paceMs: 60 });
+    if (client.belief) {
+      client.belief.reset({ x: 0, y: 0 }, 1.0);
+    }
+  } catch (e) {
+    console.error(`[click-verify] slam-unstick failed: ${(e as Error).message}`);
+  }
 }
 
 export interface ClickVerification {
@@ -213,6 +289,30 @@ export interface ClickAtWithRetryOptions {
    *  detection is reliable enough that null finalDetectedPosition
    *  is rare). Default true. */
   requireVerifiedCursor?: boolean;
+  /** Phase 305 (v0.5.232): when true, save a screenshot + JSON sidecar
+   *  every time `requireVerifiedCursor` triggers a skipped click
+   *  (cursor wasn't verified after the move). These are exactly the
+   *  cases we'd want training data for — frames where detection
+   *  failed and a future ML cursor detector could learn from.
+   *  Saved under `data/null-detection-snapshots/`. Default false. */
+  captureNullDetectionFrames?: boolean;
+  /** Phase 305 (v0.5.232): when true, on `requireVerifiedCursor`
+   *  skips, slam the cursor to a known reference corner (top-left)
+   *  and reset belief before the next retry. The next attempt's
+   *  moveToPixel will plan from (0, 0) instead of a stale belief
+   *  that may have drifted into a snap-zone we can't escape via
+   *  small correction emits. PRO: recovers from "cursor stuck in
+   *  snap-zone we can't see" failure mode. CON: extra latency
+   *  (~500ms) per slam; Phase 45 documented slam-to-edge can trigger
+   *  iPad gestures (mitigated by slamToCorner's 60ms pace).
+   *
+   *  WARNING: NOT validated in clean conditions. Phase 305 bench
+   *  (2026-05-13, Books) observed 4 consecutive slams correlated
+   *  with the iPad entering lock-screen state; root cause not
+   *  isolated. Use only if you have an active iPad-keepalive
+   *  workflow that prevents autolock during the click sequence.
+   *  Default false. */
+  enableSlamUnstickOnNull?: boolean;
   /** Phase 38: minimum mean RGB brightness (0-255) required to even
    *  attempt the click. Live-verified 2026-04-26: an iPad in a dim
    *  display state (mean=29) made every motion-diff probe fail. The
@@ -712,6 +812,16 @@ export async function clickAtWithRetry(
     }
 
     if (requireVerifiedCursor && !cursorVerified) {
+      // Phase 305 (v0.5.232): save the frame for future ML training
+      // data + slam-unstick recovery before the next retry. Both
+      // opt-in via options; defaults preserve pre-Phase-305 behaviour.
+      if (options.captureNullDetectionFrames) {
+        await captureNullDetectionEvidence(client, target, attempt, lastMoveResult);
+      }
+      if (options.enableSlamUnstickOnNull) {
+        await slamUnstick(client);
+      }
+
       // Mark this attempt as a no-click failure. Don't take pre/post
       // screenshots since there's nothing to compare. Synthesise a
       // verification result so callers see the structure they expect.
