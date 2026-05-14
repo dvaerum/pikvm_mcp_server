@@ -1,0 +1,21 @@
+Held-out val: 95 (64 pos / 31 neg)
+
+=== cursor-v1 ===
+  positives n=64  median_dist=2.8px  mean_dist=3.6px
+    det@0.3 = 100.00%
+    det@0.5 = 100.00%
+    det@0.7 = 100.00%
+  negatives n=31  median_conf=0.048  mean_conf=0.120
+    fp@0.3  = 9.68%
+    fp@0.5  = 6.45%
+    fp@0.7  = 6.45%
+
+=== cursor-v0.bad-labels ===
+  positives n=64  median_dist=2.8px  mean_dist=3.8px
+    det@0.3 = 100.00%
+    det@0.5 = 100.00%
+    det@0.7 = 100.00%
+  negatives n=31  median_conf=0.994  mean_conf=0.993
+    fp@0.3  = 100.00%
+    fp@0.5  = 100.00%
+    fp@0.7  = 100.00%
