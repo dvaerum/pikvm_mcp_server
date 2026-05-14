@@ -2,8 +2,10 @@
 Test the trained ONNX cursor detector on UNSEEN Phase 312 frames.
 The Phase 312 frames have ground-truth cursor positions (visually
 verified in tick that produced them).
+
+Run with: python3 ml/test-onnx-on-unseen.py [--model ml/cursor-v1.onnx]
 """
-import sys
+import argparse
 import json
 from pathlib import Path
 import numpy as np
@@ -11,7 +13,15 @@ import onnxruntime as ort
 from PIL import Image
 
 ROOT = Path(__file__).parent.parent
-MODEL = ROOT / "ml" / "cursor-v0.onnx"
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--model",
+    default=str(ROOT / "ml" / "cursor-v1.onnx"),
+    help="Path to ONNX model (default: ml/cursor-v1.onnx)",
+)
+args = parser.parse_args()
+MODEL = Path(args.model)
 
 # Phase 312 frames with visually-confirmed cursors
 TEST_FRAMES = [

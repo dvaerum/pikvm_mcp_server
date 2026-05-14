@@ -23,12 +23,20 @@ import path from 'path';
 import sharp from 'sharp';
 import * as ort from 'onnxruntime-node';
 
-/** Crop dimension (must match training: train-cursor-v0.py CROP_SIZE). */
+/** Crop dimension (must match training: train-cursor-v1.py CROP_SIZE). */
 const CROP_SIZE = 256;
 const HEATMAP_SIZE = 64;
 const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
-const DEFAULT_MODEL = path.resolve(process.cwd(), 'ml', 'cursor-v0.onnx');
+// v0.5.241+: cursor-v1 trained on visually-verified labels with
+// 157 cursor-absent negatives. v0 reported 100% FP rate on
+// cursor-absent val frames (Phase 310 tautology); v1 reports
+// 6.45%. See docs/troubleshooting/2026-05-14-cursor-v1-eval.md.
+// Set PIKVM_ML_MODEL env var (absolute path) to A/B against an
+// alternate ONNX file (e.g. cursor-v0.bad-labels.onnx).
+const DEFAULT_MODEL = process.env.PIKVM_ML_MODEL
+  ? path.resolve(process.env.PIKVM_ML_MODEL)
+  : path.resolve(process.cwd(), 'ml', 'cursor-v1.onnx');
 const DEFAULT_CONFIDENCE_THRESHOLD = 0.5;
 
 let cachedSession: ort.InferenceSession | null = null;
