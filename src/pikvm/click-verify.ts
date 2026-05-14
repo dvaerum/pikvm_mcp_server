@@ -1155,6 +1155,28 @@ export async function clickAtWithRetry(
       await sleepMs(50); // give iPadOS time to apply pointer-effect snap
     }
 
+    // D2a (2026-05-14): opt-in pre-button-down capture. When
+    // PIKVM_PREDOWN_DIR is set, save a screenshot right before the
+    // mouseClick fires. This is the diagnostic for "where was the
+    // cursor at click-issue time?" — the algorithm's understanding
+    // of cursor position the instant the click event is sent.
+    const predownDir = process.env.PIKVM_PREDOWN_DIR;
+    if (predownDir) {
+      try {
+        const predownShot = await client.screenshot();
+        const fs = await import('fs');
+        const path = await import('path');
+        await fs.promises.mkdir(predownDir, { recursive: true });
+        const fname = `predown-${Date.now()}-att${attempt}.jpg`;
+        await fs.promises.writeFile(
+          path.join(predownDir, fname),
+          predownShot.buffer,
+        );
+      } catch {
+        // Ignore capture errors — diagnostic must not break the click.
+      }
+    }
+
     // Phase 145: optional clickDurationMs override. Undefined uses
     // client.mouseClick's built-in 150ms default.
     if (options.clickDurationMs !== undefined) {

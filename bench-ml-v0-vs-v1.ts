@@ -42,11 +42,15 @@ await fs.rm(ROOT, { recursive: true, force: true }).catch(() => undefined);
 await fs.mkdir(ROOT, { recursive: true });
 const LOG = path.join(ROOT, 'results.jsonl');
 
+// D1 fix (2026-05-14): Files coord (1180, 800) was wrong — landed
+// in empty wallpaper to the right of the icon grid. Page-1 Files
+// icon is at approx (1037, 425). Settings/Books were already
+// roughly correct (≤10px off icon center).
 interface Target { name: string; slug: string; x: number; y: number; }
 const TARGETS: Target[] = [
-  { name: 'Settings', slug: 'settings', x: 905, y: 800 },
-  { name: 'Books',    slug: 'books',    x: 640, y: 800 },
-  { name: 'Files',    slug: 'files',    x: 1180, y: 800 },
+  { name: 'Settings', slug: 'settings', x: 905, y: 808 },
+  { name: 'Books',    slug: 'books',    x: 642, y: 808 },
+  { name: 'Files',    slug: 'files',    x: 1037, y: 425 },
 ];
 
 console.error(`variant=${variant} model=${process.env.PIKVM_ML_MODEL ?? '(default cursor-v1)'}`);
