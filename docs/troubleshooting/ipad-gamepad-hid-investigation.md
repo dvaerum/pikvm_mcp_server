@@ -1,3 +1,5 @@
+> ⚠️ **This doc may assert mechanisms now rejected as unverified.** See [REJECTED_CLAIMS.md](REJECTED_CLAIMS.md) — `pointer-effect snap`, `iPad ignores tap`, `dead zone`, `stuck in dock` are hypotheses, not observed facts. Re-verify before quoting.
+
 # iPad gamepad-HID — CLOSED AVENUE (negative result)
 
 **Status (2026-05-08):** **CLOSED.** Live-validated dead end —
