@@ -169,16 +169,56 @@ export async function findCursorByML(
   const peakY = Math.floor(bestIdx / HEATMAP_SIZE);
   const peakX = bestIdx % HEATMAP_SIZE;
   const confidence = 1 / (1 + Math.exp(-bestLogit));
-  if (confidence < minConfidence) return null;
 
   // Heatmap is HEATMAP_SIZE×HEATMAP_SIZE for a CROP_SIZE×CROP_SIZE input.
   // Scale factor = CROP_SIZE / HEATMAP_SIZE = 4.
   const scale = CROP_SIZE / HEATMAP_SIZE;
   const localX = Math.round(peakX * scale + scale / 2);
   const localY = Math.round(peakY * scale + scale / 2);
+  const predictedX = localX + cropLeft;
+  const predictedY = localY + cropTop;
+
+  // 2026-05-14: opt-in capture. When PIKVM_ML_CAPTURE_DIR is set,
+  // save the full-frame JPEG + a sidecar JSON with the model's
+  // prediction. Lets us visually compare live model output to
+  // ground-truth cursor position (the thing we previously assumed
+  // worked live without verification).
+  // Sidecar mirrors data/cursor-training-v0/ schema so saved
+  // frames can be hand-labelled and added to verified.jsonl.
+  const captureDir = process.env.PIKVM_ML_CAPTURE_DIR;
+  if (captureDir) {
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      await fs.promises.mkdir(captureDir, { recursive: true });
+      const stem = `${Date.now()}-${Math.floor(Math.random() * 1e6)
+        .toString().padStart(6, '0')}`;
+      await fs.promises.writeFile(
+        path.join(captureDir, `${stem}.jpg`),
+        jpegBuffer,
+      );
+      const sidecar = {
+        frame_path: path.join(captureDir, `${stem}.jpg`),
+        ml_prediction: { x: predictedX, y: predictedY, confidence },
+        hint: { x: options.hint.x, y: options.hint.y },
+        crop: { left: cropLeft, top: cropTop, size: CROP_SIZE },
+        model_path: modelPath,
+        captured_at: new Date().toISOString(),
+        below_threshold: confidence < minConfidence,
+      };
+      await fs.promises.writeFile(
+        path.join(captureDir, `${stem}.json`),
+        JSON.stringify(sidecar, null, 2),
+      );
+    } catch {
+      // Ignore capture errors — diagnostic must not break detection.
+    }
+  }
+
+  if (confidence < minConfidence) return null;
   return {
-    x: localX + cropLeft,
-    y: localY + cropTop,
+    x: predictedX,
+    y: predictedY,
     confidence,
     crop: { left: cropLeft, top: cropTop },
   };

@@ -1,0 +1,31 @@
+Held-out val: 107 (67 pos / 40 neg)
+
+=== cursor-v2 ===
+  positives n=67  median=2.8px  mean=5.9px
+    det@0.3 = 98.51%
+    det@0.5 = 98.51%
+    det@0.7 = 98.51%
+  negatives n=40  median_conf=0.039  mean_conf=0.101
+    fp@0.3  = 10.00%
+    fp@0.5  = 7.50%
+    fp@0.7  = 7.50%
+
+=== cursor-v1 ===
+  positives n=67  median=2.8px  mean=4.0px
+    det@0.3 = 100.00%
+    det@0.5 = 100.00%
+    det@0.7 = 100.00%
+  negatives n=40  median_conf=0.066  mean_conf=0.252
+    fp@0.3  = 30.00%
+    fp@0.5  = 22.50%
+    fp@0.7  = 17.50%
+
+=== cursor-v0.bad-labels ===
+  positives n=67  median=2.8px  mean=4.3px
+    det@0.3 = 100.00%
+    det@0.5 = 100.00%
+    det@0.7 = 100.00%
+  negatives n=40  median_conf=0.994  mean_conf=0.969
+    fp@0.3  = 100.00%
+    fp@0.5  = 100.00%
+    fp@0.7  = 100.00%
