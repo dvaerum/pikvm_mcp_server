@@ -76,14 +76,19 @@ class, and it has come back via a different path.
 ## What's actually happening
 
 The TRUE correct-element click rate on ~70 px iPad icons is
-likely very close to 0% with iPadOS Pointer Animations ON.
-Cursor positioning fundamentally cannot land within the icon's
-hit-area when the snap-zone effect is misaligning every emit.
+likely very close to 0% with iPadOS Pointer Animations ON. The
+prior framing — "Cursor positioning fundamentally cannot land
+within the icon's hit-area when the snap-zone effect is
+misaligning every emit" — asserts an unverified causal
+mechanism. See REJECTED_CLAIMS.md. The observation (very low
+correct-element rate) is supported by data; the "snap-zone
+effect" cause is hypothesis only.
 
-The Pointer Animations OFF user-side toggle (Phase 194-H) remains
-the only known path to ≥ 90% on small icons. No amount of
-algorithmic tweaking has materially helped, and several attempts
-(Phase 197b among others) actively regressed.
+The Pointer Animations OFF user-side toggle (Phase 194-H) was
+hypothesised to be the path to ≥ 90% on small icons; that
+hypothesis rests on the same unverified "snap-zone" claim. No
+amount of algorithmic tweaking has materially helped, and
+several attempts (Phase 197b among others) actively regressed.
 
 ## What a proper "correct-element HIT" check would look like
 

@@ -29,7 +29,7 @@ The dramatic drops for TV, Settings, and Maps confirm Phase 295's higher numbers
 
 ## Why Settings retained 30% while TV/Maps went to 0%
 
-Hypothesis: Settings is the closest icon to home (1060, 780). The cursor reaches Settings vicinity more reliably (Phase 50 rate-limiting note: distance scales failure rate). When the cursor IS at the Settings icon, motion-diff catches it at the residual 24-27 px range (close to label-text position but real). For TV (290 px from home), Maps area (320 px from home), the cursor barely reaches the locality — most detection attempts fail.
+Hypothesis: Settings is the closest icon to home (1060, 780). The cursor reaches Settings vicinity more reliably (the "Phase 50 rate-limiting" framing — distance scales failure rate — is on the REJECTED_CLAIMS.md list as causation-unproven). When the cursor IS at the Settings icon, motion-diff catches it at the residual 24-27 px range (close to label-text position but real). For TV (290 px from home), Maps area (320 px from home), the cursor barely reaches the locality — most detection attempts fail.
 
 ## What this means for the user's acceptance gate
 
@@ -40,7 +40,7 @@ User's stated gate: "≥4/5 trials within 30 px on diverse cursor positions" = 8
 The honest current state of cursor-shape-detect + click pipeline:
 - Detection layer (cursor-shape-detect) works correctly when cursor is present and not in label-text FP region
 - Wiggle verification eliminates label-text FPs systematically
-- The remaining click-rate failures come from cursor not reaching target (Phase 50 rate-limit, pointer-effect snap, emit chunk loss)
+- The remaining click-rate failures come from cursor not reaching target. (Earlier framing listed "Phase 50 rate-limit, pointer-effect snap, emit chunk loss" as causes; the first two are on the REJECTED_CLAIMS.md list as unverified.)
 
 ## Why this is BETTER than a 95% headline
 
@@ -56,10 +56,10 @@ A 0-30% HONEST rate is dangerous in a different way (worse UX), but:
 
 ## Acceptable next directions (per rule 4, need user direction)
 
-1. **Reduce Motion accessibility setting**: should disable pointer-effect snap. Phase 115 attempted via Spotlight; Phase 117 hit a UI obstacle. Manual physical interaction on the iPad would unblock.
-2. **Phase 50 rate-limit fix**: smaller emit chunks (Phase 65 micro mode) might transport the cursor more reliably to distant targets.
+1. **Reduce Motion accessibility setting**: was hypothesised to disable "pointer-effect snap" (REJECTED_CLAIMS.md: mechanism unverified). Phase 115 attempted via Spotlight; Phase 117 hit a UI obstacle. Manual physical interaction on the iPad would unblock — but whether the setting affects click behaviour we care about is untested.
+2. **Phase 50 emit-throughput fix**: smaller emit chunks (Phase 65 micro mode) might transport the cursor more reliably to distant targets. (Original framing called this a "rate-limit fix"; the rate-limit mechanism is on the REJECTED_CLAIMS.md list as unverified.)
 3. **Cursor-belief recovery**: when wiggle rejects all candidates AND motion-diff fails, the algorithm now correctly returns null. clickAtWithRetry's retry logic could trigger an "unstick" emit (slam-to-known-position) and retry.
-4. **Wiggle amplitude tuning**: 25 mickeys may not always move pointer-snapped cursors. A 50-mickey wiggle might break out of snap and verify more reliably, at the cost of moving the cursor further from target.
+4. **Wiggle amplitude tuning**: 25 mickeys may not always move the cursor when near an icon (earlier framing "pointer-snapped cursors" assumes a mechanism on the REJECTED_CLAIMS.md list). A 50-mickey wiggle might verify more reliably, at the cost of moving the cursor further from target.
 
 Not pursued. Phase 297's wiggle is the right architectural addition; tuning is for a future tick.
 

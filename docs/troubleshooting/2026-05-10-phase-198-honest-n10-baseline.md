@@ -45,14 +45,19 @@ targets). So:
    so adopt anything. Adopts the 258 px match.
 4. cursorVerified now true with residual 258.05.
 5. Click happens at predicted-position (still close to target).
-6. Click misses because target is outside snap-zone of click
-   landing.
+6. Click misses because the cursor isn't actually at the target.
+   (Earlier framing said "outside snap-zone of click landing";
+   that mechanism is unverified — see REJECTED_CLAIMS.md. The
+   simpler explanation: cursor was 258 px away, click landed
+   somewhere else.)
 
 The diagnostic message "All 4 attempts clicked with verified
 cursor but no screen change — likely iPadOS pointer-effect
 snap-zone miss" is WRONG for these trials. The cursor wasn't
 actually at the target; it was on a Calendar/Maps widget feature
-258 px away.
+258 px away. (Separately, the "pointer-effect snap-zone miss"
+hypothesis itself is on the REJECTED_CLAIMS.md list and should
+not be quoted as a confirmed mechanism.)
 
 ## Why Phase 197b regression happened
 

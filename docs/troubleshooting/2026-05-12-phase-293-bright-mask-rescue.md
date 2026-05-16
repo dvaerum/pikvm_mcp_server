@@ -18,7 +18,7 @@ Pixel probe of a 25×25 region around the cursor at (1080, 858) in t05-settled.j
  0% of pixels: brightness > 200
 ```
 
-The iPadOS cursor renders LIGHT when it's in pointer-effect mode (near icons) — interior is white/light-gray with a thin dark outline. Shape-detect's `darkThreshold=100` admits pixels BELOW 100; the cursor's interior at 150-200 is excluded. Without a sufficient-size dark cluster the cursor is **not a candidate**, no matter how good the locality hint or scoring math.
+When the cursor is near icons it renders LIGHT (brightness 150-200) — interior white/light-gray with a thin dark outline. (Earlier framing labelled this the "pointer-effect mode" and treated the snap-to-icon mechanism as observed; that causal claim is on the REJECTED_CLAIMS.md list. The visual observation — light-rendered cursor pixels near icons — is real; the snap mechanism is hypothesis.) Shape-detect's `darkThreshold=100` admits pixels BELOW 100; the cursor's interior at 150-200 is excluded. Without a sufficient-size dark cluster the cursor is **not a candidate**, no matter how good the locality hint or scoring math.
 
 ## The fix
 
@@ -60,7 +60,7 @@ Residuals across 20 trials of v0.5.228 at far target:
 - 2 trials: 64-132 px residual
 - 10 trials: null (no detection)
 
-The 38 px residual is **honest**: the cursor really settles at (~775, 798) due to iPadOS pointer-effect snap. Click rate stays at 0% because the cursor isn't landing on (757, 832); it's snapping to the TV-Settings inter-icon zone. But the detector now SEES the cursor instead of reporting bogus motion-diff false positives.
+The 38 px residual is **honest**: the cursor really settles at (~775, 798) on these trials. Click rate stays at 0% because the cursor isn't landing on (757, 832). (Earlier framing said "due to iPadOS pointer-effect snap, it's snapping to the TV-Settings inter-icon zone"; that mechanism is unverified — see REJECTED_CLAIMS.md. The observation that the cursor consistently lands between two icons is real; the cause is not established.) The detector now SEES the cursor instead of reporting bogus motion-diff false positives.
 
 This is a real improvement in detector honesty — `clickAtWithRetry`'s `maxResidualPx` gate (when set) can now correctly reject these mid-snap landings and force a retry.
 
@@ -73,9 +73,9 @@ This is a real improvement in detector honesty — `clickAtWithRetry`'s `maxResi
 
 ## What this teaches
 
-1. **iPadOS cursor has at least two visual modes.** Over wallpaper: dark arrow. Near icons (pointer-effect): light gray arrow + outline. Shape-detect tuned for one mode is blind to the other.
+1. **iPadOS cursor has at least two visual modes.** Over wallpaper: dark arrow. Near icons: light gray arrow + outline. Shape-detect tuned for one mode is blind to the other. (Earlier framing labelled the second mode "pointer-effect"; the rendering observation stands, but the causal mechanism is unverified — see REJECTED_CLAIMS.md.)
 2. **Phase 291-292's conclusion that "cursor isn't a candidate" was 90% wrong.** The cursor IS a candidate — to the bright-mask pass. Phase 290 cluster-bbox-aware features plus a bright threshold catch it.
-3. **The remaining far-target 0%** is now genuinely an iPadOS pointer-effect snap behavior issue — the cursor reaches the area between TV and Settings and snaps there, not to Books. This is upstream of detection (snap behavior is iPadOS rendering, not our problem to solve in shape-detect). Constructive next step would be Reduce Motion / pointer-effect-disable iPad setting (manual user toggle, per Phase 115-117).
+3. **The remaining far-target 0%** is upstream of shape-detect — the cursor reaches the area between TV and Settings, not Books, and stays there. (Earlier framing called this "an iPadOS pointer-effect snap behavior issue"; that causal claim is on the REJECTED_CLAIMS.md list as unverified.) Whether the Reduce Motion / pointer-effect iPad setting affects this is untested.
 
 ## State at end of phase
 

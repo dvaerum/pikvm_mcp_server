@@ -46,8 +46,8 @@ The 95% headline I was quoting last tick was illusory. The honest hit rate at Se
 
 ## Future improvements (NOT pursued — rule 4)
 
-1. **Cursor convergence**: most failures are now "cursor doesn't reach target" rather than "cursor was lost." This is the Phase 50 input rate-limiting issue plus pointer-effect snap. Needs upstream fix (smaller chunks, multi-attempt retry, or Reduce Motion accessibility setting).
-2. **More aggressive wiggle amplitude**: 25 mickeys may not always move pointer-snapped cursor; bigger may produce better discrimination but takes cursor farther from target.
+1. **Cursor convergence**: most failures are now "cursor doesn't reach target" rather than "cursor was lost." (Earlier framing attributed this to "the Phase 50 input rate-limiting issue plus pointer-effect snap"; both mechanisms are on the REJECTED_CLAIMS.md list as unverified.) Needs upstream fix (smaller chunks, multi-attempt retry, or Reduce Motion accessibility setting).
+2. **More aggressive wiggle amplitude**: 25 mickeys may not always move the cursor when it's near an icon (earlier framing "pointer-snapped cursor" assumes a mechanism on the REJECTED_CLAIMS.md list); bigger may produce better discrimination but takes cursor farther from target.
 3. **Combined motion-diff + shape verification**: cross-check motion-diff results with wiggle too, since motion-diff also returns FPs (Phase 296 trial 5 showed motion at (801, 525) which was wrong).
 
 ## State at end of phase

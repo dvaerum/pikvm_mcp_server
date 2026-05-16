@@ -1,5 +1,31 @@
 > ⚠️ **This doc may assert mechanisms now rejected as unverified.** See [REJECTED_CLAIMS.md](REJECTED_CLAIMS.md) — `pointer-effect snap`, `iPad ignores tap`, `dead zone`, `stuck in dock` are hypotheses, not observed facts. Re-verify before quoting.
 
+> **REJECTED-FRAMING SCOPE (2026-05-16):** this document is the
+> historical troubleshooting log spanning Phases 1-318 and
+> contains dozens of inline references to the now-rejected
+> causal mechanisms below. Inline rewrites would balloon the
+> doc; instead, treat **every** occurrence of these phrases as
+> hypothesis, not observed fact:
+>
+> - "iPadOS pointer-effect" / "pointer-effect snap" /
+>   "pointer-effect's snap-to-icon behavior" / "pointer-effect
+>   heuristic"
+> - "snap zone" / "snap-zone" / "snap-to-icon" / "snap radius" /
+>   "snap deadzone" / "snap geometry"
+> - "iPad ignores the tap" / "tap ignored" at any reported
+>   residual
+> - "rate-limit dead zone" / "Phase 50 rate-limit" as a
+>   confirmed mechanism
+> - "stuck in the dock" / "cursor stuck"
+> - "iPad moves the cursor on its own" / "the iPad did on its
+>   own"
+> - "cursor fade is a real bottleneck"
+>
+> The data points (click rates, residuals, screenshots,
+> bench logs) in this doc are evidence and should be preserved.
+> The causal narratives are not facts. See REJECTED_CLAIMS.md
+> for the authoritative list.
+
 # iPad cursor detection — troubleshooting log
 
 This document captures what we learned debugging the iPad
@@ -261,9 +287,11 @@ callers that want to gate on staleness without the side-effect.
 
 This complements (does not replace) Phase 43 (`preClickWiggleMickeys`)
 and Phase 125 (`preClickApproachMickeys`): those operate at
-button-down time to satisfy iPadOS pointer-effect's "cursor must be
-moving" snap requirement. Keepalive operates at screenshot time to
-satisfy the upstream "cursor must be visible at all" requirement.
+button-down time. (Earlier framing said they "satisfy iPadOS
+pointer-effect's 'cursor must be moving' snap requirement"; that
+mechanism is on the REJECTED_CLAIMS.md list as unverified.)
+Keepalive operates at screenshot time to satisfy the upstream
+"cursor must be visible at all" requirement.
 The two solve different problems and run independently.
 
 ## Phase 186 (2026-04-30, v0.5.176): TL;DR section cleanup — drop version anchors, add dismiss-popup row
@@ -1051,11 +1079,13 @@ No behavior change. 490 tests passing (was 482; +8 new).
 
 Continuation of the Phase 147-149 regression-pinning push. Phase
 125 (v0.5.119) introduced the in-motion click: send one
-directional emit toward target then click WITHOUT settling, so
-iPadOS pointer-effect's snap-to-icon behavior fires while the
-cursor is moving toward the target. The 3 px residual gate
-prevents wasted emits when the cursor is already inside iPadOS's
-snap radius — adding more motion at sub-pixel distance just
+directional emit toward target then click WITHOUT settling.
+(Earlier framing: "so iPadOS pointer-effect's snap-to-icon
+behavior fires while the cursor is moving toward the target";
+that mechanism is on the REJECTED_CLAIMS.md list as unverified.
+The behavior change exists; the causal explanation is
+hypothesis.) The 3 px residual gate prevents wasted emits when
+the cursor is at sub-pixel distance — extra motion there just
 injects acceleration variance noise.
 
 The gate had three subtle conditions inline: `preClickApproachMickeys
@@ -1258,15 +1288,20 @@ chain that delivers this:
 | `pikvm_ipad_launch_app` (keyboard via Spotlight) | **100%** | — |
 | `pikvm_ipad_unlock` | **100%** | — |
 
-**The iPadOS-side ceiling:** synthetic HID clicks via PiKVM's USB
-mouse emulation don't always trigger iPadOS pointer-effect snap on
-home-screen icons even when the cursor is on the icon. This is the
-remaining gap between "cursor positioned correctly" and "Settings
-opens". Workarounds:
+**The iPadOS-side ceiling (unverified causal claim):** synthetic
+HID clicks via PiKVM's USB mouse emulation don't always result in
+the expected app opening when the cursor appears positioned on a
+home-screen icon. (Earlier framing: "don't trigger iPadOS
+pointer-effect snap" / "the iPadOS-side ceiling"; both reference
+mechanisms on the REJECTED_CLAIMS.md list as unverified. The
+observation that clicks fail despite low reported residual is
+real; the cause is not established.) Workarounds:
 
 - `pikvm_ipad_launch_app` for app launches (keyboard, 100% reliable).
 - Phase 141's auto-dismiss for the hidden-popup edge case.
-- Phase 115's user-side Reduce Motion setting (loosens the snap zone).
+- Phase 115's user-side Reduce Motion setting. (Earlier framing
+  "loosens the snap zone" references the rejected mechanism;
+  whether the setting helps for the reasons claimed is hypothesis.)
 
 **For new operators:** if click_at is failing despite cursor on
 target, check for the hidden security popup (Phase 129) — slight

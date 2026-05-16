@@ -20,6 +20,11 @@ hole was visible in the JSONL output. Files-target trial 2:
    screen change — likely iPadOS pointer-effect snap-zone miss"}
 ```
 
+> The `failureReason` string above asserts a "snap-zone miss"
+> cause that is on the REJECTED_CLAIMS.md list as unverified.
+> The observation (no screen change at 239 px reported residual)
+> is real; the causal interpretation is not.
+
 `cursorVerified: true` with residual 239 px (outside the 200 px
 expectedNearRadius). Phase 197's fix in `move-to.ts` correctly
 returned null there — but `click-verify.ts:720` had its own
@@ -29,8 +34,9 @@ returned the 239 px false-positive, Phase 140 found it "closer to
 target" than the moveToPixel-reported predicted position (which was
 worse), and adopted it as the verified cursor location.
 
-Result: misdiagnosed snap-zone miss when really the cursor wasn't
-actually verified — it was a far-away widget feature.
+Result: the cursor wasn't actually verified — it was a far-away
+widget feature. (The "snap-zone miss" diagnostic the older code
+emitted asserts a mechanism on the REJECTED_CLAIMS.md list.)
 
 ## Fix
 
@@ -58,8 +64,9 @@ and `cursorVerified` reflects what moveToPixel reported.
 - Existing 673 tests pass.
 - Failure messages will be more accurate: "click missed but no
   cursor verified" instead of "verified cursor but click didn't
-  register" (the latter is the snap-zone diagnostic which only
-  applies if cursor was ACTUALLY verified at near-target).
+  register". (The latter diagnostic was historically labelled
+  a "snap-zone" miss; that label asserts an unverified mechanism
+  — see REJECTED_CLAIMS.md.)
 
 ## Live measurement (v0.5.194) — REVERTED after measured regression
 

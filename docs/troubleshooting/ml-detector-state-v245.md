@@ -21,9 +21,11 @@ to understand the current detection architecture.
   on the lock screen fails fast (<500 ms) with a clear error that
   Phase 72 auto-recovery catches.
 - **Click rate remains ~0% verifiable target hits.** The detection
-  layer is at its ceiling. The remaining bottleneck is upstream:
-  iPad pointer-effect snap zone + rate-limited emit pipeline.
-  Addressing these needs explicit user direction per past sessions.
+  layer is at its ceiling. The remaining bottleneck is upstream;
+  location not established. (Earlier framing: "iPad pointer-effect
+  snap zone + rate-limited emit pipeline"; both are on the
+  REJECTED_CLAIMS.md list as unverified.) Addressing this needs
+  explicit user direction per past sessions.
 
 ## The detection-honesty stack (5 shipped phases)
 
@@ -74,13 +76,16 @@ clickAtWithRetry
 ## What's still upstream (NOT in detection layer)
 
 - **Click registration**: 5 trials in v0.5.240 multi-target bench had
-  cursor dead-on icon (residual ≤ 20 px verified later as tautologies
-  via Phase 317 v3 — likely 0 trials genuinely had cursor on icon).
-  Even if cursor DOES reach icon, iPad pointer-effect snap zone may
-  consume the tap (Phase 310 finding).
-- **Emit pipeline rate-limit**: iPadOS clamps long emits; cursor
-  doesn't reach far targets. Detection layer correctly reports the
-  large residual; doesn't fix it.
+  cursor reported dead-on icon (residual ≤ 20 px verified later as
+  tautologies via Phase 317 v3 — likely 0 trials genuinely had cursor
+  on icon). Earlier framing said "even if cursor DOES reach icon,
+  iPad pointer-effect snap zone may consume the tap"; that mechanism
+  is on the REJECTED_CLAIMS.md list as unverified.
+- **Emit pipeline**: cursor often doesn't reach far targets. (Earlier
+  framing "iPadOS rate-limit clamps long emits" is on the
+  REJECTED_CLAIMS.md list as unverified — and Phase 301-303 already
+  found production chunks correctly.) Detection layer correctly
+  reports the large residual; doesn't fix it.
 - **iPad re-lock between trials**: ~5 min idle re-locks the iPad.
   `unlockIpad` sometimes can't escape deep lock state (observed
   v0.5.244 bench — `dragPx=1500` failed to recover). May need Touch

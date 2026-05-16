@@ -82,9 +82,11 @@ hope of filtering out clock / wallpaper noise. It does — but:
    past the 5 % threshold without any actual UI launching.
 2. When `moveToPixel` ends with the cursor on the icon and
    then drifts off (Phase 192-D unstick, micro-correction,
-   pointer-effect repulsion), the cursor's *departure* from
-   the verify region between pre and post causes a real
-   pixel change — but the click went elsewhere.
+   or some other mechanism — "pointer-effect repulsion" is
+   an unverified hypothesis, see REJECTED_CLAIMS.md), the
+   cursor's *departure* from the verify region between pre
+   and post causes a real pixel change — but the click went
+   elsewhere.
 
 The fix isn't more detection tuning. The fix is closing the
 gap between "cursor is at target" and "click fires while
@@ -121,8 +123,12 @@ cursor is at target." That's a Phase 194 problem.
 
 ## What Phase 193 did NOT fix
 
-- The end-to-end click pipeline is still bottlenecked at the
-  iPadOS pointer-effect snap-zone level (Phase 111-117).
+- The end-to-end click pipeline is still failing at a small-
+  icon ceiling consistent with Phase 111-117 observations.
+  (Earlier framing attributed this to "iPadOS pointer-effect
+  snap-zone"; that mechanism is unverified — see
+  REJECTED_CLAIMS.md. The observation is real; the cause is
+  not established.)
 - For Files at top-right (1035, 420) the cursor lands at
   ~245 px residual on every retry — the bottom-row icons
   are far away, the page indicator dots are not in this
@@ -141,14 +147,14 @@ Listed in priority order — the user's standing instruction is
 "the most import thing is to make the mouse click on the
 correct coordinates." These are the highest-leverage paths:
 
-1. **Pre-click pointer-effect dwell.** After `moveToPixel`,
-   hover at the target for 300–500 ms (currently
-   `preClickSettleMs = 80` ms) so iPadOS's magnetic snap
-   captures the cursor onto the icon. Risk: free-time at
-   target lets system auto-hide the cursor; combine with
-   `keepCursorAlive`. Expected lift: meaningful, since
-   most "near miss" residuals are 20–60 px which is well
-   within the icon's snap radius.
+1. **Pre-click dwell.** After `moveToPixel`, hover at the
+   target for 300–500 ms (currently `preClickSettleMs = 80`
+   ms). Original framing assumed "iPadOS's magnetic snap
+   captures the cursor onto the icon"; that mechanism is
+   unverified (REJECTED_CLAIMS.md). The dwell may still help
+   for unrelated reasons (cursor visibility, click pipeline
+   timing). Risk: free-time at target lets system auto-hide
+   the cursor; combine with `keepCursorAlive`.
 2. **Adaptive verify region**. Compute the window as
    `target_region − last_known_cursor_region` so cursor-pixel
    drift across the boundary doesn't trip `screenChanged`.

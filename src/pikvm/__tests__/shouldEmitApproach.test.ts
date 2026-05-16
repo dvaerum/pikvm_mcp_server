@@ -2,12 +2,14 @@
  * Phase 150 — regression tests for shouldEmitApproach.
  *
  * Phase 125 (v0.5.119) introduced the in-motion click: send one
- * directional emit toward target then click WITHOUT settling, so
+ * directional emit toward target then click WITHOUT settling.
+ * Hypothesis (unverified — see docs/troubleshooting/REJECTED_CLAIMS.md):
  * iPadOS pointer-effect's snap-to-icon behavior fires while the
- * cursor is moving. The 3 px residual gate prevents wasted emits
- * when the cursor is already inside iPadOS's snap radius (≤ 3 px
- * from target) — adding more motion at sub-pixel distance just
- * injects acceleration noise.
+ * cursor is moving. That causal mechanism is on the rejected
+ * list; the behavior change in this code path is real, the
+ * mechanism is hypothesis. The 3 px residual gate prevents
+ * wasted emits when the cursor is already at sub-pixel distance
+ * — extra motion there just injects acceleration noise.
  *
  * Pin the gate so a future "let's tighten this to 1 px for
  * precision" or "drop this gate, more motion is better" doesn't

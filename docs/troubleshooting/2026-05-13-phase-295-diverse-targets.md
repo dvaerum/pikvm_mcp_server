@@ -32,7 +32,7 @@ Distance from home (~1060, 780) to each target:
 - TV (773, 810): 289 px → 60%
 - Books (642, 810): **419 px** → 15%
 
-Click rate scales inversely with traversal distance — consistent with Phase 50's documented input rate-limiting.
+Click rate scales inversely with traversal distance. (Earlier framing said "consistent with Phase 50's documented input rate-limiting"; the rate-limit causal claim is on the REJECTED_CLAIMS.md list as unverified. The distance-vs-success correlation is real; the rate-limit mechanism is hypothesis.)
 
 ## Acceptance gate result
 
@@ -45,13 +45,13 @@ That said: Phase 294 produced a real improvement at the EASIEST target — histo
 
 ## Why detection improvement plateaus at Books target
 
-Detection is necessary but not sufficient. The pipeline is: emit → cursor moves → detect → correct. Phase 294 made detect reliable. But for the cursor to ever LAND near Books target, the emit must transport it ~419 px from home. With rate-limiting eating chunks, the cursor often stops 100-300 px short, and the correction-pass emit has the same rate-limiting issue.
+Detection is necessary but not sufficient. The pipeline is: emit → cursor moves → detect → correct. Phase 294 made detect reliable. But for the cursor to ever LAND near Books target, the emit must transport it ~419 px from home. Observed pattern: cursor often stops 100-300 px short. (Earlier framing called this "rate-limiting eating chunks"; the rate-limit causal claim is on the REJECTED_CLAIMS.md list as unverified.)
 
 ## Constructive next directions (NOT pursued — need user direction per rule 4)
 
 1. **Phase 50 follow-up**: smaller emit chunks (per Phase 65 micro-mode) on long-traversal targets. Trade emit time for more reliable transport. Likely solves Books/TV.
 2. **Multi-attempt convergence**: when post-correction residual stays > 50 px across 3+ passes, slam-restart from a different start position.
-3. **Reduce Motion accessibility setting**: still unmanaged (Phase 115/117 attempted, hit-area asymmetry blocked it). Manual iPad-side toggle would change pointer-effect-snap behavior, potentially help.
+3. **Reduce Motion accessibility setting**: still unmanaged (Phase 115/117 attempted, hit-area asymmetry blocked it). Manual iPad-side toggle was hypothesised to change "pointer-effect-snap behavior" (mechanism on the REJECTED_CLAIMS.md list as unverified); whether the toggle changes anything we care about is untested.
 4. **Per-target tuning**: log known good landing zones; aim emits at icon-centers known to snap-attract.
 
 ## State at end of phase

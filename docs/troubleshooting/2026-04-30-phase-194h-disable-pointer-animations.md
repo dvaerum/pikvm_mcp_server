@@ -1,8 +1,19 @@
 # Phase 194-H — DISABLE iPadOS Pointer Animations to break the 50 % click ceiling
 
+> ⚠️ **REJECTED FRAMING.** This doc's core premise — that "the
+> snap-zone behavior" is the cause of the ~50–60 % click
+> ceiling — is on the REJECTED_CLAIMS.md list as an unverified
+> causal claim. The Apple-documented "Pointer Animations"
+> setting is a real iPadOS preference; disabling it may still
+> help for unrelated reasons. But the doc's argument that the
+> animation feature is the mechanism behind Phase 111's
+> ceiling is hypothesis, not observation. Treat every
+> "snap-zone" assertion in this doc as unverified.
+
 **TL;DR.** Web research surfaced the iPadOS user-side setting
-that controls the snap-zone behavior responsible for Phase 111's
-"small icon ~50-60 % per attempt" ceiling. The setting is at
+that the doc's author hypothesised was responsible for Phase
+111's "small icon ~50-60 % per attempt" ceiling. The causal
+link is unverified (see REJECTED_CLAIMS.md). The setting is at
 **Settings > Accessibility > Pointer Control > Pointer
 Animations** — when *off*, the cursor stops snapping onto
 nearby UI elements. With this disabled, clicks land where the

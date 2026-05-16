@@ -1,13 +1,16 @@
 # Phase 194-C — preClickApproachMickeys A/B (NEGATIVE result)
 
-**TL;DR.** Hypothesis: bumping `preClickApproachMickeys` from
-10 → 20 would give iPadOS pointer-effect a clearer
-"moving-into-icon" velocity signal at click time, lifting click
-rate. Result: **the opposite — approach=20 was 80 % vs 90 % for
-approach=10** (5 trials × 2 targets each). Plus one approach=20
-trial visually opened **Firefox in the dock** at residual = 5 px
-algorithm-reported — i.e. the click landed ~360 px from the
-algorithm's claimed cursor position. Default stays at 10.
+> ⚠️ **This doc may assert mechanisms now rejected as unverified.** See [REJECTED_CLAIMS.md](REJECTED_CLAIMS.md) — `pointer-effect snap`, `snap-zone`, `iPad ignores tap`, `dead zone`, `stuck in dock` are hypotheses, not observed facts. Re-verify before quoting.
+
+**TL;DR.** Hypothesis (unverified, see REJECTED_CLAIMS.md):
+bumping `preClickApproachMickeys` from 10 → 20 would give iPadOS
+pointer-effect a clearer "moving-into-icon" velocity signal at
+click time, lifting click rate. Result: **the opposite —
+approach=20 was 80 % vs 90 % for approach=10** (5 trials × 2
+targets each). Plus one approach=20 trial visually opened
+**Firefox in the dock** at residual = 5 px algorithm-reported —
+i.e. the click landed ~360 px from the algorithm's claimed
+cursor position. Default stays at 10.
 
 ## Setup
 
@@ -50,14 +53,17 @@ target, but the actual click event fires at PiKVM's internal
 cursor position.
 
 If this hypothesis is right, the fix is on the relative-mouse
-emit-tracking side, not on velocity tuning or pointer-effect
-hacks.
+emit-tracking side, not on velocity tuning or any "pointer-effect"
+mechanism (which itself is an unverified hypothesis, see
+REJECTED_CLAIMS.md).
 
 ## What this rules out
 
-- Phase 143's premise (cursor velocity drives snap-zone
-  engagement) is not the missing factor at the documented
-  reliability ceiling. Bumping velocity made things worse.
+- Phase 143's premise (cursor velocity drives "snap-zone"
+  engagement — itself an unverified mechanism, see
+  REJECTED_CLAIMS.md) is not the missing factor at the
+  documented reliability ceiling. Bumping velocity made things
+  worse.
 - preClickApproachMickeys default of 10 is correct. Don't ship
   the bump.
 

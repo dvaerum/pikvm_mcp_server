@@ -414,10 +414,11 @@ USB-C input.
 
 **Implications for this project:**
 
-- HID emit timing under undervoltage may be jittery. iPadOS
-  pointer-effect snap-zone is sensitive to emit velocity (Phase
-  143). If the Pi is throttled, fast emits may arrive
-  desynchronized — could explain part of the click-rate
+- HID emit timing under undervoltage may be jittery. (Earlier
+  framing: "iPadOS pointer-effect snap-zone is sensitive to emit
+  velocity"; that mechanism is on the REJECTED_CLAIMS.md list as
+  unverified.) If the Pi is throttled, fast emits may arrive
+  desynchronized — could be a contributor to the click-rate
   variance Phase 111+ documented.
 - Screenshot capture latency may be elevated under throttle.
   This affects motion-diff (relies on time-aligned pre/post

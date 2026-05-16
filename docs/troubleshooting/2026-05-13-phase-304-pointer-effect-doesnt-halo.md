@@ -1,7 +1,18 @@
 # Phase 304 — pointer-effect doesn't create a detectable halo
 
+> ⚠️ **REJECTED FRAMING.** This doc is entirely framed around
+> "iPadOS pointer-effect" / "pointer-effect snap" — both on the
+> REJECTED_CLAIMS.md list as unverified mechanisms. The pixel-
+> diff data and emit-displacement measurements below are real
+> evidence and worth keeping. But the doc's hypothesis-testing
+> language ("snap pulls cursor to icon edge", "pointer-snap
+> mode is light gray", "cursor decelerates as it gets close to
+> an icon's snap zone") all asserts the snap mechanism as
+> observed. It is not. Treat every "pointer-effect" /
+> "snap-zone" / "snap-pull" reference as hypothesis.
+
 **Date:** 2026-05-13
-**Status:** Diagnostic. The "pointer-effect halo" detector idea is dead.
+**Status:** Diagnostic. The "pointer-effect halo" detector idea is dead. (Note: the absence of a halo doesn't disconfirm or confirm a snap mechanism — both are now off the table as established facts.)
 
 ## The user picked "Detect pointer-effect-snap icon outline"
 
@@ -25,9 +36,9 @@ The diff images show:
 
 ## The verdict
 
-**iPadOS pointer-effect does NOT highlight, halo, or visibly change the icon when cursor approaches.** There is no halo signature to detect.
+**The icon's pixels don't visibly change when the cursor approaches.** There is no halo signature to detect.
 
-The pointer-effect that I'd been blaming for failures is just the cursor itself changing shape (light-gray pointer-snap form, Phase 293's case) when over an icon. Phase 293 partially handles this via brightThreshold.
+(Earlier framing said this proves "the pointer-effect I'd been blaming is just the cursor itself changing shape, light-gray pointer-snap form". That's a reinterpretation of the same unverified mechanism, not a new finding. See REJECTED_CLAIMS.md. The observation that the cursor sometimes renders light gray near icons is real; calling it "pointer-snap form" assumes a mechanism we have not verified.)
 
 ## Bonus finding: pointer-acceleration is non-linear
 
@@ -57,19 +68,19 @@ Returning to last tick's option set:
 Going back to first principles with what I now know:
 
 - **Cursor reliably reaches the target area** when emits are chunked (production does this correctly)
-- **Cursor lands at icon EDGE, not center** — pointer-snap pulls it to a stable snap position which may or may not be the icon's geographic center
-- **Cursor in snap mode is light gray** — Phase 293 brightThreshold partially handles
-- **Cursor's actual position has high natural variance** — same emit produces ±20 px variation due to iPad rendering pipeline
+- **Cursor lands at icon EDGE, not center** in observation. (Earlier framing: "pointer-snap pulls it to a stable snap position"; that mechanism is on the REJECTED_CLAIMS.md list as unverified.)
+- **Cursor sometimes renders light gray near icons** — Phase 293 brightThreshold partially handles. (Earlier label "snap mode" assumes a mechanism on the REJECTED_CLAIMS.md list.)
+- **Cursor's actual position has high natural variance** — same emit produces ±20 px variation
 
 The Settings 30-50% click rate is the system reliably landing the cursor **somewhere in the Settings vicinity** ~50% of the time, then the detector correctly identifying that position ~50% of the time. The compounding gives the band.
 
-For TV/Books at 0-15%: the cursor doesn't land in the target's vicinity reliably because pointer-acceleration changes mid-traversal (cursor decelerates as it gets close to an icon's snap zone, "sticking" before reaching the next icon over).
+For TV/Books at 0-15%: the cursor doesn't land in the target's vicinity reliably. (Earlier explanation — "pointer-acceleration changes mid-traversal because cursor decelerates as it gets close to an icon's snap zone" — assumes the snap mechanism on the REJECTED_CLAIMS.md list. The observation is real; the cause is not established.)
 
 ## State at end of phase
 
 - v0.5.231 unchanged. No code change.
 - Pointer-effect halo detection idea retired.
-- The iPad's per-emit pointer-acceleration profile is non-linear and target-snap-aware — not something cursor-shape-detect can fix.
+- The iPad's per-emit pointer-acceleration profile is non-linear in the bench data. (Earlier framing "target-snap-aware" assumes a mechanism on the REJECTED_CLAIMS.md list.) Not something cursor-shape-detect can fix.
 - 723/723 tests pass.
 
 ## Where to go next
