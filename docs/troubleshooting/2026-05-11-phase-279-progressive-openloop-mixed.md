@@ -166,8 +166,10 @@ This implies the real failure mode is:
 
 1. Chunked emits move the cursor close to target (within ~70 px by pass 4).
 2. Subsequent emits push the cursor into a state where it disappears
-   — possibly edge-clamped, possibly behind a dock-icon snap zone,
-   possibly faded under a stationary-cursor timeout.
+   — possibly edge-clamped, possibly faded under a stationary-cursor
+   timeout, or some other mechanism we have not verified. (Older
+   framing included "dock-icon snap zone" here; that mechanism is on
+   the REJECTED_CLAIMS.md list as unverified.)
 3. The detector then locks onto whatever wallpaper/icon pattern looks
    cursor-ish in the final frame and reports an honest-looking but
    wrong residual.

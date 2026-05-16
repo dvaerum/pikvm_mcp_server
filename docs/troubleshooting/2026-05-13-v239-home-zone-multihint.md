@@ -10,7 +10,9 @@
 
 The v0.5.238 multi-hint integration passed `belief.position` as a
 second crop hint to the ML detector, intending to cover the case
-where iPad rate-limits a long emit and the cursor stays near home.
+where the cursor stays near home after a long emit. (Earlier
+framing "iPad rate-limits a long emit" is on the
+REJECTED_CLAIMS.md list as unverified.)
 
 Live diagnostic at v0.5.238 showed `belief.position = (-3051, -4130)`
 — **wildly off-screen** — after a routine `unlockIpad → ipadGoHome`
@@ -86,14 +88,18 @@ T8: detected=(777,668) residual=190px attempts=4 click=✗
 **Detection layer: 8/8 (100%) — full recovery from 0/10 NULL.**
 **Click layer: 2/8 (25%) — first non-zero rate on Books at home.**
 
-The click failures still trace to two unresolved iPad bottlenecks:
+The click failures still trace to two unresolved patterns
+(original framing called both "iPad bottlenecks"; the iPad-side
+attribution is on the REJECTED_CLAIMS.md self-stop list):
 - Residual >100 px on most trials: cursor reaches near-target but
-  iPad pointer-effect snap zone consumes the click.
-- Some trials show consistent residual 113 px → snap-zone consistently
-  parking cursor in the same wrong spot.
+  click doesn't register. (Earlier framing "iPad pointer-effect
+  snap zone consumes the click" is on the REJECTED_CLAIMS.md list
+  as unverified.)
+- Some trials show consistent residual 113 px. (Earlier framing
+  "snap-zone consistently parking cursor in the same wrong spot"
+  is on the REJECTED_CLAIMS.md list as unverified.)
 
-These are upstream of detection. The detection fix unblocks all
-future work on iPad-side click protocols.
+These are upstream of detection. The cause is not yet established.
 
 ## Files modified
 
@@ -112,9 +118,10 @@ future work on iPad-side click protocols.
   improvement only for cases where cursor doesn't reach target
   (i.e. Books-like pattern). Settings cursor reached target at
   v0.5.238 (residual 13-17 px), so v0.5.239 won't change those.
-- The 25% click rate on Books is bounded by iPad pointer-effect
-  snap zone. Next bottleneck: click protocol experiments need
-  user direction.
+- The 25% click rate on Books has some unknown upstream limit.
+  (Earlier framing "bounded by iPad pointer-effect snap zone" is
+  on the REJECTED_CLAIMS.md list as unverified.) Next experiment:
+  click protocol experiments need user direction.
 - belief drift root cause (no bounds during unlock/home) still
   exists. Defended at the multi-hint layer; not fixed at the
   belief layer. Future work could move the clip-and-inflate into

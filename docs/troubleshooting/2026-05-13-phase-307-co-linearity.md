@@ -105,8 +105,11 @@ Full suite: 727/727 pass.
 
 Ran `test-phase307-bench-with-unlock.ts` (40 trials total) against
 PiKVM at v0.5.233. Re-unlocks iPad between trials when home-swipe
-fails, so iPad-lock confound is mitigated (the bench DID re-unlock
-mid-run after pointer-effect gestures relocked the iPad).
+fails, so iPad-lock confound is mitigated. (Earlier framing said
+"pointer-effect gestures relocked the iPad mid-run"; the
+pointer-effect causal mechanism is on the REJECTED_CLAIMS.md list
+as unverified. The relock observation is real; the cause is not
+established.)
 
 ### Aggregate (success = `screenChanged == true`)
 
@@ -132,20 +135,25 @@ click lands on an adjacent icon. Classifying:
 | residual > 100 px AND no screenChanged (**cursor missed, click also missed**) | 11/40 |
 | detection null (residual=n/a, no screenChanged)             | 5/40 |
 
-**The 12 "cursor correct, click ignored" cases are the bottleneck.**
-The cursor was placed within 50 px of the icon center — *on the
-icon* — and the iPad did not register the click. Examples:
+**The 12 "cursor correct, click ignored" cases were the prior
+framing's headline bottleneck.** Algorithm-reported residual was
+within 50 px of the icon center — and the iPad did not register
+the click. Examples:
 - Settings r2.2: residual 7px, screenChanged=false
 - AppStore r1.5: residual 13 px, screenChanged=false
 - Settings r1.1: residual 19 px, screenChanged=false
 - Settings r1.3: residual 27 px, screenChanged=false
 - ... 8 more identical cases
 
-A `pikvm_mouse_click_at` at the exact pixel of the cursor (verified
-by detection) is the iPad's only input — yet iPadOS treats it as a
-non-tap. This matches Phase 111-117 findings: iPadOS pointer-effect
-snap zone consumes single mouse clicks when the cursor is "snapped"
-to an icon's hit area but not "selected" as the target.
+> NOTE 2026-05-16: The phrase "iPad ignores tap at residual=Npx"
+> is on the REJECTED_CLAIMS.md list — it derives from the
+> detector's own residual self-report, which is tautological
+> (the same detector that has high FP rate on cursor-absent
+> frames). The 12 cases above show low REPORTED residual; that
+> does not establish the cursor was visually on the icon. The
+> "iPadOS pointer-effect snap zone consumes single mouse clicks"
+> framing below is also on the REJECTED_CLAIMS.md list. Keep
+> the data; do not quote the causal interpretation.
 
 ### Verdict
 
@@ -153,8 +161,11 @@ Phase 307 measurably improves detection on saved frames (replay
 shows dock features dropped 70-96%, "Select" letters would be
 similarly penalised in the Phase 306 frames). But the live bench
 shows **the genuine click rate is the same as the documented
-v0.5.231 baseline (~10%)**, because the bottleneck is iPad-side
-click registration, not detection.
+v0.5.231 baseline (~10%)**. (Earlier framing: "because the
+bottleneck is iPad-side click registration"; "the bottleneck is
+iPad-side" is on the REJECTED_CLAIMS.md self-stop list. The
+observation that detection improvement didn't lift click rate is
+real; locating the bottleneck on the iPad side is unverified.)
 
 ### Ship verdict (per Phase 279 gate)
 
@@ -179,4 +190,5 @@ risk of regression.
   becomes top-1 when there are no other candidates — the lock-screen
   pathway is upstream (iPad needs to be unlocked first).
 - Pointer-effect snap, hot-corner gestures, and rate-limit handling
-  are separate failure modes — not addressed here.
+  — the first and third are on the REJECTED_CLAIMS.md list as
+  unverified mechanisms — are not addressed here.

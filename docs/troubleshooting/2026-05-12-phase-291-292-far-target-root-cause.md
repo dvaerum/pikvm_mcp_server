@@ -41,33 +41,41 @@ Visually inspected post-frames:
 
 **Zero of 10 settled-frame shape-detect calls found the real cursor.**
 
-## Root cause
+## Root cause (RECLASSIFIED — both proposed causes are unverified hypotheses)
 
-The cursor often **barely moves** on the far-target trajectory. Two compounding mechanisms:
+> NOTE 2026-05-16: This section's framing rests on two
+> mechanisms now on the REJECTED_CLAIMS.md list — "input
+> rate-limiting" as a confirmed cause and "iPad pointer-effect
+> snap." The bench observations (cursor barely moves; detector
+> picks wrong clusters) are real evidence. The mechanisms below
+> are hypotheses the author asserted as fact; do not quote them
+> as established.
 
-1. **Input rate-limiting.** Phase 50 documented that PiKVM's emit rate is capped; large chunked moves lose mickeys. The far target needs ~300 px of motion; many trials end with the cursor only ~25 px from home.
-2. **iPad pointer-effect snap.** When the cursor approaches an app icon (Settings at (905, 810), TV at (773, 810)), iPadOS "snaps" the cursor to the icon center and morphs its appearance — no longer a dark arrow but a faint outline around the icon. This visually destroys the cluster shape-detect depends on.
+The cursor often **barely moves** on the far-target trajectory. Two hypothesised mechanisms (both unverified):
+
+1. **Input rate-limiting (hypothesis).** Phase 50 documented a pattern in emit data. The pattern is real; the causal claim "PiKVM's emit rate is capped, large chunked moves lose mickeys" is on the REJECTED_CLAIMS.md list as unproven.
+2. **iPad pointer-effect snap (hypothesis).** Original framing: when the cursor approaches an app icon (Settings at (905, 810), TV at (773, 810)), iPadOS "snaps" the cursor to the icon center and morphs its appearance. This causal mechanism is on the REJECTED_CLAIMS.md list — never directly observed.
 
 When the cursor:
-- Barely moves (rate-limit / snap-back), motion-diff catches some transient animation (widget pixel change, pointer-effect morph) and reports a false position 100-330 px from the cursor's true location.
-- Settles in pointer-effect mode, shape-detect can't find the morphed-cursor cluster and instead locks onto the nearest cursor-shaped dark feature — typically dock-row icon-label text at (783, 961) on this iPad layout.
+- Barely moves (cause unknown), motion-diff catches some transient animation (widget pixel change, screen-update artefact) and reports a false position 100-330 px from the cursor's true location.
+- Settles somewhere we don't predict, shape-detect can't find the cursor cluster and instead locks onto the nearest cursor-shaped dark feature — typically dock-row icon-label text at (783, 961) on this iPad layout.
 
-Belief.position is now wrong (was updated by the false motion-diff reading). The locality gate now centers on the wrong place. shape-detect, even with its full Phase 290 improvements, has no path to the real cursor because the cursor is geographically far from the locality center, AND it's visually distorted by pointer-effect.
+Belief.position is now wrong (was updated by the false motion-diff reading). The locality gate now centers on the wrong place. shape-detect, even with its full Phase 290 improvements, has no path to the real cursor because the cursor is geographically far from the locality center.
 
 ## Why Phase 290's improvements didn't help
 
 Phase 290 made shape-detect's scoring more principled — the clock-FP score dropped 74%. **But** the 7/10 dock-FP picks in Phase 292 score 0.54, the clock-FP picks score 2.5-3.0, both well above any plausible cursor score in the 400-radius locality from the (wrong) belief position. The cursor's true cluster:
 - Is outside the 400-radius locality (when belief drifted to dock area)
-- OR is visually a pointer-effect morph, not an arrow (when cursor is snapped to icon)
+- OR is visually morphed in some way we don't model (the "pointer-effect snap morph" framing is unverified — see REJECTED_CLAIMS.md)
 
 The detector can't pick a candidate that isn't a candidate.
 
 ## Why this isn't a `cursor-shape-detect.ts` bug
 
 The detector is doing the right thing: find the best dark-cluster candidate within the locality gate. The failures are upstream:
-- Input rate-limiting → cursor doesn't reach target
+- Input rate-limiting (hypothesis, REJECTED_CLAIMS.md) → cursor doesn't reach target
 - Belief drift from motion-diff false positives → locality gate looks in the wrong place
-- Pointer-effect snap → cursor visually no longer matches the detector's prior
+- Pointer-effect snap (hypothesis, REJECTED_CLAIMS.md) → cursor visually no longer matches the detector's prior
 
 Fixing cursor-shape-detect's scoring doesn't address any of these.
 
@@ -79,7 +87,7 @@ Per standing rule 4: stopping rather than pivoting. The following would all be "
 2. **Belief poisoning protection.** Don't `observeCursor` a motion result that contradicts the post-emit prediction by > 1.5σ. Current belief variance is wide enough that bad observations slip through.
 3. **Disable trackpad inertia / pointer effects.** Reduce Motion + Pointer Effect off in iPad Settings. Documented in Phase 115 but never applied. Would need user to toggle in iPad UI.
 4. **Stable-FP rejection by motion test.** After locality-gated detect, emit a small wiggle and re-detect — if the candidate doesn't move, it's a widget FP. Code change in detection wrapper.
-5. **Smaller emit chunks → less rate-limit loss.** Re-examine Phase 64 (micro-step) defaults for far-target moves.
+5. **Smaller emit chunks** (if the rate-limit hypothesis holds — itself on the REJECTED_CLAIMS.md list). Re-examine Phase 64 (micro-step) defaults for far-target moves.
 
 ## Honest current state
 
@@ -92,4 +100,4 @@ Per standing rule 4: stopping rather than pivoting. The following would all be "
 Pick one of the constructive next steps above, or:
 - "Apply Reduce Motion lever first" — user manually toggles iPad accessibility settings via UI to disable pointer effects + inertia. Phase 115 attempted this via Spotlight but failed (Phase 117 hit-area asymmetry). May need physical interaction.
 - "Continue cursor-shape-detect improvements" — but per this diagnostic, the leverage isn't in the scoring math.
-- "Accept current click rate" — the near-target ~50-70% is workable for many use cases; far-target failures are an honest limitation of the PiKVM+iPad pointer-effect stack.
+- "Accept current click rate" — the near-target ~50-70% is workable for many use cases; far-target failures persist. (Original framing called it "an honest limitation of the PiKVM+iPad pointer-effect stack"; that causal claim is on the REJECTED_CLAIMS.md list.)

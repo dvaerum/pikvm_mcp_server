@@ -76,9 +76,11 @@ for HID-mouse positioning on this iPad.
 To get below 35 px residual reliably, we'd need either:
 1. **Smaller per-call displacement** — possibly via slowing the
    mouse acceleration on iPadOS side (user-side toggle)
-2. **iPadOS Pointer Animations OFF** (Phase 194-H) — changes the
-   snap-zone behavior so clicks register on icons even at 50 px
-   residual
+2. **iPadOS Pointer Animations OFF** (Phase 194-H) — original
+   framing claimed this changes "snap-zone behavior" so clicks
+   register at 50 px residual. The "snap-zone" mechanism is on
+   the REJECTED_CLAIMS.md list as unverified. Disabling the
+   setting may still help for unrelated reasons.
 3. **Different input mechanism** — touchscreen HID (Phase 31 found
    this dead-end), gamepad HID (Phase 188 deferred)
 

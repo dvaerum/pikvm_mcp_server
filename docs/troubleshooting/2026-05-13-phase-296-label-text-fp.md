@@ -52,12 +52,12 @@ The "hits cluster at 12-32 px residual" pattern in Phase 295 is consistent with 
 ## What's still true
 
 - Phase 290 cluster-bbox-aware refactor: structurally correct, no regression
-- Phase 293 brightThreshold option: catches pointer-effect light cursor when truly visible
+- Phase 293 brightThreshold option: catches light-rendered cursor (near icons) when truly visible. (Earlier framing called this "pointer-effect light cursor"; the pointer-effect mechanism is on the REJECTED_CLAIMS.md list as unverified. The light-rendering observation stands.)
 - Phase 294 shape-detect at p0: improves detection chain but is fooled by label text
 
 ## What's NOT true
 
-- "Near click rate is now 95%" — UNVERIFIED. Algorithm reports 95% but the cursor isn't where the algorithm says. A real click at target coordinates may activate the icon (when cursor happens to land nearby in pointer-effect snap) or activate the wrong thing (when cursor is at icon-row edge).
+- "Near click rate is now 95%" — UNVERIFIED. Algorithm reports 95% but the cursor isn't where the algorithm says. A real click at target coordinates may activate the icon (when cursor happens to land nearby — earlier framing "in pointer-effect snap" is on the REJECTED_CLAIMS.md list as unverified) or activate the wrong thing (when cursor is at icon-row edge).
 
 ## Memory entry corrected
 

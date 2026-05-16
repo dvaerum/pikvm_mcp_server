@@ -49,9 +49,10 @@ was already too large.
 
 **This is iPad-side variance**, not a detector bug. Each trial
 captures a different frame; the cursor renders slightly
-differently (anti-aliasing, snap-zone interaction, pointer-effect)
-producing different cluster sizes when merged with neighbouring
-dark pixels.
+differently. (Earlier framing listed "anti-aliasing, snap-zone
+interaction, pointer-effect" as causes; the last two are on the
+REJECTED_CLAIMS.md list as unverified.) Whatever the cause, the
+cluster size varies when merged with neighbouring dark pixels.
 
 ## What Phase 308 actually achieved
 
@@ -73,9 +74,12 @@ The OK rate is dominated by:
    icon edges into 200+ px clusters (filtered by sizeFit).
 2. **iPad emit pipeline** — cursor doesn't reliably reach target
    area; many trials have cursor still near home position.
-3. **iPad click registration** — when cursor IS placed correctly
-   at residual ≤ 7 px, iPad pointer-effect snap consumes the
-   click (Phase 307 finding).
+3. **Click registration failures at low reported residual** —
+   Phase 307 noted cases where the detector reports residual ≤ 7
+   px and `screenChanged=false`. (Earlier framing said "iPad
+   pointer-effect snap consumes the click"; that mechanism is on
+   the REJECTED_CLAIMS.md list as unverified, and the residual
+   number itself is the detector's own self-report.)
 
 Phases 307+308 are correctly shipped detection improvements; the
 remaining bottleneck is outside cursor-shape-detect's scope.

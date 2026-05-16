@@ -29,13 +29,14 @@
  *     the wiggle.
  *
  * Design notes:
- *   - The +1/-1 magnitude is deliberately tiny. iPadOS pointer-
- *     effect snap ignores sub-pixel motion when the cursor is over
- *     interactive UI (Phase 125 preClickApproachMickeys is the right
- *     primitive for snap-on-click); +1 mickey reliably wakes the
- *     cursor without dragging it into a different snap zone. The
- *     wiggle stays inside one HDMI pixel after acceleration on
- *     normal iPad ratios (live measured ~0.85–3.0 px/mickey).
+ *   - The +1/-1 magnitude is deliberately tiny. Historical framing
+ *     said "iPadOS pointer-effect snap ignores sub-pixel motion
+ *     when the cursor is over interactive UI" — that causal claim
+ *     is on the docs/troubleshooting/REJECTED_CLAIMS.md list as
+ *     unverified. Empirically +1 mickey reliably wakes the cursor
+ *     without large visible displacement. The wiggle stays inside
+ *     one HDMI pixel after acceleration on normal iPad ratios
+ *     (live measured ~0.85–3.0 px/mickey).
  *   - The implementation keeps `lastEmitMs` module-scoped (no class
  *     instance). The 30 ms inter-pause and configurable settle let
  *     the streamer + iPadOS render pipeline catch up before the

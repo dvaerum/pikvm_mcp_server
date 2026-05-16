@@ -56,11 +56,11 @@ async function tryOpenLoopShapeDetect(shot, predicted) {
 
 Near jumps **+35 to +45 percentage points** to 95%. This is the largest near-target click-rate improvement in dozens of phases.
 
-Far stays at 0% because the cursor still snaps to the inter-icon zone between TV (773, 810) and Settings (905, 810); honest residuals are 38-39 px to target (757, 832). Detection is accurate; the cursor physically can't rest at (757, 832) on this iPad due to pointer-effect snap. That's an iPadOS rendering constraint, not a detection bug.
+Far stays at 0% because the cursor consistently lands in the inter-icon zone between TV (773, 810) and Settings (905, 810); honest residuals are 38-39 px to target (757, 832). Detection is accurate. (Earlier framing said "the cursor physically can't rest at (757, 832) on this iPad due to pointer-effect snap" and called this "an iPadOS rendering constraint"; those causal claims are on the REJECTED_CLAIMS.md list as unverified. The observation is real; the cause is not established.)
 
 ## Why this works
 
-The Phase 293 finding — iPadOS cursor renders LIGHT GRAY in pointer-effect-snap mode, invisible to dark-mask shape-detect — applies most strongly at p0. After the open-loop emit, the cursor often ends up snapped to an icon (because the chunked emit aims for a target near or on an icon). Motion-diff sees the transit; template-match sees nothing (templates are dark-cursor templates); the cursor-on-icon is LIGHT and dark-mask shape-detect misses it.
+The Phase 293 finding — iPadOS cursor renders LIGHT GRAY near icons, invisible to dark-mask shape-detect — applies most strongly at p0. (Phase 293 framed the light-rendering mode as "pointer-effect-snap mode"; the rendering observation stands, the snap mechanism is on the REJECTED_CLAIMS.md list as unverified.) After the open-loop emit, the cursor often ends up on or near an icon (because the chunked emit aims for a target near or on an icon). Motion-diff sees the transit; template-match sees nothing (templates are dark-cursor templates); the cursor-on-icon is LIGHT and dark-mask shape-detect misses it.
 
 Phase 294's shape+bright path at p0 catches the LIGHT cursor's interior. The locality gate (radius 100 from `predictedPostOpen`) tightly filters to the expected landing zone, so dock/widget bright FPs (Phase 292's (783, 961) dock FP at score 0.54) are geographically excluded.
 
@@ -78,9 +78,9 @@ User-stated integration criterion: ≥4/5 trials within 30 px on diverse cursor 
 | Target | Hits within 30 px | Pass? |
 |---|---|---|
 | Near (905, 800) | 19/20, 19/20 (95%) | ✓ |
-| Far (757, 832) | 0/20, 0/20 (snap zone, physical limit) | ✗ (iPadOS issue) |
+| Far (757, 832) | 0/20, 0/20 (cause not established — earlier framing "snap zone, physical limit" is unverified, REJECTED_CLAIMS.md) | ✗ |
 
-Near comfortably passes. Far's snap-zone failure is upstream of detection.
+Near comfortably passes. Far's failure is upstream of detection; cause not established.
 
 ## State at end of phase
 
@@ -88,7 +88,7 @@ Near comfortably passes. Far's snap-zone failure is upstream of detection.
 - cursor-shape-detect: dual-mask (dark + Phase 293 bright) with brightThreshold option.
 - move-to.ts: shape-detect at BOTH open-loop p0 AND correction passes; identical bright-rescue gate.
 - Near (905, 800): **95%** sustained across two benches.
-- Far (757, 832): **0%** click rate, **38 px honest residuals** (snap zone).
+- Far (757, 832): **0%** click rate, **38 px honest residuals** (cause not established; earlier "snap zone" label is unverified — REJECTED_CLAIMS.md).
 - 723/723 tests pass.
 
 ## Notes

@@ -31,6 +31,15 @@ in the current session.**
   emit makes the cursor visible again. `cursor-keepalive.ts` already
   handles this. Not a real obstacle for the click pipeline.
 
+- **"iPad moves the cursor on its own" / "the iPad did on its own"**
+  — explicitly rejected by user 2026-05-16. Previous sessions kept
+  attributing unexpected cursor positions to the iPad autonomously
+  relocating the cursor. There is no evidence of that mechanism. When
+  the cursor is not where we predicted, the simpler explanations
+  (emit math wrong, detector wrong about prior position, prior emit
+  not actually applied) have not been ruled out. Do not write "iPad
+  moved the cursor" or "the iPad did on its own" as if observed.
+
 ## Why these keep coming back
 
 Old troubleshooting docs (esp. Phase 291-292, 294, 307, 308) assert

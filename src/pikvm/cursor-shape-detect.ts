@@ -61,12 +61,14 @@ export interface ShapeOptions {
    *  second cluster-extraction pass with mask = brightness > this.
    *  Returned clusters from both passes are scored uniformly and
    *  competed against each other. Default undefined = dark-only
-   *  (back-compat). Set 120-140 to catch iPadOS pointer-effect-snap
-   *  cursors that render as LIGHT gray (~150-200 brightness) over
-   *  medium wallpaper (~50-100). Phase 293 N=4 frames showed
-   *  brightThreshold=120 picks the cursor within 7-39 px of truth
-   *  when the dark-only path failed entirely (cursor invisible to
-   *  dark mask in pointer-effect mode). */
+   *  (back-compat). Set 120-140 to catch cursors that render as
+   *  LIGHT gray (~150-200 brightness) — frequently observed near
+   *  icons; historical framing "iPadOS pointer-effect-snap cursor"
+   *  attributes a causal mechanism on the REJECTED_CLAIMS.md list
+   *  as unverified. The rendering observation stands. Phase 293
+   *  N=4 frames showed brightThreshold=120 picks the cursor within
+   *  7-39 px of truth when the dark-only path failed (cursor
+   *  invisible to dark mask in light-rendered mode). */
   brightThreshold?: number;
   /** Min cluster size in pixels. Default 15 — excludes JPEG noise. */
   minClusterPixels?: number;
@@ -190,8 +192,11 @@ function findAllShapeCandidates(
 
   // Phase 293: dual-pass cluster extraction. Dark mask catches the
   // classic dark cursor over light wallpaper; bright mask (when
-  // enabled) catches the iPadOS pointer-effect-snap cursor which
-  // renders LIGHT (~150-200) over medium wallpaper (~50-100). The
+  // enabled) catches the cursor when it renders LIGHT (~150-200)
+  // over medium wallpaper (~50-100) — historically labelled
+  // "pointer-effect-snap" rendering; that causal mechanism is on
+  // the REJECTED_CLAIMS.md list as unverified. The rendering
+  // pattern is real; the cause is hypothesis. The
   // two cluster sets are processed INDEPENDENTLY (different mergeClusters
   // calls) so dark-mask clusters and bright-mask clusters don't
   // accidentally merge into single objects with double-counted pixels.

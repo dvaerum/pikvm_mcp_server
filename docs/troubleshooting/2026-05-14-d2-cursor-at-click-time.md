@@ -14,13 +14,16 @@ PRE-button-down screenshots across 9 trials × up to 4 attempts
 - Some attempts: cursor close to target but in the wallpaper gap
   between icons (no icon at click point → page-swipe trigger).
 - Files target (1037, 425, row 2 column 4): cursor consistently
-  stuck near y=850-880 (bottom-row dock area). Algorithm never
-  reaches the upper rows for Files.
+  lands near y=850-880 (bottom-row dock area) on inspected frames.
+  Algorithm never reaches the upper rows for Files on the inspected
+  frames. ("Stuck" framing is on the REJECTED_CLAIMS.md list as
+  claimed-from-sampling.)
 
-Hypothesis: **iPadOS pointer-effect snap is gluing the cursor to
-dock icons**, and the algorithm's emit-based "move up" doesn't
-overcome the snap. The cursor lands in or near the dock and stays
-there regardless of target.
+Hypothesis (unverified, REJECTED_CLAIMS.md): iPadOS pointer-
+effect snap is gluing the cursor to dock icons, and the
+algorithm's emit-based "move up" doesn't overcome the snap. The
+mechanism is unverified; the visual pattern in the sampled
+frames is real.
 
 ## Method
 
@@ -62,8 +65,9 @@ HID click registration when the cursor isn't on the target.
   D2 run. Modal cleared via Escape key in scripts/dismiss-modal.ts,
   then bench re-run on confirmed home-page-1 state. Both
   pre/post-clear runs showed the same 0% rate and similar
-  cursor-stuck-in-dock pattern, so battery is not the load-
-  bearing cause.
+  cursor-near-dock pattern in sampled frames ("stuck-in-dock"
+  framing on REJECTED_CLAIMS.md as unverified), so battery is not
+  the load-bearing cause.
 - The bench uses `forbidSlamFallback: true` (no slam-to-anchor
   recovery). That's the production-mode default but means
   recoveries depend solely on detect-then-move.

@@ -7,9 +7,10 @@
 templates on this iPad. Templates dir went from 0 to 5 templates
 during a 40-trial bench. Median residual on hits dropped 4-5×
 (Settings 152 → 30 px, Books 143 → 37 px). Reported success rate
-is statistically unchanged (55 % vs 57 % prior bench) because the
-click-landing bottleneck remains the iPadOS pointer-effect
-snap-zone (Phase 111-117).
+is statistically unchanged (55 % vs 57 % prior bench). The cause
+of the unchanged click rate is not established. (Original framing
+attributed it to "iPadOS pointer-effect snap-zone"; that
+mechanism is unverified — see REJECTED_CLAIMS.md.)
 
 ## Setup
 
@@ -71,11 +72,13 @@ persisted, template-match now functional). It did NOT lift the
 reported `screenChanged`-positive rate, which sits at 55 % —
 same statistical band as prior 57 %.
 
-This matches Phase 111's documented finding: there's a hard ~50–60 %
-per-attempt ceiling on small-icon clicks on iPadOS, driven by the
-pointer-effect snap zone rejecting clicks even with cursor
-visually on the icon. Phase 194-B confirms the ceiling is NOT a
-detection-quality artefact — it's intrinsic to iPadOS.
+This matches Phase 111's documented observation: a ~50–60 %
+per-attempt ceiling on small-icon clicks on iPadOS. The cause is
+unknown. (Earlier framing attributed it to "the pointer-effect
+snap zone rejecting clicks"; that causal claim is unverified —
+see REJECTED_CLAIMS.md.) Phase 194-B does show the ceiling is
+NOT a detection-quality artefact — detection accuracy improved
+without any change in reported success rate.
 
 ## Visual sample of "hits"
 
@@ -85,8 +88,9 @@ detection-quality artefact — it's intrinsic to iPadOS.
 | Books 09    | HIT | 27 | **FALSE** — home screen, Books did not open |
 
 Even at 23–27 px residual (cursor visually on the icon), the
-click failed to launch the app. iPadOS's snap-zone rejects click
-events that the rendered cursor position would otherwise hit.
+click failed to launch the app. Cause unknown. (Original framing
+asserted "iPadOS's snap-zone rejects click events"; that
+mechanism is unverified — see REJECTED_CLAIMS.md.)
 
 ## What this leaves on the table
 
@@ -94,11 +98,12 @@ The remaining click-rate lift opportunities are NOT detection
 fixes:
 
 1. **Pre-click hover dwell + re-aim**. Hover the cursor at the
-   target for 500–800 ms BEFORE the click, allowing iPadOS's
-   pointer-effect to magnetically snap the cursor onto the icon.
-   Currently `preClickSettleMs = 80` ms is too short. Risk: long
-   dwell may trigger iPadOS pop-up or auto-fade; needs careful
-   tuning.
+   target for 500–800 ms BEFORE the click. Currently
+   `preClickSettleMs = 80` ms. Original framing assumed iPadOS
+   pointer-effect would "magnetically snap the cursor onto the
+   icon"; that mechanism is unverified (see REJECTED_CLAIMS.md)
+   so the lift, if any, may be from unrelated causes. Risk: long
+   dwell may trigger iPadOS pop-up or auto-fade.
 2. **Click without prior cursor reveal**. iPadOS may treat clicks
    from "fresh" mouse activity differently. Try emitting a wake
    wiggle, then immediately clicking, without a stationary

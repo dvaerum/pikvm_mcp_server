@@ -46,23 +46,31 @@ Resumable: line count = frames labeled.
 ### `cursor.x` / `cursor.y`
 
 Integer pixel coordinates in the 1680×1050 full-frame space. The
-cursor's *tip* (point) is preferred. If the cursor is a pointer-
-effect blob with no tip, use the center of the bounding box.
-`null` when `visible: false`.
+cursor's *tip* (point) is preferred. If the cursor renders as a
+tipless blob (historical name "pointer-effect blob" — the
+"pointer-effect" causal mechanism is on the REJECTED_CLAIMS.md
+list as unverified; the rendering observation stands), use the
+center of the bounding box. `null` when `visible: false`.
 
 ### `cursor.tip_or_center`
 
 - `"tip"`: coordinates point to the cursor's arrowhead point.
 - `"center"`: coordinates point to the center of a blob (when
-  no arrowhead visible — pointer-effect mode).
+  no arrowhead visible — historical name "pointer-effect mode";
+  the causal mechanism is on the REJECTED_CLAIMS.md list as
+  unverified, the rendering observation is real).
 
 ### `cursor.state`
 
 - `"normal"`: standard iPadOS pointer arrow, sharp edges.
 - `"faded"`: cursor visible but lower-contrast than normal (mid-
   fade-out animation).
-- `"pointer-effect-blob"`: iPadOS has snapped the cursor to a
-  button/icon — appears as a tinted rounded shape, no arrow.
+- `"pointer-effect-blob"`: cursor renders as a tinted rounded
+  shape with no arrow, typically near a button/icon. (Historical
+  name implies "iPadOS has snapped the cursor"; that causal
+  mechanism is on the REJECTED_CLAIMS.md list as unverified. The
+  rendering observation — tipless rounded shape — is what the
+  label captures.)
 - `"edge-clipped"`: cursor partially off-screen or clipped by
   letterbox / status bar / dock.
 - `"absent"`: no cursor in frame.

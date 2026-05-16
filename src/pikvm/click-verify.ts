@@ -300,9 +300,12 @@ export interface ClickAtWithRetryOptions {
    *  skips, slam the cursor to a known reference corner (top-left)
    *  and reset belief before the next retry. The next attempt's
    *  moveToPixel will plan from (0, 0) instead of a stale belief
-   *  that may have drifted into a snap-zone we can't escape via
-   *  small correction emits. PRO: recovers from "cursor stuck in
-   *  snap-zone we can't see" failure mode. CON: extra latency
+   *  that may have drifted to a location small correction emits
+   *  can't escape from. (Earlier framing referenced "snap-zone"
+   *  as the cause; that mechanism is on the
+   *  docs/troubleshooting/REJECTED_CLAIMS.md list as unverified.)
+   *  PRO: recovers from "cursor stuck somewhere we can't fix
+   *  with small emits" failure mode. CON: extra latency
    *  (~500ms) per slam; Phase 45 documented slam-to-edge can trigger
    *  iPad gestures (mitigated by slamToCorner's 60ms pace).
    *
@@ -337,29 +340,34 @@ export interface ClickAtWithRetryOptions {
    *  varied wallpaper backdrops, strict enough to reject "cursor at
    *  arbitrary widget" false positives. */
   minPreClickTemplateScore?: number;
-  /** Phase 43: pre-click wiggle magnitude in mickeys. iPadOS's
-   *  pointer-effect snaps the cursor to interactive elements when the
-   *  cursor is MOVING near them — a stationary cursor 30 px from an
-   *  icon does NOT snap. A small +N/-N round-trip wiggle right before
-   *  the click triggers the snap without significantly displacing the
-   *  cursor. Default 5. Set 0 to disable.
+  /** Phase 43: pre-click wiggle magnitude in mickeys. Historical
+   *  hypothesis (unverified, see REJECTED_CLAIMS.md): iPadOS
+   *  pointer-effect snaps the cursor to interactive elements when
+   *  the cursor is MOVING near them, and a stationary cursor 30
+   *  px from an icon does NOT snap. The mechanism is unverified;
+   *  empirically a small +N/-N round-trip wiggle right before the
+   *  click sometimes helps click registration without significantly
+   *  displacing the cursor. Default 5. Set 0 to disable.
    *
    *  Phase 125 (v0.5.118) deprioritises this in favour of a directional
    *  APPROACH (see `preClickApproachMickeys`) when a recent cursor
    *  position is available — the approach puts the cursor in active
-   *  motion TOWARDS the icon at button-down time, which is what
-   *  pointer-effect actually wants. Wiggle remains as the fallback
-   *  when the cursor position is unknown (e.g. all detection failed). */
+   *  motion TOWARDS the icon at button-down time. (Earlier framing
+   *  said this is "what pointer-effect actually wants"; that
+   *  mechanism is on the REJECTED_CLAIMS.md list as unverified.)
+   *  Wiggle remains as the fallback when the cursor position is
+   *  unknown (e.g. all detection failed). */
   preClickWiggleMickeys?: number;
   /** Phase 125: pre-click directional approach magnitude in mickeys.
    *  Replaces Phase 43's net-zero wiggle when a recent cursor
    *  position is known. Sends one final emit TOWARDS the target in
    *  the residual direction, then clicks IMMEDIATELY (no settle) so
    *  the button-down event arrives while the cursor is still in
-   *  motion. iPadOS pointer-effect uses cursor velocity to apply
-   *  icon snap; a converged-but-stationary cursor (Phase 122-123
-   *  reaches 22 px residual) is NOT sufficient for snap-on-click,
-   *  but a converging-into-icon cursor is. The emit magnitude is
+   *  motion. Historical hypothesis (unverified, REJECTED_CLAIMS.md):
+   *  iPadOS pointer-effect uses cursor velocity to apply icon snap;
+   *  a converged-but-stationary cursor (Phase 122-123 reaches 22
+   *  px residual) is NOT sufficient for snap-on-click, but a
+   *  converging-into-icon cursor is. The emit magnitude is
    *  capped by both this option AND the residual-in-mickeys, so
    *  small residuals don't over-shoot. Default 5; set 0 to fall
    *  back to Phase 43 wiggle behaviour. */
@@ -502,11 +510,14 @@ export async function clickAtWithRetry(
   const preClickWiggleMickeys = options.preClickWiggleMickeys ?? 5;
   // Phase 143 (v0.5.135): bumped default 5 → 10 mickeys. Phase 142
   // bench showed cursor reaching 10.6 px residual on home-screen
-  // Settings icon yet click did not register; the iPadOS pointer-
-  // effect snap zone needs the cursor moving INTO the icon at
-  // button-down time, and 5 mickeys (≈6.5 px at ratio 1.3) may be
-  // too small a velocity for snap to trigger. 10 mickeys (≈13 px)
-  // gives the cursor a clearer "moving toward the icon" trajectory.
+  // Settings icon yet click did not register. Historical hypothesis
+  // (unverified, see REJECTED_CLAIMS.md): the iPadOS pointer-effect
+  // snap zone needs the cursor moving INTO the icon at button-down
+  // time, and 5 mickeys (≈6.5 px) may be too small a velocity for
+  // snap to trigger; 10 mickeys (≈13 px) gives a clearer "moving
+  // toward the icon" trajectory. Mechanism unverified; the
+  // empirical bench-difference at 10 vs 5 mickeys is the actual
+  // evidence.
   // Magnitude is still capped per-axis by the residual-in-mickeys,
   // so small residuals don't over-shoot.
   const preClickApproachMickeys = options.preClickApproachMickeys ?? 10;
@@ -1117,11 +1128,13 @@ export async function clickAtWithRetry(
     // Phase 125: in-motion click. When we know the cursor's position
     // (post-micro-correction or post-moveToPixel), send one final
     // directional emit toward the target and click WITHOUT settling.
-    // iPadOS pointer-effect snaps the cursor to nearby interactive UI
-    // elements only while the cursor is moving towards them; a
-    // stationary cursor 22 px from an icon (Phase 123 visual
-    // diagnostic) does NOT register clicks on the icon, but a moving-
-    // into-icon cursor does. Falls back to Phase 43's net-zero wiggle
+    // Historical hypothesis (unverified, see REJECTED_CLAIMS.md):
+    // iPadOS pointer-effect snaps the cursor to nearby interactive
+    // UI only while the cursor is moving towards them. The bench
+    // observation (Phase 123 visual diagnostic) was that a
+    // stationary cursor 22 px from an icon did NOT register clicks
+    // and a moving cursor sometimes did; the causal mechanism is
+    // not established. Falls back to Phase 43's net-zero wiggle
     // when the cursor position is unknown.
     const cursorAtClick = lastKnownCursor ?? lastMoveResult.finalDetectedPosition;
     if (preClickApproachMickeys > 0 && cursorAtClick) {
@@ -1148,11 +1161,13 @@ export async function clickAtWithRetry(
       }
     } else if (preClickWiggleMickeys > 0) {
       // Phase 43 fallback: net-zero wiggle when cursor position
-      // unknown. Triggers iPadOS pointer-effect via motion alone.
+      // unknown. (Historical claim: "triggers iPadOS pointer-effect
+      // via motion alone"; mechanism on REJECTED_CLAIMS.md as
+      // unverified.) Empirically wiggle sometimes helps.
       await client.mouseMoveRelative(preClickWiggleMickeys, 0);
       await sleepMs(30);
       await client.mouseMoveRelative(-preClickWiggleMickeys, 0);
-      await sleepMs(50); // give iPadOS time to apply pointer-effect snap
+      await sleepMs(50); // post-wiggle settle before click
     }
 
     // D2a (2026-05-14): opt-in pre-button-down capture. When
@@ -1471,10 +1486,13 @@ export function isDivergenceDetected(args: {
 /**
  * Phase 150 (v0.5.140) — pure helper: gate Phase 125's in-motion
  * approach emit. The in-motion click sends one final directional
- * mickey emit toward target and clicks WITHOUT settling, exploiting
- * iPadOS pointer-effect's "snap-to-icon while moving" behavior. But
- * the emit is wasted (and can over-shoot via acceleration variance)
- * when the residual is already sub-pixel-noise distance from target.
+ * mickey emit toward target and clicks WITHOUT settling.
+ * Historical framing (unverified, see REJECTED_CLAIMS.md):
+ * "exploits iPadOS pointer-effect's 'snap-to-icon while moving'
+ * behavior". Mechanism is hypothesis; the empirical effect of
+ * the in-motion emit is the actual evidence. The emit is wasted
+ * (and can over-shoot via acceleration variance) when the
+ * residual is already sub-pixel-noise distance from target.
  *
  * Fire conditions:
  *  - preClickApproachMickeys > 0: feature opt-in (caller can disable
@@ -1482,9 +1500,11 @@ export function isDivergenceDetected(args: {
  *  - cursorKnown: we have a position to compute the emit from. With
  *    no known cursor, the math would NaN-poison the chunk size.
  *  - residual ≥ minResidualPx (default 3): far enough from target to
- *    benefit from an emit. Below 3 px the cursor's already inside
- *    iPadOS's pointer-effect snap radius for typical icon-sized
- *    targets and an extra emit just adds acceleration noise.
+ *    benefit from an emit. Below 3 px the cursor is at sub-pixel
+ *    distance; an extra emit just adds acceleration noise.
+ *    (Historical framing: "already inside iPadOS's pointer-effect
+ *    snap radius"; that mechanism is on REJECTED_CLAIMS.md as
+ *    unverified.)
  *
  * Pure: deterministic, no I/O.
  */
@@ -1811,19 +1831,22 @@ export function summariseFailureClass(
 ): string | null {
   if (attemptHistory.length < 2) return null;
 
-  // Phase 112: detect the "iPadOS pointer-effect snap-zone" failure
-  // mode that emerged in Phase 109-111 benches. Symptoms:
+  // Phase 112: detect a uniform-symptom failure class that emerged
+  // in Phase 109-111 benches. Symptoms:
   //   - Every attempt actually clicked (no skipReason)
   //   - Cursor was verified at the requested target on every attempt
   //   - screenChanged was false on every attempt
   //
-  // This is NOT an algorithm failure. The cursor IS where it was
-  // requested. iPadOS's pointer-effect snap zones determine which
-  // interactive element receives the click — when the cursor is in
-  // the dead-zone between elements, clicks land on wallpaper and
-  // register as nothing. Phase 109-111 measured this caps click-
-  // success at ~50-60% for ~70 px iPad icons even with 100% cursor
-  // verification.
+  // Historical framing (REJECTED_CLAIMS.md: unverified causal claim):
+  // "iPadOS's pointer-effect snap zones determine which interactive
+  // element receives the click — when the cursor is in the dead-
+  // zone between elements, clicks land on wallpaper". The
+  // mechanism is hypothesis. The observation is real — Phase 109-
+  // 111 measured a ~50-60% per-attempt cap for ~70 px iPad icons
+  // even with the detector claiming verified cursor on every
+  // attempt. The summariser emits a historical string referring to
+  // "snap-zone" as the failure class for downstream consumers; do
+  // not treat the string as a confirmed mechanism.
   const allClicked = attemptHistory.every((a) => !a.skippedClickReason);
   const allVerified = attemptHistory.every((a) => a.cursorVerified === true);
   const allMissed = attemptHistory.every((a) => a.screenChanged === false);
@@ -1831,10 +1854,13 @@ export function summariseFailureClass(
     const n = attemptHistory.length;
     return (
       `All ${n} attempts clicked with verified cursor but no screen ` +
-      `change — likely iPadOS pointer-effect snap-zone miss. The ` +
-      `cursor was correctly positioned but iPadOS didn't register ` +
-      `the click on the target element. For tiny iPad icons, prefer ` +
-      `pikvm_ipad_launch_app (Spotlight) which is 100% reliable. See ` +
+      `change. Historically labelled "iPadOS pointer-effect snap-zone ` +
+      `miss" (causal mechanism unverified — see ` +
+      `docs/troubleshooting/REJECTED_CLAIMS.md). The detector ` +
+      `reported the cursor on target on every attempt; the click ` +
+      `did not register a UI change. Cause not established. For ` +
+      `tiny iPad icons, prefer pikvm_ipad_launch_app (Spotlight) ` +
+      `which is 100% reliable. See ` +
       `docs/troubleshooting/ipad-cursor-detection.md § Phase 111 for ` +
       `the empirical ~50-60% click-success ceiling.`
     );

@@ -5,8 +5,10 @@
 **Date:** 2026-05-13
 **Version:** v0.5.237 (ML primary, heuristic fallback)
 **Status:** ML integration shipped. Detection works as designed.
-Live click rate 0/40 — the iPad pointer-effect / click-registration
-bottleneck is now fully exposed.
+Live click rate 0/40. (Earlier framing called this "the iPad
+pointer-effect / click-registration bottleneck"; both
+"pointer-effect" causation and "the bottleneck is iPad-side" are
+on the REJECTED_CLAIMS.md list as unverified.)
 
 ## Aggregate
 
@@ -15,9 +17,9 @@ N=10 × 4 targets × 2 reps = 40 trials at v0.5.237:
 | target   | rep1  | rep2  | overall | dominant residual |
 |----------|-------|-------|---------|--------------------|
 | Settings | 0/5   | 0/5   | 0/10    | 13-17 px (cursor on icon, click ignored) |
-| Books    | 0/5   | 0/5   | 0/10    | n/a (cursor outside ML crop after rate-limited emit) |
+| Books    | 0/5   | 0/5   | 0/10    | n/a (cursor outside ML crop after emit; earlier "rate-limited" framing on REJECTED_CLAIMS.md as unverified) |
 | TV       | 0/5   | 0/5   | 0/10    | 42-67 px (partial emit reach) |
-| AppStore | 0/5   | 0/5   | 0/10    | 80 px (consistent — cursor at snap-zone edge) |
+| AppStore | 0/5   | 0/5   | 0/10    | 80 px (consistent; earlier "cursor at snap-zone edge" framing on REJECTED_CLAIMS.md as unverified) |
 
 Compare to v0.5.236 baseline (Phase 313):
 
@@ -36,19 +38,26 @@ returns NULL for those cases, eliminating the false positives.
 - ML detection at 13-17 px from target icon
 - Cursor unambiguously on the Settings icon
 - 10/10 clicks fired at the detected position
-- 10/10 failed to open Settings — iPad pointer-effect blocks tap
+- 10/10 failed to open Settings — cause not established (earlier
+  framing "iPad pointer-effect blocks tap" is on the
+  REJECTED_CLAIMS.md list as unverified)
 
 This reproduces the Phase 310 finding (residual=7 px tautology) on
-a fresh detector. Detection isn't the bottleneck. Click registration
-is.
+a fresh detector. (Note: the detector's own residual report is
+the data; calling it "cursor on the icon" is the detector's
+self-report and may not match visual ground truth — see
+REJECTED_CLAIMS.md.) Detection isn't the bottleneck — but the
+bottleneck location is not yet established.
 
 ## What didn't work (and why)
 
 **Books (10/10 NULL):** Books target is at (640, 800). Cursor home
-is at (1060, 778) — 420 px right of target. After emit, iPad rate-
-limits and cursor stays near home. ML crop is centered at predicted
-(640, 800), 256×256 wide → covers x=[512, 768]. Cursor at x≈1060
-is OUTSIDE the crop window. ML correctly returns NULL.
+is at (1060, 778) — 420 px right of target. After emit, cursor
+stays near home. (Earlier framing "iPad rate-limits"; that
+mechanism is on the REJECTED_CLAIMS.md list as unverified.) ML
+crop is centered at predicted (640, 800), 256×256 wide → covers
+x=[512, 768]. Cursor at x≈1060 is OUTSIDE the crop window. ML
+correctly returns NULL.
 
 The heuristic fallback (cursor-shape-detect with locality radius
 100 around predicted) ALSO returns nothing because cursor is far
@@ -66,23 +75,23 @@ the ML pivot have both succeeded **at the detection task**. The
 detector is now demonstrably accurate (Phase 312: 3/3 visually-
 verified within 7 px; this bench: Settings 10/10 within 17 px).
 
-But the iPad has TWO upstream bottlenecks:
+The original framing claimed two upstream iPad-side bottlenecks
+(both on the REJECTED_CLAIMS.md list — recording for context):
 
-1. **Emit pipeline rate-limit**: iPadOS limits how fast/far the
-   cursor can be moved via PiKVM relative-mouse HID events. Large
-   target-displacement emits (Books from home is 420 px) get
-   clamped → cursor doesn't reach target area → detection has
-   nothing to find.
+1. **Emit pipeline "rate-limit"** (REJECTED_CLAIMS.md: causation
+   unproven). Pattern: large target-displacement emits often
+   end with cursor short of target. Cause not established.
 
-2. **Click registration**: iPadOS pointer-effect snap zone consumes
-   single-tap mouse clicks when cursor is on an icon. Even at
-   residual 7-17 px (cursor dead-on icon), the click doesn't open
-   the app.
+2. **"Click registration" via "iPadOS pointer-effect snap zone"**
+   (REJECTED_CLAIMS.md: mechanism unverified). Pattern: low
+   reported residual but no screen change. Cause not
+   established; reported residual is the detector's own
+   self-report.
 
-Neither is a detection problem. Both need either iPad-side
-intervention (Reduce Motion accessibility setting, manual toggle
-per Phase 117) or a different click protocol (longer dwell,
-double-tap, or different HID sequence).
+What we have: detection improved; live click rate didn't lift.
+The bottleneck is upstream of detection but its location is not
+established. Possible interventions (Reduce Motion accessibility,
+different click protocol) are exploratory.
 
 ## Honest verdict
 
@@ -96,15 +105,17 @@ v0.5.236 baseline's "successes" were inflated by wrong-app clicks
 (Phase 310 finding). ML correctly rejects those — exposing the
 honest 0% genuine click rate.
 
-The next bottleneck is iPad-side. Two paths forward both need
-explicit user direction:
+The next bottleneck location is not established. (Earlier framing
+"iPad-side" is on the REJECTED_CLAIMS.md self-stop list.) Two
+exploratory paths:
 
 A. **Click protocol exploration**: Investigate longer mouseDown
-   duration, double-tap, or different HID sequencing. Could
-   directly unblock Settings/AppStore where cursor IS on icon.
+   duration, double-tap, or different HID sequencing.
 
-B. **Emit pipeline fix**: Investigate why iPad rate-limits large
-   emits. Could unblock Books where cursor doesn't reach target.
+B. **Emit pipeline investigation**: Investigate why large emits
+   often end with cursor short of target. (Earlier framing "iPad
+   rate-limits" is on the REJECTED_CLAIMS.md list.) Could unblock
+   Books where cursor doesn't reach target.
 
 Per pivot memory: ignoring stale CURRENT FOCUS prompts. The ML
 pivot is the right architectural direction — detector is solved.

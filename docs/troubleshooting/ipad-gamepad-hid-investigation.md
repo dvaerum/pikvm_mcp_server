@@ -38,18 +38,24 @@ recognized in that flow.
 
 This note exists to capture what I learned about exposing a USB HID
 **gamepad** to the iPad via the PiKVM USB OTG composite gadget, as
-a possible bypass for the iPadOS pointer-acceleration variance that
-caps `pikvm_mouse_click_at` icon-target reliability at ~50–60 %.
+a possible bypass for the variance that has historically capped
+`pikvm_mouse_click_at` icon-target reliability at ~50–60 %.
+(Earlier framing attributed that cap to "iPadOS pointer-
+acceleration variance" / "pointer-effect"; both attributions are
+on the REJECTED_CLAIMS.md list as unverified.)
 
 ## The hypothesis (user-endorsed 2026-04-29)
 
 > "If we really do not have cursor pointer acceleration, then the
 > gamepad stuff is worth investigating."
 
-Mouse-with-relative-coordinates feeds iPadOS's pointer-effect
-acceleration curve. That curve is *non-deterministic per emit*
-(measured 9× ratio variance, see `ipad-cursor-detection.md`), so
-no PiKVM-side calibration can give us deterministic clicks against
+Mouse-with-relative-coordinates feeds an iPadOS input pipeline
+whose mapping from mickeys to cursor pixels is observed as
+non-deterministic per emit (measured 9× ratio variance, see
+`ipad-cursor-detection.md`). (Earlier framing called this "iPadOS
+pointer-effect acceleration curve"; the specific mechanism is
+hypothesis — see REJECTED_CLAIMS.md.) Whatever the cause, no
+PiKVM-side calibration has given us deterministic clicks against
 small icons.
 
 A **gamepad** is a different USB HID device class entirely (Usage
@@ -78,9 +84,11 @@ The hypothesis is **partially true but with significant caveats**:
    Accessibility → Touch → AssistiveTouch → Pointer Devices) is
    the **closest** documented path. Apple lists "joystick" among
    the supported adaptive accessories. Once paired and configured
-   per accessibility flow, the joystick deflection moves the
-   system cursor at constant speed — no pointer-effect snap, no
-   acceleration variance. **But:** the AssistiveTouch joystick
+   per accessibility flow, Apple reportedly moves the system
+   cursor at constant speed via joystick deflection (claimed
+   absence of "pointer-effect snap" / acceleration variance —
+   both references to mechanisms on the REJECTED_CLAIMS.md list).
+   **But:** the AssistiveTouch joystick
    config is undocumented for non-MFi USB joysticks, and the
    accessibility flow assumes Bluetooth pairing.
 

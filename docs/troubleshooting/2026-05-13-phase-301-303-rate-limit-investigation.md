@@ -2,6 +2,16 @@
 
 # Phase 301-303 — rate-limit investigation: I was wrong (twice)
 
+> ⚠️ **REJECTED FRAMING.** The original doc oscillated between
+> two causal stories — "pointer-effect snap" and "Phase 50
+> rate-limit" — treating both as competing facts. **Both
+> mechanisms are now on the REJECTED_CLAIMS.md list as
+> unverified.** The doc's experiments (clamp behaviour in
+> `mouseMoveRelative`, chunking necessity) are real findings
+> about the emit code path. The interpretation that
+> "pointer-effect snap" is "real but minor" was the author's
+> conclusion and is rejected. Read the data, not the verdict.
+
 **Date:** 2026-05-13
 **Status:** Diagnostic only. No code change needed.
 
@@ -44,10 +54,10 @@ So my "Phase 50 rate-limit is the dominant production problem" claim was **WRONG
 
 ## What I should have said all along
 
-The actual dominant remaining failure mode for far targets is NOT rate-limit. With chunked emits production correctly transports the cursor near the target. The remaining failures are:
+The actual dominant remaining failure mode for far targets is NOT rate-limit. With chunked emits production correctly transports the cursor near the target. The author then listed three hypothesised remaining causes (all unverified — see REJECTED_CLAIMS.md):
 
-1. **Pointer-effect-snap on icons** makes the cursor visually change (light gray outline instead of dark arrow), evading dark-mask shape-detect. Phase 293 added bright-mask but it's still imperfect.
-2. **Label-text false positives** at icon labels (Phase 296 finding). Phase 297 wiggle eliminates these, at the cost of refusing to report when cursor IS pointer-snapped (because snap-pulled cursors don't fully respond to wiggle either).
+1. **"Pointer-effect-snap on icons"** (REJECTED_CLAIMS.md) — hypothesised to make the cursor visually change (light gray outline instead of dark arrow), evading dark-mask shape-detect. The light-rendering observation is real; the snap mechanism is not established. Phase 293 added bright-mask but it's still imperfect.
+2. **Label-text false positives** at icon labels (Phase 296 finding). Phase 297 wiggle eliminates these. (Earlier framing said this comes "at the cost of refusing to report when cursor IS pointer-snapped"; that assumes the snap mechanism — REJECTED_CLAIMS.md.)
 3. **Variance in detection** — some trials, motion-diff catches the cursor cleanly; others, it gets confused by widget animations near the target.
 
 These are all detection-layer problems, which Phase 290/293/294/297/299 have addressed to the architectural ceiling. Phase 300's bigger-wiggle attempt regressed.
@@ -56,16 +66,16 @@ These are all detection-layer problems, which Phase 290/293/294/297/299 have add
 
 | Earlier tick claim | What I now know |
 |---|---|
-| "Pointer-effect snap is the dominant problem" | Partially right — snap IS real (icon highlights when cursor on it) |
-| "Phase 50 rate-limit is the dominant problem" | Wrong — production chunks correctly, no rate-limit in production |
-| "It's both" | Closer — snap is real but minor; rate-limit only affects bypassing callers (test code) |
+| "Pointer-effect snap is the dominant problem" | REJECTED — snap mechanism is on the REJECTED_CLAIMS.md list as unverified; the doc's "partially right" verdict was the author's interpretation, not evidence. |
+| "Phase 50 rate-limit is the dominant problem" | Wrong — production chunks correctly, no rate-limit in production. (Note: the "rate-limit dead zone" framing is itself on the REJECTED_CLAIMS.md list.) |
+| "It's both" | REJECTED — both halves are unverified causal claims (REJECTED_CLAIMS.md). |
 | "Detection is at architectural ceiling" | Still true. The 30-50% Settings honest rate is the system's real performance. |
 
 ## State at end of phase
 
 - v0.5.231 unchanged. No code modification this tick.
 - Settings click rate: 30-50% honest variance band (multiple runs across recent ticks)
-- TV / Maps / Books: 0-15% — cursor DOES reach via production chunking, but detection in icon-area pointer-effect mode is unreliable
+- TV / Maps / Books: 0-15% — cursor DOES reach via production chunking, but detection in icon-area is unreliable. (Earlier framing "pointer-effect mode" is on the REJECTED_CLAIMS.md list as unverified.)
 - Production `emitChunked` is correct; my Phase 50 framing was misleading
 - 723/723 tests pass
 
@@ -77,6 +87,6 @@ The 4 documented next-step levers stand. All are upstream of cursor-shape-detect
 3. Cursor-belief slam-unstick on null
 4. Acceptance of 30-50% Settings ceiling
 
-The pointer-effect halo idea (the user picked in last decision) would be a real detector improvement IF we can characterize the halo signature. Phase 302's diff between baseline (cursor at home) and "snapped" (cursor near icon) showed ZERO pixel difference in the icon's 160×160 crop. That means either (a) cursor never actually reached the icon (single-emit clamp issue, see above), or (b) pointer-effect-on-icon doesn't change pixels in the icon's area at all on this iPad/iPadOS combo.
+The "pointer-effect halo" detector idea (later retired in Phase 304) would have been a real detector improvement IF a halo signature existed. Phase 302's diff between baseline (cursor at home) and cursor-near-icon ("snapped" in the original framing, REJECTED_CLAIMS.md) showed ZERO pixel difference in the icon's 160×160 crop. That means either (a) cursor never actually reached the icon (single-emit clamp issue, see above), or (b) no detectable rendering change occurs around the icon on this iPad/iPadOS combo.
 
 To properly test (b), I'd need to drive cursor to icon via CHUNKED emit, then capture baseline vs snapped. Not done this tick.

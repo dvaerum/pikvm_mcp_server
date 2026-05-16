@@ -25,9 +25,12 @@ Failure modes that ML can address:
 1. **Cluster merging**: cursor pixels merge with adjacent icon edges
    into 200+ px clusters; heuristic kills by sizeFit. ML can learn
    to localize the cursor center even within a larger cluster.
-2. **Pointer-effect snap variant**: light-gray cursor over light
+2. **Light-rendered cursor variant**: light-gray cursor over light
    icon — low contrast, heuristic struggles. ML can learn the
-   shape signature regardless of brightness.
+   shape signature regardless of brightness. (Earlier framing
+   "pointer-effect snap variant" assumes a mechanism on the
+   REJECTED_CLAIMS.md list as unverified; the light-rendering
+   observation stands.)
 3. **iPad-specific cursor rendering**: dotted/filled/snap variants
    — heuristic needs per-variant code paths; ML generalizes.
 
@@ -96,7 +99,7 @@ heuristic for cursor-absent / hint-far cases.
 Per cursor wiggle (Phase 187 keepalive pattern):
 1. Take frame A (cursor at unknown position P)
 2. Emit small displacement Δ (e.g. +20, +20)
-3. Take frame B (cursor at P+Δ' where Δ' = Δ × ratio, rate-limited)
+3. Take frame B (cursor at P+Δ' where Δ' = Δ × ratio, possibly less than Δ if there's some effective per-emit limit — the "rate-limited" framing is on the REJECTED_CLAIMS.md list as unverified)
 4. Compute diff = abs(A - B), threshold
 5. The diff has TWO bright regions: cursor at P (vanished) and
    cursor at P+Δ' (appeared). The cluster centroids give us labels

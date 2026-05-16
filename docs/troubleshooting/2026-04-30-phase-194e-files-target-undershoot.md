@@ -1,5 +1,7 @@
 # Phase 194-E (diagnostic, no fix yet) — Files-target consistent undershoot
 
+> ⚠️ **This doc references mechanisms now rejected as unverified.** See [REJECTED_CLAIMS.md](REJECTED_CLAIMS.md) — `pointer-effect snap`, `snap-zone`, `rate-limit dead zone`, `iPad ignores tap`, `stuck in dock` are hypotheses, not observed facts. The "rate-limiting" hypothesis in this doc remains untested; do not quote as established.
+
 **TL;DR.** The Files target (1035, 420 — top-right of the iPad
 home-screen icon grid) shows a **systematic ~200 px horizontal
 undershoot** that 5 phases of detection fixes did not change.
@@ -44,9 +46,10 @@ displacement**, not a detection illusion.
   Phase 194-B (dark-cursor `looksLikeCursor`) made detection
   honest; both motion-diff and template-match converge on
   (832, 404) at NCC 0.94.
-- **Not a snap-zone-rejection bug.** Snap-zone rejection
-  would mean the cursor is at the icon but the click event
-  doesn't register. Here the cursor never reaches the icon.
+- **Not a click-rejection-at-icon issue.** (Whether "snap-zone
+  rejection" is a real mechanism is an unverified claim — see
+  REJECTED_CLAIMS.md.) The cursor never reaches the icon, so
+  whatever happens at the icon is not what's failing here.
 - **Not iPad cursor-fade.** Trace bench captures all four
   pipeline stages; cursor is visible in template-match
   searches at every stage.
@@ -69,8 +72,9 @@ top-right region. Three hypotheses to test next:
    than needed to reach 1035 and stop early thinking it's
    converged.
 3. **iPad rate-limiting of fast emits in the right-edge
-   region.** Phase 50 documented input rate-limiting on this
-   iPad; possible the right region is more aggressive.
+   region.** (Hypothesis only — "rate-limit dead zone" is on
+   the REJECTED_CLAIMS list as causation-unproven. The Phase 50
+   document describes a pattern, not a confirmed mechanism.)
 
 ## Concrete next test (Phase 194-F candidate)
 

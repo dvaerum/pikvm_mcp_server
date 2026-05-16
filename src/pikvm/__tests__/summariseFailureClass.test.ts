@@ -146,10 +146,12 @@ describe('summariseFailureClass', () => {
   it("REGRESSION (Phase 112): detects iPadOS pointer-effect snap-zone miss (verified cursor + clicked + no screenChanged)", () => {
     // The Phase 109-111 failure mode: every attempt clicks (no skip),
     // cursor is verified at the requested target, but screenChanged
-    // stays false. This is iPadOS pointer-effect snap-zone — the
-    // cursor was correctly positioned but iPadOS didn't register the
-    // click on the target element. The summariser should specifically
-    // surface this so users see the keyboard-first recommendation.
+    // stays false. Historical framing labelled this "iPadOS pointer-
+    // effect snap-zone"; that causal claim is on the
+    // docs/troubleshooting/REJECTED_CLAIMS.md list as unverified. The
+    // test exercises the summariser's class-output behavior (which
+    // still emits that historical string for downstream consumers);
+    // do not read the assertion as a confirmed mechanism.
     const summary = summariseFailureClass([
       { cursorVerified: true, screenChanged: false },
       { cursorVerified: true, screenChanged: false },

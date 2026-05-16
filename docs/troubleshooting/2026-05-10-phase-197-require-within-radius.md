@@ -123,10 +123,12 @@ A live bench at v0.5.193 will validate. Results will be appended.
   algorithm is no longer confidently locked onto a wrong widget
   feature.
 - **But Files still fails 0% on 5 trials** — for OTHER reasons:
-  cursor fades before screenshot, snap-zone misses, or detection
-  genuinely failing in the top-right region. Two trials reported
-  `unv` (cursorVerified=false) — Phase 197 correctly returned
-  null instead of fabricating a position.
+  cursor fades before screenshot, click failing for unknown
+  reasons (earlier framing said "snap-zone misses"; that
+  mechanism is unverified — see REJECTED_CLAIMS.md), or
+  detection genuinely failing in the top-right region. Two
+  trials reported `unv` (cursorVerified=false) — Phase 197
+  correctly returned null instead of fabricating a position.
 
 ### Practical takeaway
 
@@ -157,9 +159,10 @@ noise; don't read a real lift into it.
 ## What's still on the roadmap (Phase 198+ candidates)
 
 - Files target still 0% on 5 trials. Remaining failure modes:
-  cursor fade before detection, snap-zone misses, or detection
-  genuinely failing in top-right region (Maps widget animation
-  interferes).
+  cursor fade before detection, click failing for unknown
+  reasons (REJECTED_CLAIMS.md notes the "snap-zone" framing is
+  unverified), or detection genuinely failing in top-right
+  region (Maps widget animation interferes).
 - Region-specific search-window tuning: top-right has different
   detection characteristics than dock area.
 - Apply `requireWithinRadius: true` to `click-verify.ts:720`
