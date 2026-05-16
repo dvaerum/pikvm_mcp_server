@@ -1,3 +1,5 @@
+> ⚠️ **This doc may assert mechanisms now rejected as unverified.** See [REJECTED_CLAIMS.md](REJECTED_CLAIMS.md) — `pointer-effect snap`, `iPad ignores tap`, `dead zone`, `stuck in dock` are hypotheses, not observed facts. Re-verify before quoting.
+
 # iPad cursor detection — troubleshooting log
 
 This document captures what we learned debugging the iPad

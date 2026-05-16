@@ -1,3 +1,5 @@
+> ⚠️ **This doc may assert mechanisms now rejected as unverified.** See [REJECTED_CLAIMS.md](REJECTED_CLAIMS.md) — `pointer-effect snap`, `iPad ignores tap`, `dead zone`, `stuck in dock` are hypotheses, not observed facts. Re-verify before quoting.
+
 # Phase 194-B live click bench (v0.5.188, 2026-04-30)
 
 **TL;DR.** The dark-cursor `looksLikeCursor` fix shipped in Phase 194-B

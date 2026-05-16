@@ -1,3 +1,5 @@
+> ⚠️ **This doc may assert mechanisms now rejected as unverified.** See [REJECTED_CLAIMS.md](REJECTED_CLAIMS.md) — `pointer-effect snap`, `iPad ignores tap`, `dead zone`, `stuck in dock` are hypotheses, not observed facts. Re-verify before quoting.
+
 # Phase 193-C live click bench (v0.5.186, 2026-04-30)
 
 **TL;DR.** Detection layer is now honest after Phase 193-A/B

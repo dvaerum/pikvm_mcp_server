@@ -1,3 +1,5 @@
+> ⚠️ **This doc may assert mechanisms now rejected as unverified.** See [REJECTED_CLAIMS.md](REJECTED_CLAIMS.md) — `pointer-effect snap`, `iPad ignores tap`, `dead zone`, `stuck in dock` are hypotheses, not observed facts. Re-verify before quoting.
+
 # Phase 197b (v0.5.194) — `requireWithinRadius` applied to click-verify wake-recapture path
 
 **Date:** 2026-05-10  
