@@ -39,9 +39,27 @@ const DEFAULT_MODEL = process.env.PIKVM_ML_MODEL
   : path.resolve(process.cwd(), 'ml', 'cursor-v1.onnx');
 const DEFAULT_CONFIDENCE_THRESHOLD = 0.5;
 
+// H-i (2026-05-17): v5 full-frame presence gate. When
+// PIKVM_ML_V5_PRESENCE_GATE=1, every findCursorByML call first runs
+// v5 on the full frame. If v5's presence head says "no cursor"
+// (presence < threshold), return null without running v1 — short-
+// circuiting the Phase 310 tautology where v1 false-positives on
+// page-indicator dots and icon glyphs.
+const V5_MODEL = process.env.PIKVM_ML_V5_MODEL
+  ? path.resolve(process.env.PIKVM_ML_V5_MODEL)
+  : path.resolve(process.cwd(), 'ml', 'cursor-v5.onnx');
+const V5_PRESENCE_GATE = process.env.PIKVM_ML_V5_PRESENCE_GATE === '1';
+const V5_INPUT_W = 768;
+const V5_INPUT_H = 480;
+const V5_HEATMAP_W = V5_INPUT_W / 4;  // 192
+const V5_HEATMAP_H = V5_INPUT_H / 4;  // 120
+const V5_PRESENCE_THRESHOLD = 0.5;
+
 let cachedSession: ort.InferenceSession | null = null;
 let cachedModelPath: string | null = null;
 let loadFailureLogged = false;
+let cachedV5Session: ort.InferenceSession | null = null;
+let v5LoadFailureLogged = false;
 
 /** Result type returned by findCursorByML. */
 export interface MLCursorResult {
@@ -94,6 +112,85 @@ async function getSession(modelPath: string): Promise<ort.InferenceSession | nul
 }
 
 /**
+ * Run v5 full-frame inference. Returns presence probability and a
+ * rough cursor position (in full-frame native pixels). Used by the
+ * presence-gate path; v5's position is intentionally coarse (~11 px
+ * median error) so callers either use it as a hint for v1 or treat
+ * the presence signal alone.
+ */
+async function findCursorPresenceV5(
+  jpegBuffer: Buffer,
+  frameWidth: number,
+  frameHeight: number,
+): Promise<{ presence: number; x: number; y: number } | null> {
+  if (cachedV5Session === null) {
+    try {
+      await fs.access(V5_MODEL);
+      cachedV5Session = await ort.InferenceSession.create(V5_MODEL);
+    } catch (e) {
+      if (!v5LoadFailureLogged) {
+        console.error(
+          `[cursor-ml-detect] failed to load v5 model at ${V5_MODEL}: ` +
+          `${(e as Error).message}. Presence gate disabled.`,
+        );
+        v5LoadFailureLogged = true;
+      }
+      return null;
+    }
+  }
+
+  // Resize full frame to v5 input dims (768×480) preserving aspect.
+  // PiKVM frames are 1680×1050 (aspect 1.6), v5 input is 768×480 (also 1.6).
+  const { data: rgb } = await sharp(jpegBuffer)
+    .resize(V5_INPUT_W, V5_INPUT_H, { fit: 'fill' })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const inputData = new Float32Array(1 * 3 * V5_INPUT_W * V5_INPUT_H);
+  for (let y = 0; y < V5_INPUT_H; y++) {
+    for (let x = 0; x < V5_INPUT_W; x++) {
+      const srcIdx = (y * V5_INPUT_W + x) * 3;
+      const r = rgb[srcIdx] / 255;
+      const g = rgb[srcIdx + 1] / 255;
+      const b = rgb[srcIdx + 2] / 255;
+      const dstBase = y * V5_INPUT_W + x;
+      const planeSize = V5_INPUT_W * V5_INPUT_H;
+      inputData[0 * planeSize + dstBase] = (r - MEAN[0]) / STD[0];
+      inputData[1 * planeSize + dstBase] = (g - MEAN[1]) / STD[1];
+      inputData[2 * planeSize + dstBase] = (b - MEAN[2]) / STD[2];
+    }
+  }
+
+  const inputTensor = new ort.Tensor(
+    'float32', inputData, [1, 3, V5_INPUT_H, V5_INPUT_W],
+  );
+  const results = await cachedV5Session.run({ frame: inputTensor });
+
+  // v5 has two outputs: heatmap_logits (1,1,120,192), presence_logit (1,1).
+  const heatmapLogits = results.heatmap_logits.data as Float32Array;
+  const presenceLogit = (results.presence_logit.data as Float32Array)[0];
+  const presence = 1 / (1 + Math.exp(-presenceLogit));
+
+  // Decode heatmap peak
+  let bestIdx = 0;
+  let bestLogit = -Infinity;
+  for (let i = 0; i < heatmapLogits.length; i++) {
+    if (heatmapLogits[i] > bestLogit) {
+      bestLogit = heatmapLogits[i];
+      bestIdx = i;
+    }
+  }
+  const peakY_hm = Math.floor(bestIdx / V5_HEATMAP_W);
+  const peakX_hm = bestIdx % V5_HEATMAP_W;
+  // Scale heatmap coords to native frame coords.
+  const xNative = (peakX_hm / V5_HEATMAP_W) * frameWidth;
+  const yNative = (peakY_hm / V5_HEATMAP_H) * frameHeight;
+
+  return { presence, x: xNative, y: yNative };
+}
+
+/**
  * Run the trained heatmap detector on a screenshot. Returns the
  * predicted cursor position (in full-frame pixels) or null.
  *
@@ -114,6 +211,17 @@ export async function findCursorByML(
 
   const session = await getSession(modelPath);
   if (session === null) return null;
+
+  // H-i (2026-05-17): v5 presence gate. Short-circuit when v5 says no
+  // cursor in the frame, before running v1's crop-around-hint
+  // inference. Defends against Phase 310 tautology where v1 picks
+  // icon-internal features as "cursor" in cursor-absent crops.
+  if (V5_PRESENCE_GATE) {
+    const v5 = await findCursorPresenceV5(jpegBuffer, frameWidth, frameHeight);
+    if (v5 !== null && v5.presence < V5_PRESENCE_THRESHOLD) {
+      return null;
+    }
+  }
 
   // Compute the crop window — center on hint, clamp to frame bounds.
   const half = CROP_SIZE / 2;
