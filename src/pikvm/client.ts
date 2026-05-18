@@ -657,6 +657,32 @@ export class PiKVMClient {
     params.set('delta_x', clampedX.toString());
     params.set('delta_y', clampedY.toString());
 
+    // 2026-05-17: opt-in emit logger. When PIKVM_EMIT_LOG is set,
+    // append every (clamped) emit + timestamp + stack trace to that
+    // file. Used to correlate emit-by-emit with cursor-trajectory
+    // captures so we can see when our emits and the cursor's actual
+    // motion diverge.
+    const emitLog = process.env.PIKVM_EMIT_LOG;
+    if (emitLog) {
+      try {
+        const fs = await import('fs');
+        // Capture caller frames (skip this function + Error.captureStackTrace).
+        const err = new Error();
+        const stack = (err.stack ?? '').split('\n').slice(2, 7).map(s => s.trim()).join(' ← ');
+        await fs.promises.appendFile(
+          emitLog,
+          JSON.stringify({
+            t: Date.now(),
+            requested: { dx: deltaX, dy: deltaY },
+            clamped: { dx: clampedX, dy: clampedY },
+            stack,
+          }) + '\n',
+        );
+      } catch {
+        // Ignore log errors — diagnostic must not break the emit.
+      }
+    }
+
     await this.request('POST', `/hid/events/send_mouse_relative?${params}`);
     // Phase 187: stamp the keepalive clock. The keepalive guard
     // (cursor-keepalive.ts) reads this timestamp to decide whether
