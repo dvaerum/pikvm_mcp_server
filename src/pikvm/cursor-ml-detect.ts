@@ -118,7 +118,7 @@ async function getSession(modelPath: string): Promise<ort.InferenceSession | nul
  * median error) so callers either use it as a hint for v1 or treat
  * the presence signal alone.
  */
-async function findCursorPresenceV5(
+export async function findCursorPresenceV5(
   jpegBuffer: Buffer,
   frameWidth: number,
   frameHeight: number,
