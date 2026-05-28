@@ -90,12 +90,15 @@ const homeShot = await client.screenshot({ quality: 75 });
 const { rgb: homeRgb } = await rgbFromJpeg(homeShot.buffer);
 await fs.writeFile(path.join(ROOT, 'home-reference.jpg'), homeShot.buffer);
 console.error(`Captured home reference (96x54 RGB, ${homeRgb.length} bytes)`);
-// PA20: a 0.9 similarity-to-home threshold separates "still home"
-// (≥0.9 — pure pointer-effect HITs that didn't launch anything) from
-// "launched app" (<0.9 — different UI). Calibrated against PA19-i
-// Settings 02-hit.jpg (cursor on icon, no launch) and known-launched
-// frames from earlier sessions.
-const HOME_SIM_THRESHOLD = 0.9;
+// PA20: similarity-to-home threshold for "still home" vs "launched
+// app". Bimodal data from the first PA20 run:
+//   - 0.924-0.948 when an app (Settings, Maps) is visible
+//   - 0.999 when home is unchanged
+// The big constant noise floor (~0.92) is the HDMI letterbox black
+// border, which is identical between home and any app screenshot.
+// 0.95 cleanly separates the two modes; 0.9 (initial guess) was too
+// lax and misclassified successful launches as NOLAUNCH.
+const HOME_SIM_THRESHOLD = 0.95;
 
 // 2026-05-28: re-measured against the current iPad home-screen layout
 // after the bench started producing MISSes (cursor landing in icon
