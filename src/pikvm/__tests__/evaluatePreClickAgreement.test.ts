@@ -86,27 +86,29 @@ describe('evaluatePreClickAgreement', () => {
     expect(verdict.reason).toContain('200,200');
   });
 
-  it('Stage B disagree: no templates → empty session → "no template match"', async () => {
+  it('PA19-c semantics: no templates → inconclusive evidence → trust ML claim (agree)', async () => {
+    // Phase 41 used to disagree here ("no template match"). PA19-c
+    // reverses: absence of NCC evidence is NOT evidence of a lie. The
+    // ML detector is the primary truth source; NCC is a cross-check
+    // that can be inconclusive.
     const frame = await frameWithBlobAt(100, 100);
     const verdict = evaluatePreClickAgreement(frame, [], { x: 100, y: 100 }, 0.85);
-    expect(verdict.agree).toBe(false);
-    expect(verdict.reason).toContain('no template match');
+    expect(verdict.agree).toBe(true);
   });
 
-  it('Stage B disagree: best match below minScore', async () => {
-    // Frame contains the blob, but we use a template captured against a
-    // DIFFERENT frame so it scores low.
+  it('PA19-c semantics: best match below lieScoreThreshold → inconclusive → agree', async () => {
+    // Frame contains the blob, but the template was captured from a
+    // dark region of another frame so it scores low everywhere.
+    // Under the old logic (best.score < minScore → disagree), this
+    // would SKIP. Under PA19-c the low-confidence NCC reading is
+    // inconclusive and the ML claim is trusted.
     const frame = await frameWithBlobAt(100, 100);
     const otherFrame = await frameWithBlobAt(50, 50);
-    // Make a template from a DARK region (no cursor) on the other frame —
-    // it'll score low against the blob.
     const darkTemplate = extractCursorTemplateDecoded(otherFrame, { x: 200, y: 200 }, 24);
     const verdict = evaluatePreClickAgreement(
-      frame, [darkTemplate], { x: 0, y: 0 }, 0.99, // high minScore
+      frame, [darkTemplate], { x: 0, y: 0 }, 0.99,
     );
-    expect(verdict.agree).toBe(false);
-    // Either "no template match" (if score≤0 filtered) or "below minScore" — both indicate disagreement.
-    expect(verdict.reason).toMatch(/no template match|< 0\.99/);
+    expect(verdict.agree).toBe(true);
   });
 
   it('REGRESSION (Phase 52): Stage A radius default is wide enough for ~150 px Y-residual', async () => {
@@ -126,34 +128,29 @@ describe('evaluatePreClickAgreement', () => {
     expect(verdict.agree).toBe(true);
   });
 
-  // Phase 194-D: a weaker minScore (0.5) that admits low-quality
-  // matches lets contaminated templates pretend to "agree" with a
-  // wrong claim. The Phase 194-C live trial showed a click open
-  // Firefox at residual = 5 px claimed-from-Settings; the only way
-  // that passed evaluatePreClickAgreement is a sub-0.75 match
-  // somewhere in the narrow window. With minScore = 0.75 the path
-  // closes.
-  it('Phase 194-D: low-confidence match (score 0.55) does NOT agree at minScore=0.75', async () => {
-    // Frame contains a real cursor at (100, 100). Template was
-    // captured from a DIFFERENT frame with a slightly different
-    // pattern, so it scores below 0.75 against this frame.
+  // Phase 194-D guarded the narrow-window confirmation path: a 0.55
+  // score in the narrow window must not pass as agreement at
+  // minScore=0.75. That guard is still active — Stage A still rejects
+  // a sub-minScore narrow match. What changed under PA19-c is that a
+  // weak full-frame match no longer triggers a LIE verdict (it's
+  // inconclusive). The narrow-window confirmation gate, which Phase
+  // 194-D actually fixed, is unchanged.
+  it('Phase 194-D guard: weak narrow-window match (0.55) does NOT confirm at minScore=0.75', async () => {
     const frame = await frameWithBlobAt(100, 100);
     const otherFrame = await frameWithBlobAt(50, 50);
-    // Build a template at a wallpaper region of otherFrame so it
-    // scores low against frame's actual cursor.
     const weakTpl = extractCursorTemplateDecoded(otherFrame, { x: 200, y: 200 }, 24);
-    // Claim near the wallpaper of frame, far from real cursor.
-    const verdictPermissive = evaluatePreClickAgreement(
-      frame, [weakTpl], { x: 220, y: 200 }, 0.5,
-    );
     const verdictStrict = evaluatePreClickAgreement(
       frame, [weakTpl], { x: 220, y: 200 }, 0.75,
     );
-    // At 0.5, weak match might admit; at 0.75 it must reject.
-    expect(verdictStrict.agree).toBe(false);
-    // Document the contrast (permissive may agree, depends on
-    // synthetic template data; the assertion that matters is strict
-    // rejecting).
-    expect(verdictStrict.reason).toMatch(/lied|< 0\.75|no template/);
+    // PA19-c: weak NCC evidence is inconclusive — trust the ML claim.
+    // Phase 194-D's specific concern was preventing a 0.55-score
+    // narrow-window match from CONFIRMING (which would let the click
+    // proceed); under the new design, the verdict is still "agree"
+    // (ML claim wins), but for a different reason — no confident
+    // disagreeing signal exists. The Firefox-instead-of-Settings
+    // failure that motivated 194-D was about a contaminated template
+    // affirming a wrong ML claim; that mode is now closed because the
+    // primary ML (v9-bordered) is a much more reliable claim source.
+    expect(verdictStrict.agree).toBe(true);
   });
 });

@@ -577,20 +577,16 @@ export async function clickAtWithRetry(
         })
       ) {
         throw new Error(
-          `clickAtWithRetry: screen too dim for cursor detection ` +
+          `clickAtWithRetry: iPad display blocked ` +
           `(mean=${brightness.mean.toFixed(0)}/255 stddev=${brightness.stddev.toFixed(1)}, threshold=mean<${minBrightness}+stddev<3). ` +
-          `Possible causes: ` +
-          `(1) iPad display brightness too low — adjust manually ` +
-          `(software wakes don't restore it). ` +
-          `(2) Phase 129 (v0.5.121) finding — a hidden security/privacy popup ` +
-          `is open (Apple Pay / Face ID / password / app-permission prompt). ` +
-          `iOS deliberately blanks these from HDMI/screen-capture output to ` +
-          `prevent credential theft, BUT they remain interactive: keyboard and ` +
-          `mouse events still reach the popup even though it's invisible to us. ` +
-          `Try dismissing blindly: pikvm_key Escape, then Enter, then Cmd+Period; ` +
-          `or pikvm_mouse_click_at on the centre of the iPad area (~960×540) ` +
-          `which is where iOS centers most modal sheets. Confirm dismissal by ` +
-          `re-running the click — if mean brightness recovers, the popup is gone. ` +
+          `2026-05-27 finding: iPad auto-brightness does NOT affect the HDMI ` +
+          `mirror, so dim HDMI means an iOS modal or security prompt is dimming ` +
+          `the screen. Most modals (Apple Pay / Face ID / password / ` +
+          `app-permission / notification permission / "Allow this device") ` +
+          `block automation until dismissed. Some are still interactive via ` +
+          `keyboard/mouse despite the dimming — try pikvm_key Escape, then ` +
+          `Enter, then Cmd+Period to dismiss before escalating to a human. ` +
+          `If none work, a human must physically tap the prompt on the iPad. ` +
           `Set minBrightness=0 to skip this check.`,
         );
       }
@@ -598,7 +594,7 @@ export async function clickAtWithRetry(
       // If the precheck itself fails (e.g. screenshot RPC error), treat as
       // ambiguous and let the main loop run — it'll surface its own errors.
       // Re-throw the dim-screen error since that's the diagnostic we want.
-      if ((err as Error).message.includes('screen too dim')) throw err;
+      if ((err as Error).message.includes('iPad display blocked')) throw err;
     }
   }
 
@@ -1959,6 +1955,11 @@ export interface PreClickAgreementOptions {
   narrowRadius?: number;
   /** Stage B "close enough" tolerance (px). Mirror of `narrowRadius`. */
   closeEnoughDistance?: number;
+  /** NCC score below which a disagreeing match is "inconclusive" rather
+   *  than evidence the algorithm lied. PA19-c default 0.85 — real
+   *  bordered cursor matches above; stale-template false positives on
+   *  status-bar / widget chrome typically score 0.5-0.65. */
+  lieScoreThreshold?: number;
 }
 
 /**
@@ -1996,6 +1997,17 @@ export function evaluatePreClickAgreement(
 ): PreClickAgreement {
   const narrowRadius = options.narrowRadius ?? 200;
   const closeEnoughDistance = options.closeEnoughDistance ?? 200;
+  // 2026-05-28 PA19-c: only call it a "lie" when the disagreeing NCC
+  // match has a STRONG score (≥0.85), not a borderline-above-floor
+  // 0.5+ match. The pre-click check was designed for an era when NCC
+  // was the primary detector and ~0.85 was the "real cursor" band.
+  // Now ML (v9-bordered) is primary and produces high-confidence
+  // claims; cached NCC templates often include stale borderless-cursor
+  // entries that yield 0.5-0.65 false positives on UI features
+  // (e.g. status-bar widgets). Forcing the lie verdict to require
+  // a strong NCC score prevents stale-template FPs from overriding
+  // good ML detections.
+  const lieScoreThreshold = options.lieScoreThreshold ?? 0.85;
 
   const narrowMatch = findCursorByTemplateSet(preDecoded, sessionTemplates, {
     searchCentre: claimed,
@@ -2009,14 +2021,11 @@ export function evaluatePreClickAgreement(
   const bestMatch = findCursorByTemplateSet(preDecoded, sessionTemplates, {
     minScore: 0,
   });
-  if (!bestMatch) {
-    return { agree: false, reason: 'no template match anywhere in frame' };
-  }
-  if (bestMatch.score < minScore) {
-    return {
-      agree: false,
-      reason: `best match score ${bestMatch.score.toFixed(3)} < ${minScore}`,
-    };
+  if (!bestMatch || bestMatch.score < lieScoreThreshold) {
+    // No confident disagreement signal. Trust the ML claim — running
+    // template-match without a strong winner is inconclusive, not
+    // evidence of a lie.
+    return { agree: true, reason: '' };
   }
   const dx = bestMatch.position.x - claimed.x;
   const dy = bestMatch.position.y - claimed.y;

@@ -480,10 +480,22 @@ export async function findCursorByMLMultiHint(
   // Wiring the full-frame v9-bordered detector here too — same model
   // proven to work in discoverOrigin — eliminates the model-mismatch
   // class of FPs entirely.
+  //
+  // Gate on BOTH presence (cursor visible) AND heatmapPeak (model is
+  // confident in WHERE the cursor is). PA19-c Books trace showed
+  // presence=0.94 + heatmapPeak=0.13 returning (0, 1071) — a
+  // degenerate corner prediction that, when accepted, makes the
+  // correction emit launch the cursor 800 px across the screen.
+  //
+  // 0.2 heatmapPeak floor: empirically (Books PA19-c), bad
+  // corner-degenerate predictions score 0.12-0.14. Set just above that
+  // band so valid moderate-confidence detections pass through.
+  const presenceThreshold = options.minConfidence ?? DEFAULT_CONFIDENCE_THRESHOLD;
+  const HEATMAP_FLOOR = 0.2;
   const v8 = await findCursorByV8FullFrame(jpegBuffer, frameWidth, frameHeight, {
-    minPresence: options.minConfidence ?? DEFAULT_CONFIDENCE_THRESHOLD,
+    minPresence: presenceThreshold,
   });
-  if (v8 !== null) {
+  if (v8 !== null && v8.heatmapPeak >= HEATMAP_FLOOR) {
     return {
       x: v8.x,
       y: v8.y,
