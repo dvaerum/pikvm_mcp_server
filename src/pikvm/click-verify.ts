@@ -846,14 +846,17 @@ export async function clickAtWithRetry(
           shot.buffer, shot.screenshotWidth, shot.screenshotHeight,
           { minPresence: 0.5 },
         );
-        if (v8 !== null && v8.heatmapPeak >= 0.5) {
+        // Accept moderate-confidence (heatmap ≥ 0.3) detections within
+        // 80 px of target. PA19-f Books inspection showed iPadOS pointer-
+        // effect morphs the cursor onto icons, dropping v9-bordered's
+        // heatmapPeak to 0.33-0.48 (vs 0.95+ for free-floating cursors).
+        // The 80 px geographic filter is the safety net — it covers the
+        // pointer-effect cursor-on-icon case without admitting far-away
+        // FP-class detections (the recurring 100-130 px static FPs in
+        // dock/widget areas).
+        if (v8 !== null && v8.heatmapPeak >= 0.3) {
           const recoverDist = Math.hypot(v8.x - target.x, v8.y - target.y);
-          // Only adopt if reasonably close to target — if the cursor is
-          // far away, the original SKIP was correct (real positioning
-          // failure, not a verification gap). 120 px window covers the
-          // 7-9 px AppStore false-SKIP class without admitting Books
-          // 127 px true-positioning failures.
-          if (recoverDist <= 120) {
+          if (recoverDist <= 80) {
             (lastMoveResult as { finalDetectedPosition: { x: number; y: number } | null })
               .finalDetectedPosition = { x: v8.x, y: v8.y };
             cursorVerified = true;
