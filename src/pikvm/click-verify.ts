@@ -30,6 +30,7 @@ import type { PiKVMClient, MouseButton } from './client.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
 import { detectIpadBoundsFromBuffer } from './orientation.js';
 import { loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './template-set.js';
+import { findCursorByV8FullFrame } from './cursor-ml-detect.js';
 import { ipadGoHome } from './ipad-unlock.js';
 import { keepCursorAlive } from './cursor-keepalive.js';
 import { slamToCorner } from './ballistics.js';
@@ -823,6 +824,43 @@ export async function clickAtWithRetry(
         }
       } catch {
         // Fall through; we'll skip the click as before.
+      }
+    }
+
+    if (requireVerifiedCursor && !cursorVerified) {
+      // PA19-e (2026-05-28): last-chance v9-bordered full-frame check
+      // before declaring "cursor not verified". moveToPixel's internal
+      // chain can fail (motion-diff null + template null + wiggle-
+      // verify rejected) even when v9-bordered would find the cursor
+      // cleanly on a fresh frame. Saved-SKIP analysis showed 2 of 6
+      // AppStore SKIPs had the cursor visibly 7-9 px from target —
+      // they were false SKIPs caused by transient detection
+      // disagreement, not real positioning failure.
+      //
+      // Fresh frame + same v9-bordered model that drives everything
+      // else. If it finds a confident cursor within reasonable range
+      // of target, accept it and let the click proceed.
+      try {
+        const shot = await client.screenshot();
+        const v8 = await findCursorByV8FullFrame(
+          shot.buffer, shot.screenshotWidth, shot.screenshotHeight,
+          { minPresence: 0.5 },
+        );
+        if (v8 !== null && v8.heatmapPeak >= 0.5) {
+          const recoverDist = Math.hypot(v8.x - target.x, v8.y - target.y);
+          // Only adopt if reasonably close to target — if the cursor is
+          // far away, the original SKIP was correct (real positioning
+          // failure, not a verification gap). 120 px window covers the
+          // 7-9 px AppStore false-SKIP class without admitting Books
+          // 127 px true-positioning failures.
+          if (recoverDist <= 120) {
+            (lastMoveResult as { finalDetectedPosition: { x: number; y: number } | null })
+              .finalDetectedPosition = { x: v8.x, y: v8.y };
+            cursorVerified = true;
+          }
+        }
+      } catch {
+        // Recovery best-effort; fall through to the SKIP path below.
       }
     }
 
