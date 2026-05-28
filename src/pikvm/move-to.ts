@@ -2023,17 +2023,25 @@ export async function moveToPixel(
       // v0.5.245 showed Phase 310 tautology slipping through: in a dense
       // icon grid, ML often finds *something* high-conf within 30 px of
       // any test point. Require (A) AND (B) together for accept.
-      const cursorAtExpected = await findCursorByML(
+      // PA19-d: use the v9-bordered full-frame detector via multi-hint
+      // (same single-call cost on multi-hint dedup) so wiggle-verify
+      // operates on the same model that produced `initial`. Previously
+      // both checks called findCursorByML which loads cursor-v1.onnx
+      // — wrong-era model for the orange-bordered cursor — causing
+      // valid v9-bordered detections to be rejected as static FPs.
+      const cursorAtExpected = await findCursorByMLMultiHint(
         wiggleShotRaw.buffer,
         wiggleShotRaw.screenshotWidth,
         wiggleShotRaw.screenshotHeight,
-        { hint: expectedPostPos, minConfidence: 0.5 },
+        [expectedPostPos],
+        { minConfidence: 0.5 },
       );
-      const stillAtInitial = await findCursorByML(
+      const stillAtInitial = await findCursorByMLMultiHint(
         wiggleShotRaw.buffer,
         wiggleShotRaw.screenshotWidth,
         wiggleShotRaw.screenshotHeight,
-        { hint: { x: initial.x, y: initial.y }, minConfidence: 0.5 },
+        [{ x: initial.x, y: initial.y }],
+        { minConfidence: 0.5 },
       );
       // Always inverse-wiggle to restore cursor near initial pos
       await client.mouseMoveRelative(-dxMickeys, -dyMickeys);
