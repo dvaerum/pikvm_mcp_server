@@ -114,16 +114,20 @@ Configure on the iPad once, before connecting it to the PiKVM HDMI capture:
 |---|---|---|
 | **Full Keyboard Access** | **ON** | Phase 63 — enables Tab / Arrow keyboard navigation in many panes. Keyboard nav is far more reliable than cursor clicks. With Full Keyboard Access OFF, only some apps respond to keyboard nav |
 
-**Once configured, also set the cursor detection environment** when launching
-the MCP server (or any benchmark script):
+**ML cursor calibration is on by default.** When the bundled
+`ml/cursor-v9-bordered.onnx` (8.7 MB, MobileNetV3-small, 700 training
+frames) is present, the orange-cursor ML detector seeds the cursor-origin
+calibration step automatically — no env vars required.
 
+To **disable** the ML path (force probe-and-diff only):
 ```bash
-PIKVM_V8_CALIBRATE=1
-PIKVM_ML_V8_MODEL=/absolute/path/to/pikvm_mcp_server/ml/cursor-v9-bordered.onnx
+PIKVM_ML_DISABLE=1
 ```
 
-The model file `ml/cursor-v9-bordered.onnx` (8.7 MB, MobileNetV3-small,
-700 frames of training data) is committed in the repo.
+To **A/B test** with a different model file:
+```bash
+PIKVM_ML_V8_MODEL=/absolute/path/to/some-other-model.onnx
+```
 
 ### Screenshots
 

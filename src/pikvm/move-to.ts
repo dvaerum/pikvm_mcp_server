@@ -44,7 +44,7 @@ import {
 } from './cursor-detect.js';
 import { extractMaskedTemplate } from './seed-template.js';
 import { findCursorByShape } from './cursor-shape-detect.js';
-import { findCursorByML, findCursorByMLMultiHint, buildMLHints, type MLCursorResult } from './cursor-ml-detect.js';
+import { findCursorByML, findCursorByMLMultiHint, buildMLHints, findCursorByV8FullFrame, type MLCursorResult } from './cursor-ml-detect.js';
 import {
   DEFAULT_TEMPLATE_DIR,
   LEGACY_TEMPLATE_PATH,
@@ -781,6 +781,38 @@ async function discoverOrigin(
   }
 
   if (requested === 'detect-then-move') {
+    // 2026-05-25: v8 full-frame CNN trained on combined v0+emit+collect
+    // human labels was median 15 px off on the same frames where
+    // locateCursor (probe-and-diff) returned ~360 px-wrong positions.
+    // 2026-05-28: cursor-v9-bordered.onnx (same architecture, retrained
+    // on the orange-bordered cursor) verified 90% live click rate, 0%
+    // silent miss — see docs/troubleshooting/2026-05-28-orange-cursor-
+    // v9-bordered-90-percent.md. The ML calibration path is now ENABLED
+    // BY DEFAULT (was opt-in PIKVM_V8_CALIBRATE=1 prior to this change).
+    // Opt out via PIKVM_ML_DISABLE=1. The legacy PIKVM_V8_CALIBRATE=1
+    // is still honoured for backward compatibility but no longer needed.
+    // If presence gate fires (cursor confidently present), use that
+    // position as origin and skip the locateCursor probe path. No
+    // probeMeasurement is returned — downstream falls back to the
+    // prior calibrated ratio for emit planning.
+    const mlEnabled = process.env.PIKVM_ML_DISABLE !== '1';
+    if (mlEnabled) {
+      const shot = await decodeScreenshot(await takeRawScreenshot(client));
+      const v8 = await findCursorByV8FullFrame(shot.buffer, shot.width, shot.height);
+      if (v8 !== null) {
+        if (options.verbose) {
+          console.log(
+            `[discoverOrigin] v8 calibration: cursor at (${v8.x}, ${v8.y}), ` +
+            `presence=${v8.presence.toFixed(3)}, heatmapPeak=${v8.heatmapPeak.toFixed(3)}`,
+          );
+        }
+        return { point: { x: v8.x, y: v8.y }, method: 'detect-then-move' };
+      }
+      if (options.verbose) {
+        console.log('[discoverOrigin] v8 calibration returned null; falling back to locateCursor');
+      }
+    }
+
     // Phase 19: locateCursor (probe-and-diff) is now PRIMARY for origin
     // discovery. Pre-Phase-13, template-match was preferred because
     // locateCursor was unreliable (failed ~60% of trials). With the

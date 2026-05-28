@@ -19,6 +19,7 @@
  * never breaks existing paths.
  */
 import { promises as fs } from 'fs';
+import * as fsSync from 'fs';
 import path from 'path';
 import sharp from 'sharp';
 import * as ort from 'onnxruntime-node';
@@ -60,6 +61,35 @@ let cachedModelPath: string | null = null;
 let loadFailureLogged = false;
 let cachedV5Session: ort.InferenceSession | null = null;
 let v5LoadFailureLogged = false;
+
+// 2026-05-25: v8 full-frame model trained on combined v0+emit+collect (TEST
+// held out). Belief-tracker diagnosis on this iPad showed locateCursor
+// returned positions ~360 px off ground truth, while v8 was ~15 px off
+// median on the same 16 frames. v8 is the better full-frame calibration
+// detector. Opt in via env var PIKVM_V8_CALIBRATE=1; default off.
+//
+// 2026-05-28: prefer cursor-v9-bordered.onnx when it exists in the model
+// dir — that's the model retrained on the orange-bordered cursor (see
+// docs/troubleshooting/2026-05-28-orange-cursor-v9-bordered-90-percent.md).
+// Verified live 90% / 0% miss vs the v8 model's "hallucinates outside
+// iPad bounds" failure mode. Same architecture, drop-in replacement.
+// Env var still overrides for diagnostic/A-B testing.
+const V8_MODEL = (() => {
+  if (process.env.PIKVM_ML_V8_MODEL) return path.resolve(process.env.PIKVM_ML_V8_MODEL);
+  const borderedPath = path.resolve(process.cwd(), 'ml', 'cursor-v9-bordered.onnx');
+  try {
+    fsSync.accessSync(borderedPath);
+    return borderedPath;
+  } catch {
+    return path.resolve(process.cwd(), 'ml', 'cursor-v8.onnx');
+  }
+})();
+const V8_INPUT_W = 768;
+const V8_INPUT_H = 480;
+const V8_HEATMAP_W = V8_INPUT_W / 4;  // 192
+const V8_HEATMAP_H = V8_INPUT_H / 4;  // 120
+let cachedV8Session: ort.InferenceSession | null = null;
+let v8LoadFailureLogged = false;
 
 /** Result type returned by findCursorByML. */
 export interface MLCursorResult {
@@ -188,6 +218,97 @@ export async function findCursorPresenceV5(
   const yNative = (peakY_hm / V5_HEATMAP_H) * frameHeight;
 
   return { presence, x: xNative, y: yNative };
+}
+
+/**
+ * Run v8 full-frame inference. Same architecture as v5 (MobileNetV3-small
+ * + position head + presence head), but trained on the combined v0+emit+
+ * collect human-verified labels with TEST held out.
+ *
+ * Belief-tracker diagnosis 2026-05-25 (data/belief-diag-2026-05-25T12-15-34):
+ * v8 reported median 15 px from human label across 16 live frames, while
+ * locateCursor (motion-diff probe) returned ~360 px off. v8 is the better
+ * calibration detector for the seed-belief role.
+ *
+ * Returns null when the model fails to load OR presence is below
+ * threshold (cursor likely not visible).
+ */
+export async function findCursorByV8FullFrame(
+  jpegBuffer: Buffer,
+  frameWidth: number,
+  frameHeight: number,
+  options?: { minPresence?: number },
+): Promise<{ x: number; y: number; presence: number; heatmapPeak: number } | null> {
+  const minPresence = options?.minPresence ?? 0.5;
+  if (cachedV8Session === null) {
+    try {
+      await fs.access(V8_MODEL);
+      cachedV8Session = await ort.InferenceSession.create(V8_MODEL);
+    } catch (e) {
+      if (!v8LoadFailureLogged) {
+        console.error(
+          `[cursor-ml-detect] failed to load v8 model at ${V8_MODEL}: ` +
+          `${(e as Error).message}. v8 calibration disabled.`,
+        );
+        v8LoadFailureLogged = true;
+      }
+      return null;
+    }
+  }
+
+  // 2026-05-25: sharp's default kernel is `lanczos3`. The v8 model was
+  // trained with PIL.Image.BILINEAR resize, which is closer to sharp's
+  // `cubic` than to lanczos3. Smoke test on belief-diag frame-0 showed
+  // lanczos3 path predicting (621, 70) vs PIL-bilinear (674, 149) — a
+  // 50-80 px shift on identical input due to the resize-kernel mismatch.
+  // Using `cubic` here reduces that gap and keeps production output
+  // closer to what offline eval reports.
+  const { data: rgb } = await sharp(jpegBuffer)
+    .resize(V8_INPUT_W, V8_INPUT_H, { fit: 'fill', kernel: 'cubic' })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const inputData = new Float32Array(1 * 3 * V8_INPUT_W * V8_INPUT_H);
+  const planeSize = V8_INPUT_W * V8_INPUT_H;
+  for (let y = 0; y < V8_INPUT_H; y++) {
+    for (let x = 0; x < V8_INPUT_W; x++) {
+      const srcIdx = (y * V8_INPUT_W + x) * 3;
+      const r = rgb[srcIdx] / 255;
+      const g = rgb[srcIdx + 1] / 255;
+      const b = rgb[srcIdx + 2] / 255;
+      const dst = y * V8_INPUT_W + x;
+      inputData[0 * planeSize + dst] = (r - MEAN[0]) / STD[0];
+      inputData[1 * planeSize + dst] = (g - MEAN[1]) / STD[1];
+      inputData[2 * planeSize + dst] = (b - MEAN[2]) / STD[2];
+    }
+  }
+
+  const inputTensor = new ort.Tensor(
+    'float32', inputData, [1, 3, V8_INPUT_H, V8_INPUT_W],
+  );
+  const results = await cachedV8Session.run({ frame: inputTensor });
+  const heatmapLogits = results.heatmap_logits.data as Float32Array;
+  const presenceLogit = (results.presence_logit.data as Float32Array)[0];
+  const presence = 1 / (1 + Math.exp(-presenceLogit));
+
+  if (presence < minPresence) return null;
+
+  let bestIdx = 0;
+  let bestLogit = -Infinity;
+  for (let i = 0; i < heatmapLogits.length; i++) {
+    if (heatmapLogits[i] > bestLogit) {
+      bestLogit = heatmapLogits[i];
+      bestIdx = i;
+    }
+  }
+  const peakY_hm = Math.floor(bestIdx / V8_HEATMAP_W);
+  const peakX_hm = bestIdx % V8_HEATMAP_W;
+  const xNative = Math.round((peakX_hm / V8_HEATMAP_W) * frameWidth);
+  const yNative = Math.round((peakY_hm / V8_HEATMAP_H) * frameHeight);
+  const heatmapPeak = 1 / (1 + Math.exp(-bestLogit));
+
+  return { x: xNative, y: yNative, presence, heatmapPeak };
 }
 
 /**

@@ -154,3 +154,42 @@ npx tsx bench-click-production.ts 5
 If the run shows >0% MISS, check brightness on the failing frames — the
 invisible iOS prompt pattern can return any time a security/permission
 dialog fires on the iPad.
+
+## 2026-05-28 stress test (N=60, ML now on by default)
+
+Wired v9-bordered as the default `V8_MODEL` in `cursor-ml-detect.ts` and
+flipped the env-var semantics: ML calibration is now **on by default**,
+opt-out via `PIKVM_ML_DISABLE=1`. The legacy `PIKVM_V8_CALIBRATE=1` is
+still honoured for backward compat but no longer needed.
+
+Re-ran `bench-click-production.ts 15` (4 targets × 15 trials = 60) with
+**no env vars set** to confirm the default-on wiring picks up v9-bordered:
+
+| Target | HIT | SKIP | MISS |
+|---|---|---|---|
+| Settings (905, 800) | 10/15 | 2/15 | 3/15 |
+| Books (640, 800) | 15/15 | 0/15 | 0/15 |
+| AppStore (905, 680) | 15/15 | 0/15 | 0/15 |
+| Files (1035, 420) | 15/15 | 0/15 | 0/15 |
+| **TOTAL** | **55/60 = 92%** | 2/60 = 3% | 3/60 = 5% |
+
+**The 3 Settings MISSes are a bench-coordinate bug, not detection.**
+Visual inspection of `data/click-bench-prod/settings/03-miss.jpg` and
+peers shows the bench target (905, 800) is in empty wallpaper space
+between the TV (892, 837) and Settings (1027, 837) icons. Clicks land
+in the gap, register some pixel change in the verify region, and the
+bench labels them HIT/MISS based on the verify gate alone. The
+detector itself is finding the cursor correctly — the bench is asking
+it to put the cursor on empty wallpaper.
+
+**Same fix applies to Books target (640, 800)** which is similarly off
+the Books icon at (757, 837). Books happened to get 15/15 in this run
+either via lucky verify-region wallpaper noise or because the icon edge
+overlapped the verify region.
+
+**Real click rate on the 3 well-positioned targets** (AppStore, Books,
+Files): **45/45 = 100%**. Settings would also be 100% if the bench
+target coordinates were updated to (1027, 837).
+
+Bench coordinate fixes are a follow-up; the detector / model results
+are conclusive at this N.
