@@ -235,3 +235,68 @@ worth investigating separately. Path forward would be:
 a HIT rate when the bench targets weren't visually verified against
 the current iPad layout. Bench coord drift between iPad reorientations
 or iPadOS updates is invisible and inflates HIT numbers.
+
+## 2026-05-28 PA19 root cause — model mismatch in verification path (41% → 81% HIT)
+
+Investigation of the 30% SKIP rate turned up a real bug: two different
+ONNX models were live in the codebase simultaneously, and only one used
+the orange-bordered weights.
+
+- `findCursorByV8FullFrame` → `ml/cursor-v9-bordered.onnx` (correct).
+  Used by `discoverOrigin` to seed cursor position at the start of every
+  attempt.
+- `findCursorByML` / `findCursorByMLMultiHint` → `ml/cursor-v1.onnx`
+  (borderless-cursor weights, wrong distribution). Used inside
+  `tryOpenLoopShapeDetect` for post-emit verification.
+
+Verbose trace on a Settings trial (n=4 attempts):
+
+```
+[discoverOrigin] v8 calibration: cursor at (1100, 684), heatmapPeak=0.978  ← TRUE cursor, v9-bordered
+[move-to] motion-diff returned null
+[move-to] ML detect ACCEPTED — (961,919) conf=0.989 prox=105                ← v1 hallucination, near target hint
+```
+
+discoverOrigin found the cursor correctly every attempt (1100, 684) →
+(1110, 738) → (1110, 756) — moving as corrections accumulated. But the
+verification ML, fed a crop centred on target hint (1027, 837), used
+the v1 borderless-cursor weights and confidently returned (961, 919)
+at heatmap_peak 0.989. (961, 919) is wallpaper between Settings icon
+and the dock — visually nothing — but a confident-wrong feature for
+the wrong model on this iPad's cursor distribution.
+
+This was the same Phase 310 tautology class of bug, but the source
+wasn't "the algorithm gets confused near target" — it was "the wrong
+model is loaded in the verification path".
+
+### Fix
+
+`findCursorByMLMultiHint` now tries the full-frame v9-bordered detector
+first; only when that returns null (presence below threshold = cursor
+not visible) does it fall through to the hint-crop loop on v1. Single-
+file change in `src/pikvm/cursor-ml-detect.ts`. No call-site changes.
+
+### Live bench n=32 (PRODUCTION DEFAULTS, no env vars)
+
+| Target | Before fix | After fix |
+|---|---|---|
+| Settings (1027, 837) | 0/8 HIT, 8/8 SKIP | **8/8 HIT** |
+| Books (757, 837) | 3/8 HIT, 5/8 SKIP | 2/8 HIT, 6/8 SKIP |
+| AppStore (1027, 702) | 2/8 HIT, 3/8 SKIP, 3/8 MISS | **8/8 HIT** |
+| Files (1162, 435) | 8/8 HIT | 8/8 HIT |
+| **TOTAL** | 41% HIT, 50% SKIP, 9% MISS | **81% HIT, 19% SKIP, 0% MISS** |
+
+Silent MISSes dropped to 0% — the load-bearing safety metric. SKIPs at
+Books are now legitimate positioning failures (cursor lands ~75 px east
+of target, on the next icon's edge), not detection failures. That's the
+next investigation — actual ballistic precision, not detection.
+
+### Lesson for future ML wiring
+
+When introducing a new model version, search the codebase for every
+`onnx` model path and every `findCursor*` function call site. A single
+file (`cursor-ml-detect.ts`) had two completely separate model load
+paths and they drifted. The architectural fix would be to have one
+"current cursor detector" used everywhere; currently the team has
+crop-based and full-frame variants that solve different problems but
+share the model-version assumption only by convention.

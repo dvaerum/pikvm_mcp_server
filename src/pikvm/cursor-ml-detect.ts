@@ -470,8 +470,31 @@ export async function findCursorByMLMultiHint(
   hints: Array<{ x: number; y: number }>,
   options: Omit<MLCursorOptions, 'hint'> = {},
 ): Promise<MLCursorResult | null> {
-  // Dedup: keep only hints that are > 200 px apart (so crops don't
-  // overlap substantially).
+  // 2026-05-28: prefer the full-frame v9-bordered detector when it
+  // returns a confident result. PA19 trace (Settings target, n=8): the
+  // post-emit hint-crop path (cursor-v1, borderless-cursor weights)
+  // returned (961, 919) at conf=0.989 on every single attempt — a
+  // confident-wrong static FP near the target hint. discoverOrigin
+  // running findCursorByV8FullFrame (cursor-v9-bordered) on the SAME
+  // frames found the true cursor at (1100, 684)/(1110, 738)/etc.
+  // Wiring the full-frame v9-bordered detector here too — same model
+  // proven to work in discoverOrigin — eliminates the model-mismatch
+  // class of FPs entirely.
+  const v8 = await findCursorByV8FullFrame(jpegBuffer, frameWidth, frameHeight, {
+    minPresence: options.minConfidence ?? DEFAULT_CONFIDENCE_THRESHOLD,
+  });
+  if (v8 !== null) {
+    return {
+      x: v8.x,
+      y: v8.y,
+      confidence: v8.heatmapPeak,
+      crop: { left: 0, top: 0 },
+    };
+  }
+
+  // Fall back to crop-based hint search when full-frame returns null
+  // (presence below threshold). Dedup: keep only hints that are > 200 px
+  // apart (so crops don't overlap substantially).
   const dedupedHints: Array<{ x: number; y: number }> = [];
   for (const h of hints) {
     if (dedupedHints.every((d) => Math.hypot(d.x - h.x, d.y - h.y) > 200)) {

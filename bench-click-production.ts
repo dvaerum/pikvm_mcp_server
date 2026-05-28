@@ -99,7 +99,14 @@ for (const t of TARGETS) {
     const shot = await client.screenshot({ quality: 75 });
     const file = path.join(dir, `${String(i).padStart(2, '0')}-${cls}.jpg`);
     await fs.writeFile(file, shot.buffer);
-    console.error(`  ${i}/${TRIALS} ${cls.toUpperCase()} attempts=${r.attempts} → ${file}`);
+    const skipReasons = r.attemptHistory
+      .filter(a => a.skippedClickReason)
+      .map(a => `[a${a.attempt}] ${a.skippedClickReason}`)
+      .join(' | ');
+    const finalPos = r.finalMoveResult.finalDetectedPosition;
+    const posStr = finalPos ? `pos=(${finalPos.x},${finalPos.y})` : 'pos=null';
+    console.error(`  ${i}/${TRIALS} ${cls.toUpperCase()} attempts=${r.attempts} ${posStr} → ${file}`);
+    if (skipReasons) console.error(`    reasons: ${skipReasons}`);
   }
 }
 
