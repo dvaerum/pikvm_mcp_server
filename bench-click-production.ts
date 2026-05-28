@@ -25,11 +25,50 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 import { loadConfig } from './src/config.js';
 import { PiKVMClient } from './src/pikvm/client.js';
 import { clickAtWithRetry, defaultMaxRetriesFor, defaultMaxResidualPxFor } from './src/pikvm/click-verify.js';
 import { loadProfile } from './src/pikvm/ballistics.js';
 import { ipadGoHome } from './src/pikvm/ipad-unlock.js';
+
+// PA20: real-launch detector. iPadOS pointer-effect cursor-on-icon
+// highlight + cursor motion in a 100x100 region around target was
+// enough to satisfy verifyClickByDiff without the iPad registering a
+// real tap. To get an honest HIT rate, take a HOME-SCREEN REFERENCE
+// at the bench start, then after every click compare the WHOLE frame
+// to the reference. If the post-click frame is mostly identical to
+// home (>= 0.9 similarity), the click did not launch anything,
+// regardless of what verifyClickByDiff said.
+async function rgbFromJpeg(jpeg: Buffer): Promise<{ rgb: Buffer; w: number; h: number }> {
+  // Downscale before comparing — small variation in cursor position
+  // would dominate the per-pixel diff otherwise. 96x54 keeps gross
+  // structural change (home → app) easily detectable while smoothing
+  // over the 1-2 cursor-sized differences that don't matter.
+  const meta = await sharp(jpeg).metadata();
+  const targetW = 96, targetH = 54;
+  const { data } = await sharp(jpeg)
+    .resize(targetW, targetH, { fit: 'fill' })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return { rgb: data, w: targetW, h: targetH };
+}
+
+async function similarityToHome(
+  postClickJpeg: Buffer,
+  homeRgb: Buffer,
+): Promise<number> {
+  // Mean absolute pixel difference, mapped to [0,1] where 1 = identical.
+  const { rgb } = await rgbFromJpeg(postClickJpeg);
+  if (rgb.length !== homeRgb.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < rgb.length; i++) {
+    sum += Math.abs(rgb[i] - homeRgb[i]);
+  }
+  const meanDiff = sum / rgb.length; // 0..255
+  return 1 - meanDiff / 255;
+}
 
 const cfg = loadConfig();
 const client = new PiKVMClient(cfg.pikvm);
@@ -44,6 +83,20 @@ await fs.mkdir(ROOT, { recursive: true });
 console.error(`Production-defaults bench: ${TRIALS} trials × 4 targets`);
 console.error(`maxRetries=${MAX_RETRIES}, maxResidualPx=${MAX_RESIDUAL_PX}, requireVerifiedCursor=true`);
 
+// Capture home-screen reference for the PA20 launch detector.
+await ipadGoHome(client);
+await new Promise(r => setTimeout(r, 800));
+const homeShot = await client.screenshot({ quality: 75 });
+const { rgb: homeRgb } = await rgbFromJpeg(homeShot.buffer);
+await fs.writeFile(path.join(ROOT, 'home-reference.jpg'), homeShot.buffer);
+console.error(`Captured home reference (96x54 RGB, ${homeRgb.length} bytes)`);
+// PA20: a 0.9 similarity-to-home threshold separates "still home"
+// (≥0.9 — pure pointer-effect HITs that didn't launch anything) from
+// "launched app" (<0.9 — different UI). Calibrated against PA19-i
+// Settings 02-hit.jpg (cursor on icon, no launch) and known-launched
+// frames from earlier sessions.
+const HOME_SIM_THRESHOLD = 0.9;
+
 // 2026-05-28: re-measured against the current iPad home-screen layout
 // after the bench started producing MISSes (cursor landing in icon
 // gaps). The previous coords (905,800) etc. were stale — they hit
@@ -56,15 +109,16 @@ const TARGETS = [
 ];
 
 interface ResultClass {
-  hit: number;
-  skip: number;
-  miss: number;
+  hit: number;       // app actually launched (post-click frame differs from home)
+  skip: number;      // safety gate refused the click
+  miss: number;      // clicked but verifyClickByDiff said no screen change
+  nolaunch: number;  // PA20: clickAtWithRetry succeeded but app didn't launch
 }
 
 const results: Record<string, ResultClass> = {};
 
 for (const t of TARGETS) {
-  results[t.slug] = { hit: 0, skip: 0, miss: 0 };
+  results[t.slug] = { hit: 0, skip: 0, miss: 0, nolaunch: 0 };
   const dir = path.join(ROOT, t.slug);
   await fs.mkdir(dir, { recursive: true });
   console.error(`\n=== ${t.name} (${t.x}, ${t.y}) — ${TRIALS} trials ===`);
@@ -89,14 +143,27 @@ for (const t of TARGETS) {
       },
     });
 
-    let cls: 'hit' | 'skip' | 'miss';
-    if (r.success) cls = 'hit';
-    else if (r.attemptHistory.every(a => a.skippedClickReason)) cls = 'skip';
-    else cls = 'miss';
+    // Take post-trial screenshot first so we can run the PA20 launch
+    // check before classifying.
+    const shot = await client.screenshot({ quality: 75 });
+    const sim = await similarityToHome(shot.buffer, homeRgb);
+
+    let cls: 'hit' | 'skip' | 'miss' | 'nolaunch';
+    if (r.success) {
+      // PA20: clickAtWithRetry succeeded (verifyClickByDiff fired), but
+      // demote to "nolaunch" if the post-click frame is still mostly
+      // home. The local verify region picks up pointer-effect highlight
+      // and cursor motion; only a frame-wide change indicates an app
+      // actually launched.
+      cls = sim >= HOME_SIM_THRESHOLD ? 'nolaunch' : 'hit';
+    } else if (r.attemptHistory.every(a => a.skippedClickReason)) {
+      cls = 'skip';
+    } else {
+      cls = 'miss';
+    }
 
     results[t.slug][cls]++;
 
-    const shot = await client.screenshot({ quality: 75 });
     const file = path.join(dir, `${String(i).padStart(2, '0')}-${cls}.jpg`);
     await fs.writeFile(file, shot.buffer);
     const skipReasons = r.attemptHistory
@@ -105,35 +172,40 @@ for (const t of TARGETS) {
       .join(' | ');
     const finalPos = r.finalMoveResult.finalDetectedPosition;
     const posStr = finalPos ? `pos=(${finalPos.x},${finalPos.y})` : 'pos=null';
-    console.error(`  ${i}/${TRIALS} ${cls.toUpperCase()} attempts=${r.attempts} ${posStr} → ${file}`);
+    console.error(
+      `  ${i}/${TRIALS} ${cls.toUpperCase()} attempts=${r.attempts} ${posStr} ` +
+      `sim=${sim.toFixed(3)} → ${file}`,
+    );
     if (skipReasons) console.error(`    reasons: ${skipReasons}`);
   }
 }
 
 console.error('\n========== SUMMARY (PRODUCTION DEFAULTS) ==========\n');
-console.error('Target      |  hit  | skip | miss | n');
-console.error('------------+-------+------+------+----');
-let totalHit = 0, totalSkip = 0, totalMiss = 0, totalN = 0;
+console.error('Target      | hit | skip | miss | nolaunch | n');
+console.error('------------+-----+------+------+----------+----');
+let totalHit = 0, totalSkip = 0, totalMiss = 0, totalNolaunch = 0, totalN = 0;
 for (const t of TARGETS) {
   const c = results[t.slug];
-  const n = c.hit + c.skip + c.miss;
+  const n = c.hit + c.skip + c.miss + c.nolaunch;
   totalHit += c.hit;
   totalSkip += c.skip;
   totalMiss += c.miss;
+  totalNolaunch += c.nolaunch;
   totalN += n;
   const fmt = (v: number) => `${v}/${n}`;
   console.error(
-    `${t.name.padEnd(11)} | ${fmt(c.hit).padStart(5)} | ${fmt(c.skip).padStart(4)} | ${fmt(c.miss).padStart(4)} | ${n}`,
+    `${t.name.padEnd(11)} | ${fmt(c.hit).padStart(3)} | ${fmt(c.skip).padStart(4)} | ${fmt(c.miss).padStart(4)} | ${fmt(c.nolaunch).padStart(8)} | ${n}`,
   );
 }
-console.error('------------+-------+------+------+----');
+console.error('------------+-----+------+------+----------+----');
 console.error(
-  `${'TOTAL'.padEnd(11)} | ${`${totalHit}/${totalN}`.padStart(5)} | ${`${totalSkip}/${totalN}`.padStart(4)} | ${`${totalMiss}/${totalN}`.padStart(4)} | ${totalN}`,
+  `${'TOTAL'.padEnd(11)} | ${`${totalHit}/${totalN}`.padStart(3)} | ${`${totalSkip}/${totalN}`.padStart(4)} | ${`${totalMiss}/${totalN}`.padStart(4)} | ${`${totalNolaunch}/${totalN}`.padStart(8)} | ${totalN}`,
 );
-console.error(`\nHit rate: ${((100 * totalHit) / totalN).toFixed(0)}%`);
+console.error(`\nReal launch rate: ${((100 * totalHit) / totalN).toFixed(0)}%`);
 console.error(`Skip rate (safety gate fired): ${((100 * totalSkip) / totalN).toFixed(0)}%`);
-console.error(`Miss rate (clicked but wrong): ${((100 * totalMiss) / totalN).toFixed(0)}%`);
+console.error(`Miss rate (verifyClickByDiff said no change): ${((100 * totalMiss) / totalN).toFixed(0)}%`);
+console.error(`PA20 NO-LAUNCH rate (verifyClickByDiff said HIT but frame still home): ${((100 * totalNolaunch) / totalN).toFixed(0)}%`);
 console.error('\nNote: SKIPs are graceful failures (user gets a clear error).');
-console.error('MISSes are silent failures (might land on adjacent UI).');
+console.error('NO-LAUNCH means the bench thought a click registered but the iPad did not launch the app.');
 
 process.exit(0);
