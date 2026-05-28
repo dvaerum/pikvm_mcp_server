@@ -910,6 +910,42 @@ export async function clickAtWithRetry(
     // (verified 2026-04-27: target Software Update at (1090,416), cursor
     // at (1030,466) navigated to Apple Account row instead). Callers that
     // need correct-element-hit semantics opt in by setting maxResidualPx.
+    //
+    // PA19-g (2026-05-28): before SKIPping, run a fresh-frame v9-bordered
+    // check. The in-flight detection chain inside moveToPixel can lock
+    // onto static FPs (recurring 127 px dock-area detections on Books
+    // even when cursor is on icon). v9-bordered on a fresh frame finds
+    // the real cursor if it's there. If the fresh-frame detection is
+    // confident AND within 80 px of target, override the in-flight
+    // claim and let the click proceed.
+    if (
+      cursorVerified
+      && lastMoveResult.finalDetectedPosition
+      && options.maxResidualPx !== undefined
+    ) {
+      const currentResidual = Math.hypot(
+        lastMoveResult.finalDetectedPosition.x - target.x,
+        lastMoveResult.finalDetectedPosition.y - target.y,
+      );
+      if (currentResidual > options.maxResidualPx) {
+        try {
+          const shot = await client.screenshot();
+          const v8 = await findCursorByV8FullFrame(
+            shot.buffer, shot.screenshotWidth, shot.screenshotHeight,
+            { minPresence: 0.5 },
+          );
+          if (v8 !== null && v8.heatmapPeak >= 0.3) {
+            const freshDist = Math.hypot(v8.x - target.x, v8.y - target.y);
+            if (freshDist <= 80 && freshDist < currentResidual) {
+              (lastMoveResult as { finalDetectedPosition: { x: number; y: number } | null })
+                .finalDetectedPosition = { x: v8.x, y: v8.y };
+            }
+          }
+        } catch {
+          // Recovery best-effort; fall through to the SKIP path below.
+        }
+      }
+    }
     if (cursorVerified && lastMoveResult.finalDetectedPosition) {
       const skipResidual = residualForSkip(
         lastMoveResult.finalDetectedPosition,
