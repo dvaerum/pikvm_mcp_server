@@ -339,11 +339,17 @@ full-frame path proven to work upstream.
 | PA19-f: lower heatmap floor for snap | 90% | 10% | 0% | pointer-effect cursor-on-icon |
 | PA19-g: pre-residual v9 override | **98%** | **2%** | **0%** | static-FP override |
 
-Final n=60: Settings 15/15, AppStore 15/15, Files 15/15, Books 14/15.
-The single remaining Books SKIP had the cursor genuinely stuck 127 px
-from target throughout the trial — a real ballistic positioning
-failure that the safety gate correctly catches. Zero silent misses
-preserved through every change.
+Per-run n=60 results after PA19-g:
+- Run 1: Settings 15/15, AppStore 15/15, Files 15/15, Books 14/15 → **98%**
+- Run 2: Settings 15/15, AppStore 15/15, Files 15/15, Books 12/15 → **95%**
+- Combined n=120: **96.7%** HIT, 0% silent MISS, 3.3% SKIP
+
+All SKIPs are concentrated on Books and represent real iPad-side
+ballistic variance — the cursor genuinely gets stuck somewhere in
+the dock area and the algorithm's retry budget runs out. Settings,
+AppStore, and Files are at 100% consistently. The detection chain
+is solid; remaining variance is upstream of detection (HID input
+pathway → iPad pointer-effect interaction).
 
 ### PA19-g technique — fresh-frame override of in-flight static FPs
 
