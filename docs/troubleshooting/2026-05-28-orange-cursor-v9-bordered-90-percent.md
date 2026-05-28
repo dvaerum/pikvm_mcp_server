@@ -327,16 +327,43 @@ full-frame path proven to work upstream.
 | Files (1162, 435) | **15/15** | 0/15 | 0/15 |
 | **TOTAL** | **54/60 = 90%** | 6/60 = 10% | **0/60 = 0%** |
 
-### Session arc (PA19 a→d)
+### Session arc (PA19 a→g)
 
 | Stage | HIT | SKIP | MISS | Note |
 |---|---|---|---|---|
 | Before PA19 | 41% | 50% | 9% | model mismatch v1/v9 in verification |
 | PA19-b: multi-hint uses v9-bordered | 81% | 19% | 0% | corner-degenerate ML accepted |
 | PA19-c: heatmapPeak floor + NCC relax | 78% | 22% | 0% | wiggle-verify still on v1 |
-| PA19-d: wiggle-verify uses v9-bordered | **90%** | **10%** | **0%** | end-to-end on one model |
+| PA19-d: wiggle-verify uses v9-bordered | 90% | 10% | 0% | end-to-end on one model |
+| PA19-e: last-chance v9 before SKIP | 87% | 13% | 0% | AppStore false SKIPs lift |
+| PA19-f: lower heatmap floor for snap | 90% | 10% | 0% | pointer-effect cursor-on-icon |
+| PA19-g: pre-residual v9 override | **98%** | **2%** | **0%** | static-FP override |
 
-Detection is now honest end-to-end. The remaining 10% SKIP is
-concentrated on Books and AppStore — both real ballistic positioning
-errors where the cursor genuinely lands 35-90 px from target. The
-safety gate correctly catches these; no silent misses.
+Final n=60: Settings 15/15, AppStore 15/15, Files 15/15, Books 14/15.
+The single remaining Books SKIP had the cursor genuinely stuck 127 px
+from target throughout the trial — a real ballistic positioning
+failure that the safety gate correctly catches. Zero silent misses
+preserved through every change.
+
+### PA19-g technique — fresh-frame override of in-flight static FPs
+
+A recurring pattern: the in-flight detection chain inside `moveToPixel`
+locks onto a static UI feature (the (860, 912) dock-area FP at ~127 px
+from Books target was the reproducible case) and reports it as cursor
+position with high confidence. The cursor is *visibly* on the icon but
+the verification path doesn't see it.
+
+The fix: before any SKIP fires (cursor-not-verified OR residual-too-
+large), take a fresh `client.screenshot()` and run `findCursorByV8FullFrame`
+(the v9-bordered model). If it returns presence ≥ 0.5, heatmapPeak
+≥ 0.3, AND the detected position is within 80 px of target AND closer
+than the algorithm's current claim, override the claim with the
+fresh-frame position and proceed with the click.
+
+Guardrails:
+- 80 px geographic filter rejects the recurring 100-130 px static FPs.
+- "closer than current" prevents the override from making things worse
+  when the algorithm was right and fresh detection is itself the FP.
+- 0.3 heatmapPeak admits pointer-effect cursor-on-icon detections
+  (which v9-bordered scores 0.33-0.48 rather than the 0.95+ it gives
+  free-floating cursors).
