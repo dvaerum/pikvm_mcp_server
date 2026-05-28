@@ -351,6 +351,45 @@ AppStore, and Files are at 100% consistently. The detection chain
 is solid; remaining variance is upstream of detection (HID input
 pathway → iPad pointer-effect interaction).
 
+### ⚠️ Honesty correction (PA19-i discovery): bench HIT semantics
+
+Visual inspection of saved HIT frames from later session benches
+(PA19-g and PA19-i) found cases where:
+
+- The cursor is visibly on the target icon
+- The bench classified the trial as HIT (`r.success === true`)
+- The post-trial saved frame shows the iPad home screen — i.e., the
+  app did NOT actually launch
+
+The bench's HIT metric is `verifyClickByDiff` reporting screen-changed
+fraction ≥ 5 % in a 100×100 verify region around target. iPadOS
+pointer-effect cursor-on-icon animations + cursor-position change
+between pre-click and post-click frames can satisfy this gate without
+the iPad registering the click as a real tap (e.g. when the cursor
+lands on the icon EDGE the snap-zone highlights the icon but the
+tap dispatcher rejects the event).
+
+Plus — the PA19-i bench Files target frames showed an iPad
+**Low Battery 5% modal** had appeared partway through the bench,
+which would have blocked all subsequent real taps. Some "HITs" in
+Files trials are pure verify-region artifact.
+
+Implication: **the 41% → 97% lift over the PA19 chain reflects how
+often the verify region changes, not how often the iPad actually
+opens the target app**. The detection improvements are real (cursor
+position reporting is honest end-to-end on v9-bordered) but the
+end-to-end "click opens the app" rate has NOT been honestly
+measured in this session.
+
+Open follow-ups:
+- Replace the bench's `verifyClickByDiff` HIT gate with a real
+  app-launched check (look for app-specific UI features after click,
+  not just any pixel change in a 100×100 region).
+- Re-run the entire PA19 chain after the bench is repaired to get
+  honest before/after numbers.
+- Charge the iPad and check whether the prior runs were contaminated
+  by Low Battery modals or other system alerts.
+
 ### PA19-h null result: extra retries don't help
 
 To rule out "the retry budget is too short", an A/B at n=60 ran with
