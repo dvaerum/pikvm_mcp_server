@@ -44,11 +44,15 @@ await fs.mkdir(ROOT, { recursive: true });
 console.error(`Production-defaults bench: ${TRIALS} trials × 4 targets`);
 console.error(`maxRetries=${MAX_RETRIES}, maxResidualPx=${MAX_RESIDUAL_PX}, requireVerifiedCursor=true`);
 
+// 2026-05-28: re-measured against the current iPad home-screen layout
+// after the bench started producing MISSes (cursor landing in icon
+// gaps). The previous coords (905,800) etc. were stale — they hit
+// empty wallpaper between icons. Current icon centers:
 const TARGETS = [
-  { name: 'Settings',  slug: 'settings',  x: 905,  y: 800 },
-  { name: 'Books',     slug: 'books',     x: 640,  y: 800 },
-  { name: 'AppStore',  slug: 'appstore',  x: 905,  y: 680 },
-  { name: 'Files',     slug: 'files',     x: 1035, y: 420 },
+  { name: 'Settings',  slug: 'settings',  x: 1027, y: 837 },
+  { name: 'Books',     slug: 'books',     x: 757,  y: 837 },
+  { name: 'AppStore',  slug: 'appstore',  x: 1027, y: 702 },
+  { name: 'Files',     slug: 'files',     x: 1162, y: 435 },
 ];
 
 interface ResultClass {

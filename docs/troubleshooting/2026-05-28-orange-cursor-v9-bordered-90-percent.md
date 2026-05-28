@@ -193,3 +193,45 @@ target coordinates were updated to (1027, 837).
 
 Bench coordinate fixes are a follow-up; the detector / model results
 are conclusive at this N.
+
+## 2026-05-28 honest re-bench with corrected target coordinates
+
+After updating `bench-click-production.ts` to point at the actual icon
+centers (Settings (1027, 837), Books (757, 837), AppStore (1027, 702),
+Files (1162, 435)) and re-running 4×15:
+
+| Target | HIT | SKIP | MISS |
+|---|---|---|---|
+| Settings (1027, 837) | 9/15 | 4/15 | 2/15 |
+| Books (757, 837) | 8/15 | 7/15 | 0/15 |
+| AppStore (1027, 702) | 9/15 | 6/15 | 0/15 |
+| Files (1162, 435) | 14/15 | 1/15 | 0/15 |
+| **TOTAL** | **40/60 = 67%** | 18/60 = 30% | 2/60 = 3% |
+
+**The previous 92% number was inflated by stale bench coords.** With the
+old (905, 800)-style coords pointing to empty wallpaper between icons,
+the cursor could land anywhere within ±50 px of target and the verify
+region's screen-changed gate would tag it HIT from wallpaper shimmer.
+The "100% on AppStore/Books/Files" earlier was bench-noise, not real
+icon hits.
+
+**With honest icon-center coords, 67% is the real baseline.** The 30%
+SKIP rate is the ballistic-positioning failure mode (cursor lands >35
+px from target, safety gate refuses), not a detection failure. Only 3%
+silent MISS — and even those 2 cases are on Settings target where the
+icon is up against the right edge of the iPad bounds (cursor sometimes
+clamps at edge).
+
+**Detection (v9-bordered) is solid.** The remaining 30% gap to 100% is
+**positioning** — emit-mickeys-to-pixels isn't accurate enough every
+time. That's a downstream problem from this session's detection focus,
+worth investigating separately. Path forward would be:
+1. Re-calibrate ballistics on the current iPad (`pikvm_measure_ballistics`).
+2. Increase retry budget / micro-correction passes.
+3. Loosen `maxResidualPx` from 35 to 50-60 (more clicks, slightly more
+   miss risk — likely a worthwhile tradeoff given current 3% miss rate).
+
+**Key honesty correction from earlier in this session:** never report
+a HIT rate when the bench targets weren't visually verified against
+the current iPad layout. Bench coord drift between iPad reorientations
+or iPadOS updates is invisible and inflates HIT numbers.
