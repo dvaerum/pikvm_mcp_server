@@ -351,6 +351,26 @@ AppStore, and Files are at 100% consistently. The detection chain
 is solid; remaining variance is upstream of detection (HID input
 pathway → iPad pointer-effect interaction).
 
+### PA19-h null result: extra retries don't help
+
+To rule out "the retry budget is too short", an A/B at n=60 ran with
+`maxRetries=5` (6 attempts) against the default `maxRetries=3` (4
+attempts). Result: Books still 12/15 — identical to the maxRetries=3
+validation run. Extra retries recovered 2 trials that would have
+SKIPped at attempt 4 but 3 other Books trials still failed at
+attempt 6 (residuals stayed at ~120 px throughout). One trial
+came tantalisingly close (residual 35.5 px on attempt 5, just over
+the 35 px gate) but bounced back to 120 px on the next attempt.
+
+Confirms the bottleneck is not retry budget — it is the iPad's
+pointer-effect behaviour at the leftmost icon column. Possible
+follow-ups (out of scope for the detection-focused PA19 chain):
+
+- Touchscreen HID experiment (Phase 31) for absolute positioning.
+- Keyboard-first navigation for left-edge targets.
+- iPad-side configuration: experiment with different Pointer Size
+  / Border Width values to see if the snap zone shifts.
+
 ### PA19-g technique — fresh-frame override of in-flight static FPs
 
 A recurring pattern: the in-flight detection chain inside `moveToPixel`
