@@ -300,3 +300,43 @@ paths and they drifted. The architectural fix would be to have one
 "current cursor detector" used everywhere; currently the team has
 crop-based and full-frame variants that solve different problems but
 share the model-version assumption only by convention.
+
+## 2026-05-28 PA19-d — wiggle-verify also on v9-bordered (78% → 90%)
+
+After PA19-c's heatmapPeak floor and NCC-lie-verdict relaxation, the
+bench settled at 78% with Books still the bottleneck (1/8 HIT).
+Verbose trace caught the next link: `mlWiggleVerify` (the static-FP
+guard that emits a small known motion and re-detects) was calling
+`findCursorByML` directly — bypassing the v9-bordered preference in
+`findCursorByMLMultiHint`. So when discoverOrigin (v9-bordered) found
+the cursor 25 px from target on Books, wiggle-verify ran the v1
+borderless model on the same frame, didn't recognise the cursor, and
+returned null → "static FP" → SKIP.
+
+Single-edit fix: wiggle-verify's two `findCursorByML` calls now route
+through `findCursorByMLMultiHint`, which uses the same v9-bordered
+full-frame path proven to work upstream.
+
+### Final live bench n=60 (PRODUCTION DEFAULTS, no env vars)
+
+| Target | HIT | SKIP | MISS |
+|---|---|---|---|
+| Settings (1027, 837) | **15/15** | 0/15 | 0/15 |
+| Books (757, 837) | 11/15 | 4/15 | 0/15 |
+| AppStore (1027, 702) | 13/15 | 2/15 | 0/15 |
+| Files (1162, 435) | **15/15** | 0/15 | 0/15 |
+| **TOTAL** | **54/60 = 90%** | 6/60 = 10% | **0/60 = 0%** |
+
+### Session arc (PA19 a→d)
+
+| Stage | HIT | SKIP | MISS | Note |
+|---|---|---|---|---|
+| Before PA19 | 41% | 50% | 9% | model mismatch v1/v9 in verification |
+| PA19-b: multi-hint uses v9-bordered | 81% | 19% | 0% | corner-degenerate ML accepted |
+| PA19-c: heatmapPeak floor + NCC relax | 78% | 22% | 0% | wiggle-verify still on v1 |
+| PA19-d: wiggle-verify uses v9-bordered | **90%** | **10%** | **0%** | end-to-end on one model |
+
+Detection is now honest end-to-end. The remaining 10% SKIP is
+concentrated on Books and AppStore — both real ballistic positioning
+errors where the cursor genuinely lands 35-90 px from target. The
+safety gate correctly catches these; no silent misses.
