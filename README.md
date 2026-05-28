@@ -80,6 +80,81 @@ PIKVM_VERIFY_SSL=false
 PIKVM_DEFAULT_KEYMAP=en-us
 ```
 
+## iPad cursor configuration
+
+If the target host is an iPad, **the iPadOS-side cursor settings strongly
+affect click reliability**. On 2026-05-28 a 4×5 production click bench
+with the configuration below hit **90% honest clicks, 0% silent
+misses** (see [docs/troubleshooting/2026-05-28-orange-cursor-v9-bordered-90-percent.md](docs/troubleshooting/2026-05-28-orange-cursor-v9-bordered-90-percent.md)).
+Without it the same bench measured ~10-50% with mixed silent failures.
+
+Configure on the iPad once, before connecting it to the PiKVM HDMI capture:
+
+**Settings → Accessibility → Pointer Control:**
+
+| Setting | Value | Why |
+|---|---|---|
+| Increase Contrast | OFF | irrelevant for HDMI capture |
+| **Automatically Hide Pointer** | **OFF** | the auto-fade after ~10 s breaks any session longer than that (Phase 256) |
+| **Colour** | **Orange** | iOS rarely uses saturated orange in UI chrome, so the cursor's pixels are near-unique and the trained ML detector can find them reliably. White also works visually but collides with iOS chrome (Notes/Books/Airplane Mode all have white or orange-yellow icons that the cursor competes against) |
+| **Border Width** | **~50% of slider** | the white outline around the coloured cursor body is what trains crisp ML features; thin border = ambiguous |
+| **Pointer Size** | **~1/3 of slider** (one notch above smallest) | bigger cursor = bigger pixel cluster for detection. Above ~1/2 the cursor occludes UI and snaps to icons more aggressively |
+| **Pointer Animations** | **OFF** | Phase 194-H's documented lever — magnetic snap-to-icon behaviour causes silent wrong-element clicks when cursor lands "almost on" target. With this OFF the cursor lands exactly where emitted |
+| Scrolling Speed | any | unrelated |
+
+**Settings → General → Trackpad & Mouse (if visible on your iPadOS version):**
+
+| Setting | Value | Why |
+|---|---|---|
+| **Trackpad Inertia** | **OFF** | Phase 57 — inertia means a stopped emit still drifts the cursor; OFF makes positioning deterministic |
+
+**Settings → Accessibility → Keyboard → Full Keyboard Access:**
+
+| Setting | Value | Why |
+|---|---|---|
+| **Full Keyboard Access** | **ON** | Phase 63 — enables Tab / Arrow keyboard navigation in many panes. Keyboard nav is far more reliable than cursor clicks. With Full Keyboard Access OFF, only some apps respond to keyboard nav |
+
+**Once configured, also set the cursor detection environment** when launching
+the MCP server (or any benchmark script):
+
+```bash
+PIKVM_V8_CALIBRATE=1
+PIKVM_ML_V8_MODEL=/absolute/path/to/pikvm_mcp_server/ml/cursor-v9-bordered.onnx
+```
+
+The model file `ml/cursor-v9-bordered.onnx` (8.7 MB, MobileNetV3-small,
+700 frames of training data) is committed in the repo.
+
+### Screenshots
+
+**Where Pointer Control lives** — Settings → Accessibility sidebar item, scroll down to **Accessories** in the right pane, **Pointer Control** is the last row:
+
+![iPad Accessibility pane — Pointer Control row visible at bottom under Accessories](docs/screenshots/ipad-settings/00-accessibility-pane-clean.jpg)
+
+**Pointer Control panel — all settings configured per the table above:**
+
+![Pointer Control panel — Increase Contrast OFF, Auto-Hide OFF, Colour=Orange, Pointer Size at ~1/3, Pointer Animations OFF](docs/screenshots/ipad-settings/01-pointer-control.jpg)
+
+Note the orange-bordered cursor at the bottom right — this is what the
+v9-bordered model is trained to detect.
+
+**Colour picker — Orange selected, Border Width at ~50%:**
+
+![Colour picker — Orange selected with blue checkmark, Border Width slider at ~50%](docs/screenshots/ipad-settings/02-colour-picker.jpg)
+
+### Why these settings exist as user-side levers
+
+The iPad's HDMI mirror is a black-box pixel stream — we cannot inject
+detection hooks or read pointer state. Every detector has to find a
+small rendered cursor among ~2 million iOS UI pixels. The smaller and
+less distinct the cursor, the harder the detection task. The orange +
+border + size configuration **tilts the visual signal toward the
+detector**, and the retrained ML model exploits that lift.
+
+iPadOS's built-in pointer-animation / pointer-snap behaviour is the
+other compounding factor — see Phase 194-H docs for why this isn't
+something we can compensate for from the host side.
+
 ## Usage with Claude Code
 
 > **Requires Node.js 18+.** This server uses ES modules. If `node --version` shows an older version, replace `"command": "node"` with the full path to a compatible binary (e.g. `"/usr/local/bin/node"` or your nvm path like `"~/.nvm/versions/node/v22.x.x/bin/node"`). This is common when nvm's default alias points to an older version.
@@ -159,7 +234,7 @@ Or if using the .env file:
 
 **Cursor templates ship bundled** (Phase 284, 2026-05-12): 5 starter templates are committed under `data/cursor-templates/` so NCC (template-match, the primary cursor detector) works out of the box on fresh deployments. **Before Phase 284**, fresh deploys silently dropped to ~0% click rate because the cache was empty and there was no signal to the user that templates were missing (Phase 281 finding). If iPadOS updates the cursor rendering in a future release and click rates drop, manually re-run `pikvm_seed_cursor_template`. A future improvement (B2) would be an auto-refresh check on startup that detects stale templates and reseeds automatically.
 
-**iPad click-accuracy expectations** (revised post-Phase 199, v0.5.194; honesty notes Phase 214/219/235/244, v0.5.211): with `maxRetries: 3` (iPad default — no opt-in needed) and the `maxResidualPx: 35` safety gate (also iPad default), end-to-end **correct-element click rates** are ~99% for sidebar rows, ~95-97% for app icons ≥100 px, ~88% for tiny back-arrows / X buttons / toggles. **For ~70 px small icons, ~5-15% correct-element hit + ~85-95% explicit "click skipped (residual too large)" errors + ~0% silent wrong-element clicks.** The earlier "~50-60% for small icons" figure was based on screen-changed checks that counted clicks landing on adjacent icons as hits; the production safety gate properly refuses those, so the real correct-element rate is much lower. **HONESTY NOTE (Phase 214/235/244, 2026-05-10):** prior measurements may have been taken with the iPad in App Switcher mode rather than home screen, because `pikvm_ipad_home` (Cmd+H) does NOT dismiss the App Switcher; only the `forceHomeViaSwipe: true` option does (Phase 235 v0.5.208 baked a chunked mid-screen cursor deposit into that path so subsequent clicks aren't blocked by top-edge pinning). Phase 244 (v0.5.211) extended the Phase 197 locality gate to the correction-pass — fewer confident-wrong template matches, more safe-null detections. **Phase 248/249 (v0.5.213/v0.5.214) shipped an opt-in `useKnownFpBlocklist: true` MCP arg that rejects 3 known iPad-UI false-positive locations. Phase 248 cumulative N=60 blocklist = 26.7% vs cumulative N=40 baseline = 30% within 35 px — blocklist actually slightly WORSE in aggregate, but both numbers within Phase 237 per-run variance (individual runs swing 5%→40% on identical protocol). The Phase 248 first-N=20 "40% with blocklist vs 25% baseline" suggested a 60% improvement; with more data the apparent improvement vanishes. The blocklist is semantically correct (rejects 3 visually-confirmed FPs) but no demonstrated click-rate benefit at this N. Motion-diff bypasses the blocklist (Phase 250+ candidate).** Per Phase 237's variance lesson, the rates above need an N≥30 re-bench before they should be trusted as current. To measure honestly, call `pikvm_ipad_unlock` then `pikvm_ipad_home({ forceHomeViaSwipe: true })` before each click bench. **For small iPad icons, use `pikvm_ipad_launch_app` (Spotlight + type + Enter) which is 100% reliable.** Toggling iPadOS Pointer Animations OFF (Settings → Accessibility → Touch → Pointer Control) is the user-side lever predicted to lift small-icon click rate to ≥ 90% — see `docs/troubleshooting/2026-04-30-phase-194h-disable-pointer-animations.md`. The iPad must be unlocked — call `pikvm_ipad_unlock` first or pass `autoUnlockOnDetectFail: true` for opt-in self-recovery. See `docs/troubleshooting/2026-05-10-phase-199-production-defaults-bench.md` for the production-bench methodology and `docs/troubleshooting/ipad-cursor-detection.md` § "Current state" for the full reliability matrix.
+**iPad click-accuracy expectations** (revised post-Phase 199, v0.5.194; honesty notes Phase 214/219/235/244, v0.5.211): with `maxRetries: 3` (iPad default — no opt-in needed) and the `maxResidualPx: 35` safety gate (also iPad default), end-to-end **correct-element click rates** are ~99% for sidebar rows, ~95-97% for app icons ≥100 px, ~88% for tiny back-arrows / X buttons / toggles. **For ~70 px small icons, ~5-15% correct-element hit + ~85-95% explicit "click skipped (residual too large)" errors + ~0% silent wrong-element clicks.** The earlier "~50-60% for small icons" figure was based on screen-changed checks that counted clicks landing on adjacent icons as hits; the production safety gate properly refuses those, so the real correct-element rate is much lower. **HONESTY NOTE (Phase 214/235/244, 2026-05-10):** prior measurements may have been taken with the iPad in App Switcher mode rather than home screen, because `pikvm_ipad_home` (Cmd+H) does NOT dismiss the App Switcher; only the `forceHomeViaSwipe: true` option does (Phase 235 v0.5.208 baked a chunked mid-screen cursor deposit into that path so subsequent clicks aren't blocked by top-edge pinning). Phase 244 (v0.5.211) extended the Phase 197 locality gate to the correction-pass — fewer confident-wrong template matches, more safe-null detections. **Phase 248/249 (v0.5.213/v0.5.214) shipped an opt-in `useKnownFpBlocklist: true` MCP arg that rejects 3 known iPad-UI false-positive locations. Phase 248 cumulative N=60 blocklist = 26.7% vs cumulative N=40 baseline = 30% within 35 px — blocklist actually slightly WORSE in aggregate, but both numbers within Phase 237 per-run variance (individual runs swing 5%→40% on identical protocol). The Phase 248 first-N=20 "40% with blocklist vs 25% baseline" suggested a 60% improvement; with more data the apparent improvement vanishes. The blocklist is semantically correct (rejects 3 visually-confirmed FPs) but no demonstrated click-rate benefit at this N. Motion-diff bypasses the blocklist (Phase 250+ candidate).** Per Phase 237's variance lesson, the rates above need an N≥30 re-bench before they should be trusted as current. To measure honestly, call `pikvm_ipad_unlock` then `pikvm_ipad_home({ forceHomeViaSwipe: true })` before each click bench. **For small iPad icons, use `pikvm_ipad_launch_app` (Spotlight + type + Enter) which is 100% reliable.** Toggling iPadOS Pointer Animations OFF (Settings → Accessibility → Touch → Pointer Control) is the user-side lever predicted to lift small-icon click rate to ≥ 90% — **verified live 2026-05-28 with the full cursor configuration in [§ iPad cursor configuration](#ipad-cursor-configuration): 90% hit, 0% miss on 4 targets × 5 trials**. See `docs/troubleshooting/2026-04-30-phase-194h-disable-pointer-animations.md` (predicted) and `docs/troubleshooting/2026-05-28-orange-cursor-v9-bordered-90-percent.md` (measured). The iPad must be unlocked — call `pikvm_ipad_unlock` first or pass `autoUnlockOnDetectFail: true` for opt-in self-recovery. See `docs/troubleshooting/2026-05-10-phase-199-production-defaults-bench.md` for the production-bench methodology and `docs/troubleshooting/ipad-cursor-detection.md` § "Current state" for the full reliability matrix.
 
 **v0.5.97+ template-match upgrade** (Phase 102-107): the cursor-template cache was 87.5% contaminated with letter-glyph false positives. Phase 106 fixed this with mask-based template extraction. Post-fix bench: cursor-verification rate 60-70% → **100%**, Phase 65 micro-step within-25-px hit rate **3/10 → 9/10** with median residual **6 px** (previously 36 px). Wrong-element-hit risk from stale template matches is materially reduced. **Restart your MCP client to activate** — see `docs/troubleshooting/ipad-cursor-detection.md` § "Phase 107 bench" for measurements.
 
