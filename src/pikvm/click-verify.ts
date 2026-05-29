@@ -1265,6 +1265,26 @@ export async function clickAtWithRetry(
       }
     }
 
+    // PA22 (2026-05-29) attempted + not shipped. A guaranteed
+    // pre-click wake-wiggle (+1/-1 mickey + 80 ms settle) reduced
+    // NOLAUNCH from 25 % to 12 % — confirming the "cursor faded →
+    // no tap" mechanism is real. But the extra ~110 ms latency per
+    // click let cursor positions diverge more across retry attempts,
+    // pushing SKIP from 37 % to 58 % (cursor genuinely landed
+    // further from target by the time we got to click). Net HIT rate
+    // 32 % → 28 % at N=60 — within noise.
+    //
+    // Wake-wiggle effect kept opt-in via PIKVM_FORCE_WAKE=1 for
+    // future experiments that find a way to add the wake without
+    // the latency penalty. Default off so the bench measures the
+    // PA21 baseline.
+    if (process.env.PIKVM_FORCE_WAKE === '1') {
+      await client.mouseMoveRelative(1, 0);
+      await sleepMs(30);
+      await client.mouseMoveRelative(-1, 0);
+      await sleepMs(80);
+    }
+
     // Phase 145: optional clickDurationMs override. Undefined uses
     // client.mouseClick's built-in 150ms default.
     if (options.clickDurationMs !== undefined) {
