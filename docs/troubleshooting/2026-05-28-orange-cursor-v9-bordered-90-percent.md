@@ -339,10 +339,45 @@ full-frame path proven to work upstream.
 | PA19-f: lower heatmap floor for snap | 90% | 10% | 0% | pointer-effect cursor-on-icon |
 | PA19-g: pre-residual v9 override | **98%** | **2%** | **0%** | static-FP override |
 
-Per-run n=60 results after PA19-g:
+Per-run n=60 results after PA19-g (NOTE: these used the inflated
+verifyClickByDiff HIT metric; see honesty correction below for
+the corrected end-to-end app-launch rate):
 - Run 1: Settings 15/15, AppStore 15/15, Files 15/15, Books 14/15 → **98%**
 - Run 2: Settings 15/15, AppStore 15/15, Files 15/15, Books 12/15 → **95%**
-- Combined n=120: **96.7%** HIT, 0% silent MISS, 3.3% SKIP
+- Combined n=120: **96.7%** verify-region HIT, 0% silent MISS
+
+## 2026-05-29 PA25 — variance check; ±7pp noise at N=60
+
+The PA20 launch detector + 0.95 threshold gave PA21 baseline 32%
+real launches (n=60). PA22 (per-click wake), PA23 (pre-trial wake),
+and PA24 (longer tap) all came in at 20-30%. PA25 re-ran the
+**unchanged** PA21 code to measure run-to-run variance — and got
+25%, a 7pp gap with no code changes.
+
+Combined unchanged-baseline n=120 (PA21 + PA25):
+  19 + 15 = 34/120 = **28% real launch rate**
+
+| Run | HIT | Note |
+|---|---|---|
+| PA21 baseline | 32% | first measurement post-modal-dismiss |
+| PA22 per-click wake | 28% | within noise |
+| PA23 per-trial wake | 20% | possibly real regression |
+| PA24 longer tap | 30% | within noise |
+| PA25 baseline rerun | 25% | within noise |
+
+**Statistical takeaway**: at N=60 the noise band is ±7pp (1σ). All
+PA22/PA24 changes are within noise; PA23 may be a real -8 to -12pp
+regression. To detect a real ≥5pp lift in future experiments,
+N ≥ 200-300 would be needed.
+
+**Practical takeaway**: with the current v9-bordered detection
+chain on this iPad, the real launch rate is **28% ± 4pp**. Books
+target genuinely cannot be reliably launched (0/15 in 4 of 5 runs
+across PA22-PA25) — the cursor consistently lands far enough from
+Books that the safety gate refuses to click. Detection-side tuning
+has run its course; further pushes need architectural changes
+(touchscreen HID, v10 retrain to break (1170,558) static FP,
+charged battery state for repeatable measurement).
 
 All SKIPs are concentrated on Books and represent real iPad-side
 ballistic variance — the cursor genuinely gets stuck somewhere in
