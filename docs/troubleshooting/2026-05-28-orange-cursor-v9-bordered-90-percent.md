@@ -351,6 +351,64 @@ AppStore, and Files are at 100% consistently. The detection chain
 is solid; remaining variance is upstream of detection (HID input
 pathway → iPad pointer-effect interaction).
 
+## 2026-05-29 PA21 — first honest end-to-end baseline (n=60)
+
+After PA20 repaired the bench HIT metric (verify-region + whole-frame
+home-similarity check at threshold 0.95), and after the user
+restarted the PiKVM / charged the iPad enough to clear the Low
+Battery modal, the FIRST honest end-to-end bench:
+
+| Target | Launch | Click→Launch given click |
+|---|---|---|
+| Settings (1027, 837) | 3/15 = 20% | 3/11 = 27% |
+| Books (757, 837) | 2/15 = 13% | 2/3 = 67% |
+| AppStore (1027, 702) | 11/15 = **73%** | 11/13 = **85%** |
+| Files (1162, 435) | 3/15 = 20% | 3/11 = 27% |
+| **TOTAL** | **19/60 = 32%** | 19/41 = 46% |
+
+Where the misses go:
+- SKIP 22/60 = 37% (algorithm correctly refused, residual > 35 px)
+- NOLAUNCH 15/60 = 25% (click fired, sim ≥ 0.95 — iPad didn't tap)
+- MISS 4/60 = 7% (verifyClickByDiff said no change)
+
+### Two failure patterns observed
+
+1. **Static FP at (1170, 558)** — many Settings/Books/Files SKIPs
+   report cursor at this exact pixel. Distance from this FP to each
+   target explains the per-target variation: AppStore is 200 px away
+   (close enough to ballistic in 1-3 attempts), Settings 313 px,
+   Books 488 px (algorithm SKIPs after retry budget). AppStore
+   benefits from the FP location being relatively close to its
+   target.
+
+2. **Cursor faded at click time** — Settings 06 NOLAUNCH frame
+   inspection showed NO visible cursor anywhere. The algorithm fired
+   a click at the reported position but the iPad's pointer had
+   auto-hidden during the multi-attempt retry sequence. iPadOS
+   appears to require a visible cursor for tap dispatch — invisible
+   cursor + click = no tap event.
+
+### Implications
+
+The PA19 detection chain is real — v9-bordered honestly reports cursor
+positions. The remaining ~70% failure rate at click time is split
+between:
+
+- ballistic positioning that can't reach far targets reliably (SKIPs)
+- cursor fade between detect and click (NOLAUNCH)
+
+Both are upstream of the detection-side improvements. Next experiments
+that could actually lift the launch rate:
+
+- A pre-click wake-wiggle that's more aggressive than the current
+  keepCursorAlive (force cursor visible right before clicking).
+- Verify cursor visibility via fresh v9-bordered call between cursor
+  position lock and the actual click event; abort and retry if
+  cursor presence dropped.
+- Investigate why the (1170, 558) static FP recurs — train a v10
+  cursor detector that doesn't lock on this specific dock-area
+  feature.
+
 ### ⚠️ Honesty correction (PA19-i discovery): bench HIT semantics
 
 Visual inspection of saved HIT frames from later session benches
