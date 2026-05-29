@@ -142,6 +142,10 @@ for (const t of TARGETS) {
         forbidSlamFallback: true,
         strategy: 'detect-then-move',
       },
+      // PA24 attempted + not shipped: clickDurationMs=250 vs default
+      // 150. Reduced NOLAUNCH 25%→7% (longer tap does help cursor-
+      // fade cases) but pushed SKIP 37%→60% (same latency-cost
+      // pattern as PA22/PA23). Net HIT 32%→30%, within noise.
       // Production defaults below — match what MCP calls do.
       maxResidualPx: MAX_RESIDUAL_PX,
       requireVerifiedCursor: true,
