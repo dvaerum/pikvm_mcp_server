@@ -104,6 +104,12 @@ const HOME_SIM_THRESHOLD = 0.95;
 // after the bench started producing MISSes (cursor landing in icon
 // gaps). The previous coords (905,800) etc. were stale — they hit
 // empty wallpaper between icons. Current icon centers:
+// PA26 attempted + reverted: tested running Books FIRST to check
+// whether iPad-state accumulation between targets hurts Books's
+// rate. Books still got 0/15 — order effect refuted. The 0%
+// Books rate is iPad-state-independent; static FP at (764, 564)
+// recurred in 12 of 15 trials regardless of which target ran
+// before. Original target order restored.
 const TARGETS = [
   { name: 'Settings',  slug: 'settings',  x: 1027, y: 837 },
   { name: 'Books',     slug: 'books',     x: 757,  y: 837 },
