@@ -129,6 +129,11 @@ for (const t of TARGETS) {
   for (let i = 1; i <= TRIALS; i++) {
     await ipadGoHome(client);
     await new Promise(r => setTimeout(r, 800));
+    // PA23 attempted + reverted: a pre-trial 4-mickey diagonal wake
+    // wiggle made HIT rate worse (32% → 20% at n=60). The wake
+    // added ~310 ms latency per trial without measurable cursor-
+    // visibility benefit; per-target Books 2→0, AppStore 11→7.
+    // PA21 baseline (no wake) remains the local maximum.
 
     const r = await clickAtWithRetry(client, { x: t.x, y: t.y }, {
       maxRetries: MAX_RETRIES,
