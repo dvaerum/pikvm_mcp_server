@@ -1,0 +1,350 @@
+/**
+ * Pointer-acceleration trajectory collector.
+ *
+ * Drives PiKVM HID through a library of mouse-emit sequences while the
+ * iPad collector app streams cursor events back over WebSocket. Saves
+ * timestamp-aligned `emits.jsonl` + `cursor.jsonl` + `manifest.json`
+ * for downstream pointer-acceleration model fitting (intended to
+ * replace PiKVM's hard-coded 1.4 px/mickey constant).
+ *
+ * Usage:
+ *   npx tsx bench-collect-trajectory.ts            # short smoke run (<2 min)
+ *   npx tsx bench-collect-trajectory.ts --full     # full run
+ *   npx tsx bench-collect-trajectory.ts --port 8767
+ *
+ * Requires PiKVM env vars set (same as other bench-* scripts) and the
+ * iPad app already connected to ws://<this-mac>:{PORT}.
+ *
+ * Output: data/cursor-trajectory-{TS}/
+ *   emits.jsonl   {t, dx, dy, sequenceLabel}
+ *   cursor.jsonl  {t, x_logical, y_logical, phase}
+ *   manifest.json {ts, iPadHello, region, scale, clockOffsetMs, rttMs, sequenceLabels}
+ */
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { loadConfig } from '../src/config.js';
+import { PiKVMClient } from '../src/pikvm/client.js';
+import {
+  startIpadAppServer,
+  type CursorEvent,
+  type IpadSession,
+} from '../src/pikvm/ipad-app-ws.js';
+import {
+  buildTransform,
+  detectIpadRegion,
+  NATIVE_MARGIN,
+} from '../src/pikvm/ipad-region-detect.js';
+
+// Default true so a quick `npx tsx bench-collect-trajectory.ts` finishes
+// fast. `--full` flips this off for the full library.
+let SHORT_RUN = true;
+
+let PORT = 8767;
+for (let i = 2; i < process.argv.length; i++) {
+  const a = process.argv[i];
+  if (a === '--full') SHORT_RUN = false;
+  else if (a === '--port' && process.argv[i + 1]) {
+    PORT = Number(process.argv[i + 1]);
+    i++;
+  }
+}
+
+const FLUSH_EVERY = 100;
+const RESYNC_INTERVAL_MS = 30_000;
+
+interface EmitRow {
+  t: number;
+  dx: number;
+  dy: number;
+  sequenceLabel: string;
+}
+
+interface CursorRow {
+  t: number;
+  x_logical: number;
+  y_logical: number;
+  phase: CursorEvent['phase'];
+}
+
+interface Direction {
+  label: string;
+  dx: number;
+  dy: number;
+}
+
+const DIRS_4: Direction[] = [
+  { label: '+x', dx: 1, dy: 0 },
+  { label: '-x', dx: -1, dy: 0 },
+  { label: '+y', dx: 0, dy: 1 },
+  { label: '-y', dx: 0, dy: -1 },
+];
+
+// 8 cardinal + diagonal directions; unit vectors scaled to magnitude later.
+const DIRS_8: Direction[] = [
+  { label: 'N', dx: 0, dy: -1 },
+  { label: 'NE', dx: Math.SQRT1_2, dy: -Math.SQRT1_2 },
+  { label: 'E', dx: 1, dy: 0 },
+  { label: 'SE', dx: Math.SQRT1_2, dy: Math.SQRT1_2 },
+  { label: 'S', dx: 0, dy: 1 },
+  { label: 'SW', dx: -Math.SQRT1_2, dy: Math.SQRT1_2 },
+  { label: 'W', dx: -1, dy: 0 },
+  { label: 'NW', dx: -Math.SQRT1_2, dy: -Math.SQRT1_2 },
+];
+
+const LINEARITY_MAGS_FULL = [1, 2, 5, 10, 15, 20, 25, 30, 50, 80, 100, 127];
+const LINEARITY_MAGS_SHORT = [10, 50, 127];
+const BURST_DELAYS_FULL = [0, 5, 10, 25, 50, 100, 200];
+const BURST_DELAYS_SHORT = [0, 25, 200];
+const BURST_COUNT = 8;
+const BURST_MAG = 20;
+
+const LINEARITY_SETTLE_MS = 800;
+const BURST_SETTLE_MS = 1500;
+const DIRECTION_SETTLE_MS = 800;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function waitForSession(): Promise<{ sess: IpadSession; closeServer: () => Promise<void> }> {
+  return new Promise((resolve, reject) => {
+    const server = startIpadAppServer({
+      port: PORT,
+      async onSession(sess) {
+        resolve({ sess, closeServer: () => server.close() });
+      },
+    });
+    setTimeout(() => reject(new Error('timed out waiting for iPad app to connect')), 120_000);
+  });
+}
+
+class JsonlWriter<T> {
+  private buf: T[] = [];
+  constructor(private readonly filePath: string, private readonly flushEvery: number) {}
+
+  push(row: T): void {
+    this.buf.push(row);
+    if (this.buf.length >= this.flushEvery) {
+      // Fire-and-forget flush; no await so producer isn't back-pressured.
+      void this.flush();
+    }
+  }
+
+  async flush(): Promise<void> {
+    if (this.buf.length === 0) return;
+    const rows = this.buf;
+    this.buf = [];
+    const text = rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
+    await fs.appendFile(this.filePath, text);
+  }
+}
+
+async function runLinearitySweep(
+  client: PiKVMClient,
+  emits: JsonlWriter<EmitRow>,
+): Promise<string[]> {
+  const mags = SHORT_RUN ? LINEARITY_MAGS_SHORT : LINEARITY_MAGS_FULL;
+  const labels: string[] = [];
+  for (const dir of DIRS_4) {
+    for (const mag of mags) {
+      const dx = Math.round(dir.dx * mag);
+      const dy = Math.round(dir.dy * mag);
+      const label = `linearity:${dir.label}:m${mag}`;
+      labels.push(label);
+      try {
+        const t = Date.now();
+        await client.mouseMoveRelative(dx, dy);
+        emits.push({ t, dx, dy, sequenceLabel: label });
+      } catch (e) {
+        console.error(`[traj] ${label}: mouseMoveRelative failed: ${(e as Error).message}`);
+      }
+      await sleep(LINEARITY_SETTLE_MS);
+    }
+  }
+  return labels;
+}
+
+async function runBurstCoalescing(
+  client: PiKVMClient,
+  emits: JsonlWriter<EmitRow>,
+): Promise<string[]> {
+  const delays = SHORT_RUN ? BURST_DELAYS_SHORT : BURST_DELAYS_FULL;
+  const labels: string[] = [];
+  for (const delay of delays) {
+    const label = `burst:+x:m${BURST_MAG}:n${BURST_COUNT}:d${delay}`;
+    labels.push(label);
+    for (let i = 0; i < BURST_COUNT; i++) {
+      try {
+        const t = Date.now();
+        await client.mouseMoveRelative(BURST_MAG, 0);
+        emits.push({ t, dx: BURST_MAG, dy: 0, sequenceLabel: label });
+      } catch (e) {
+        console.error(`[traj] ${label}: mouseMoveRelative failed: ${(e as Error).message}`);
+      }
+      if (delay > 0 && i < BURST_COUNT - 1) await sleep(delay);
+    }
+    await sleep(BURST_SETTLE_MS);
+  }
+  return labels;
+}
+
+async function runDirectionSweep(
+  client: PiKVMClient,
+  emits: JsonlWriter<EmitRow>,
+): Promise<string[]> {
+  const dirs = SHORT_RUN ? DIRS_4 : DIRS_8;
+  const mag = 100;
+  const labels: string[] = [];
+  for (const dir of dirs) {
+    const dx = Math.round(dir.dx * mag);
+    const dy = Math.round(dir.dy * mag);
+    const label = `direction:${dir.label}:m${mag}`;
+    labels.push(label);
+    try {
+      const t = Date.now();
+      await client.mouseMoveRelative(dx, dy);
+      emits.push({ t, dx, dy, sequenceLabel: label });
+    } catch (e) {
+      console.error(`[traj] ${label}: mouseMoveRelative failed: ${(e as Error).message}`);
+    }
+    await sleep(DIRECTION_SETTLE_MS);
+  }
+  return labels;
+}
+
+async function main() {
+  console.log(`[traj] starting WS server on ws://0.0.0.0:${PORT} (SHORT_RUN=${SHORT_RUN})`);
+  console.log('[traj] waiting for iPad app to connect…');
+
+  const { sess, closeServer } = await waitForSession();
+  console.log(`[traj] connected: ${JSON.stringify(sess.hello)}`);
+  if (!sess.hello) throw new Error('no hello payload');
+
+  const cfg = loadConfig();
+  const client = new PiKVMClient(cfg.pikvm);
+
+  // Calibration screenshot (same pattern as bench-collect-synthetic.ts).
+  console.log('[traj] lighting screen for calibration…');
+  await sess.showScene({
+    kind: 'procedural',
+    params: { proc_kind: 'solid', r: 0.95, g: 0.95, b: 0.95 },
+  });
+  await sleep(400);
+  console.log('[traj] taking calibration screenshot…');
+  const shot0 = await client.screenshot();
+  const region = await detectIpadRegion(shot0.buffer);
+  const tight = {
+    x: region.x + NATIVE_MARGIN,
+    y: region.y + NATIVE_MARGIN,
+    w: region.w - 2 * NATIVE_MARGIN,
+    h: region.h - 2 * NATIVE_MARGIN,
+    frameW: region.frameW,
+    frameH: region.frameH,
+  };
+  const xform = buildTransform(tight, sess.hello.logicalW, sess.hello.logicalH);
+  void xform; // exposed via scale in manifest; per-event coords stay logical
+  const scale = {
+    x: tight.w / sess.hello.logicalW,
+    y: tight.h / sess.hello.logicalH,
+  };
+  console.log(
+    `[traj] iPad region (tight): x=${tight.x} y=${tight.y} w=${tight.w} h=${tight.h} (frame ${region.frameW}×${region.frameH})`,
+  );
+  console.log(`[traj] logical → screenshot scale: x=${scale.x.toFixed(3)} y=${scale.y.toFixed(3)}`);
+
+  // Output dir + writers.
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  const outDir = path.join('data', `cursor-trajectory-${ts}`);
+  await fs.mkdir(outDir, { recursive: true });
+  const emitsPath = path.join(outDir, 'emits.jsonl');
+  const cursorPath = path.join(outDir, 'cursor.jsonl');
+  const manifestPath = path.join(outDir, 'manifest.json');
+  console.log(`[traj] output dir: ${outDir}`);
+
+  const emits = new JsonlWriter<EmitRow>(emitsPath, FLUSH_EVERY);
+  const cursor = new JsonlWriter<CursorRow>(cursorPath, FLUSH_EVERY);
+
+  // Clock sync before streaming starts.
+  console.log('[traj] syncing clock (10 samples)…');
+  const sync0 = await sess.syncClock(10);
+  console.log(`[traj] clock offset = ${sync0.offsetMs.toFixed(1)} ms, rtt = ${sync0.rttMs.toFixed(1)} ms`);
+
+  // Stream cursor events.
+  let cursorCount = 0;
+  sess.onCursorEvent = (ev: CursorEvent) => {
+    cursorCount++;
+    cursor.push({
+      t: sess.ipadToCollectorMs(ev.t_ipad),
+      x_logical: ev.x,
+      y_logical: ev.y,
+      phase: ev.phase,
+    });
+  };
+  await sess.subscribeCursor();
+  console.log('[traj] cursor subscription active');
+
+  // Periodic clock resync (drift ~ms over minutes).
+  const resyncTimer = setInterval(() => {
+    sess.syncClock(5).then(
+      ({ offsetMs, rttMs }) => {
+        console.log(`[traj] resync: offset=${offsetMs.toFixed(1)} ms rtt=${rttMs.toFixed(1)} ms`);
+      },
+      (err: Error) => {
+        console.error(`[traj] resync failed: ${err.message}`);
+      },
+    );
+  }, RESYNC_INTERVAL_MS);
+
+  const t0 = Date.now();
+  const sequenceLabels: string[] = [];
+
+  try {
+    console.log('[traj] sequence 1/3: linearity sweep');
+    sequenceLabels.push(...(await runLinearitySweep(client, emits)));
+    console.log('[traj] sequence 2/3: burst-coalescing matrix');
+    sequenceLabels.push(...(await runBurstCoalescing(client, emits)));
+    console.log('[traj] sequence 3/3: direction sweep');
+    sequenceLabels.push(...(await runDirectionSweep(client, emits)));
+  } finally {
+    clearInterval(resyncTimer);
+    try {
+      await sess.unsubscribeCursor();
+    } catch (e) {
+      console.error(`[traj] unsubscribeCursor failed: ${(e as Error).message}`);
+    }
+    sess.onCursorEvent = null;
+    await emits.flush();
+    await cursor.flush();
+  }
+
+  // Final manifest (includes the *final* clock offset for the record).
+  await fs.writeFile(
+    manifestPath,
+    JSON.stringify(
+      {
+        ts,
+        iPadHello: sess.hello,
+        region,
+        scale,
+        clockOffsetMs: sess.clockOffsetMs,
+        rttMs: sync0.rttMs,
+        sequenceLabels,
+      },
+      null,
+      2,
+    ),
+  );
+
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`[traj] done in ${elapsed}s. cursor events=${cursorCount}, sequences=${sequenceLabels.length}`);
+  console.log(`[traj] emits: ${emitsPath}`);
+  console.log(`[traj] cursor: ${cursorPath}`);
+  console.log(`[traj] manifest: ${manifestPath}`);
+
+  await closeServer();
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
