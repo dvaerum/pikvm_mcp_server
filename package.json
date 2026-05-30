@@ -27,10 +27,12 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@types/ws": "^8.18.1",
     "dotenv": "^17.2.3",
     "onnxruntime-node": "^1.26.0",
     "sharp": "^0.33.0",
-    "undici": "^7.19.1"
+    "undici": "^7.19.1",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -29,6 +29,7 @@ coverage/
 # Test artifacts
 test-screenshot.jpg
 *.m4v
+tools/label-review/verify-screenshots/
 
 # Benchmark output (gitignored: device-specific, regenerated per run)
 bench-results/

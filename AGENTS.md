@@ -33,9 +33,16 @@ pikvm_mcp_server/
 │       ├── skill-tools.ts  # Auto-generated skill_* tools from prompts
 │       └── index.ts    # Barrel export + lookup function
 ├── docs/skills/        # Human-readable skill guides (mirrors prompts)
+├── benches/            # bench-*.ts — reproducible benchmarks (kept long-term)
+├── scratch/            # _*.ts, test-*.ts, diagnose-*.ts, analyze-*.ts — throwaway diagnostics, gitignored / disposable
+├── ipad-collector/     # SwiftUI app + bench-collect-synthetic / bench-collect-trajectory for auto-labeled training-data collection. See ipad-collector/SETUP.md.
 ├── package.json
 └── tsconfig.json
 ```
+
+Root is reserved for real top-level files (config, top-level docs,
+package manifests). New bench scripts go in `benches/`; throwaway
+diagnostics go in `scratch/`.
 
 ## Development Commands
 
