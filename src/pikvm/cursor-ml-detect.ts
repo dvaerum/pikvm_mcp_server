@@ -68,16 +68,18 @@ let v5LoadFailureLogged = false;
 // median on the same 16 frames. v8 is the better full-frame calibration
 // detector. Opt in via env var PIKVM_V8_CALIBRATE=1; default off.
 //
-// 2026-05-30 (PA36 ship-decision): prefer cursor-v11.onnx — trained on
-// 1030 human-labeled frames including 56 absent examples. Live A/B:
-// detection 19/19 (100%) within 35 px vs v9-bordered's 10/19 (53%) on
-// the same frames; real click rate 11/20 (55%) with slam-fallback
-// enabled vs v9-bordered's ~30% baseline. Falls back to v9-bordered,
-// then v8, when v11 isn't present (e.g., earlier checkouts). Env var
+// 2026-05-31 (v12 ship-decision): prefer cursor-v12.onnx — trained on
+// 11k labeled frames (10k iPad-app auto-labeled synthetic + 1030 human-
+// verified). Live A/B on iPad: 8/20 real-launch HITs (40%) vs v11's
+// 1/20 (5%) on the same iPad state and same 4 targets; AppStore: 5/5
+// vs 0/5; Files: 3/5 vs 1/5. Zero SKIPs (vs v11's 4) — v12 produces
+// confident-enough detections to clear the 35-px residual gate.
+// Falls back to v11 → v9-bordered → v8 if v12 isn't present. Env var
 // still overrides for diagnostic / A-B testing.
 const V8_MODEL = (() => {
   if (process.env.PIKVM_ML_V8_MODEL) return path.resolve(process.env.PIKVM_ML_V8_MODEL);
   const candidates = [
+    path.resolve(process.cwd(), 'ml', 'cursor-v12.onnx'),
     path.resolve(process.cwd(), 'ml', 'cursor-v11.onnx'),
     path.resolve(process.cwd(), 'ml', 'cursor-v9-bordered.onnx'),
     path.resolve(process.cwd(), 'ml', 'cursor-v8.onnx'),

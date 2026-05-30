@@ -300,6 +300,31 @@ Common key codes for `pikvm_key` and `pikvm_shortcut`:
 - Special: `Enter`, `Escape`, `Backspace`, `Tab`, `Space`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`
 - Arrows: `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`
 
+## iPad data-collection pipeline
+
+A SwiftUI iPad app paired with two Mac-side benches auto-labels cursor positions for training data. The iPad renders the cursor in a known scene and reports its on-screen coordinates back to the Mac over WebSocket; the bench saves a screenshot + label per frame. No human labelling is required.
+
+Three components make up the pipeline:
+
+- [`ipad-collector/`](ipad-collector/) — the SwiftUI app that runs on the iPad. See [`ipad-collector/SETUP.md`](ipad-collector/SETUP.md) for build and provisioning. Once the app is running, type **help** on the connected USB keyboard to open the settings sheet (scene picker, target Mac host, port).
+- [`benches/bench-collect-synthetic.ts`](benches/bench-collect-synthetic.ts) — per-frame request/response collector. The bench asks the app to render a scene and effect, takes a PiKVM screenshot, and saves the frame with the cursor-label JSON the app returns. Used for cursor-detector training data.
+- [`benches/bench-collect-trajectory.ts`](benches/bench-collect-trajectory.ts) — streaming-mode collector. The bench emits HID mouse deltas while the app streams the rendered cursor position back continuously, producing emit→cursor pairs for fitting the pointer-acceleration model.
+
+Quickstart (iPad app must be running and connected to the same network):
+
+```
+# iPad app must be running and connected
+npx tsx benches/bench-collect-synthetic.ts --target 100   # 100 labeled frames
+npx tsx benches/bench-collect-trajectory.ts                # pointer-accel data
+```
+
+The collected datasets feed two trainers:
+
+- [`ml/train-cursor-v12.py`](ml/train-cursor-v12.py) — trains the next cursor detector on the synthetic dataset combined with prior human-verified frames.
+- [`ml/train-pointer-accel.py`](ml/train-pointer-accel.py) — fits the emit→displacement model used by `pikvm_mouse_move_to` for closed-loop correction.
+
+The WebSocket protocol runs on port **8767**. The Mac-side collector listens on `0.0.0.0:8767`; the iPad app connects out to the Mac's LAN address at that port.
+
 ## License
 
 GPL-3.0 - See [LICENSE](LICENSE) for details.

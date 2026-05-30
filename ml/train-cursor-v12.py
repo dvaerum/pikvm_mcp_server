@@ -41,7 +41,14 @@ SOURCES = {
     "absent-targeted": DATA_ROOT / "cursor-collect-absent-2026-05-30T08-03-23" / "human-verified.jsonl",
     "v10-livebench":   DATA_ROOT / "cursor-collect-v10-livebench-2026-05-30T07-00-55" / "human-verified.jsonl",
     "pa26":            DATA_ROOT / "verify-pa26" / "human-verified.jsonl",
-    "synthetic-1337":  DATA_ROOT / "cursor-collect-synthetic-2026-05-30T13-37-03" / "verified.jsonl",
+    "synthetic-train": DATA_ROOT / "cursor-collect-synthetic-2026-05-30T16-46-52" / "verified.jsonl",
+}
+
+# Held-out val set with a hard image-catalog split: every background image
+# used here is guaranteed NOT to appear in any SOURCES entry above (the
+# bench-collect-synthetic --exclude-list flag enforced it at capture time).
+EXTERNAL_VAL_SOURCES = {
+    "synthetic-val": DATA_ROOT / "cursor-collect-synthetic-2026-05-30T17-46-59" / "verified.jsonl",
 }
 
 INPUT_W, INPUT_H = 768, 480
@@ -75,9 +82,9 @@ def load_latest_per_frame(path: Path) -> dict:
     return latest
 
 
-def load_sources() -> list:
+def load_sources(sources: dict = SOURCES) -> list:
     rows = []
-    for name, jsonl_path in SOURCES.items():
+    for name, jsonl_path in sources.items():
         latest = load_latest_per_frame(jsonl_path)
         kept = 0
         skipped_skip = 0
@@ -91,7 +98,13 @@ def load_sources() -> list:
             if cursor is None:
                 skipped_null += 1
                 continue
+            # Old format: frame includes dataset-dir prefix (e.g.
+            # "cursor-collect-X/books/frame-000.jpg") → resolve under DATA_ROOT.
+            # New synth format: frame is dataset-relative (e.g.
+            # "procedural/frame-00001.jpg") → resolve under jsonl_path.parent.
             abs_path = DATA_ROOT / fid
+            if not abs_path.exists():
+                abs_path = jsonl_path.parent / fid
             rows.append({
                 "source": name,
                 "frame_id": fid,
@@ -224,11 +237,22 @@ def decode_heatmap_peak(heatmap_logits):
 
 def main():
     OUT_DIR.mkdir(exist_ok=True)
-    rows = load_sources()
-    if not rows:
+    train_rows = load_sources(SOURCES)
+    if not train_rows:
         print("no training rows; aborting")
         return
-    train_rows, val_rows = stratified_split(rows, VAL_FRACTION, SEED)
+    print(f"--- external val sources ---")
+    val_rows = load_sources(EXTERNAL_VAL_SOURCES)
+    if not val_rows:
+        print("no external val rows; aborting")
+        return
+    pos_t = sum(1 for r in train_rows if r["cursor"]["visible"])
+    pos_v = sum(1 for r in val_rows if r["cursor"]["visible"])
+    print(
+        f"train: {len(train_rows)} ({pos_t} pos / {len(train_rows) - pos_t} neg) | "
+        f"val: {len(val_rows)} ({pos_v} pos / {len(val_rows) - pos_v} neg) "
+        f"[hard image-catalog split]"
+    )
 
     val_manifest = OUT_DIR / "cursor-v12-val-manifest.jsonl"
     with open(val_manifest, "w") as f:
@@ -293,8 +317,14 @@ def main():
                 pred_heatmap, pred_presence = model(img)
                 pred_presence_prob = torch.sigmoid(pred_presence.view(-1)).cpu()
                 pred_x, pred_y, _ = decode_heatmap_peak(pred_heatmap)
-                tgt_x_hm = torch.zeros(img.size(0))
-                tgt_y_hm = torch.zeros(img.size(0))
+                # Targets MUST live on the same device as pred_x/pred_y, or
+                # PyTorch 2.12 on Apple silicon silently returns garbage for
+                # MPS−CPU tensor subtraction instead of raising. Reading the
+                # CPU-resident value as zero produced the bogus 76 px val-dist
+                # plateau we chased on 2026-05-31 (full write-up at
+                # docs/troubleshooting/2026-05-31-v12-76px-plateau.md).
+                tgt_x_hm = torch.zeros(img.size(0), device=DEVICE)
+                tgt_y_hm = torch.zeros(img.size(0), device=DEVICE)
                 for i in range(img.size(0)):
                     hm_i = heatmap[i, 0]
                     flat_i = hm_i.view(-1)

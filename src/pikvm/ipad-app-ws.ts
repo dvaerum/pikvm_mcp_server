@@ -18,6 +18,7 @@
  */
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 export interface AppHello {
   logicalW: number;
@@ -38,9 +39,16 @@ export interface CursorEvent extends CursorPos {
 
 export interface SceneSpec {
   /** Catalog kind: image asset, procedural pattern, or video. */
-  kind: 'image' | 'procedural' | 'video';
-  /** Free-form per-kind parameters; see scene-renderers spec. */
-  params: Record<string, unknown>;
+  kind: 'image' | 'procedural' | 'video' | 'blackHoldingPattern';
+  /** For kind=image: base64-encoded JPEG/PNG bytes. */
+  image?: string;
+  /** For kind=procedural: which renderer (solid, gradient, checker, noise). */
+  proc_kind?: string;
+  /** For kind=procedural: numeric parameters consumed by the renderer
+   *  (e.g. r/g/b for solid, cell for checker). iPad parses as Doubles. */
+  params?: Record<string, number>;
+  /** For kind=video: URL the app fetches and loops. */
+  url?: string;
 }
 
 export interface EffectSpec {
@@ -245,6 +253,37 @@ export interface IpadAppServerOptions {
  * Bind a WebSocket server and dispatch each new connection to the user's
  * handler. Resolves with a `close()` function that shuts the server down.
  */
+/**
+ * SIGKILL any process holding the given local TCP port. Recurring bug:
+ * when a previous bench dies but leaves a TCP socket open, the iPad app
+ * is still talking to that dead-process socket — the next bench binds
+ * the port fresh but never sees a hello, then times out. Call this at
+ * the top of any bench's main(), before startIpadAppServer.
+ *
+ * No-op on platforms without `lsof` (e.g. Linux without it installed)
+ * or when nothing holds the port.
+ */
+export function killOrphansOnPort(port: number, tag = 'ipad-app-ws'): void {
+  let out: string;
+  try {
+    out = execFileSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' });
+  } catch {
+    return;
+  }
+  const pids = out
+    .split(/\s+/)
+    .map((s) => Number(s))
+    .filter((n) => Number.isFinite(n) && n > 0 && n !== process.pid);
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGKILL');
+      console.log(`[${tag}] killed orphan PID ${pid} holding port ${port}`);
+    } catch (e) {
+      console.error(`[${tag}] failed to kill PID ${pid}: ${(e as Error).message}`);
+    }
+  }
+}
+
 export function startIpadAppServer(opts: IpadAppServerOptions): { close(): Promise<void> } {
   const wss = new WebSocketServer({ port: opts.port, host: '0.0.0.0' });
   wss.on('connection', (ws: WebSocket) => {

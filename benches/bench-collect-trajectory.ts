@@ -25,6 +25,7 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { PiKVMClient } from '../src/pikvm/client.js';
 import {
+  killOrphansOnPort,
   startIpadAppServer,
   type CursorEvent,
   type IpadSession,
@@ -213,6 +214,7 @@ async function runDirectionSweep(
 }
 
 async function main() {
+  killOrphansOnPort(PORT);
   console.log(`[traj] starting WS server on ws://0.0.0.0:${PORT} (SHORT_RUN=${SHORT_RUN})`);
   console.log('[traj] waiting for iPad app to connect…');
 
@@ -268,6 +270,24 @@ async function main() {
   console.log('[traj] syncing clock (10 samples)…');
   const sync0 = await sess.syncClock(10);
   console.log(`[traj] clock offset = ${sync0.offsetMs.toFixed(1)} ms, rtt = ${sync0.rttMs.toFixed(1)} ms`);
+
+  // Wake the iPad pointer system. SwiftUI .onContinuousHover doesn't fire
+  // until a pointer event arrives; without warmup the first cursor events
+  // may be missing or report (0,0). Same pattern as bench-collect-synthetic.
+  console.log('[traj] waking pointer…');
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await client.mouseMoveRelative(30, 30);
+    await client.mouseMoveRelative(-30, -30);
+    await sleep(200);
+    try {
+      const probe = await sess.getCursor();
+      if (probe.x !== 0 || probe.y !== 0) {
+        console.log(`[traj] pointer alive at (${probe.x.toFixed(1)}, ${probe.y.toFixed(1)})`);
+        break;
+      }
+    } catch {}
+    if (attempt === 4) console.error('[traj] WARNING: pointer never woke; early events may be (0,0)');
+  }
 
   // Stream cursor events.
   let cursorCount = 0;
