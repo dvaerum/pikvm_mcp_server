@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Label review</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, system-ui, sans-serif;
+    color: #eee;
+    background: #1a1a1a;
+    height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+  header {
+    background: #222;
+    border-bottom: 1px solid #333;
+    padding: 8px 12px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  header select, header button {
+    background: #333;
+    border: 1px solid #555;
+    color: #eee;
+    padding: 4px 8px;
+    font-size: 14px;
+    border-radius: 3px;
+  }
+  header button { cursor: pointer; }
+  header button:hover { background: #444; }
+  header .spacer { flex: 1; }
+  header .progress { font-variant-numeric: tabular-nums; }
+  header #active-raters {
+    font-size: 12px;
+    color: #aaa;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: #2a2a2a;
+  }
+  header #active-raters.online { background: #2a5; color: white; }
+
+  main {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    min-height: 0;
+  }
+  #image-area {
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    position: relative;
+  }
+  #image-area.zoomed {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+  #image-wrap {
+    position: relative;
+    max-width: 100%;
+    max-height: 100%;
+    line-height: 0;
+  }
+  #image-area.zoomed #image-wrap {
+    max-width: none;
+    max-height: none;
+  }
+  #image-wrap img {
+    max-width: 100%;
+    max-height: calc(100vh - 60px);
+    display: block;
+  }
+  #image-area.zoomed #image-wrap img {
+    max-width: none;
+    max-height: none;
+  }
+  #zoom-controls {
+    position: fixed;
+    bottom: 12px;
+    left: 12px;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    z-index: 100;
+  }
+  #zoom-controls button {
+    background: #333;
+    color: white;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 3px 8px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  #zoom-controls button:hover { background: #555; }
+  #zoom-controls button.active { background: #2a5; border-color: #4d8; }
+  #zoom-controls .label { opacity: 0.7; }
+  #image-wrap.hovered:not(.always-show) .marker { opacity: 0; }
+  /* In always-show mode the markers stay visible during hover, but they
+     still need to get out of the way when you're trying to click on
+     the cursor underneath. Fade them when the mouse is within 20 px of
+     any arrow tip; restored as soon as you move away. */
+  #image-wrap.always-show.near-marker .marker { opacity: 0; }
+  .marker {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid black;
+    transform: translate(-50%, -50%);
+    transition: opacity 100ms;
+    pointer-events: none;
+  }
+  .marker .tag {
+    position: absolute;
+    top: 16px;
+    left: 0;
+    background: rgba(0,0,0,0.8);
+    color: white;
+    font-size: 11px;
+    padding: 1px 4px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  /* Label marker is an arrow pointing left → right. Tip lands at the
+     label coord; body extends to the LEFT, into the empty space
+     beside the cursor sprite. Tip is at SVG (26, 14) so we shift the
+     box by (-26, -14) to anchor the tip on (left, top). */
+  .marker.label {
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    transform: translate(-26px, -14px);
+  }
+  .marker.label .label-arrow {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .marker.label .tag {
+    /* Sit above the tail of the arrow. */
+    top: -16px;
+    left: -4px;
+  }
+  /* Verified marker (existing prior-decision arrow). Points up-right
+     (↗) — opposite-diagonal of yellow algo arrow so all three at the
+     same coord don't overlap. Tip at SVG (26, 2); body extends
+     DOWN-LEFT of the tip (away from the cursor sprite which extends
+     down-right). */
+  .marker.verified {
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    transform: translate(-26px, -2px);
+  }
+  .marker.verified .verified-arrow {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .marker.verified .tag {
+    /* Sit below the down-left tail. */
+    bottom: -16px;
+    left: -4px;
+    top: auto;
+  }
+  /* Algo marker is an arrow (top-left → bottom-right). Tip lands at
+     the predicted (x, y); body extends up-and-left into the empty
+     space above the iPadOS cursor sprite (which extends down-right
+     from its hot spot). Tip is at SVG (26, 26), so we shift the
+     marker box up-left by 26 px so the tip lands on the JS-set
+     (left, top). */
+  .marker.algo {
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    transform: translate(-26px, -26px);
+  }
+  .marker.algo .algo-arrow {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .marker.algo .tag {
+    /* Sit near the tail of the arrow (upper-left), out of the way. */
+    top: -14px;
+    left: -4px;
+  }
+
+  #side {
+    background: #222;
+    border-left: 1px solid #333;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+  }
+  #side h3 { margin: 0; font-size: 14px; color: #888; font-weight: 600; }
+  #frame-name { font-family: monospace; font-size: 12px; word-break: break-all; }
+  #visibility-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  #visibility-badge.visible { background: #2a5; color: white; }
+  #visibility-badge.absent { background: #a52; color: white; }
+  #visibility-badge.unknown { background: #555; color: #ccc; }
+
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .actions button {
+    padding: 10px;
+    border: 1px solid #555;
+    background: #333;
+    color: white;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .actions button:hover { background: #444; }
+  .actions button.primary { background: #2a5; border-color: #2a5; }
+  .actions button.danger { background: #a52; border-color: #a52; }
+  .actions button.muted { background: #555; }
+
+  .nav { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .nav button { padding: 6px; border: 1px solid #555; background: #2a2a2a; color: #ccc; border-radius: 3px; cursor: pointer; font-size: 12px; }
+  .nav button:hover { background: #333; }
+
+  .shortcuts { font-size: 11px; color: #888; line-height: 1.6; }
+  .shortcuts kbd { background: #333; border: 1px solid #555; border-radius: 2px; padding: 1px 4px; font-family: monospace; font-size: 11px; }
+
+  .verified-info { background: #1a3a1a; border: 1px solid #2a5; padding: 6px; border-radius: 3px; font-size: 12px; }
+  #status { font-size: 11px; color: #888; }
+  #banner {
+    position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    z-index: 100; padding: 12px 20px; border-radius: 6px;
+    font-size: 15px; font-weight: 600;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    display: none;
+  }
+  #banner.success { background: #2a5; color: white; border: 1px solid #5c8; }
+  #banner.info    { background: #246; color: white; border: 1px solid #4af; }
+  #coord-readout { font-size: 12px; color: #ccc; line-height: 1.6; }
+  #coord-readout code { font-family: monospace; color: #fff; }
+  #coord-readout .label-swatch,
+  #coord-readout .algo-swatch,
+  #coord-readout .verified-swatch,
+  #coord-readout .hover-swatch {
+    display: inline-block;
+    width: 8px; height: 8px;
+    margin-right: 6px;
+    border-radius: 2px;
+    vertical-align: middle;
+  }
+  #coord-readout .label-swatch    { background: #44ff66; }
+  #coord-readout .algo-swatch     { background: #ffdd44; }
+  #coord-readout .verified-swatch { background: #ff44dd; }
+  #coord-readout .hover-swatch    { background: #4af; }
+  .toggle-btn {
+    background: #333;
+    border: 1px solid #555;
+    color: #ddd;
+    padding: 6px 8px;
+    font-size: 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .toggle-btn:hover { background: #444; }
+  .toggle-btn[aria-pressed="true"] {
+    background: #2a5;
+    border-color: #2a5;
+    color: white;
+  }
+
+  /* Click feedback */
+  .click-ping {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #4af;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    animation: ping 600ms ease-out forwards;
+  }
+  @keyframes ping {
+    0% { opacity: 1; transform: translate(-50%, -50%) scale(0.5); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(2); }
+  }
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<header>
+  <label>Dataset:
+    <select id="dataset-pick"></select>
+  </label>
+  <label>Filter:
+    <select id="filter-pick">
+      <option value="all">All unverified</option>
+      <option value="visible">Label says visible</option>
+      <option value="absent">Label says absent</option>
+      <option value="disagree50">Algo disagrees ≥ 50 px</option>
+      <option value="disagree100">Algo disagrees ≥ 100 px</option>
+    </select>
+  </label>
+  <button id="jump-unverified" title="Shortcut: U">Jump to first unverified (U)</button>
+  <div class="spacer"></div>
+  <div id="active-raters" title="Other users currently labelling">—</div>
+  <div class="progress" id="progress">—</div>
+</header>
+<main>
+  <div id="image-area">
+    <div id="zoom-controls">
+      <span class="label">view:</span>
+      <button id="zoom-fit" title="Fit whole frame (key: 0)">fit</button>
+      <button id="zoom-out" title="Zoom out (key: -)">−</button>
+      <button id="zoom-in" title="Zoom in (key: +)">+</button>
+      <span id="zoom-label">1×</span>
+      <span class="label" style="margin-left:8px;">crop:</span>
+      <button id="crop-toggle" title="Trim PiKVM black borders to iPad only (key: t)">iPad-only</button>
+    </div>
+    <div id="image-wrap">
+      <img id="frame-img" alt="frame" />
+      <div id="label-marker" class="marker label" style="display:none">
+        <svg class="label-arrow" viewBox="0 0 28 28" aria-hidden="true">
+          <!-- Dark outline for contrast -->
+          <line x1="2" y1="14" x2="20" y2="14" stroke="#000" stroke-width="5" stroke-linecap="round"/>
+          <polygon points="26,14 19,7 19,21" fill="#000" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
+          <!-- Green foreground -->
+          <line x1="2" y1="14" x2="20" y2="14" stroke="#44ff66" stroke-width="3" stroke-linecap="round"/>
+          <polygon points="26,14 20,9 20,19" fill="#44ff66"/>
+        </svg>
+      </div>
+      <div id="algo-marker" class="marker algo" style="display:none">
+        <svg class="algo-arrow" viewBox="0 0 28 28" aria-hidden="true">
+          <line class="algo-shaft" x1="4" y1="4" x2="20" y2="20" stroke="#ffdd44" stroke-width="3" stroke-linecap="round"/>
+          <polygon class="algo-head" points="26,26 23,18 18,23" fill="#ffdd44"/>
+        </svg>
+      </div>
+      <div id="verified-marker" class="marker verified" style="display:none">
+        <svg class="verified-arrow" viewBox="0 0 28 28" aria-hidden="true">
+          <!-- Dark outline. Tip at SVG (26, 2); body extends down-left. -->
+          <line x1="4" y1="24" x2="20" y2="8" stroke="#000" stroke-width="5" stroke-linecap="round"/>
+          <polygon points="26,2 16,6 22,12" fill="#000" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
+          <!-- Magenta foreground -->
+          <line x1="4" y1="24" x2="20" y2="8" stroke="#ff44dd" stroke-width="3" stroke-linecap="round"/>
+          <polygon points="26,2 18,5 23,10" fill="#ff44dd"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+  <aside id="side">
+    <h3>Frame</h3>
+    <div id="frame-name">—</div>
+    <div id="visibility-badge" class="unknown">—</div>
+    <div id="coord-readout">
+      <div><span class="label-swatch"></span>label:&nbsp;<code id="label-coords">—</code></div>
+      <div><span class="algo-swatch"></span>algo:&nbsp;<code id="algo-coords">—</code></div>
+      <div><span class="verified-swatch"></span>verified:&nbsp;<code id="verified-coords">—</code></div>
+      <div><span class="hover-swatch"></span>hover:&nbsp;<code id="hover-coords">—</code></div>
+    </div>
+    <button id="btn-always-show" class="toggle-btn" aria-pressed="false">
+      Always show markers: <span id="always-show-state">off</span>
+    </button>
+    <div id="verified-info" class="verified-info" style="display:none">—</div>
+
+    <h3>Decide</h3>
+    <div class="actions">
+      <button id="btn-confirm" class="primary">Confirm</button>
+      <button id="btn-absent" class="danger">Mark absent</button>
+      <button id="btn-skip" class="muted">Skip</button>
+      <button id="btn-correct-hint" disabled>Click image to correct</button>
+    </div>
+
+    <h3>Navigate</h3>
+    <div class="nav">
+      <button id="btn-prev">← Previous</button>
+      <button id="btn-next">Next →</button>
+    </div>
+
+    <div class="shortcuts">
+      <kbd>c</kbd> / <kbd>Enter</kbd> confirm ·
+      <kbd>a</kbd> absent ·
+      <kbd>s</kbd> skip ·
+      <kbd>←</kbd>/<kbd>→</kbd> nav ·
+      <kbd>h</kbd> always-show markers ·
+      click image to correct
+    </div>
+    <div id="status">loading…</div>
+  </aside>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

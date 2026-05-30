@@ -68,21 +68,24 @@ let v5LoadFailureLogged = false;
 // median on the same 16 frames. v8 is the better full-frame calibration
 // detector. Opt in via env var PIKVM_V8_CALIBRATE=1; default off.
 //
-// 2026-05-28: prefer cursor-v9-bordered.onnx when it exists in the model
-// dir — that's the model retrained on the orange-bordered cursor (see
-// docs/troubleshooting/2026-05-28-orange-cursor-v9-bordered-90-percent.md).
-// Verified live 90% / 0% miss vs the v8 model's "hallucinates outside
-// iPad bounds" failure mode. Same architecture, drop-in replacement.
-// Env var still overrides for diagnostic/A-B testing.
+// 2026-05-30 (PA36 ship-decision): prefer cursor-v11.onnx — trained on
+// 1030 human-labeled frames including 56 absent examples. Live A/B:
+// detection 19/19 (100%) within 35 px vs v9-bordered's 10/19 (53%) on
+// the same frames; real click rate 11/20 (55%) with slam-fallback
+// enabled vs v9-bordered's ~30% baseline. Falls back to v9-bordered,
+// then v8, when v11 isn't present (e.g., earlier checkouts). Env var
+// still overrides for diagnostic / A-B testing.
 const V8_MODEL = (() => {
   if (process.env.PIKVM_ML_V8_MODEL) return path.resolve(process.env.PIKVM_ML_V8_MODEL);
-  const borderedPath = path.resolve(process.cwd(), 'ml', 'cursor-v9-bordered.onnx');
-  try {
-    fsSync.accessSync(borderedPath);
-    return borderedPath;
-  } catch {
-    return path.resolve(process.cwd(), 'ml', 'cursor-v8.onnx');
+  const candidates = [
+    path.resolve(process.cwd(), 'ml', 'cursor-v11.onnx'),
+    path.resolve(process.cwd(), 'ml', 'cursor-v9-bordered.onnx'),
+    path.resolve(process.cwd(), 'ml', 'cursor-v8.onnx'),
+  ];
+  for (const c of candidates) {
+    try { fsSync.accessSync(c); return c; } catch { /* keep looking */ }
   }
+  return candidates[candidates.length - 1];  // best effort; let load fail loudly
 })();
 const V8_INPUT_W = 768;
 const V8_INPUT_H = 480;
