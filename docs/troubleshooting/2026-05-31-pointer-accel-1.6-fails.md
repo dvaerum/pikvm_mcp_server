@@ -24,9 +24,24 @@ iPad state was already degraded vs the morning bench (was 40%). The 85 % NO-LAUN
 
 ### Treatment (`PIKVM_USE_LEARNED_BALLISTICS=1`)
 
-Residual numbers (cursor distance from target after each retry) jumped from baseline's typical 38–91 px range up to **199–767 px**. Settings: all 5 SKIP. Books: 2 NOLAUNCH + 3 SKIP. AppStore: SKIP+rate-limit, etc. Residuals decreased across retries — characteristic halving pattern of "px/mickey ratio is off by ~2–4×".
+```
+Target      | hit | skip | miss | nolaunch | n
+------------+-----+------+------+----------+----
+Settings    | 0/5 |  5/5 |  0/5 |      0/5 | 5
+Books       | 0/5 |  3/5 |  0/5 |      2/5 | 5
+AppStore    | 1/5 |  3/5 |  1/5 |      0/5 | 5
+Files       | 0/5 |  5/5 |  0/5 |      0/5 | 5
+------------+-----+------+------+----------+----
+TOTAL       | 1/20 = 5% real launch
+SKIP        | 16/20 = 80% (algorithm refused to click)
+NO-LAUNCH   | 2/20 = 10%
+```
 
-(Treatment was still running at write time. Final summary numbers will be appended in the roadmap entry; pattern is overwhelmingly clear from the per-trial residuals.)
+Residual numbers (cursor distance from target after each retry) jumped from baseline's typical 38–91 px range up to **199–767 px**. Residuals decreased across retries — characteristic halving pattern of "px/mickey ratio is off by ~2–4×".
+
+**Treatment is strictly worse: 15 % → 5 % real launch (–10 pp). SKIP rate 0 % → 80 %**. NO-LAUNCH dropped from 85 % to 10 % only because SKIP fires before the bad click registers (the algorithm correctly notices it can't position the cursor and refuses to click — safer but less useful).
+
+Treatment delta: –10 pp HIT. Pass criterion was treatment ≥ baseline + 15 pp. **Fails by 25 pp.**
 
 ## Root cause — the model is being asked the wrong question
 
