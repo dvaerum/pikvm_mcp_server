@@ -37,6 +37,20 @@ export interface CursorEvent extends CursorPos {
   phase: 'moved' | 'entered' | 'exited';
 }
 
+/**
+ * The app fires a `tap-event` whenever a click on the SceneRendererView
+ * is recognised. Coordinates are iPad logical pixels — same space as
+ * `CursorPos`. The bench uses this to verify "did our mouseClick
+ * actually register inside the app, and at what coordinate?" without
+ * relying on real iPad UI state.
+ */
+export interface TapEvent {
+  x: number;
+  y: number;
+  /** App-side wall-clock (ms since epoch). */
+  t_ipad: number;
+}
+
 export interface SceneSpec {
   /** Catalog kind: image asset, procedural pattern, or video. */
   kind: 'image' | 'procedural' | 'video' | 'blackHoldingPattern';
@@ -99,6 +113,10 @@ export class IpadSession {
   clockOffsetMs = 0;
   /** Set by the user when streaming is on; called for every incoming cursor-event. */
   onCursorEvent: ((ev: CursorEvent) => void) | null = null;
+  /** Set by the user; called for every tap inside the app's scene view.
+   *  The app fires these always when a tap is recognised — no explicit
+   *  subscribe message; the bench just sets the callback when it cares. */
+  onTapEvent: ((ev: TapEvent) => void) | null = null;
 
   private readonly ws: WebSocket;
   private readonly pending = new Map<string, PendingRequest>();
@@ -180,6 +198,12 @@ export class IpadSession {
       case 'cursor-event': {
         if (this.onCursorEvent) {
           this.onCursorEvent(msg.payload as CursorEvent);
+        }
+        break;
+      }
+      case 'tap-event': {
+        if (this.onTapEvent) {
+          this.onTapEvent(msg.payload as TapEvent);
         }
         break;
       }

@@ -74,6 +74,14 @@ final class SessionStore: ObservableObject {
         connected = false
     }
 
+    /// Report a tap on the scene view to the collector. Wired from
+    /// RootView's `.onTapGesture` — used by the click-isolation bench
+    /// to verify clicks land inside the app at the expected coords
+    /// without depending on real iPad UI state.
+    func reportTap(at point: CGPoint) {
+        client?.sendTap(location: point)
+    }
+
     private func openSocket(url: URL) {
         client?.close()
         let c = WebSocketClient(

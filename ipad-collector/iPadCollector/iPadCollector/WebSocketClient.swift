@@ -139,6 +139,19 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
         task.send(.string(s)) { _ in }
     }
 
+    /// Report a tap to the collector. The bench uses these to verify
+    /// "did the click I emitted via PiKVM HID actually register inside
+    /// the app, and at what coordinate?" — independent of any iPadOS
+    /// app-launch path. Always-fire; no subscribe handshake.
+    func sendTap(location: CGPoint) {
+        let payload: [String: Any] = [
+            "x": Double(location.x),
+            "y": Double(location.y),
+            "t_ipad": Date().timeIntervalSince1970 * 1000.0,
+        ]
+        send(["type": "tap-event", "payload": payload])
+    }
+
     // MARK: - Protocol dispatch
 
     private func handle(text: String) {

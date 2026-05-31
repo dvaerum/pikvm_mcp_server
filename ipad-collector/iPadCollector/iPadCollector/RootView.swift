@@ -28,6 +28,18 @@ struct RootView: View {
                 // attaching the modifier to the full-screen scene view, we
                 // get pointer events across the entire iPad display.
                 .modifier(PointerTrackingModifier(tracker: session.pointerTracker))
+                // Tap reporter for the click-isolation bench. iOS 16
+                // doesn't have onTapGesture-with-location, so we use a
+                // zero-distance DragGesture whose onEnded fires on
+                // press-then-release (i.e. a click) and exposes the
+                // location. Hover events are orthogonal (PointerMovement
+                // vs Press phases), so this doesn't disturb tracking.
+                .gesture(
+                    DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                        .onEnded { value in
+                            session.reportTap(at: value.location)
+                        }
+                )
 
             // Invisible keyboard-trigger layer. Listens for the literal
             // sequence h-e-l-p; on match, opens settings. Rendered last
