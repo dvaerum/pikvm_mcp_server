@@ -26,6 +26,7 @@
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import sharp from 'sharp';
 import { loadConfig } from '../src/config.js';
 import { PiKVMClient } from '../src/pikvm/client.js';
 import {
@@ -35,6 +36,7 @@ import {
   type TapEvent,
 } from '../src/pikvm/ipad-app-ws.js';
 import { moveToPixel } from '../src/pikvm/move-to.js';
+import { detectIpadRegion, NATIVE_MARGIN } from '../src/pikvm/ipad-region-detect.js';
 
 const PORT = 8767;
 
@@ -105,8 +107,7 @@ async function main(): Promise<void> {
   await fs.access(BG_PATH).catch(() => {
     throw new Error(`background image not found: ${BG_PATH}`);
   });
-  const bgBytes = await fs.readFile(BG_PATH);
-  const bgB64 = bgBytes.toString('base64');
+  const bgBytesFull = await fs.readFile(BG_PATH);
 
   const { sess, closeServer } = await waitForSession();
   if (!sess.hello) throw new Error('no hello');
@@ -114,7 +115,31 @@ async function main(): Promise<void> {
   const logicalW = sess.hello.logicalW;
   const logicalH = sess.hello.logicalH;
 
-  // Push the home-page screenshot as the app's scene.
+  // Detect the iPad region inside the input screenshot and crop to it,
+  // then resize to iPad logical dims. Without this, the iPad app
+  // .scaledToFill stretches the full 1920×1080 PiKVM frame (including
+  // black bezel) into the iPad screen — icons get squished and
+  // bench-target logical coords don't map to icon positions. After
+  // this crop+resize, target logical coords correspond 1:1 to the
+  // positions of icons in the rendered scene.
+  const inputRegion = await detectIpadRegion(bgBytesFull);
+  const cropTight = {
+    left: inputRegion.x + NATIVE_MARGIN,
+    top: inputRegion.y + NATIVE_MARGIN,
+    width: inputRegion.w - 2 * NATIVE_MARGIN,
+    height: inputRegion.h - 2 * NATIVE_MARGIN,
+  };
+  console.log(
+    `[click-iso] input iPad region: x=${cropTight.left} y=${cropTight.top} w=${cropTight.width} h=${cropTight.height}; resizing to ${logicalW}×${logicalH}`,
+  );
+  const bgBytes = await sharp(bgBytesFull)
+    .extract(cropTight)
+    .resize(logicalW, logicalH, { fit: 'fill' })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+  const bgB64 = bgBytes.toString('base64');
+
+  // Push the cropped+resized home page as the app's scene.
   await sess.showScene({ kind: 'image', image: bgB64 });
   await sleep(500);
 
@@ -133,7 +158,6 @@ async function main(): Promise<void> {
   // then compute the screenshot-coord targets ourselves so subsequent
   // trials skip re-detection.
   const firstScreenshot = await client.screenshot();
-  const { detectIpadRegion, NATIVE_MARGIN } = await import('../src/pikvm/ipad-region-detect.js');
   const region = await detectIpadRegion(firstScreenshot.buffer);
   const tight = {
     x: region.x + NATIVE_MARGIN,
