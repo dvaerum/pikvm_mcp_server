@@ -58,7 +58,109 @@ import {
   slamOriginFromBounds,
   LEGACY_PORTRAIT_SLAM_ORIGIN,
 } from './orientation.js';
+import {
+  buildFeatures as buildPointerAccelFeatures,
+  predictDisplacement as predictLearnedDisplacement,
+  pointerAccelModelExists,
+} from './pointer-accel.js';
 import { sleep } from './util.js';
+
+/** iPad logical resolution assumed by the pointer-accel v1 model.
+ *  The trajectory bench collected `iPadHello.logicalW/H = 820 × 1180`
+ *  (manifest.json), and all current PiKVM-attached iPads in this
+ *  deployment match. If a future iPad reports a different logical
+ *  resolution the `learnedBallisticsPxPerMickey` helper will produce
+ *  a scaled-wrong ratio — gated by `PIKVM_USE_LEARNED_BALLISTICS=1`,
+ *  so production paths are unaffected until we re-collect. */
+const POINTER_ACCEL_IPAD_LOGICAL_W = 820;
+const POINTER_ACCEL_IPAD_LOGICAL_H = 1180;
+
+/** Read the learned-ballistics feature flag at call time so tests can
+ *  flip env and re-run without module-eval caching. */
+function learnedBallisticsEnabled(): boolean {
+  return process.env.PIKVM_USE_LEARNED_BALLISTICS === '1';
+}
+
+/**
+ * Run the learned pointer-accel forward model for a representative
+ * "emit `chunkMag` mickeys along (sx, sy)" query with an empty history
+ * (so the prediction reflects the steady-state response for the
+ * planning chunk size, not a coalesced burst), then convert the
+ * predicted logical-px displacement to **screenshot** pixels using the
+ * current iPad bounds. Returns `{ pxPerMickeyX, pxPerMickeyY }` or
+ * `null` if the model is unavailable / bounds undetected.
+ *
+ * Per the Stage-1.4 eval, the model's mean error is ~3 px on bursts
+ * and < 1 px on linearity sequences. We use it to seed the planning
+ * ratio only — the downstream correction loop still runs unchanged
+ * and verifies via motion-diff / template-match. Inverting the
+ * forward model exactly is unnecessary at this granularity: the model
+ * is approximately linear in the steady-state regime (verified by the
+ * trainer log: linearity:m100 row predicts ~85 logical px for a 100-
+ * mickey emit), so dividing predicted-displacement by `chunkMag`
+ * gives a usable per-mickey planning constant.
+ *
+ * Approximation: we cannot invert the model in closed form (it's an
+ * MLP). We pick the documented approximation (Newton/scale variant):
+ * one forward call at the chunk size, divide by the chunk magnitude,
+ * use the result as a planning ratio. The correction loop carries
+ * any residual error. Trade-off: smaller emits stay accurate (1:1
+ * linear regime), larger emits inherit some non-linearity that the
+ * correction loop absorbs as it does today.
+ */
+async function learnedBallisticsPxPerMickey(
+  origin: { x: number; y: number },
+  dxPx: number,
+  dyPx: number,
+  chunkMag: number,
+): Promise<{ pxPerMickeyX: number; pxPerMickeyY: number } | null> {
+  // Bounds + iPad logical W/H let us map predicted logical px back to
+  // HDMI-screenshot px. If bounds aren't cached yet, fall back.
+  const bounds = getLastGoodBounds();
+  if (!bounds) return null;
+  if (!pointerAccelModelExists()) return null;
+
+  const signX = dxPx >= 0 ? 1 : -1;
+  const signY = dyPx >= 0 ? 1 : -1;
+  // Query the model independently per axis so we get a per-axis ratio
+  // (iPad acceleration is asymmetric — 25× per-axis spread observed
+  // live, see existing Phase 15 note). Empty history + 0 prior dt
+  // matches the trainer's cold-start condition.
+  const featX = buildPointerAccelFeatures(
+    [],
+    { vxPxPerMs: 0, vyPxPerMs: 0 },
+    { dx: signX * chunkMag, dy: 0, t: 0 },
+    0,
+  );
+  const featY = buildPointerAccelFeatures(
+    [],
+    { vxPxPerMs: 0, vyPxPerMs: 0 },
+    { dx: 0, dy: signY * chunkMag, t: 0 },
+    0,
+  );
+  const [predX, predY] = await Promise.all([
+    predictLearnedDisplacement(featX),
+    predictLearnedDisplacement(featY),
+  ]);
+  if (!predX || !predY) return null;
+
+  // Convert iPad logical px -> HDMI screenshot px using the detected
+  // iPad bounds and the assumed logical resolution.
+  const scaleScreenshotPerLogicalX =
+    bounds.width / POINTER_ACCEL_IPAD_LOGICAL_W;
+  const scaleScreenshotPerLogicalY =
+    bounds.height / POINTER_ACCEL_IPAD_LOGICAL_H;
+  const screenshotDxAbs = Math.abs(predX.dx) * scaleScreenshotPerLogicalX;
+  const screenshotDyAbs = Math.abs(predY.dy) * scaleScreenshotPerLogicalY;
+
+  // px/mickey per axis. Guard against pathological zero/negative
+  // outputs by returning null and letting the caller fall back.
+  if (screenshotDxAbs <= 0 || screenshotDyAbs <= 0) return null;
+  return {
+    pxPerMickeyX: screenshotDxAbs / chunkMag,
+    pxPerMickeyY: screenshotDyAbs / chunkMag,
+  };
+}
 
 export type MoveStrategy = 'detect-then-move' | 'slam-then-move' | 'assume-at';
 export type Axis = 'x' | 'y';
@@ -1413,9 +1515,9 @@ export async function moveToPixel(
     }
   }
 
-  const pxPerMickeyX =
+  let pxPerMickeyX =
     (profile && lookupPxPerMickey(profile, 'x', chunkMag, 'slow')) ?? fallback;
-  const pxPerMickeyY =
+  let pxPerMickeyY =
     (profile && lookupPxPerMickey(profile, 'y', chunkMag, 'slow')) ?? fallback;
 
   const targetX = clamp(Math.round(target.x), 0, resolution.width - 1);
@@ -1425,6 +1527,41 @@ export async function moveToPixel(
   const discovered = await discoverOrigin(client, options);
   const origin = discovered.point;
   const actualStrategy = discovered.method;
+
+  // Step 1.5 (2026-05-31): when PIKVM_USE_LEARNED_BALLISTICS=1, replace
+  // the constant `fallback` (and any profile lookup) with the
+  // pointer-accel v1 forward model's prediction for `chunkMag`-mickey
+  // steady-state emits. Bounds-gated: if the iPad bounds aren't
+  // detected yet, or the ONNX file is missing, this is a no-op and the
+  // production constant path runs unchanged. See
+  // `docs/troubleshooting/2026-05-31-pointer-accel-v1-eval.md` for
+  // the per-sequence-family error breakdown that justifies wiring
+  // this on iPad targets only.
+  if (learnedBallisticsEnabled()) {
+    const dxPxForPlanning = targetX - origin.x;
+    const dyPxForPlanning = targetY - origin.y;
+    const learned = await learnedBallisticsPxPerMickey(
+      origin,
+      dxPxForPlanning,
+      dyPxForPlanning,
+      chunkMag,
+    );
+    if (learned) {
+      if (verbose) {
+        console.error(
+          `[move-to] LEARNED_BALLISTICS active: pxPerMickeyX ${pxPerMickeyX.toFixed(3)} -> ${learned.pxPerMickeyX.toFixed(3)}, ` +
+          `pxPerMickeyY ${pxPerMickeyY.toFixed(3)} -> ${learned.pxPerMickeyY.toFixed(3)}`,
+        );
+      }
+      pxPerMickeyX = learned.pxPerMickeyX;
+      pxPerMickeyY = learned.pxPerMickeyY;
+    } else if (verbose) {
+      console.error(
+        '[move-to] LEARNED_BALLISTICS requested but unavailable (model missing ' +
+        'or iPad bounds not cached); using constant fallback ratio',
+      );
+    }
+  }
 
   // Phase 192-C: feed bounds + origin into the cursor belief.
   // discoverOrigin's return is our most-trusted cursor position at
