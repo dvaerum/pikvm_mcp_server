@@ -357,9 +357,15 @@ async function main() {
     }
 
     // Optionally drop a text-field overlay around the cursor's current
-    // position so iPadOS morphs the system arrow into an I-beam. The
-    // cursor's reported hot-spot stays at (cur.x, cur.y), so the label
-    // is still correct — only the cursor sprite changes.
+    // position so iPadOS morphs the system arrow into an I-beam.
+    //
+    // iPadOS only re-evaluates the pointer style on enter/move events
+    // through a UIPointerInteraction region. Just placing the overlay
+    // under a stationary cursor does NOT trigger the morph — the cursor
+    // sprite stays as the system arrow. A 1-mickey nudge after
+    // setOverlay forces a pointer-move event so the OS reads the new
+    // region's style. Re-fetch cursor after the nudge so the saved
+    // label matches the post-nudge hot-spot.
     let cursorShape: 'arrow' | 'i-beam' = 'arrow';
     if (TEXTFIELD_FRACTION > 0 && Math.random() < TEXTFIELD_FRACTION) {
       const tfW = 200;
@@ -369,7 +375,11 @@ async function main() {
       const tfY = Math.max(0, Math.min(logicalH - tfH, cur.y - tfH / 2));
       try {
         await sess.setOverlay({ kind: 'text-field', x: tfX, y: tfY, w: tfW, h: tfH });
-        await new Promise((r) => setTimeout(r, 250));  // wait for pointer-style morph
+        await new Promise((r) => setTimeout(r, 80));
+        await client.mouseMoveRelative(1, 0);
+        await client.mouseMoveRelative(-1, 0);
+        await new Promise((r) => setTimeout(r, 250));  // wait for morph after nudge
+        cur = await sess.getCursor();  // re-fetch label after the nudge
         cursorShape = 'i-beam';
       } catch (e) {
         console.error(`[collect] frame ${i + 1}: setOverlay failed: ${(e as Error).message}`);
