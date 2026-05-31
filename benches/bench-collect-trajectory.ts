@@ -8,9 +8,16 @@
  * replace PiKVM's hard-coded 1.4 px/mickey constant).
  *
  * Usage:
- *   npx tsx bench-collect-trajectory.ts            # short smoke run (<2 min)
- *   npx tsx bench-collect-trajectory.ts --full     # full run
+ *   npx tsx bench-collect-trajectory.ts                       # short smoke run (~30s, ~30 events)
+ *   npx tsx bench-collect-trajectory.ts --full                # one full pass (~60s, ~90 events)
+ *   npx tsx bench-collect-trajectory.ts --full --repeats 12   # 12 passes (~12min, ~1000+ events)
  *   npx tsx bench-collect-trajectory.ts --port 8767
+ *
+ * Each outer pass runs linearity + burst + direction sweeps once.
+ * iPadOS coalesces pointer events ~22% of the time (PA38), so 1 pass
+ * yields ~78% of emit count as cursor events. The forward ballistics
+ * model needs many samples per (direction, magnitude) condition, so use
+ * --repeats to multiply.
  *
  * Requires PiKVM env vars set (same as other bench-* scripts) and the
  * iPad app already connected to ws://<this-mac>:{PORT}.
@@ -41,11 +48,15 @@ import {
 let SHORT_RUN = true;
 
 let PORT = 8767;
+let REPEATS = 1;
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
   if (a === '--full') SHORT_RUN = false;
   else if (a === '--port' && process.argv[i + 1]) {
     PORT = Number(process.argv[i + 1]);
+    i++;
+  } else if (a === '--repeats' && process.argv[i + 1]) {
+    REPEATS = Math.max(1, Number(process.argv[i + 1]));
     i++;
   }
 }
@@ -319,12 +330,15 @@ async function main() {
   const sequenceLabels: string[] = [];
 
   try {
-    console.log('[traj] sequence 1/3: linearity sweep');
-    sequenceLabels.push(...(await runLinearitySweep(client, emits)));
-    console.log('[traj] sequence 2/3: burst-coalescing matrix');
-    sequenceLabels.push(...(await runBurstCoalescing(client, emits)));
-    console.log('[traj] sequence 3/3: direction sweep');
-    sequenceLabels.push(...(await runDirectionSweep(client, emits)));
+    for (let pass = 1; pass <= REPEATS; pass++) {
+      const prefix = REPEATS > 1 ? `[pass ${pass}/${REPEATS}] ` : '';
+      console.log(`${prefix}[traj] sequence 1/3: linearity sweep`);
+      sequenceLabels.push(...(await runLinearitySweep(client, emits)));
+      console.log(`${prefix}[traj] sequence 2/3: burst-coalescing matrix`);
+      sequenceLabels.push(...(await runBurstCoalescing(client, emits)));
+      console.log(`${prefix}[traj] sequence 3/3: direction sweep`);
+      sequenceLabels.push(...(await runDirectionSweep(client, emits)));
+    }
   } finally {
     clearInterval(resyncTimer);
     try {
