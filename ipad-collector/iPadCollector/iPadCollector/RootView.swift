@@ -38,9 +38,14 @@ struct RootView: View {
                 // downstream system handlers so iPadOS can't reinterpret
                 // it as a swipe / app switch.
                 .overlay(
-                    TapCaptureView { location in
-                        session.reportTap(at: location)
-                    }
+                    TapCaptureView(
+                        onTap: { location in
+                            session.reportTap(at: location)
+                        },
+                        onHover: { location, state in
+                            session.reportHover(at: location, state: state)
+                        }
+                    )
                     .ignoresSafeArea()
                     .allowsHitTesting(true)
                 )
@@ -69,51 +74,79 @@ struct RootView: View {
     }
 }
 
-// MARK: - Tap capture overlay
+// MARK: - Tap + hover capture overlay
 
-/// Transparent UIView with a UITapGestureRecognizer. The recognizer
-/// fires only on true taps (press + release within ~3 pt, fast) and
-/// reports the tap location in window coordinates (which match the
-/// iPad logical coord system the bench expects). `cancelsTouchesInView`
-/// is left at its default `true` — the touch is consumed here and
-/// doesn't propagate to system gesture handlers, so iPadOS can't
-/// reinterpret our HID click as a swipe / app switch.
+/// Transparent UIView that captures BOTH taps and hover positions.
+///
+/// - Taps: UITapGestureRecognizer fires only on true clicks (press +
+///   release within ~3 pt, fast). `cancelsTouchesInView` is left at
+///   the default `true` — the touch is consumed here and doesn't
+///   propagate to system gesture handlers, so iPadOS can't reinterpret
+///   our HID click as a swipe / app switch.
+/// - Hovers: UIHoverGestureRecognizer fires on .began (cursor enters
+///   the view), .changed (cursor moves within the view), and .ended
+///   (cursor exits). Required because a SwiftUI `.onContinuousHover`
+///   modifier on a sibling view stops firing when this UIView overlay
+///   is present (this overlay sits above SceneRendererView in the
+///   hierarchy and absorbs pointer hit-tests). Reporting hover from
+///   the same UIView that's already capturing the pointer fixes that.
+///
+/// Both callbacks deliver coords in window space, which equals the
+/// iPad's logical-points coord system for a full-screen window —
+/// matches what PointerTracker / cursor-event consumers expect.
 struct TapCaptureView: UIViewRepresentable {
     let onTap: (CGPoint) -> Void
+    let onHover: (CGPoint, UIGestureRecognizer.State) -> Void
 
     func makeUIView(context: Context) -> UIView {
         let v = UIView()
         v.backgroundColor = .clear
         v.isUserInteractionEnabled = true
-        let recogniser = UITapGestureRecognizer(
+
+        let tap = UITapGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleTap(_:))
         )
-        recogniser.numberOfTapsRequired = 1
-        recogniser.numberOfTouchesRequired = 1
-        v.addGestureRecognizer(recogniser)
+        tap.numberOfTapsRequired = 1
+        tap.numberOfTouchesRequired = 1
+        v.addGestureRecognizer(tap)
+
+        let hover = UIHoverGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleHover(_:))
+        )
+        v.addGestureRecognizer(hover)
+
         return v
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.onTap = onTap
+        context.coordinator.onHover = onHover
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onTap: onTap)
+        Coordinator(onTap: onTap, onHover: onHover)
     }
 
     final class Coordinator: NSObject {
         var onTap: (CGPoint) -> Void
-        init(onTap: @escaping (CGPoint) -> Void) { self.onTap = onTap }
+        var onHover: (CGPoint, UIGestureRecognizer.State) -> Void
+
+        init(
+            onTap: @escaping (CGPoint) -> Void,
+            onHover: @escaping (CGPoint, UIGestureRecognizer.State) -> Void
+        ) {
+            self.onTap = onTap
+            self.onHover = onHover
+        }
 
         @objc func handleTap(_ sender: UITapGestureRecognizer) {
-            // `location(in: nil)` returns coordinates in the window's
-            // coordinate space, which equals the iPad's logical-points
-            // space for a full-screen window. Matches the cursor coords
-            // PointerTracker reports via .onContinuousHover.
-            let p = sender.location(in: nil)
-            onTap(p)
+            onTap(sender.location(in: nil))
+        }
+
+        @objc func handleHover(_ sender: UIHoverGestureRecognizer) {
+            onHover(sender.location(in: nil), sender.state)
         }
     }
 }

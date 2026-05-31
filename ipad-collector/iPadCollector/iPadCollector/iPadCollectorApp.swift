@@ -91,6 +91,25 @@ final class SessionStore: ObservableObject {
         client?.sendTap(location: point)
     }
 
+    /// Report a pointer hover event from the TapCaptureView's
+    /// UIHoverGestureRecognizer. Calls into PointerTracker.record so
+    /// `getCursor()` RPCs return fresh coords AND streaming
+    /// subscribers receive a cursor-event (via the existing
+    /// pointerTracker.events Combine publisher that WebSocketClient
+    /// subscribes to during subscribe-cursor). Wired this way because
+    /// the TapCaptureView UIView overlay sits above SceneRendererView
+    /// and absorbs pointer hit-tests, preventing the existing
+    /// SwiftUI `.onContinuousHover` modifier from receiving events.
+    func reportHover(at point: CGPoint, state: UIGestureRecognizer.State) {
+        let phase: String
+        switch state {
+        case .began:   phase = "entered"
+        case .ended, .cancelled, .failed: phase = "exited"
+        default:       phase = "moved"
+        }
+        pointerTracker.record(x: Double(point.x), y: Double(point.y), phase: phase)
+    }
+
     private func openSocket(url: URL) {
         client?.close()
         let c = WebSocketClient(
