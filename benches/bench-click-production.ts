@@ -31,6 +31,7 @@ import { PiKVMClient } from '../src/pikvm/client.js';
 import { clickAtWithRetry, defaultMaxRetriesFor, defaultMaxResidualPxFor } from '../src/pikvm/click-verify.js';
 import { loadProfile } from '../src/pikvm/ballistics.js';
 import { ipadGoHome } from '../src/pikvm/ipad-unlock.js';
+import { detectIpadRegion, NATIVE_MARGIN } from '../src/pikvm/ipad-region-detect.js';
 
 // PA20: real-launch detector. iPadOS pointer-effect cursor-on-icon
 // highlight + cursor motion in a 100x100 region around target was
@@ -70,6 +71,46 @@ async function similarityToHome(
   return 1 - meanDiff / 255;
 }
 
+// 3.5 (2026-05-31): for page-discrimination the bezel-inclusive 96x54
+// version of rgbFromJpeg returns ~0.97 sim between page-1 and page-2
+// home — the ~92% black bezel pixels dominate. Cropping to the
+// detected iPad-tight region first gives clean separation (page-1
+// vs page-2 = ~0.90 cropped vs ~0.97 uncropped). Used only by the
+// page-1 sanity gate; HIT detection still uses full-frame.
+async function rgbFromJpegCroppedToIpad(
+  jpeg: Buffer,
+): Promise<{ rgb: Buffer; w: number; h: number }> {
+  const reg = await detectIpadRegion(jpeg);
+  const tight = {
+    left: reg.x + NATIVE_MARGIN,
+    top: reg.y + NATIVE_MARGIN,
+    width: Math.max(1, reg.w - 2 * NATIVE_MARGIN),
+    height: Math.max(1, reg.h - 2 * NATIVE_MARGIN),
+  };
+  const targetW = 96, targetH = 54;
+  const { data } = await sharp(jpeg)
+    .extract(tight)
+    .resize(targetW, targetH, { fit: 'fill' })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return { rgb: data, w: targetW, h: targetH };
+}
+
+async function similarityCroppedToIpad(
+  jpegA: Buffer,
+  rgbB: Buffer,
+): Promise<number> {
+  const { rgb } = await rgbFromJpegCroppedToIpad(jpegA);
+  if (rgb.length !== rgbB.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < rgb.length; i++) {
+    sum += Math.abs(rgb[i] - rgbB[i]);
+  }
+  const meanDiff = sum / rgb.length;
+  return 1 - meanDiff / 255;
+}
+
 const cfg = loadConfig();
 const client = new PiKVMClient(cfg.pikvm);
 const profile = await loadProfile('./data/ballistics.json').catch(() => null);
@@ -90,6 +131,48 @@ const homeShot = await client.screenshot({ quality: 75 });
 const { rgb: homeRgb } = await rgbFromJpeg(homeShot.buffer);
 await fs.writeFile(path.join(ROOT, 'home-reference.jpg'), homeShot.buffer);
 console.error(`Captured home reference (96x54 RGB, ${homeRgb.length} bytes)`);
+
+// 3.5 (2026-05-31): page-1 sanity gate. The bench TARGETS below are
+// hardcoded for iPad home **page 1** (Settings, Books, App Store,
+// Files visible). If the iPad is sitting on page 2, those coords
+// land on empty wallpaper between icons — every trial NO-LAUNCH —
+// and the click rate looks like a tap-registration disaster when
+// the real cause is "we measured the wrong screen". Today's
+// 0%/5%/15% numbers across PA37/1.6 baseline/1.6 treatment were all
+// page-2 artifacts (see docs/troubleshooting/2026-05-31-3.1-tap-
+// registration-fine.md). The check below compares the freshly-
+// captured home screenshot against a known page-1 reference; if
+// similarity is below threshold the bench refuses to run rather
+// than silently producing wrong-page data.
+const PAGE_1_REFERENCE = 'benches/fixtures/page-1-home-reference.jpg';
+// 3.5 (2026-05-31): threshold derived from cropped-to-iPad similarity
+// probe — page-1 vs page-2 of the same iPad's home screen lands at
+// ~0.903, while two page-1 snapshots are ~0.97-1.0. 0.94 sits
+// comfortably between, with margin for icon-badge changes (e.g. App
+// Store notification dot) and ambient brightness drift.
+const PAGE_1_SIM_THRESHOLD = 0.94;
+{
+  const refBytes = await fs.readFile(PAGE_1_REFERENCE).catch(() => null);
+  if (!refBytes) {
+    console.error(
+      `WARN: page-1 reference missing at ${PAGE_1_REFERENCE}; skipping sanity check. ` +
+      `Bench will run but results may reflect wrong-page artifacts.`,
+    );
+  } else {
+    const { rgb: refRgbCropped } = await rgbFromJpegCroppedToIpad(refBytes);
+    const sim = await similarityCroppedToIpad(homeShot.buffer, refRgbCropped);
+    console.error(`Page-1 sanity sim=${sim.toFixed(3)} (cropped-to-iPad; threshold ${PAGE_1_SIM_THRESHOLD})`);
+    if (sim < PAGE_1_SIM_THRESHOLD) {
+      await fs.writeFile(path.join(ROOT, 'current-home-vs-page1-mismatch.jpg'), homeShot.buffer);
+      throw new Error(
+        `Page-1 sanity check failed: similarity ${sim.toFixed(3)} < ${PAGE_1_SIM_THRESHOLD}. ` +
+        `The iPad is not on home page 1 — the bench's hardcoded TARGETS would land on the wrong icons (or empty pixels). ` +
+        `Manually swipe to page 1 and re-run, or update the TARGETS table for the current page. ` +
+        `Frame saved to ${path.join(ROOT, 'current-home-vs-page1-mismatch.jpg')} for inspection.`,
+      );
+    }
+  }
+}
 // PA20: similarity-to-home threshold for "still home" vs "launched
 // app". Bimodal data from the first PA20 run:
 //   - 0.924-0.948 when an app (Settings, Maps) is visible
