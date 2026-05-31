@@ -43,6 +43,16 @@ const TEXTFIELD_FRACTION = (() => {
   if (i >= 0 && process.argv[i + 1]) return Math.max(0, Math.min(1, Number(process.argv[i + 1])));
   return 0;
 })();
+/** Fraction of frames captured AFTER iPadOS auto-hides the pointer (no
+ *  visible cursor). Saved with `cursor: null` to match
+ *  bench-collect-absent.ts schema. iPadOS pointer fade is ≥10 s; we wait
+ *  12 s after the last emit to be safe. */
+const ABSENT_FRACTION = (() => {
+  const i = process.argv.indexOf('--absent-fraction');
+  if (i >= 0 && process.argv[i + 1]) return Math.max(0, Math.min(1, Number(process.argv[i + 1])));
+  return 0;
+})();
+const ABSENT_WAIT_MS = 12_000;
 const SETTLE_MS = 150;
 const STEP_MICKEYS_MIN = 30;
 const STEP_MICKEYS_MAX = 90;
@@ -269,6 +279,33 @@ async function main() {
       } catch (e) {
         console.error(`[collect] frame ${i + 1}: setEffect failed: ${(e as Error).message}`);
       }
+    }
+
+    // Absent-cursor branch: no emit, wait for iPadOS pointer auto-hide,
+    // screenshot, save with cursor:null. Detector needs these examples
+    // so it learns "no cursor → return null" instead of always picking
+    // the nearest pointer-shaped artifact.
+    const wantAbsent = ABSENT_FRACTION > 0 && Math.random() < ABSENT_FRACTION;
+    if (wantAbsent) {
+      await new Promise((r) => setTimeout(r, ABSENT_WAIT_MS));
+      const shot = await client.screenshot();
+      const seq = String(saved + 1).padStart(5, '0');
+      const relPath = `procedural/frame-${seq}.jpg`;
+      await fs.writeFile(path.join(outDir, relPath), shot.buffer);
+      const row = {
+        frame: relPath,
+        cursor: null,
+        decision: 'synthetic',
+        scene: recipe.label,
+        cursor_shape: 'absent' as const,
+        decided_at: new Date().toISOString(),
+        ...(effect ? { effect: { blur: effect.blur, brightness: effect.brightness, colorMul: effect.colorMul } } : {}),
+      };
+      await fs.appendFile(jsonlPath, JSON.stringify(row) + '\n');
+      saved++;
+      // Force a wake on the next iteration so the cursor is alive again.
+      lastCur = null;
+      continue;
     }
 
     const big = i > 0 && i % BIG_STEP_EVERY === 0;
