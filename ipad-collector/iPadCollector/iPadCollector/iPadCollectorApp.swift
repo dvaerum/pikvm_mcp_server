@@ -15,6 +15,15 @@ import Combine
 struct iPadCollectorApp: App {
     @StateObject private var session = SessionStore()
 
+    init() {
+        // Disable iOS's idle-timer auto-lock while iPadCollector is
+        // foreground. Otherwise long benches (>30 s) hit the iPad's
+        // auto-lock; once locked, iPadCollector is suspended, no
+        // .onContinuousHover or TapCaptureView events fire, and every
+        // remaining trial silently no-ops against the lock screen.
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

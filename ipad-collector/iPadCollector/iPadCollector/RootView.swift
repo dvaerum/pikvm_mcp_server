@@ -28,17 +28,21 @@ struct RootView: View {
                 // attaching the modifier to the full-screen scene view, we
                 // get pointer events across the entire iPad display.
                 .modifier(PointerTrackingModifier(tracker: session.pointerTracker))
-                // Tap reporter for the click-isolation bench. iOS 16
-                // doesn't have onTapGesture-with-location, so we use a
-                // zero-distance DragGesture whose onEnded fires on
-                // press-then-release (i.e. a click) and exposes the
-                // location. Hover events are orthogonal (PointerMovement
-                // vs Press phases), so this doesn't disturb tracking.
-                .gesture(
-                    DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                        .onEnded { value in
-                            session.reportTap(at: value.location)
-                        }
+                // Tap reporter for the click-isolation bench. Earlier
+                // attempt with DragGesture(min=0, .global) backgrounded
+                // iPadCollector after the first click — SwiftUI's
+                // DragGesture is too greedy and competes with system
+                // gestures. UITapGestureRecognizer on a UIView overlay is
+                // the right primitive: only fires on true taps, and with
+                // cancelsTouchesInView=true the touch never reaches
+                // downstream system handlers so iPadOS can't reinterpret
+                // it as a swipe / app switch.
+                .overlay(
+                    TapCaptureView { location in
+                        session.reportTap(at: location)
+                    }
+                    .ignoresSafeArea()
+                    .allowsHitTesting(true)
                 )
 
             // Invisible keyboard-trigger layer. Listens for the literal
@@ -61,6 +65,55 @@ struct RootView: View {
             if session.collectorURL.isEmpty {
                 showSettings = true
             }
+        }
+    }
+}
+
+// MARK: - Tap capture overlay
+
+/// Transparent UIView with a UITapGestureRecognizer. The recognizer
+/// fires only on true taps (press + release within ~3 pt, fast) and
+/// reports the tap location in window coordinates (which match the
+/// iPad logical coord system the bench expects). `cancelsTouchesInView`
+/// is left at its default `true` — the touch is consumed here and
+/// doesn't propagate to system gesture handlers, so iPadOS can't
+/// reinterpret our HID click as a swipe / app switch.
+struct TapCaptureView: UIViewRepresentable {
+    let onTap: (CGPoint) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        v.isUserInteractionEnabled = true
+        let recogniser = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        recogniser.numberOfTapsRequired = 1
+        recogniser.numberOfTouchesRequired = 1
+        v.addGestureRecognizer(recogniser)
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onTap = onTap
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTap: onTap)
+    }
+
+    final class Coordinator: NSObject {
+        var onTap: (CGPoint) -> Void
+        init(onTap: @escaping (CGPoint) -> Void) { self.onTap = onTap }
+
+        @objc func handleTap(_ sender: UITapGestureRecognizer) {
+            // `location(in: nil)` returns coordinates in the window's
+            // coordinate space, which equals the iPad's logical-points
+            // space for a full-screen window. Matches the cursor coords
+            // PointerTracker reports via .onContinuousHover.
+            let p = sender.location(in: nil)
+            onTap(p)
         }
     }
 }

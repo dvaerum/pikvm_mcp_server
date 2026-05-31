@@ -37,6 +37,7 @@ import {
 } from '../src/pikvm/ipad-app-ws.js';
 import { moveToPixel } from '../src/pikvm/move-to.js';
 import { detectIpadRegion, NATIVE_MARGIN } from '../src/pikvm/ipad-region-detect.js';
+import { unlockIpad } from '../src/pikvm/ipad-unlock.js';
 
 const PORT = 8767;
 
@@ -48,10 +49,14 @@ const TRIALS = (() => {
 const BG_PATH = (() => {
   const i = process.argv.indexOf('--bg');
   if (i >= 0 && process.argv[i + 1]) return process.argv[i + 1];
-  // Default: the home-page-2 reference we just captured. The bench
-  // works with any iPad-sized image, but using a real iPad screenshot
-  // makes the targets visually sensible (an "icon" is actually an icon).
-  return 'data/tap-isolation-2026-05-31T07-01-22/00-home-reference.jpg';
+  // Default: a known cursor-FREE iPad home-page-1 frame from the
+  // presence-collection dataset. The earlier default (the take-1 home
+  // reference) had the iPad cursor visible IN the JPEG; when rendered
+  // as the scene, moveToPixel's detector saw TWO cursors (painted +
+  // real) and picked the wrong one (residual 657 px in trial 1).
+  // This file was captured after auto-fade so the painted frame
+  // contains no cursor pixels.
+  return 'data/cursor-collect-presence-2026-05-30T07-28-52/home/frame-0000.jpg';
 })();
 const CLICK_DOWN_MS = 150;
 const TAP_WAIT_MS = 800;
@@ -108,6 +113,19 @@ async function main(): Promise<void> {
     throw new Error(`background image not found: ${BG_PATH}`);
   });
   const bgBytesFull = await fs.readFile(BG_PATH);
+
+  // Pre-flight: unlock the iPad if it's on the lock screen. iPadOS
+  // suspends background apps when locked — iPadCollector wouldn't be
+  // running, so no tap events would fire and every trial would be a
+  // no-op. unlockIpad is idempotent: cheap no-op when already unlocked.
+  console.log('[click-iso] ensuring iPad is unlocked…');
+  const cfgEarly = loadConfig();
+  const clientEarly = new PiKVMClient(cfgEarly.pikvm);
+  try {
+    await unlockIpad(clientEarly, { verbose: false });
+  } catch (e) {
+    console.error(`[click-iso] unlockIpad failed: ${(e as Error).message} (continuing — bench may produce 0 taps if iPad stays locked)`);
+  }
 
   const { sess, closeServer } = await waitForSession();
   if (!sess.hello) throw new Error('no hello');
