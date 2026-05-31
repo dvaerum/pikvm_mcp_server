@@ -18,6 +18,7 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
     private let onDisconnected: (String?) -> Void
     private let onScene: (SceneSpec) -> Void
     private let onEffect: (EffectSpec) -> Void
+    private let onOverlay: (OverlaySpec) -> Void
 
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
@@ -31,13 +32,15 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
          onConnected: @escaping () -> Void,
          onDisconnected: @escaping (String?) -> Void,
          onScene: @escaping (SceneSpec) -> Void,
-         onEffect: @escaping (EffectSpec) -> Void) {
+         onEffect: @escaping (EffectSpec) -> Void,
+         onOverlay: @escaping (OverlaySpec) -> Void) {
         self.url = url
         self.pointer = pointer
         self.onConnected = onConnected
         self.onDisconnected = onDisconnected
         self.onScene = onScene
         self.onEffect = onEffect
+        self.onOverlay = onOverlay
     }
 
     func start() {
@@ -156,6 +159,8 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
             handleShowScene(payload: payload, refId: id)
         case "set-effect":
             handleSetEffect(payload: payload, refId: id)
+        case "set-overlay":
+            handleSetOverlay(payload: payload, refId: id)
         case "subscribe-cursor":
             startStreaming(refId: id)
         case "unsubscribe-cursor":
@@ -217,6 +222,24 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
             e.colorMul = (cm[0], cm[1], cm[2])
         }
         DispatchQueue.main.async { self.onEffect(e) }
+        if let refId {
+            send(["type": "ack", "payload": ["ref": refId]])
+        }
+    }
+
+    private func handleSetOverlay(payload: [String: Any]?, refId: String?) {
+        guard let p = payload else { return }
+        var o = OverlaySpec()
+        let kindStr = (p["kind"] as? String) ?? "none"
+        switch kindStr {
+        case "text-field": o.kind = .textField
+        default:           o.kind = .none
+        }
+        if let x = p["x"] as? Double { o.x = x }
+        if let y = p["y"] as? Double { o.y = y }
+        if let w = p["w"] as? Double { o.w = w }
+        if let h = p["h"] as? Double { o.h = h }
+        DispatchQueue.main.async { self.onOverlay(o) }
         if let refId {
             send(["type": "ack", "payload": ["ref": refId]])
         }

@@ -57,6 +57,27 @@ export interface EffectSpec {
   colorMul?: [number, number, number];  // RGB multipliers; [1,1,1] = unchanged
 }
 
+/**
+ * Overlay rendered on TOP of the current scene. Each kind triggers a
+ * different iPadOS pointer-style morph: a TextField shows an I-beam over
+ * its area; a Button morphs into a highlighted button shape; "none"
+ * leaves the system arrow alone. The morph is what we actually want in
+ * the screenshot — the detector must learn that an I-beam over a text
+ * field is still the cursor, with the hot-spot in its middle.
+ *
+ * `x`, `y`, `w`, `h` are in iPad logical coordinates (the same space as
+ * cursor positions from `getCursor()` / cursor-event). The bench
+ * positions the cursor inside the overlay rect to capture a morphed
+ * frame, then sets `kind: 'none'` for the next non-morphed frame.
+ */
+export interface OverlaySpec {
+  kind: 'none' | 'text-field';
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+}
+
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(err: Error): void;
@@ -198,6 +219,10 @@ export class IpadSession {
 
   async setEffect(effect: EffectSpec): Promise<void> {
     await this.request('set-effect', effect);
+  }
+
+  async setOverlay(overlay: OverlaySpec): Promise<void> {
+    await this.request('set-overlay', overlay);
   }
 
   /**

@@ -47,23 +47,45 @@ struct EffectSpec: Equatable {
     }
 }
 
+/// On-top overlay used to trigger iPadOS pointer-style morphs
+/// (e.g. I-beam over a text field). Coordinates are iPad logical points.
+struct OverlaySpec: Equatable {
+    enum Kind: String, Equatable {
+        case none
+        case textField
+    }
+    var kind: Kind = .none
+    var x: Double = 0
+    var y: Double = 0
+    var w: Double = 0
+    var h: Double = 0
+
+    static let none = OverlaySpec()
+}
+
 struct SceneRendererView: View {
     let scene: SceneSpec
     let effect: EffectSpec
+    let overlay: OverlaySpec
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             content
+                .blur(radius: CGFloat(effect.blur))
+                .brightness(effect.brightness)
+                .colorMultiply(Color(.sRGB,
+                                     red: effect.colorMul.0,
+                                     green: effect.colorMul.1,
+                                     blue: effect.colorMul.2,
+                                     opacity: 1))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+
+            // Overlay is NOT under the effect modifiers — we want the
+            // text-field to render at full fidelity so iPadOS recognises
+            // it and morphs the pointer to an I-beam over it.
+            overlayView
         }
-        .blur(radius: CGFloat(effect.blur))
-        .brightness(effect.brightness)
-        .colorMultiply(Color(.sRGB,
-                             red: effect.colorMul.0,
-                             green: effect.colorMul.1,
-                             blue: effect.colorMul.2,
-                             opacity: 1))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
     }
 
     @ViewBuilder
@@ -78,6 +100,55 @@ struct SceneRendererView: View {
                             params: scene.proceduralParams)
         case .video:
             VideoScene(urlString: scene.videoURL ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private var overlayView: some View {
+        switch overlay.kind {
+        case .none:
+            EmptyView()
+        case .textField:
+            IBeamRegion()
+                .frame(width: CGFloat(overlay.w), height: CGFloat(overlay.h))
+                .position(x: CGFloat(overlay.x) + CGFloat(overlay.w) / 2,
+                          y: CGFloat(overlay.y) + CGFloat(overlay.h) / 2)
+        }
+    }
+}
+
+/// A UIView region that uses UIPointerInteraction to morph the system
+/// pointer to a vertical I-beam over its bounds — same shape iPadOS
+/// shows over any UITextField. Visually rendered as a thin-bordered
+/// translucent rect so it's recognisable in screenshots without being
+/// the dominant visual feature. Touch interaction is disabled so a
+/// stray click can't pop the keyboard.
+struct IBeamRegion: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = UIColor.white.withAlphaComponent(0.25)
+        v.layer.borderColor = UIColor.darkGray.cgColor
+        v.layer.borderWidth = 1
+        v.layer.cornerRadius = 6
+        v.isUserInteractionEnabled = true  // keep pointer interaction
+        // A UIPointerInteraction's delegate decides the pointer style
+        // for the view's bounds. Returning a verticalBeam style makes
+        // iPadOS render the I-beam pointer while the cursor is inside.
+        let interaction = UIPointerInteraction(delegate: context.coordinator)
+        v.addInteraction(interaction)
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, UIPointerInteractionDelegate {
+        func pointerInteraction(_ interaction: UIPointerInteraction,
+                                styleFor region: UIPointerRegion) -> UIPointerStyle? {
+            // 22pt is the canonical I-beam length used over UITextField.
+            return UIPointerStyle(shape: .verticalBeam(length: 22),
+                                  constrainedAxes: [])
         }
     }
 }

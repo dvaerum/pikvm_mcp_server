@@ -32,6 +32,7 @@ final class SessionStore: ObservableObject {
     @Published var connected: Bool = false
     @Published var scene: SceneSpec = .blackHoldingPattern
     @Published var effect: EffectSpec = .none
+    @Published var overlay: OverlaySpec = .none
     @Published var lastError: String = ""
 
     let pointerTracker = PointerTracker()
@@ -94,6 +95,9 @@ final class SessionStore: ObservableObject {
             },
             onEffect: { [weak self] e in
                 Task { @MainActor in self?.effect = e }
+            },
+            onOverlay: { [weak self] o in
+                Task { @MainActor in self?.overlay = o }
             }
         )
         client = c

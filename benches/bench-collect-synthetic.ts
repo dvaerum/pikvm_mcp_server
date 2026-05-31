@@ -34,6 +34,15 @@ const TARGET = (() => {
   if (i >= 0 && process.argv[i + 1]) return Number(process.argv[i + 1]);
   return 100;
 })();
+/** Fraction of frames in which the cursor is morphed to an I-beam by a
+ *  text-field overlay placed around its current position. Detector needs
+ *  these examples since the cursor shape changes over text input fields
+ *  in real iPad use; without them the model only learns the arrow shape. */
+const TEXTFIELD_FRACTION = (() => {
+  const i = process.argv.indexOf('--textfield-fraction');
+  if (i >= 0 && process.argv[i + 1]) return Math.max(0, Math.min(1, Number(process.argv[i + 1])));
+  return 0;
+})();
 const SETTLE_MS = 150;
 const STEP_MICKEYS_MIN = 30;
 const STEP_MICKEYS_MAX = 90;
@@ -310,16 +319,44 @@ async function main() {
       continue;
     }
 
+    // Optionally drop a text-field overlay around the cursor's current
+    // position so iPadOS morphs the system arrow into an I-beam. The
+    // cursor's reported hot-spot stays at (cur.x, cur.y), so the label
+    // is still correct — only the cursor sprite changes.
+    let cursorShape: 'arrow' | 'i-beam' = 'arrow';
+    if (TEXTFIELD_FRACTION > 0 && Math.random() < TEXTFIELD_FRACTION) {
+      const tfW = 200;
+      const tfH = 44;
+      // Clamp so the overlay stays fully on-screen even when cursor is near an edge.
+      const tfX = Math.max(0, Math.min(logicalW - tfW, cur.x - tfW / 2));
+      const tfY = Math.max(0, Math.min(logicalH - tfH, cur.y - tfH / 2));
+      try {
+        await sess.setOverlay({ kind: 'text-field', x: tfX, y: tfY, w: tfW, h: tfH });
+        await new Promise((r) => setTimeout(r, 250));  // wait for pointer-style morph
+        cursorShape = 'i-beam';
+      } catch (e) {
+        console.error(`[collect] frame ${i + 1}: setOverlay failed: ${(e as Error).message}`);
+      }
+    }
+
     const px = xform.toScreenshotPx(cur.x, cur.y);
     const shot = await client.screenshot();
     const seq = String(saved + 1).padStart(5, '0');
     const relPath = `procedural/frame-${seq}.jpg`;
     await fs.writeFile(path.join(outDir, relPath), shot.buffer);
+
+    // Always clear the overlay before the next iteration so the default
+    // arrow returns on the very next frame's getCursor + screenshot.
+    if (cursorShape === 'i-beam') {
+      try { await sess.setOverlay({ kind: 'none' }); } catch {}
+    }
+
     const row = {
       frame: relPath,
       cursor: { visible: true, x: Math.round(px.x), y: Math.round(px.y) },
       decision: 'synthetic',
       scene: recipe.label,
+      cursor_shape: cursorShape,
       logical: { x: Math.round(cur.x * 10) / 10, y: Math.round(cur.y * 10) / 10 },
       decided_at: new Date().toISOString(),
       ...(effect ? { effect: { blur: effect.blur, brightness: effect.brightness, colorMul: effect.colorMul } } : {}),

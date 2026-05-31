@@ -20,7 +20,9 @@ struct RootView: View {
     var body: some View {
         ZStack {
             // Scene fills the whole screen.
-            SceneRendererView(scene: session.scene, effect: session.effect)
+            SceneRendererView(scene: session.scene,
+                              effect: session.effect,
+                              overlay: session.overlay)
                 .ignoresSafeArea()
                 // PointerTracker subscribes to .onContinuousHover here. By
                 // attaching the modifier to the full-screen scene view, we
