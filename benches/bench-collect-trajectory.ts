@@ -114,6 +114,29 @@ const LINEARITY_SETTLE_MS = 800;
 const BURST_SETTLE_MS = 1500;
 const DIRECTION_SETTLE_MS = 800;
 
+// chunkedBurst sequence (added 2026-06-01, post-1.6 failure analysis): the
+// linearity/burst/direction sweeps don't cover the regime move-to actually
+// uses — chunkMag=20 at 30 ms inter-emit pace, repeated 4-16 times to
+// span a target. Without samples in this regime the pointer-accel model
+// extrapolates ~4× the steady-state ratio (see
+// docs/troubleshooting/2026-05-31-pointer-accel-1.6-fails.md). Each
+// chunk is (dir × mag × pace × chainLen).
+const CHUNKED_BURST_MAGS_FULL = [10, 20, 30, 50];
+const CHUNKED_BURST_MAGS_SHORT = [20];
+const CHUNKED_BURST_PACES_FULL = [20, 30, 50, 100];
+const CHUNKED_BURST_PACES_SHORT = [30];
+const CHUNKED_BURST_CHAINS_FULL = [4, 8, 16];
+const CHUNKED_BURST_CHAINS_SHORT = [8];
+const CHUNKED_BURST_SETTLE_MS = 1000;
+
+// randomWalk sequence (added 2026-06-01): one long chain of varied
+// (magnitude, direction, inter-emit delay) drawn from a seeded PRNG, so
+// the model sees state transitions it would never see from the
+// well-isolated dir/mag sweeps. Reproducible via SEED.
+const RANDOM_WALK_LENGTH_FULL = 500;
+const RANDOM_WALK_LENGTH_SHORT = 50;
+const RANDOM_WALK_SEED_BASE = 12345;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -224,6 +247,83 @@ async function runDirectionSweep(
   return labels;
 }
 
+async function runChunkedBurst(
+  client: PiKVMClient,
+  emits: JsonlWriter<EmitRow>,
+): Promise<string[]> {
+  const mags = SHORT_RUN ? CHUNKED_BURST_MAGS_SHORT : CHUNKED_BURST_MAGS_FULL;
+  const paces = SHORT_RUN ? CHUNKED_BURST_PACES_SHORT : CHUNKED_BURST_PACES_FULL;
+  const chains = SHORT_RUN ? CHUNKED_BURST_CHAINS_SHORT : CHUNKED_BURST_CHAINS_FULL;
+  const labels: string[] = [];
+  for (const dir of DIRS_4) {
+    for (const mag of mags) {
+      for (const pace of paces) {
+        for (const chain of chains) {
+          const dx = Math.round(dir.dx * mag);
+          const dy = Math.round(dir.dy * mag);
+          const label = `chunkedBurst:${dir.label}:m${mag}:n${chain}:p${pace}`;
+          labels.push(label);
+          for (let i = 0; i < chain; i++) {
+            try {
+              const t = Date.now();
+              await client.mouseMoveRelative(dx, dy);
+              emits.push({ t, dx, dy, sequenceLabel: label });
+            } catch (e) {
+              console.error(`[traj] ${label}: mouseMoveRelative failed: ${(e as Error).message}`);
+            }
+            if (pace > 0 && i < chain - 1) await sleep(pace);
+          }
+          await sleep(CHUNKED_BURST_SETTLE_MS);
+        }
+      }
+    }
+  }
+  return labels;
+}
+
+async function runRandomWalk(
+  client: PiKVMClient,
+  emits: JsonlWriter<EmitRow>,
+  passIndex: number,
+): Promise<string[]> {
+  // LCG so the bench is byte-deterministic given (seed, pass); useful for
+  // reproducing bug-reports against a specific trajectory.
+  let s = (RANDOM_WALK_SEED_BASE + passIndex) >>> 0;
+  function rand(): number {
+    s = (Math.imul(s, 1103515245) + 12345) >>> 0;
+    return (s & 0x7fffffff) / 0x7fffffff;
+  }
+  function pickMag(): number {
+    // Skew toward 20-40 by squaring uniform — matches move-to's working range.
+    const u = rand();
+    return Math.round(10 + u * u * 70);
+  }
+  function pickDelayMs(): number {
+    return Math.round(10 + rand() * 190);
+  }
+  function pickDir(): Direction {
+    return DIRS_8[Math.floor(rand() * DIRS_8.length)];
+  }
+  const length = SHORT_RUN ? RANDOM_WALK_LENGTH_SHORT : RANDOM_WALK_LENGTH_FULL;
+  const label = `randomWalk:s${RANDOM_WALK_SEED_BASE + passIndex}:n${length}`;
+  for (let i = 0; i < length; i++) {
+    const dir = pickDir();
+    const mag = pickMag();
+    const delay = pickDelayMs();
+    const dx = Math.round(dir.dx * mag);
+    const dy = Math.round(dir.dy * mag);
+    try {
+      const t = Date.now();
+      await client.mouseMoveRelative(dx, dy);
+      emits.push({ t, dx, dy, sequenceLabel: label });
+    } catch (e) {
+      console.error(`[traj] ${label}: mouseMoveRelative failed: ${(e as Error).message}`);
+    }
+    if (delay > 0 && i < length - 1) await sleep(delay);
+  }
+  return [label];
+}
+
 async function main() {
   killOrphansOnPort(PORT);
   console.log(`[traj] starting WS server on ws://0.0.0.0:${PORT} (SHORT_RUN=${SHORT_RUN})`);
@@ -332,12 +432,16 @@ async function main() {
   try {
     for (let pass = 1; pass <= REPEATS; pass++) {
       const prefix = REPEATS > 1 ? `[pass ${pass}/${REPEATS}] ` : '';
-      console.log(`${prefix}[traj] sequence 1/3: linearity sweep`);
+      console.log(`${prefix}[traj] sequence 1/5: linearity sweep`);
       sequenceLabels.push(...(await runLinearitySweep(client, emits)));
-      console.log(`${prefix}[traj] sequence 2/3: burst-coalescing matrix`);
+      console.log(`${prefix}[traj] sequence 2/5: burst-coalescing matrix`);
       sequenceLabels.push(...(await runBurstCoalescing(client, emits)));
-      console.log(`${prefix}[traj] sequence 3/3: direction sweep`);
+      console.log(`${prefix}[traj] sequence 3/5: direction sweep`);
       sequenceLabels.push(...(await runDirectionSweep(client, emits)));
+      console.log(`${prefix}[traj] sequence 4/5: chunked-burst (move-to regime)`);
+      sequenceLabels.push(...(await runChunkedBurst(client, emits)));
+      console.log(`${prefix}[traj] sequence 5/5: random walk`);
+      sequenceLabels.push(...(await runRandomWalk(client, emits, pass)));
     }
   } finally {
     clearInterval(resyncTimer);
