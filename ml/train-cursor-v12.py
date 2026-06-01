@@ -96,8 +96,15 @@ def load_sources(sources: dict = SOURCES) -> list:
                 continue
             cursor = entry.get("cursor")
             if cursor is None:
-                skipped_null += 1
-                continue
+                # 2026-06-01: bench-collect-synthetic writes literal
+                # `cursor: null` for absent frames; the older
+                # human-verified format wrote `cursor: {"visible":
+                # false, ...}`. Normalize to the latter so absent rows
+                # train the presence head instead of being silently
+                # dropped. Same fix applied in train-cursor-v12.1.py
+                # after the original v12 trainer silently lost 994
+                # absent train rows + 497 absent val rows in 2.3.
+                cursor = {"visible": False}
             # Old format: frame includes dataset-dir prefix (e.g.
             # "cursor-collect-X/books/frame-000.jpg") → resolve under DATA_ROOT.
             # New synth format: frame is dataset-relative (e.g.

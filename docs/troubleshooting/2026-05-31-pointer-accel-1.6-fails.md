@@ -89,3 +89,19 @@ The decreasing-residual pattern (717 → 388 → 199 — halving each pass) is e
 **Pivot Stage 1 budget to Stage 3** (iPadOS tap-registration investigation). 85 % NO-LAUNCH on a *good* day means positioning fixes can move the needle at most 15 pp; tap-registration fixes can move it 50+ pp.
 
 If Stage 3 closes and learned-ballistics still looks like a useful lever, come back with approach (b) — query mid-burst, use it to gate the chunked-emit loop, no re-training needed.
+
+## 2026-06-01 update — Stage 3 has closed; the 85 % NO-LAUNCH framing was wrong
+
+The "85 % NO-LAUNCH on a *good* day" number above was measured during the wrong-page bug (Stage 3.1 finding): `bench-click-production.ts` TARGETS were hardcoded for home page 1 while the iPad was on page 2, so clicks landed on empty wallpaper. The NO_LAUNCH counter triggered for every trial because the post-click frame still showed the home screen — which it would have whether the click registered or not.
+
+After Stage 3.5 (page-1 sanity gate) landed, the honest baseline is **85 % HIT at N=80** (see [[v12-synth-dataset-corrected-85pct]]). Breakdown at N=80:
+
+- 68/80 HIT
+- 9/80 NO_LAUNCH (clicks within 35 px of target, post-frame still home — genuinely silent tap failures, not positioning)
+- 3/80 SKIP (move-to couldn't get within 35 px → safety gate refused to click)
+
+So the remaining headroom for a ballistics fix is **at most ~3.75 pp** (the SKIP fraction). NO_LAUNCH is not positioning-bounded — those clicks already landed within the gate radius.
+
+**Revised recommendation:** approach (a) or (b) is still worth pursuing for the SKIP fraction, but bounded upside (≤ 5 pp) means a clean negative result (cf. v12.1) is the modal outcome. Worth doing because (1) the prediction model itself is good on its training distribution (val MAE 2.3 / 0.7 px), (2) the bug is well-localized (wrong regime queried, not wrong physics), (3) the work is cheap (~3 h end-to-end).
+
+Approach (a) — collect a new chunked-burst sequence type in `bench-collect-trajectory.ts`, retrain `pointer-accel-v2.pt`, re-do 1.6 A/B — is the most direct fix. Stage 4.1 (the 20 k synth bench currently running) competes for iPad time; one of the two has to yield.
