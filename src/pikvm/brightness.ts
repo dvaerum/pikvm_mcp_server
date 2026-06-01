@@ -34,6 +34,12 @@ export interface BrightnessReport {
   stddev: number;
   /** Severity bucket. */
   severity: 'normal' | 'dim' | 'very-dim';
+  /** 2026-05-27: iPad auto-brightness does NOT affect the HDMI mirror —
+   *  HDMI brightness is determined entirely by iPad UI state. When this
+   *  is true (severity === 'very-dim'), the iPad almost certainly has a
+   *  modal/permission/security prompt up, and automation cannot proceed
+   *  until a human dismisses it on the device itself. */
+  ipadDisplayBlocked: boolean;
   /** Operator-facing one-liner with recovery guidance. Empty string when
    *  severity is 'normal'. */
   hint: string;
@@ -101,22 +107,25 @@ export function classifyBrightness(mean: number, stddev: number = 100): {
     return {
       severity: 'very-dim',
       hint:
-        ' ⚠ VERY DIM — uniform dark frame, cursor detection will likely fail. ' +
-        'Possible causes: (1) iPad brightness setting too low (Settings → ' +
-        'Display & Brightness, turn Auto-Brightness OFF), (2) a security/' +
-        'permission popup with a uniform darkening modal overlay. The popup ' +
-        'may be off the HDMI capture frame but is STILL INTERACTIVE — try ' +
-        'sending Escape via pikvm_key, then Enter, then Cmd+Period via ' +
-        'pikvm_shortcut to dismiss it. Look at the iPad screen directly.',
+        ' ⚠ iPad DISPLAY BLOCKED — uniform dark frame in HDMI capture. ' +
+        '2026-05-27 finding: iPad auto-brightness does NOT affect the HDMI ' +
+        'mirror, so a dim HDMI capture means an iOS modal/permission/security ' +
+        'prompt is dimming the screen. AUTOMATION CANNOT PROCEED until a human ' +
+        'dismisses the prompt physically on the iPad. The prompt is usually ' +
+        'fully visible to the human at the device even when HDMI looks dark. ' +
+        'Try-before-escalating: pikvm_key Escape, then Enter, then ' +
+        'pikvm_shortcut Cmd+Period; these dismiss SOME modals. If none work, ' +
+        'a human at the iPad must tap "Not Now" / "Cancel" / Touch ID.',
     };
   }
   if (mean < DIM_THRESHOLD) {
     return {
       severity: 'dim',
       hint:
-        ' ⚠ DIM — cursor detection may fail intermittently. iPad auto-brightness ' +
-        'may be reducing the display, or a partially-transparent overlay may be ' +
-        'in front of the screen.',
+        ' ⚠ DIM — cursor detection may fail intermittently. Likely a ' +
+        'partially-transparent overlay in front of the screen (notification ' +
+        'banner, partially-pulled Control Center, etc.) — auto-brightness ' +
+        'does not affect HDMI, so this is a UI-state signal, not ambient light.',
     };
   }
   return { severity: 'normal', hint: '' };
@@ -165,14 +174,19 @@ export async function analyzeBrightness(
   // Phase 48: stddev across R,G,B. sharp.stats() exposes per-channel stdev.
   const stddev = (stats.channels[0].stdev + stats.channels[1].stdev + stats.channels[2].stdev) / 3;
   const { severity, hint } = classifyBrightness(mean, stddev);
-  return { mean, meanR, meanG, meanB, stddev, severity, hint };
+  return {
+    mean, meanR, meanG, meanB, stddev, severity, hint,
+    ipadDisplayBlocked: severity === 'very-dim',
+  };
 }
 
 /** Format a brightness report as a single line for operator output. */
 export function formatBrightnessReport(report: BrightnessReport): string {
+  const blocked = report.ipadDisplayBlocked ? ' iPadDisplayBlocked: yes.' : '';
   return (
     `Screen brightness: mean=${report.mean.toFixed(0)}/255, stddev=${report.stddev.toFixed(1)} ` +
     `(R=${report.meanR.toFixed(0)}, G=${report.meanG.toFixed(0)}, B=${report.meanB.toFixed(0)}).` +
+    blocked +
     report.hint
   );
 }

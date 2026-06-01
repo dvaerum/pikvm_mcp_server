@@ -289,7 +289,7 @@ describe('clickAtWithRetry', () => {
         // Default minBrightness=VERY_DIM_THRESHOLD (50). All-black frame
         // has mean=0 → precheck throws.
       }),
-    ).rejects.toThrow(/screen too dim|wake the iPad/i);
+    ).rejects.toThrow(/iPad display blocked|screen too dim|wake the iPad/i);
     // Precheck happens before any moveToPixel call → no clicks, no moves.
     expect(client.mouseClickCount).toBe(0);
     expect(client.mouseMoveRelativeCount).toBe(0);

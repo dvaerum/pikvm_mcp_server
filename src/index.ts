@@ -1342,10 +1342,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 content: [{
                   type: 'text',
                   text:
-                    `Click aborted: screen too dim for cursor detection ` +
+                    `Click aborted: iPad display blocked ` +
                     `(mean brightness=${brightness.mean.toFixed(0)}/255, threshold=${minBrightness}). ` +
-                    `Wake the iPad: call pikvm_ipad_unlock or manually adjust the iPad's display ` +
-                    `brightness, then retry.`,
+                    `iPad auto-brightness does NOT affect HDMI — dim HDMI means an ` +
+                    `iOS modal/security prompt is dimming the screen. Try ` +
+                    `pikvm_key Escape, Enter, or Cmd+Period to dismiss blindly; ` +
+                    `if none work, a human must dismiss the prompt physically on the iPad.`,
                 }],
                 isError: true,
               };

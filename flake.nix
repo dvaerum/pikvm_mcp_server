@@ -29,6 +29,27 @@
           pikvm-mcp-server = pkgs.pikvm-mcp-server;
         };
 
+        apps.label-review = {
+          type = "app";
+          program = "${pkgs.writeShellScriptBin "pikvm-label-review" ''
+            set -euo pipefail
+            if [ -n "''${PIKVM_MCP_REPO:-}" ]; then
+              REPO="$PIKVM_MCP_REPO"
+            elif REPO=$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null); then
+              :
+            else
+              REPO="$PWD"
+            fi
+            if [ ! -f "$REPO/tools/label-review/server.ts" ]; then
+              echo "error: $REPO/tools/label-review/server.ts not found" >&2
+              echo "  set PIKVM_MCP_REPO=<path-to-checkout> or cd into the repo" >&2
+              exit 1
+            fi
+            cd "$REPO"
+            exec ${pkgs.tsx}/bin/tsx tools/label-review/server.ts --repo "$REPO" "$@"
+          ''}/bin/pikvm-label-review";
+        };
+
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             nodejs_20

@@ -42,7 +42,7 @@ buildNpmPackage {
 
   # Regenerate when package-lock.json changes:
   #   nix run nixpkgs#prefetch-npm-deps -- package-lock.json
-  npmDepsHash = "sha256-B4kJyPwEWPgGOB46miOy88cEi1p6VbD25rnB8BnyUy8=";
+  npmDepsHash = "sha256-VSx49QGiTJkg/RKBEDoXouSj0MpTIvOG6Gl57Yug/0E=";
 
   nodejs = nodejs_20;
 
