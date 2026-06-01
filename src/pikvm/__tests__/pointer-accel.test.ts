@@ -161,3 +161,30 @@ describe('predictDisplacement', () => {
     expect(out).toEqual({ dx: 12, dy: -1 });
   });
 });
+
+describe('resolveDefaultModelPath', () => {
+  // Env-var-driven model selection so 1.11 A/B can swap v1 vs v2 without
+  // editing source. Mirrors PIKVM_ML_V8_MODEL pattern in cursor-ml-detect.
+  it('returns v1 ONNX when PIKVM_POINTER_ACCEL_MODEL is unset', async () => {
+    const prev = process.env.PIKVM_POINTER_ACCEL_MODEL;
+    delete process.env.PIKVM_POINTER_ACCEL_MODEL;
+    try {
+      const { resolveDefaultModelPath } = await import('../pointer-accel.js');
+      expect(resolveDefaultModelPath()).toMatch(/pointer-accel-v1\.onnx$/);
+    } finally {
+      if (prev !== undefined) process.env.PIKVM_POINTER_ACCEL_MODEL = prev;
+    }
+  });
+
+  it('returns the env-var path when PIKVM_POINTER_ACCEL_MODEL is set', async () => {
+    const prev = process.env.PIKVM_POINTER_ACCEL_MODEL;
+    process.env.PIKVM_POINTER_ACCEL_MODEL = '/tmp/pointer-accel-v2-experimental.onnx';
+    try {
+      const { resolveDefaultModelPath } = await import('../pointer-accel.js');
+      expect(resolveDefaultModelPath()).toBe('/tmp/pointer-accel-v2-experimental.onnx');
+    } finally {
+      if (prev === undefined) delete process.env.PIKVM_POINTER_ACCEL_MODEL;
+      else process.env.PIKVM_POINTER_ACCEL_MODEL = prev;
+    }
+  });
+});

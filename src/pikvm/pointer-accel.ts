@@ -49,7 +49,17 @@ export const FEATURE_DIM = 8;
 /** Number of output values. Must match the trainer's OUTPUT_DIM. */
 export const OUTPUT_DIM = 2;
 
-const DEFAULT_MODEL = path.resolve(process.cwd(), 'ml', 'pointer-accel-v1.onnx');
+/** 2026-06-01: `PIKVM_POINTER_ACCEL_MODEL` env override mirrors
+ *  `PIKVM_ML_V8_MODEL` in cursor-ml-detect.ts. Lets 1.11 A/B swap in
+ *  `pointer-accel-v2.onnx` for the treatment arm without touching this
+ *  file. When unset, v1 stays the safe default (matches v1.6 byte-
+ *  identical behaviour when `PIKVM_USE_LEARNED_BALLISTICS=0`). */
+export function resolveDefaultModelPath(): string {
+  const envOverride = process.env.PIKVM_POINTER_ACCEL_MODEL;
+  if (envOverride) return path.resolve(envOverride);
+  return path.resolve(process.cwd(), 'ml', 'pointer-accel-v1.onnx');
+}
+const DEFAULT_MODEL = resolveDefaultModelPath();
 
 /** Single emit record. Times in absolute wall-clock ms (Date.now-ish);
  *  only inter-event deltas matter, but consistent units make the buffer
