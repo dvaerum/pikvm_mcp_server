@@ -38,6 +38,7 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import {
   killOrphansOnPort,
   startIpadAppServer,
@@ -48,7 +49,53 @@ import { loadConfig } from '../src/config.js';
 import { PiKVMClient } from '../src/pikvm/client.js';
 import { moveToPixel } from '../src/pikvm/move-to.js';
 import { loadProfile } from '../src/pikvm/ballistics.js';
-import { detectIpadBounds } from '../src/pikvm/orientation.js';
+import { detectIpadBounds, getLastGoodBounds } from '../src/pikvm/orientation.js';
+import { buildFeatures, predictDisplacement, pointerAccelModelExists } from '../src/pikvm/pointer-accel.js';
+
+const IPAD_LOGICAL_W = 820;
+const IPAD_LOGICAL_H = 1180;
+const SANE_MICKEYS_CAP = 2000;
+
+/** Replicate move-to.ts:learnedBallisticsPxPerMickey for use as a
+ *  pre-flight check. Returns the same per-axis ratios that moveToPixel
+ *  will actually use, or null if the path falls back to constant. */
+async function previewLearnedRatio(
+  dxPx: number, dyPx: number, chunkMag = 20,
+): Promise<{ pxPerMickeyX: number; pxPerMickeyY: number } | null> {
+  if (process.env.PIKVM_USE_LEARNED_BALLISTICS !== '1') return null;
+  const bounds = getLastGoodBounds();
+  if (!bounds) return null;
+  if (!pointerAccelModelExists()) return null;
+  const signX = dxPx >= 0 ? 1 : -1;
+  const signY = dyPx >= 0 ? 1 : -1;
+  const featX = buildFeatures([], { vxPxPerMs: 0, vyPxPerMs: 0 }, { dx: signX * chunkMag, dy: 0, t: 0 }, 0);
+  const featY = buildFeatures([], { vxPxPerMs: 0, vyPxPerMs: 0 }, { dx: 0, dy: signY * chunkMag, t: 0 }, 0);
+  const [predX, predY] = await Promise.all([predictDisplacement(featX), predictDisplacement(featY)]);
+  if (!predX || !predY) return null;
+  const scaleX = bounds.width / IPAD_LOGICAL_W;
+  const scaleY = bounds.height / IPAD_LOGICAL_H;
+  const screenshotDxAbs = Math.abs(predX.dx) * scaleX;
+  const screenshotDyAbs = Math.abs(predY.dy) * scaleY;
+  if (screenshotDxAbs <= 0 || screenshotDyAbs <= 0) return null;
+  return {
+    pxPerMickeyX: screenshotDxAbs / chunkMag,
+    pxPerMickeyY: screenshotDyAbs / chunkMag,
+  };
+}
+
+const IPAD_DEVICE_ID = 'CF2B815D-7960-5B60-987B-FA2DC9A65353';
+const IPAD_BUNDLE_ID = 'com.bb.iPadCollector';
+
+function relaunchIpadApp(): void {
+  try {
+    execSync(
+      `xcrun devicectl device process launch --terminate-existing --device ${IPAD_DEVICE_ID} ${IPAD_BUNDLE_ID}`,
+      { stdio: 'pipe' },
+    );
+  } catch (e) {
+    console.error(`  [relaunch failed: ${(e as Error).message}]`);
+  }
+}
 
 const PORT = 8767;
 const ARM = (() => {
@@ -73,6 +120,27 @@ async function waitForSession(): Promise<{ sess: IpadSession; closeServer: () =>
   });
 }
 
+/** Tear down the bench's WS server and the iPad app, relaunch both, return
+ *  the new session. Used to recover when an aggressive emit (e.g. v1
+ *  cold-start predicting ~0.025 px_hdmi/mickey → 13k mickeys) crashes the
+ *  iPadCollector view and kills the WebSocket. */
+async function reconnectIpadSession(
+  currentSess: IpadSession,
+  currentClose: () => Promise<void>,
+): Promise<{ sess: IpadSession; closeServer: () => Promise<void> }> {
+  console.error('  [reconnect] WS dropped; closing server, relaunching iPad app…');
+  try { currentSess.close(); } catch { /* best effort */ }
+  try { await currentClose(); } catch { /* best effort */ }
+  await sleep(500);
+  killOrphansOnPort(PORT);
+  relaunchIpadApp();
+  await sleep(3000);
+  const fresh = await waitForSession();
+  console.error('  [reconnect] new session acquired');
+  await fresh.sess.syncClock(5);
+  return fresh;
+}
+
 async function main() {
   killOrphansOnPort(PORT);
   console.error(`[gt-bench] arm=${ARM}, trials=${TRIALS}`);
@@ -80,7 +148,7 @@ async function main() {
   console.error(`[gt-bench] PIKVM_POINTER_ACCEL_MODEL=${process.env.PIKVM_POINTER_ACCEL_MODEL || '(default)'}`);
   console.error('[gt-bench] waiting for iPad app to connect…');
 
-  const { sess, closeServer } = await waitForSession();
+  let { sess, closeServer } = await waitForSession();
   if (!sess.hello) throw new Error('no hello payload');
   console.error(`[gt-bench] connected: logicalW=${sess.hello.logicalW} logicalH=${sess.hello.logicalH}`);
 
@@ -141,6 +209,12 @@ async function main() {
   for (let trial = 1; trial <= TRIALS; trial++) {
     const target = targets[trial - 1];
 
+    // If the WS connection died (e.g. v1's catastrophic over-emit on the
+    // previous trial overwhelmed iPadCollector), reconnect before slamming.
+    if (!sess.connected) {
+      ({ sess, closeServer } = await reconnectIpadSession(sess, closeServer));
+    }
+
     // Slam to top-left corner — clamp at iPad edges. Use slam-then-move
     // strategy on a DUMMY target to do the slam, then read iPadCollector
     // for the actual start position. Simpler: directly emit huge -dx/-dy.
@@ -151,7 +225,13 @@ async function main() {
 
     let startCursor;
     try { startCursor = await sess.getCursor(); }
-    catch (e) { console.error(`  trial ${trial}: getCursor failed at start — ${(e as Error).message}`); continue; }
+    catch (e) {
+      console.error(`  trial ${trial}: getCursor failed at start — ${(e as Error).message}; reconnecting`);
+      ({ sess, closeServer } = await reconnectIpadSession(sess, closeServer));
+      // retry once after reconnect
+      try { startCursor = await sess.getCursor(); }
+      catch (e2) { console.error(`  trial ${trial}: still failing post-reconnect — ${(e2 as Error).message}; skipping`); continue; }
+    }
 
     // Pure-open-loop moveToPixel: assume-at (use current belief — we just
     // slammed to (0,0) ish) + no correction loop. This isolates the
@@ -165,6 +245,33 @@ async function main() {
     // Seed belief at the iPad-reported start so moveToPixel computes
     // the correct emit distance.
     client.belief?.reset({ x: startHdmi.x, y: startHdmi.y });
+
+    // Pre-flight: compute what mickeys this arm would emit. If the model
+    // predicts something catastrophic (e.g. v1's cold-start ~0.025 px/
+    // mickey → 13k mickeys), skip the trial — emitting that flood
+    // crashes the iPadCollector view and breaks the reconnect path.
+    const dxPx = target.x - startHdmi.x, dyPx = target.y - startHdmi.y;
+    const ratio = await previewLearnedRatio(dxPx, dyPx);
+    const plannedMickeysX = ratio
+      ? Math.round(Math.abs(dxPx) / ratio.pxPerMickeyX)
+      : Math.round(Math.abs(dxPx));
+    const plannedMickeysY = ratio
+      ? Math.round(Math.abs(dyPx) / ratio.pxPerMickeyY)
+      : Math.round(Math.abs(dyPx));
+    if (plannedMickeysX > SANE_MICKEYS_CAP || plannedMickeysY > SANE_MICKEYS_CAP) {
+      const reason = `planned mickeys=(${plannedMickeysX},${plannedMickeysY}) > ${SANE_MICKEYS_CAP} (ratio=${ratio ? `(${ratio.pxPerMickeyX.toFixed(3)},${ratio.pxPerMickeyY.toFixed(3)})` : 'null'})`;
+      console.error(`  trial ${trial}: SKIP — ${reason}`);
+      await fs.appendFile(outPath, JSON.stringify({
+        trial,
+        target,
+        startCursorLogical: { x: startCursor.x, y: startCursor.y },
+        startHdmi: { x: Math.round(startHdmi.x), y: Math.round(startHdmi.y) },
+        ratioPreview: ratio,
+        plannedMickeysX, plannedMickeysY,
+        skipReason: reason,
+      }) + '\n');
+      continue;
+    }
 
     try {
       await moveToPixel(client, target, {
@@ -184,7 +291,21 @@ async function main() {
 
     let endCursor;
     try { endCursor = await sess.getCursor(); }
-    catch (e) { console.error(`  trial ${trial}: getCursor failed at end — ${(e as Error).message}`); continue; }
+    catch (e) {
+      console.error(`  trial ${trial}: getCursor failed at end — ${(e as Error).message}; reconnecting`);
+      // The cursor's actual landing isn't recoverable post-reconnect (iPad
+      // app restart resets cursor state). Record as a failure with the
+      // best info we have — moveToPixel finished, so the catastrophic
+      // emit IS the result for this trial — and continue.
+      await fs.appendFile(outPath, JSON.stringify({
+        trial,
+        target,
+        startCursorLogical: { x: startCursor.x, y: startCursor.y },
+        error: 'WS disconnected after moveToPixel (catastrophic emit)',
+      }) + '\n');
+      ({ sess, closeServer } = await reconnectIpadSession(sess, closeServer));
+      continue;
+    }
 
     const endHdmi = {
       x: tight.x + endCursor.x * scaleHdmiPerLogical.x,
