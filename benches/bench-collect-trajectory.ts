@@ -121,11 +121,20 @@ const DIRECTION_SETTLE_MS = 800;
 // extrapolates ~4× the steady-state ratio (see
 // docs/troubleshooting/2026-05-31-pointer-accel-1.6-fails.md). Each
 // chunk is (dir × mag × pace × chainLen).
-const CHUNKED_BURST_MAGS_FULL = [10, 20, 30, 50];
+// 2026-06-02: shrunk from 4×4×3 = 192 sequences to 2×2×2 = 32 because
+// the original load (~1900 emits per pass over 4-5 min sustained) reliably
+// killed the iPad WS session inside chunkedBurst — three attempts in a
+// row hit the same wall at ~1100 cursor events. Hypothesis: iPad-side
+// buffer overflow under sustained ~50 emit/sec inner loop, or iPadOS
+// backgrounding iPadCollector. The dropped corners (mag=10/50, pace=20/
+// 100, chain=16) are out-of-regime anyway — move-to.ts:1439-1440 uses
+// chunkMag=20 + chunkPaceMs=30, so the kept (20|30) × (30|50) × (4|8)
+// nest brackets it without overshoot.
+const CHUNKED_BURST_MAGS_FULL = [20, 30];
 const CHUNKED_BURST_MAGS_SHORT = [20];
-const CHUNKED_BURST_PACES_FULL = [20, 30, 50, 100];
+const CHUNKED_BURST_PACES_FULL = [30, 50];
 const CHUNKED_BURST_PACES_SHORT = [30];
-const CHUNKED_BURST_CHAINS_FULL = [4, 8, 16];
+const CHUNKED_BURST_CHAINS_FULL = [4, 8];
 const CHUNKED_BURST_CHAINS_SHORT = [8];
 const CHUNKED_BURST_SETTLE_MS = 1000;
 
