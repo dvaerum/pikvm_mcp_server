@@ -50,14 +50,18 @@ export const FEATURE_DIM = 8;
 export const OUTPUT_DIM = 2;
 
 /** 2026-06-01: `PIKVM_POINTER_ACCEL_MODEL` env override mirrors
- *  `PIKVM_ML_V8_MODEL` in cursor-ml-detect.ts. Lets 1.11 A/B swap in
- *  `pointer-accel-v2.onnx` for the treatment arm without touching this
- *  file. When unset, v1 stays the safe default (matches v1.6 byte-
- *  identical behaviour when `PIKVM_USE_LEARNED_BALLISTICS=0`). */
+ *  `PIKVM_ML_V8_MODEL` in cursor-ml-detect.ts. Lets the model swap
+ *  without touching this file.
+ *  2026-06-02 (1.11 result): live A/B at 4 targets × 5 trials showed
+ *  v2-wider HIT 16/20 (80%) vs v1 HIT 5/20 (25%) — +55pp on iPad. Despite
+ *  the offline chunkedBurst-y MAE (10.37 px) being well above the 3-px
+ *  per-axis gate, the live safety-gate skip rate dropped 65% → 15%
+ *  because v2's residual after retries clears the 35 px maxResidualPx
+ *  threshold much more often than v1's did. v2-wider promoted to default. */
 export function resolveDefaultModelPath(): string {
   const envOverride = process.env.PIKVM_POINTER_ACCEL_MODEL;
   if (envOverride) return path.resolve(envOverride);
-  return path.resolve(process.cwd(), 'ml', 'pointer-accel-v1.onnx');
+  return path.resolve(process.cwd(), 'ml', 'pointer-accel-v2-wider.onnx');
 }
 const DEFAULT_MODEL = resolveDefaultModelPath();
 

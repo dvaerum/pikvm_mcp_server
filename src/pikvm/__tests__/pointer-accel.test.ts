@@ -163,14 +163,16 @@ describe('predictDisplacement', () => {
 });
 
 describe('resolveDefaultModelPath', () => {
-  // Env-var-driven model selection so 1.11 A/B can swap v1 vs v2 without
-  // editing source. Mirrors PIKVM_ML_V8_MODEL pattern in cursor-ml-detect.
-  it('returns v1 ONNX when PIKVM_POINTER_ACCEL_MODEL is unset', async () => {
+  // Env-var-driven model selection lets the model swap without editing source.
+  // Mirrors PIKVM_ML_V8_MODEL pattern in cursor-ml-detect.
+  // 2026-06-02 (1.11): default flipped v1 → v2-wider after live A/B (v2-wider
+  // HIT 16/20 vs v1 HIT 5/20, +55pp).
+  it('returns v2-wider ONNX when PIKVM_POINTER_ACCEL_MODEL is unset', async () => {
     const prev = process.env.PIKVM_POINTER_ACCEL_MODEL;
     delete process.env.PIKVM_POINTER_ACCEL_MODEL;
     try {
       const { resolveDefaultModelPath } = await import('../pointer-accel.js');
-      expect(resolveDefaultModelPath()).toMatch(/pointer-accel-v1\.onnx$/);
+      expect(resolveDefaultModelPath()).toMatch(/pointer-accel-v2-wider\.onnx$/);
     } finally {
       if (prev !== undefined) process.env.PIKVM_POINTER_ACCEL_MODEL = prev;
     }
