@@ -52,7 +52,7 @@ EPOCHS_DEFAULT = 100
 # per-family loss weighting (option c) before adding more capacity.
 HIDDEN_DIM = 64
 HIDDEN_LAYERS = 4
-FEATURE_DIM = 8
+FEATURE_DIM = 10  # 2026-06-02: was 8; added last_emit_dx, last_emit_dy
 OUTPUT_DIM = 2
 
 DEVICE = (
@@ -199,11 +199,21 @@ def build_examples(
             count += 1
             j -= 1
 
-        # --- time since previous emit ---
+        # --- time since previous emit + the previous emit itself ---
+        # 2026-06-02: added last_emit_dx/dy as explicit features. Cumulative
+        # sum + cursor velocity capture *some* chain context, but mid-chain
+        # the model previously had no explicit "what was the last emit"
+        # signal. The last emit's dx/dy plus dt_prev gives the model exact
+        # information about whether we're mid-chain and the immediate
+        # predecessor's direction/magnitude.
         if i > 0:
             dt_prev = t_emit - emit_ts[i - 1]
+            last_dx = float(emits[i - 1]["dx"])
+            last_dy = float(emits[i - 1]["dy"])
         else:
             dt_prev = 0.0
+            last_dx = 0.0
+            last_dy = 0.0
 
         # --- cursor velocity at t_emit (logical px / ms) ---
         vx, vy = instantaneous_velocity(cursor, t_emit)
@@ -213,6 +223,7 @@ def build_examples(
             sum_dx, sum_dy, float(count),
             float(dt_prev),
             vx, vy,
+            last_dx, last_dy,
         ])
         Y.append([target_dx, target_dy])
 
