@@ -241,6 +241,41 @@ For iPad-specific cursor-detection troubleshooting, see
 phase-by-phase progression from "phantom cursor" to the latency
 root cause to the current opt-in `progressiveOpenLoop` mode.
 
+### Pair every live A/B with an iPadCollector ground-truth bench
+
+When a code change might affect cursor positioning, the screenshot
+detector, or click classification, **don't trust the live production
+bench alone**. The screenshot detector mediates that bench's
+residuals and can lie ([[detector_residual_is_not_ground_truth]];
+1.13b proved hallucinations on cursor-on-icon frames). A live-only
+A/B can report a +55pp lift that the screenshot detector
+manufactured by interacting differently with two code paths — the
+1.11 pointer-accel work spent multiple days on a phantom signal that
+1.13c + 1.14 walked back.
+
+The right control: run a sibling A/B against the **iPadCollector**
+sidecar app at `ipad-collector/`, which exposes ground-truth cursor
+positions (`getCursor()`, `subscribe-cursor`) AND ground-truth tap
+locations (`onTapEvent` at `src/pikvm/ipad-app-ws.ts:119`) over
+WebSocket. iPadCollector accepts arbitrary image scenes via
+`showScene({kind: 'image', ...})` — feed it a PiKVM screenshot of
+the real home screen and the screenshot detector sees the same
+visual surface as production while you simultaneously collect
+ground-truth from the iPad's own pointer system.
+
+Example benches:
+- `benches/bench-1.13c-groundtruth-pointer-accel.ts` — measures
+  cursor-landing accuracy against ground truth, no clicks.
+- `benches/bench-5.1-groundtruth-retry-loop.ts` — replicates
+  `clickAtWithRetry`'s 4-attempt loop and measures per-attempt
+  drift against ground truth.
+
+If the iPadCollector run is logistically hard (it needs the app
+foregrounded and conflicts with production benches that need the
+home screen visible), document that and decide explicitly whether
+to defer or redesign. Do not silently skip the ground-truth half of
+the experiment — that's how mis-attributions slip through.
+
 ## References
 
 - See `CONTEXT.md` for background research
