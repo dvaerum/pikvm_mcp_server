@@ -126,6 +126,13 @@ async function learnedBallisticsPxPerMickey(
   // (iPad acceleration is asymmetric — 25× per-axis spread observed
   // live, see existing Phase 15 note). Empty history + 0 prior dt
   // matches the trainer's cold-start condition.
+  //
+  // 6.7 (2026-06-02 negative result): tried querying at dt_prev=50ms
+  // with one prior emit in history — 6.4 had shown the model's
+  // per-chunk error is 23 px at dt=0 vs 11 px at dt=50. Ground-truth
+  // A/B at N=15: dt=50 median 344 px vs dt=0 median 354 px — null at
+  // the ~100 px noise floor. Per-chunk model accuracy at warm-regime
+  // doesn't translate to chunked-moveToPixel residual improvement.
   const featX = buildPointerAccelFeatures(
     [],
     { vxPxPerMs: 0, vyPxPerMs: 0 },
