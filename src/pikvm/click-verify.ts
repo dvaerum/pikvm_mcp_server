@@ -661,10 +661,15 @@ export async function clickAtWithRetry(
     // emits 0 mickeys when (target - previous) is already within
     // tolerance, so the cursor stays where it was.
     let retryMoveOptions = moveToOptions;
+    // 6.6 (2026-06-02): env override `PIKVM_DISABLE_RETRY_SKIP_PROBE=1`
+    // forces the pre-5.1 behaviour (every retry runs a fresh detect-
+    // then-move probe). Used for ground-truth A/B testing of the 5.1
+    // fix without code edits between arms.
     if (
       attempt > 1
       && lastMoveResult?.finalDetectedPosition
       && options.maxResidualPx !== undefined
+      && process.env.PIKVM_DISABLE_RETRY_SKIP_PROBE !== '1'
     ) {
       const prevPos = lastMoveResult.finalDetectedPosition;
       const prevResid = Math.hypot(prevPos.x - target.x, prevPos.y - target.y);
