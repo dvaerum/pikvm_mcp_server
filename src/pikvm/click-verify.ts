@@ -647,6 +647,36 @@ export async function clickAtWithRetry(
       }
     }
 
+    // 4.1' audit (2026-06-02): when the previous attempt's moveToPixel
+    // landed within maxResidualPx of target with a verified cursor
+    // position, skip this attempt's detect-then-move probe by reusing
+    // the previous detected position via strategy='assume-at'. Visual
+    // audit of 40 per-attempt Books frames (data/bench-1.13-books-
+    // perattempt) showed 52.5% of high-residual frames were the retry
+    // loop driving cursor 50-200 px AWAY from a previously on-target
+    // position — the detect-then-move probe emits 60 mickeys before the
+    // open-loop emit, and that probe motion + ratio-variance overshoot
+    // is what destabilizes the cursor when the previous attempt had
+    // already converged. assume-at on the previous detected position
+    // emits 0 mickeys when (target - previous) is already within
+    // tolerance, so the cursor stays where it was.
+    let retryMoveOptions = moveToOptions;
+    if (
+      attempt > 1
+      && lastMoveResult?.finalDetectedPosition
+      && options.maxResidualPx !== undefined
+    ) {
+      const prevPos = lastMoveResult.finalDetectedPosition;
+      const prevResid = Math.hypot(prevPos.x - target.x, prevPos.y - target.y);
+      if (prevResid <= options.maxResidualPx) {
+        retryMoveOptions = {
+          ...moveToOptions,
+          strategy: 'assume-at',
+          assumeCursorAt: prevPos,
+        };
+      }
+    }
+
     // Fresh aim every attempt — moveToPixel runs detect-then-move probe
     // afresh so cursor position is rediscovered from scratch.
     //
@@ -656,7 +686,7 @@ export async function clickAtWithRetry(
     // cursor entirely; on the next attempt the detect probes themselves
     // re-render it. Letting the retry loop run again gives it a chance.
     try {
-      lastMoveResult = await moveToPixel(client, target, moveToOptions);
+      lastMoveResult = await moveToPixel(client, target, retryMoveOptions);
       lastMoveError = null;
     } catch (err) {
       let recoveredErr: Error | null = err as Error;
@@ -672,6 +702,8 @@ export async function clickAtWithRetry(
         try {
           await ipadGoHome(client);
           await new Promise(r => setTimeout(r, 500));
+          // Phase 72 recovery: fall back to fresh detect-then-move
+          // (NOT assume-at — the ipadGoHome moved cursor unpredictably).
           lastMoveResult = await moveToPixel(client, target, moveToOptions);
           lastMoveError = null;
           recoveredErr = null;
