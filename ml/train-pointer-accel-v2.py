@@ -34,14 +34,24 @@ from torch.utils.data import DataLoader, Dataset
 # --- Module-level constants (easy to tune) -----------------------------------
 
 HORIZON_MS = 50.0          # predict cursor displacement over the next N ms
+# 2026-06-02: tried 500 ms (long chunkedBurst chains) — made things worse.
+# Plain cumulative-sum over 500 ms adds inter-chain noise without
+# temporal structure. Reverted to 100 ms (same as v1). Lesson recorded:
+# if richer history is needed, change the feature SHAPE (e.g. per-bucket
+# emit sums, time-since-last-burst), not just the window length.
 HISTORY_WINDOW_MS = 100.0  # cumulative emit window for context features
 VAL_FRACTION = 0.2
 SEED = 1337
 BATCH_SIZE = 128
 LR = 1e-3
 EPOCHS_DEFAULT = 100
-HIDDEN_DIM = 32
-HIDDEN_LAYERS = 3
+# 2026-06-02: widened from 32×3 (~2.5k params) → 64×4 (~13k params) after
+# the first v2 attempt fit val_mse=828 best at epoch 50 then overfit.
+# Hypothesis: insufficient capacity for the 3.5× larger + more diverse
+# 5-family training distribution. If this still plateaus high, try
+# per-family loss weighting (option c) before adding more capacity.
+HIDDEN_DIM = 64
+HIDDEN_LAYERS = 4
 FEATURE_DIM = 8
 OUTPUT_DIM = 2
 
