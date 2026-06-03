@@ -216,34 +216,83 @@ async function main(): Promise<void> {
     // care about cursor-on-icon *frames*, not exact placement.
     const aimIpad = hdmiToIpad(aimHdmi.x, aimHdmi.y);
 
-    // Slam to top-left to clear cursor state. The slams are clamped
-    // to ±127 by PiKVM; loop until cursor is reliably parked at the
-    // corner.
+    // Closed-loop emit using iPadCollector ground truth as feedback.
+    // Avoids the pointer-acceleration overshoot the open-loop version
+    // hit (cursor pinned 100-400 px past aim, see 2026-06-03 smoke-
+    // test write-up). Algorithm:
+    //   1. Slam to a known corner (chunked -127 to clear state).
+    //   2. Get current position from iPadCollector.
+    //   3. If within TOL_PX of aim → done.
+    //   4. Otherwise emit a step toward aim, sized to the residual.
+    //      Step is clamped to ±60 mickeys so each emit traverses a
+    //      manageable distance and PointerTracker fires for each
+    //      step.
+    //   5. After settle, re-read cursor. Repeat until converged or
+    //      MAX_CORRECTION_STEPS exhausted.
+    const TOL_PX = 25;            // ±25 HDMI px is "on the icon"
+    const MAX_STEPS = 30;
+    const STEP_CLAMP = 60;        // per-step mickey clamp
+    const MULTIPLIER = 0.45;      // damping — iPad over-responds to large emits
+
+    // Slam to top-left.
     for (let s = 0; s < 20; s++) {
       await client.mouseMoveRelative(-127, -127);
     }
-    await sleep(200);
+    await sleep(300);
 
-    // Emit toward aim in 100-mickey chunks. A single 1500+ mickey
-    // call would be clamped to ±127 and the cursor would never reach
-    // the icon — the 2026-06-03 smoke-test bug. With chunked emits
-    // PiKVM doesn't burst-coalesce, so we use a 1.0 multiplier (was
-    // 1.5 for single-call mode that hit saturation; chunked is closer
-    // to 1:1 mickey:px).
-    const emitDxTotal = Math.round(aimIpad.x * 1.0);
-    const emitDyTotal = Math.round(aimIpad.y * 1.0);
-    let remDx = emitDxTotal;
-    let remDy = emitDyTotal;
-    while (Math.abs(remDx) > 0 || Math.abs(remDy) > 0) {
-      const stepDx = Math.max(-100, Math.min(100, remDx));
-      const stepDy = Math.max(-100, Math.min(100, remDy));
-      await client.mouseMoveRelative(stepDx, stepDy);
-      remDx -= stepDx;
-      remDy -= stepDy;
-      await sleep(20);
+    let convergedHdmi: { x: number; y: number } | null = null;
+    let stepsTaken = 0;
+    for (let step = 0; step < MAX_STEPS; step++) {
+      let cur;
+      try { cur = await sess.getCursor(); }
+      catch (e) {
+        console.error(`[on-icon] frame ${i + 1} step ${step}: getCursor failed: ${(e as Error).message}`);
+        break;
+      }
+      // (0,0) sentinel: cursor outside iPadCollector's tracked region.
+      // Nudge it back in by emitting a small step toward center.
+      if (cur.x === 0 && cur.y === 0) {
+        const towardCenterDx = sess.hello.logicalW / 2 > 100 ? 30 : -30;
+        const towardCenterDy = sess.hello.logicalH / 2 > 100 ? 30 : -30;
+        await client.mouseMoveRelative(towardCenterDx, towardCenterDy);
+        await sleep(80);
+        continue;
+      }
+      const curHdmi = ipadToHdmi(cur.x, cur.y);
+      const residX = aimHdmi.x - curHdmi.x;
+      const residY = aimHdmi.y - curHdmi.y;
+      const residPx = Math.hypot(residX, residY);
+      if (residPx <= TOL_PX) {
+        convergedHdmi = curHdmi;
+        stepsTaken = step;
+        break;
+      }
+      // Step toward aim, dampened.
+      const wantDx = residX * MULTIPLIER;
+      const wantDy = residY * MULTIPLIER;
+      const stepDx = Math.max(-STEP_CLAMP, Math.min(STEP_CLAMP, Math.round(wantDx)));
+      const stepDy = Math.max(-STEP_CLAMP, Math.min(STEP_CLAMP, Math.round(wantDy)));
+      if (stepDx === 0 && stepDy === 0) {
+        // tiny residual but not under TOL; nudge by 1 in residual direction
+        const dxSign = residX > 0 ? 1 : residX < 0 ? -1 : 0;
+        const dySign = residY > 0 ? 1 : residY < 0 ? -1 : 0;
+        await client.mouseMoveRelative(dxSign, dySign);
+      } else {
+        await client.mouseMoveRelative(stepDx, stepDy);
+      }
+      await sleep(80);
+      stepsTaken = step + 1;
     }
     await sleep(SETTLE_MS);
+    if (convergedHdmi === null) {
+      console.error(`[on-icon] frame ${i + 1}: did not converge within ±${TOL_PX} px in ${MAX_STEPS} steps — skipping`);
+      skipped++;
+      continue;
+    }
 
+    // Re-read once after SETTLE_MS to catch any settle-drift (the
+    // closed loop already converged but the cursor may have shifted a
+    // few px during the post-convergence settle).
     let cur;
     try { cur = await sess.getCursor(); }
     catch (e) {
@@ -251,9 +300,8 @@ async function main(): Promise<void> {
       skipped++;
       continue;
     }
-
     if (cur.x === 0 && cur.y === 0) {
-      console.error(`[on-icon] frame ${i + 1}: cursor at (0,0) — pointer not awake, skipping`);
+      console.error(`[on-icon] frame ${i + 1}: cursor at (0,0) after converge — skipping`);
       skipped++;
       continue;
     }
@@ -280,6 +328,7 @@ async function main(): Promise<void> {
         dx: Math.round(hdmi.x - aimHdmi.x),
         dy: Math.round(hdmi.y - aimHdmi.y),
       },
+      closed_loop_steps: stepsTaken,
       decided_at: new Date().toISOString(),
     };
     await fs.appendFile(jsonlPath, JSON.stringify(row) + '\n');
