@@ -83,15 +83,23 @@ PIKVM_DEFAULT_KEYMAP=en-us
 ## iPad cursor configuration
 
 If the target host is an iPad, **the iPadOS-side cursor settings strongly
-affect click reliability**. With the configuration below + the page-1
-sanity gate (Stage 3.5, 2026-05-31), the honest production click rate
-on 4 home-screen icons is **85 % HIT at N=80 trials** (see
-[docs/roadmap-2026-05-31.md § Stage 3.5](docs/roadmap-2026-05-31.md)).
-Run-to-run swing at N=20 is ±10 pp, so individual N=20 measurements
-sit anywhere in the 75–95 % band. Earlier figures of 90 % HIT
-(2026-05-28, N=20) and 93 % HIT (v11 ship-decision, 2026-05-30) are
-both inside that band — there is no detector-level lift across v9, v11,
-v12, v12.1 that exceeds the noise floor at this measurement resolution.
+affect click reliability**. With the configuration below, the
+production click rate on 4 home-screen icons measured against
+iPadCollector ground truth (taps recorded directly by a sidecar iPad
+app, not inferred from screenshot diffs) is **~55–65 % HIT at N=80–320
+trials** (see [docs/roadmap-2026-05-31.md § 6.6](docs/roadmap-2026-05-31.md)).
+Per-target rate ranges from ~50 % (Files) to ~70 % (Settings).
+Run-to-run swing at N=20–30 is ±10–15 pp.
+
+The earlier figures of 85 % HIT (N=80 screenshot bench, 2026-05-31),
+90 % HIT (N=20, 2026-05-28), and 93 % HIT (v11 ship-decision, 2026-05-30)
+were all measured by the same screenshot-mediated detector that gates
+the click — i.e., the detector both decides whether to click and
+later evaluates whether the click "hit". The 2026-06-02 iPadCollector
+ground-truth bench (§ 6.0) showed the screenshot bench overstates HIT
+by ~30–40 pp because it counts gate-passing residual as success even
+when the iPad never received the tap.
+
 Without the cursor configuration the same bench measured ~10–50 % with
 mixed silent failures.
 
