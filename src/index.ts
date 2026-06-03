@@ -309,10 +309,15 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_dismiss_popup',
-    description: 'Run the hidden-popup dismiss recipe (Escape → 60ms → Enter → 60ms). Useful when click_at lands on a known-correct target but produces no UI change — the dominant explanation is an iOS HDMI-blocked security popup (Apple Pay / Face ID / password / Low Battery / app permission) eating the input. Live-verified that Escape DOES dismiss visible system popups (a Low Battery 10% modal cleared cleanly with one Escape). Best-effort: errors are captured and returned, never thrown. Returns { keysSent, errors }.',
+    description: 'Run the hidden-popup dismiss recipe (Escape → 60ms → Enter → 60ms). Useful when click_at lands on a known-correct target but produces no UI change — the dominant explanation is an iOS HDMI-blocked security popup (Apple Pay / Face ID / password / Low Battery / app permission) eating the input. Live-verified that Escape DOES dismiss visible system popups (a Low Battery 10% modal cleared cleanly with one Escape). Optional opt-in escalation `force: true` appends Cmd+H (system Home shortcut) AFTER Escape+Enter — use only when Escape+Enter alone produced no visible state change AND you accept that Cmd+H will exit any foreground app (verified 2026-06-03 to dismiss a stuck Low Battery 5% modal that absorbed Escape). Best-effort: errors are captured and returned, never thrown. Returns { keysSent, errors }.',
     inputSchema: {
       type: 'object',
-      properties: {},
+      properties: {
+        force: {
+          type: 'boolean',
+          description: 'If true, append Cmd+H (system Home shortcut) AFTER the Escape+Enter recipe. Destructive: exits the current foreground app. Use only when (a) the iPad is on or near the home screen, AND (b) the plain Escape+Enter recipe did not produce a visible state change.',
+        },
+      },
     },
   },
   {
@@ -994,7 +999,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Phase 165: run the documented Phase 141 hidden-popup dismiss recipe.
         // Phase 172 extracted formatDismissResult so both formatting branches
         // are regression-pinned by unit tests.
-        const result = await runDismissRecipe(pikvm);
+        const force = validateBoolean(args.force) ?? false;
+        const result = await runDismissRecipe(pikvm, { tryCmdH: force });
         return {
           content: [{ type: 'text', text: formatDismissResult(result) }],
         };

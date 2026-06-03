@@ -612,7 +612,7 @@ The earlier "~50-60% small-icon hit" figure was based on screen-changed checks t
 
 **Phase 94 / Phase 142 default**: \`maxRetries\` defaults to 3 on iPad (relative-mouse) targets. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
 
-**Silent failure remedy**: when click_at returns success but the post-click screenshot shows no UI change, the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating input. Call \`pikvm_dismiss_popup\` to fire the documented Escape → Enter recipe, then retry. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly with one Escape).
+**Silent failure remedy**: when click_at returns success but the post-click screenshot shows no UI change, the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating input. Call \`pikvm_dismiss_popup\` to fire the documented Escape → Enter recipe, then retry. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly with one Escape). **2026-06-03 escalation**: a stuck Low Battery 5% modal that had been sitting for hours (HDMI frame frozen) absorbed Escape with NO effect — the modal lost keyboard focus. \`pikvm_dismiss_popup\` with \`force: true\` appends Cmd+H (system Home shortcut) after Escape+Enter, which bypasses the focus problem. Cmd+H is destructive (exits any foreground app), so only use \`force: true\` when (a) the iPad is on or near the home screen, AND (b) the plain recipe already returned with no visible change.
 
 ## Critical pre-flight
 

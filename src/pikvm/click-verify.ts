@@ -1826,11 +1826,27 @@ export function defaultChunkPaceMsFor(mouseAbsoluteMode: boolean): number | unde
  * Enter is sent as a fallback for popups whose default action is
  * an OK button rather than Cancel.
  *
+ * 2026-06-03 escalation: a Low Battery 5% modal that had been
+ * sitting on the home screen for hours (HDMI frame frozen, no
+ * visual updates) absorbed Escape with no effect — modal had lost
+ * keyboard focus or the system was deferring input. Cmd+H (system
+ * Home shortcut) bypassed it in one step and the home screen
+ * became responsive again. Added as opt-in escalation: pass
+ * `tryCmdH: true` to append Cmd+H AFTER Escape+Enter. NOT default
+ * because Cmd+H exits any foreground app — destructive if the
+ * popup was inside an app the user wanted to stay in. Use when:
+ *   - the iPad is on (or expected to be on) the home screen, AND
+ *   - Escape+Enter alone did not produce a visible state change.
+ *
  * Errors from sendKey are caught — some clients may not support it.
  * Returns the count of keys sent so callers can sanity-check.
  */
 export async function runDismissRecipe(
-  client: { sendKey: (k: string) => Promise<void> },
+  client: {
+    sendKey: (k: string) => Promise<void>;
+    sendShortcut?: (keys: string[]) => Promise<void>;
+  },
+  opts?: { tryCmdH?: boolean },
 ): Promise<{ keysSent: number; errors: string[] }> {
   const errors: string[] = [];
   let keysSent = 0;
@@ -1847,6 +1863,15 @@ export async function runDismissRecipe(
     await sleepMs(60);
   } catch (err) {
     errors.push(`Enter: ${(err as Error).message}`);
+  }
+  if (opts?.tryCmdH && client.sendShortcut) {
+    try {
+      await client.sendShortcut(['MetaLeft', 'KeyH']);
+      keysSent++;
+      await sleepMs(60);
+    } catch (err) {
+      errors.push(`Cmd+H: ${(err as Error).message}`);
+    }
   }
   return { keysSent, errors };
 }

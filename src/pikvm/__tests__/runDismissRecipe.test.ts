@@ -13,6 +13,7 @@ import { runDismissRecipe } from '../click-verify.js';
 
 class CapturingClient {
   keys: string[] = [];
+  shortcuts: string[][] = [];
   errOnKey?: string;
   errMessage = 'simulated';
   async sendKey(key: string): Promise<void> {
@@ -20,6 +21,9 @@ class CapturingClient {
       throw new Error(this.errMessage);
     }
     this.keys.push(key);
+  }
+  async sendShortcut(keys: string[]): Promise<void> {
+    this.shortcuts.push(keys);
   }
 }
 
@@ -75,6 +79,55 @@ describe('runDismissRecipe', () => {
       }
     }
     await expect(runDismissRecipe(new AllFailClient())).resolves.toBeDefined();
+  });
+
+  it('does NOT send Cmd+H by default — destructive shortcut is opt-in', async () => {
+    // 2026-06-03 escalation: Cmd+H bypasses focus-lost modals but
+    // exits any foreground app. Must stay off by default.
+    const client = new CapturingClient();
+    await runDismissRecipe(client);
+    expect(client.shortcuts).toEqual([]);
+  });
+
+  it('sends Cmd+H AFTER Escape+Enter when tryCmdH is true', async () => {
+    // 2026-06-03 escalation: opt-in escalation for stuck-focus modals
+    // (Low Battery 5% modal sitting for hours absorbed Escape with no
+    // effect; Cmd+H bypassed it).
+    const client = new CapturingClient();
+    const result = await runDismissRecipe(client, { tryCmdH: true });
+    expect(client.keys).toEqual(['Escape', 'Enter']);
+    expect(client.shortcuts).toEqual([['MetaLeft', 'KeyH']]);
+    expect(result.keysSent).toBe(3);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('REGRESSION: tryCmdH still completes when Escape+Enter throw', async () => {
+    // Defensive: opt-in Cmd+H must run even if both preceding keys
+    // failed (e.g. on a client whose sendKey is broken).
+    class EscapeFailingClient extends CapturingClient {
+      override async sendKey(): Promise<void> {
+        throw new Error('broken');
+      }
+    }
+    const client = new EscapeFailingClient();
+    const result = await runDismissRecipe(client, { tryCmdH: true });
+    expect(client.shortcuts).toEqual([['MetaLeft', 'KeyH']]);
+    expect(result.keysSent).toBe(1);
+    expect(result.errors).toHaveLength(2);
+  });
+
+  it('tryCmdH is a no-op when client has no sendShortcut method', async () => {
+    // Some older client mocks only support sendKey. The recipe must
+    // not throw — just skip the Cmd+H step.
+    class NoShortcutClient {
+      keys: string[] = [];
+      async sendKey(key: string): Promise<void> { this.keys.push(key); }
+    }
+    const client = new NoShortcutClient();
+    const result = await runDismissRecipe(client, { tryCmdH: true });
+    expect(client.keys).toEqual(['Escape', 'Enter']);
+    expect(result.keysSent).toBe(2);
+    expect(result.errors).toEqual([]);
   });
 
   it('REGRESSION: order is Escape then Enter (not the reverse)', async () => {
