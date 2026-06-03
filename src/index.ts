@@ -42,6 +42,7 @@ import { seedCursorTemplate } from './pikvm/seed-template.js';
 import { VERSION } from './version.js';
 import {
   unlockIpad,
+  unlockIpadWithCode,
   launchIpadApp,
   ipadGoHome,
   ipadOpenAppSwitcher,
@@ -313,6 +314,20 @@ const tools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {},
+    },
+  },
+  {
+    name: 'pikvm_ipad_unlock_with_code',
+    description: 'Keyboard-only unlock for a passcode-protected iPad. Recipe (verified by user 2026-06-03): sendKey Space → wait 1 s (wakes the screen) → sendKey Space → wait 1 s (dismisses the lock screen and brings up the passcode prompt) → type each passcode digit with ~100 ms between presses → sendKey Enter. Pass the passcode as `code` (digits only, 4–10 chars). Use this instead of pikvm_ipad_unlock when the iPad has a passcode set. **The code is sent verbatim to PiKVM HID and is NOT logged, stored, or echoed in the response** — the response just confirms the digit-count and that Enter was fired. Verify success with pikvm_screen_state (expect on:true) and pikvm_screenshot. Mirror tool for locking: pikvm_ipad_lock.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description: 'iPad passcode (digits only). Stored only in the in-memory request payload for the duration of this call; not persisted or logged.',
+        },
+      },
+      required: ['code'],
     },
   },
   {
@@ -1033,6 +1048,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [{ type: 'text', text: `Screen state: FAILED to read (${(err as Error).message}). PiKVM itself may be unreachable.` }],
           };
         }
+      }
+
+      case 'pikvm_ipad_unlock_with_code': {
+        // 2026-06-03 user-provided keyboard-only unlock recipe.
+        // unlockIpadWithCode validates code shape BEFORE any HID
+        // activity so a malformed code doesn't half-type and trip
+        // iPadOS's wrong-passcode counter.
+        const code = requireString(args.code, 'code');
+        const result = await unlockIpadWithCode(pikvm, code);
+        return {
+          content: [{
+            type: 'text',
+            text: `Unlock recipe fired (Space → wait → Space → wait → ${result.digitsSent} digits → Enter). Verify with pikvm_screen_state (expect on:true) and pikvm_screenshot. If wrong-passcode, iPadOS will show the shake animation and remain on the passcode prompt.`,
+          }],
+        };
       }
 
       case 'pikvm_ipad_lock': {

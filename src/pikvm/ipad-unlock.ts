@@ -522,6 +522,62 @@ export async function ipadOpenAppSwitcher(
   };
 }
 
+/**
+ * 2026-06-03 user-provided recipe — keyboard-only unlock for a
+ * passcode-protected iPad. Used when `unlockIpad`'s swipe gesture
+ * isn't appropriate (e.g. the iPad sleeps mid-session and we want
+ * to come back via keyboard with the known passcode).
+ *
+ * Sequence:
+ *   - Space → wait wakeWaitMs (default 1000 ms): wakes the screen
+ *   - Space → wait wakeWaitMs: dismisses the lock screen, brings up
+ *     the passcode prompt
+ *   - For each digit: send the corresponding `Digit{n}` keycode,
+ *     wait perDigitMs (default 100 ms)
+ *   - Enter: submit
+ *
+ * The `code` is sent verbatim to PiKVM HID. It is NOT logged,
+ * stored anywhere, or returned in the result. The caller is the
+ * passcode's authority.
+ *
+ * Validates: 4–10 digits. Throws on bad input BEFORE any HID activity
+ * (so a malformed code doesn't half-type a partial passcode and
+ * trigger iPadOS's wrong-passcode counter).
+ */
+export interface UnlockWithCodeOptions {
+  wakeWaitMs?: number;
+  perDigitMs?: number;
+}
+
+export interface UnlockWithCodeResult {
+  digitsSent: number;
+}
+
+export async function unlockIpadWithCode(
+  client: { sendKey: (k: string) => Promise<void> },
+  code: string,
+  options: UnlockWithCodeOptions = {},
+): Promise<UnlockWithCodeResult> {
+  if (typeof code !== 'string' || !/^\d{4,10}$/.test(code)) {
+    throw new Error('code must be a string of 4–10 decimal digits');
+  }
+  const wakeWaitMs = options.wakeWaitMs ?? 1000;
+  const perDigitMs = options.perDigitMs ?? 100;
+
+  await client.sendKey('Space');
+  await sleep(wakeWaitMs);
+  await client.sendKey('Space');
+  await sleep(wakeWaitMs);
+
+  for (const digit of code) {
+    await client.sendKey(`Digit${digit}`);
+    await sleep(perDigitMs);
+  }
+
+  await client.sendKey('Enter');
+  return { digitsSent: code.length };
+}
+
 // Phase 321 (v0.5.248): the Phase 318 isLikelyLockScreen helper was
 // removed. The dock-strip heuristic gave false positives on
 // legitimate non-home screens (App Library, in-app views, blurred
