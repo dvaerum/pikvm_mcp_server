@@ -216,18 +216,32 @@ async function main(): Promise<void> {
     // care about cursor-on-icon *frames*, not exact placement.
     const aimIpad = hdmiToIpad(aimHdmi.x, aimHdmi.y);
 
-    // Slam to top-left to clear cursor state.
-    await client.mouseMoveRelative(-2000, -2000);
-    await sleep(150);
-    await client.mouseMoveRelative(-2000, -2000);
-    await sleep(150);
+    // Slam to top-left to clear cursor state. The slams are clamped
+    // to ±127 by PiKVM; loop until cursor is reliably parked at the
+    // corner.
+    for (let s = 0; s < 20; s++) {
+      await client.mouseMoveRelative(-127, -127);
+    }
+    await sleep(200);
 
-    // Emit toward aim. iPad logical coords are roughly 1:1 with HDMI
-    // for our region size, but use a multiplier of ~1.5 mickeys/px to
-    // account for pointer acceleration.
-    const emitDx = Math.round(aimIpad.x * 1.5);
-    const emitDy = Math.round(aimIpad.y * 1.5);
-    await client.mouseMoveRelative(emitDx, emitDy);
+    // Emit toward aim in 100-mickey chunks. A single 1500+ mickey
+    // call would be clamped to ±127 and the cursor would never reach
+    // the icon — the 2026-06-03 smoke-test bug. With chunked emits
+    // PiKVM doesn't burst-coalesce, so we use a 1.0 multiplier (was
+    // 1.5 for single-call mode that hit saturation; chunked is closer
+    // to 1:1 mickey:px).
+    const emitDxTotal = Math.round(aimIpad.x * 1.0);
+    const emitDyTotal = Math.round(aimIpad.y * 1.0);
+    let remDx = emitDxTotal;
+    let remDy = emitDyTotal;
+    while (Math.abs(remDx) > 0 || Math.abs(remDy) > 0) {
+      const stepDx = Math.max(-100, Math.min(100, remDx));
+      const stepDy = Math.max(-100, Math.min(100, remDy));
+      await client.mouseMoveRelative(stepDx, stepDy);
+      remDx -= stepDx;
+      remDy -= stepDy;
+      await sleep(20);
+    }
     await sleep(SETTLE_MS);
 
     let cur;
