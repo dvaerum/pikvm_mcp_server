@@ -51,6 +51,25 @@ export interface TapEvent {
   t_ipad: number;
 }
 
+/**
+ * SwiftUI scene-phase transition reported by the app. Phases:
+ *   - "active": foreground + receiving events (normal operation)
+ *   - "inactive": foreground but not receiving events (system overlay,
+ *     mid-transition, control centre etc.)
+ *   - "background": app suspended; no HID/hover events fire, ANY
+ *     pending RPC will see stale state — bench must abort.
+ *
+ * Motivated by the 2026-06-03 bench-collect-on-icon corpus run that
+ * silently failed at row 112 after iPadCollector backgrounded. Without
+ * this signal, getCursor RPCs return stale data until something times
+ * out; with it the bench can abort cleanly and name the last good row.
+ */
+export interface LifecycleEvent {
+  state: 'active' | 'inactive' | 'background' | 'unknown';
+  /** App-side wall-clock (ms since epoch). */
+  t_ipad: number;
+}
+
 export interface SceneSpec {
   /** Catalog kind: image asset, procedural pattern, or video. */
   kind: 'image' | 'procedural' | 'video' | 'blackHoldingPattern';
@@ -117,6 +136,13 @@ export class IpadSession {
    *  The app fires these always when a tap is recognised — no explicit
    *  subscribe message; the bench just sets the callback when it cares. */
   onTapEvent: ((ev: TapEvent) => void) | null = null;
+  /** Set by the user; called for every scene-phase transition.
+   *  Always-fire; bench may or may not register a handler. */
+  onLifecycle: ((ev: LifecycleEvent) => void) | null = null;
+  /** Latest reported scene phase, or null until the app sends its first
+   *  lifecycle event. SwiftUI fires `.active` on launch so a connected
+   *  session normally pins this to "active" within a few hundred ms. */
+  currentLifecycle: LifecycleEvent['state'] | null = null;
 
   private readonly ws: WebSocket;
   private readonly pending = new Map<string, PendingRequest>();
@@ -204,6 +230,14 @@ export class IpadSession {
       case 'tap-event': {
         if (this.onTapEvent) {
           this.onTapEvent(msg.payload as TapEvent);
+        }
+        break;
+      }
+      case 'lifecycle': {
+        const ev = msg.payload as LifecycleEvent;
+        this.currentLifecycle = ev.state;
+        if (this.onLifecycle) {
+          this.onLifecycle(ev);
         }
         break;
       }

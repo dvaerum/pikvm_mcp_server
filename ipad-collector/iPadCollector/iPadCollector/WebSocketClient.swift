@@ -152,6 +152,27 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
         send(["type": "tap-event", "payload": payload])
     }
 
+    /// Report an iOS scene lifecycle transition to the collector. The
+    /// bench-collect-on-icon corpus run on 2026-06-03 silently failed
+    /// after row 112 because iPadCollector backgrounded (cause TBD)
+    /// and subsequent getCursor RPCs returned stale data. With this
+    /// event, the bench can abort cleanly the moment iPadCollector
+    /// loses foreground status, with a log line naming the failure.
+    /// Always-fire; bench may or may not have a handler registered.
+    /// Scene phases:
+    ///   - "active": foreground + receiving events (normal operation)
+    ///   - "inactive": foreground but not receiving events (system
+    ///     overlay shown, mid-transition, control centre etc.)
+    ///   - "background": app suspended; no HID/hover events fire,
+    ///     ANY pending RPC will see stale state
+    func sendLifecycle(state: String) {
+        let payload: [String: Any] = [
+            "state": state,
+            "t_ipad": Date().timeIntervalSince1970 * 1000.0,
+        ]
+        send(["type": "lifecycle", "payload": payload])
+    }
+
     // MARK: - Protocol dispatch
 
     private func handle(text: String) {

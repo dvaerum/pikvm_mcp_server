@@ -132,6 +132,19 @@ async function main(): Promise<void> {
   if (!sess.hello) throw new Error('no hello payload');
   console.error(`[on-icon] connected: logicalW=${sess.hello.logicalW} logicalH=${sess.hello.logicalH}`);
 
+  // 2026-06-03: bench-collect-on-icon row-112 silent failure was
+  // iPadCollector backgrounding mid-run. Abort cleanly on the first
+  // non-active scene phase so the failure surfaces in the log instead
+  // of hundreds of "did not converge" rows masking it.
+  let lifecycleAbort: string | null = null;
+  let lastSavedAtAbort = 0;
+  sess.onLifecycle = (ev) => {
+    if (ev.state === 'background' && lifecycleAbort === null) {
+      lifecycleAbort = ev.state;
+      console.error(`[on-icon] ABORT: iPadCollector backgrounded (state=${ev.state}) — last saved row=${lastSavedAtAbort}`);
+    }
+  };
+
   // HDMI <-> iPad-logical conversions.
   const ipadToHdmi = (x: number, y: number) => ({
     x: tight.x + (x / sess.hello!.logicalW) * tight.w,
@@ -200,6 +213,7 @@ async function main(): Promise<void> {
   const t0 = Date.now();
 
   for (let i = 0; i < TARGET; i++) {
+    if (lifecycleAbort) break;
     const icon = TARGETS_HDMI[i % TARGETS_HDMI.length];
     const { dx, dy } = sampleOffset();
     const aimHdmi = { x: icon.x + dx, y: icon.y + dy };
@@ -333,6 +347,7 @@ async function main(): Promise<void> {
     };
     await fs.appendFile(jsonlPath, JSON.stringify(row) + '\n');
     saved++;
+    lastSavedAtAbort = saved;
 
     if (saved % 5 === 0 || saved === TARGET) {
       const dt = (Date.now() - t0) / 1000;

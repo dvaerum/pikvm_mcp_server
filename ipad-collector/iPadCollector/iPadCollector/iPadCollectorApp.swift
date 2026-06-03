@@ -14,6 +14,7 @@ import Combine
 @main
 struct iPadCollectorApp: App {
     @StateObject private var session = SessionStore()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         // Disable iOS's idle-timer auto-lock while iPadCollector is
@@ -31,6 +32,24 @@ struct iPadCollectorApp: App {
                 .statusBarHidden(true)
                 .persistentSystemOverlays(.hidden)  // hide Home Indicator hint when possible
                 .preferredColorScheme(.dark)        // so a black scene-loading view matches the letterbox
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            // 2026-06-03: forward every scene-phase transition to the
+            // collector over WS so the bench can detect "iPadCollector
+            // backgrounded mid-run" in real time instead of getting
+            // stale getCursor results until something times out.
+            // Phase mapping:
+            //   .active    → "active"     (normal operation)
+            //   .inactive  → "inactive"   (system overlay, mid-transition)
+            //   .background → "background" (suspended — bench must abort)
+            let stateName: String
+            switch newPhase {
+            case .active:     stateName = "active"
+            case .inactive:   stateName = "inactive"
+            case .background: stateName = "background"
+            @unknown default: stateName = "unknown"
+            }
+            session.reportLifecycle(state: stateName)
         }
     }
 }
@@ -89,6 +108,15 @@ final class SessionStore: ObservableObject {
     /// without depending on real iPad UI state.
     func reportTap(at point: CGPoint) {
         client?.sendTap(location: point)
+    }
+
+    /// Forward a SwiftUI scene-phase transition over the WS so the
+    /// bench can detect iPadCollector backgrounding in real time.
+    /// Best-effort — if the WS isn't connected we silently drop;
+    /// the iPad's local scene-phase change is what triggered this
+    /// call, and the bench will see the WS go away anyway.
+    func reportLifecycle(state: String) {
+        client?.sendLifecycle(state: state)
     }
 
     /// Report a pointer hover event from the TapCaptureView's
