@@ -308,6 +308,22 @@ const tools: Tool[] = [
     },
   },
   {
+    name: 'pikvm_screen_state',
+    description: 'Quick "is the screen on?" check via the PiKVM streamer API. Returns { on: boolean, resolution: { width, height } }. When `on: false`, the HDMI source is not transmitting (iPad screen off — most commonly LOCKED / asleep / Touch ID gate, less commonly powered off or unplugged); pikvm_screenshot will return 503 UnavailableError until the screen comes back. Wake the iPad first (sendKey Enter wakes the screen and on iPadOS 26 also dismisses the lock screen when no passcode is set; see also pikvm_ipad_unlock for the swipe-based path on passcode-protected devices). When `on: true`, the source is healthy and cursor/click tools should work normally. Cheaper than pikvm_health_check — exactly one PiKVM API call.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'pikvm_ipad_lock',
+    description: 'Lock the iPad screen by sending Ctrl+Cmd+Q (the standard macOS Lock Screen shortcut; live-verified 2026-06-03 to lock an iPad running iPadOS 26). After firing, the iPad screen turns off → PiKVM HDMI source goes offline → pikvm_screenshot returns 503 until the iPad wakes again. Verify by calling pikvm_screen_state immediately after — should report on:false within ~2 s. To unlock again on a passcode-free iPad: sendKey Enter wakes the screen and on iPadOS 26 also dismisses the lock screen (Phase 217). For passcode-protected iPads: pikvm_ipad_unlock fires the swipe-up gesture instead. Use cases: end-of-session cleanup; recovering from a stuck modal that absorbed Escape but where the user expected the iPad to sleep anyway; tests that want a known-locked starting state.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
     name: 'pikvm_dismiss_popup',
     description: 'Run the hidden-popup dismiss recipe (Escape → 60ms → Enter → 60ms). Useful when click_at lands on a known-correct target but produces no UI change — the dominant explanation is an iOS HDMI-blocked security popup (Apple Pay / Face ID / password / Low Battery / app permission) eating the input. Live-verified that Escape DOES dismiss visible system popups (a Low Battery 10% modal cleared cleanly with one Escape). Optional opt-in escalation `force: true` appends Cmd+H (system Home shortcut) AFTER Escape+Enter — use only when Escape+Enter alone produced no visible state change AND you accept that Cmd+H will exit any foreground app (verified 2026-06-03 to dismiss a stuck Low Battery 5% modal that absorbed Escape). Best-effort: errors are captured and returned, never thrown. Returns { keysSent, errors }.',
     inputSchema: {
@@ -785,11 +801,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } else {
             lines.push(
               `⚠ Streamer source: OFFLINE — no HDMI signal. The device behind ` +
-              `the cable (iPad in our setup) is powered off, mid-reboot, ` +
-              `unplugged, or its display is asleep beyond what wake nudges can ` +
-              `recover. pikvm_screenshot will return 503 UnavailableError ` +
-              `until the source comes back. Wake the device or restore HDMI; ` +
-              `cursor/click tools are unusable in this state.`,
+              `the cable (iPad in our setup) has its screen off. Most common ` +
+              `cause: the iPad is LOCKED / asleep / showing a Touch ID gate. ` +
+              `Less commonly: powered off (dead battery), mid-reboot, or ` +
+              `unplugged. pikvm_screenshot will return 503 UnavailableError ` +
+              `until the screen comes back. Wake the iPad with sendKey Enter ` +
+              `(Phase 217 — also dismisses the lock screen on iPadOS 26 when ` +
+              `no passcode is set) or pikvm_ipad_unlock for passcode-protected ` +
+              `devices. Cursor/click tools are unusable in this state.`,
             );
           }
         } catch (err) {
@@ -992,6 +1011,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await pikvm.sendShortcut(keys);
         return {
           content: [{ type: 'text', text: `Sent shortcut: ${keys.join('+')}` }],
+        };
+      }
+
+      case 'pikvm_screen_state': {
+        // Phase 189 introduced getStreamerStatus(); this case exposes
+        // it as its own MCP tool. Cheaper than pikvm_health_check (a
+        // single GET /streamer) and returns a clear { on: boolean }
+        // that other tools can sanity-check before assuming HDMI is
+        // available.
+        try {
+          const s = await pikvm.getStreamerStatus();
+          const msg = s.sourceOnline
+            ? `Screen ON. Resolution ${s.resolution.width}×${s.resolution.height}.`
+            : `Screen OFF (no HDMI signal). Most common cause: iPad is locked / asleep / showing Touch ID gate. Wake with sendKey Enter (Phase 217: also dismisses lock screen on iPadOS 26 with no passcode), or pikvm_ipad_unlock for the swipe-based path. pikvm_screenshot will 503 until the screen wakes.`;
+          return {
+            content: [{ type: 'text', text: msg }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: 'text', text: `Screen state: FAILED to read (${(err as Error).message}). PiKVM itself may be unreachable.` }],
+          };
+        }
+      }
+
+      case 'pikvm_ipad_lock': {
+        // 2026-06-03: Ctrl+Cmd+Q is the standard macOS "Lock Screen"
+        // shortcut and iPadOS honors it from an attached keyboard
+        // (verified live on iPadOS 26). The iPad's HDMI output turns
+        // off ~immediately; pikvm_screen_state will report on:false
+        // within a couple of seconds.
+        await pikvm.sendShortcut(['ControlLeft', 'MetaLeft', 'KeyQ']);
+        return {
+          content: [{
+            type: 'text',
+            text: 'Sent Ctrl+Cmd+Q (iPadOS Lock Screen). Screen should turn off within 2 s. Verify with pikvm_screen_state (expect on:false). To unlock again: sendKey Enter (wakes the screen; on iPadOS 26 with no passcode also dismisses the lock screen).',
+          }],
         };
       }
 
