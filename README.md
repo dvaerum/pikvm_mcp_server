@@ -136,6 +136,13 @@ present, the orange-cursor ML detector seeds the cursor-origin
 calibration step automatically — no env vars required. Falls back to
 v11 → v9-bordered → v8 if v12 isn't on disk.
 
+An experimental `ml/cursor-v13.onnx` (v12 corpus + 100 4.1' on-icon
+frames) exists — offline it's ~3 px tighter than v12 at p50 on the
+34-frame on-icon held-out eval, but the live A/B (roadmap 4.3') has
+not yet run, so v13 is **explicit opt-in only** via
+`PIKVM_ML_V8_MODEL=ml/cursor-v13.onnx` and is deliberately excluded
+from the auto-load candidate list.
+
 To **disable** the ML path (force probe-and-diff only):
 ```bash
 PIKVM_ML_DISABLE=1
