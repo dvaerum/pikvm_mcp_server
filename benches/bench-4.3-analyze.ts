@@ -55,20 +55,20 @@ function num(s: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function stats(values: number[]): { n: number; p50: number; mean: number; p25: number; p75: number; p95: number; max: number } {
-  if (values.length === 0) return { n: 0, p50: NaN, mean: NaN, p25: NaN, p75: NaN, p95: NaN, max: NaN };
+interface Stats { n: number; p50: number; mean: number; p25: number; p75: number; p95: number; max: number }
+
+function stats(values: number[]): Stats | null {
+  if (values.length === 0) return null;
   const s = [...values].sort((a, b) => a - b);
   // Linear-interpolation quantile (type-7 / numpy default). For even N
-  // the true median is (s[n/2 - 1] + s[n/2]) / 2, not s[n/2] — the
-  // floor-only variant biased p50 upward by ~0.5–2 px and was enough
-  // to invert a close v12/v13 call.
+  // the true median is (s[n/2 - 1] + s[n/2]) / 2 — floor-only biases
+  // p50 upward by ~0.5–2 px, enough to invert a close v12/v13 call.
   const q = (p: number): number => {
     if (s.length === 1) return s[0];
     const idx = p * (s.length - 1);
     const lo = Math.floor(idx);
     const hi = Math.ceil(idx);
-    const frac = idx - lo;
-    return s[lo] + (s[hi] - s[lo]) * frac;
+    return s[lo] + (s[hi] - s[lo]) * (idx - lo);
   };
   return {
     n: s.length,
@@ -81,7 +81,8 @@ function stats(values: number[]): { n: number; p50: number; mean: number; p25: n
   };
 }
 
-function fmt(s: ReturnType<typeof stats>): string {
+function fmt(s: Stats | null): string {
+  if (s === null) return 'n=0 (no data)';
   return `n=${s.n} p50=${s.p50.toFixed(1)} mean=${s.mean.toFixed(1)} p25=${s.p25.toFixed(1)} p75=${s.p75.toFixed(1)} p95=${s.p95.toFixed(1)} max=${s.max.toFixed(1)}`;
 }
 
@@ -112,23 +113,31 @@ async function main(): Promise<void> {
   // Paired-attempt comparison. Iterate the UNION of (trial, attempt)
   // keys from both runs so v12-only and v13-only rows both surface —
   // otherwise a v13 that aborts early hides how many trials v12
-  // completed alone, misleadingly favoring v13's coverage.
+  // completed alone, misleadingly favoring v13's coverage. Single
+  // pass populates both the win/loss counters AND the divergence
+  // list (previously two independent loops over the same data).
   const keyA = new Map(rowsA.map((r) => [`${r.trial}.${r.attempt}`, r] as const));
   const keyB = new Map(rowsB.map((r) => [`${r.trial}.${r.attempt}`, r] as const));
   const allKeys = new Set<string>([...keyA.keys(), ...keyB.keys()]);
+  const DIVERGENCE_PX = 15;
   let v12Better = 0, tied = 0, v13Better = 0, onlyV12 = 0, onlyV13 = 0, bothNull = 0;
+  const divergences: { trial: number; attempt: number; v12: number; v13: number; v12Frame: string; v13Frame: string }[] = [];
   for (const k of allKeys) {
     const rA = keyA.get(k);
     const rB = keyB.get(k);
     const a12 = rA ? num(rA.detector_minus_ipad) : null;
     const a13 = rB ? num(rB.detector_minus_ipad) : null;
-    if (a12 !== null && a13 === null) { onlyV12++; continue; }
-    if (a12 === null && a13 !== null) { onlyV13++; continue; }
     if (a12 === null && a13 === null) { bothNull++; continue; }
-    // both non-null
-    if (Math.abs(a12! - a13!) < 0.5) tied++;
-    else if (a13! < a12!) v13Better++;
+    if (a13 === null) { onlyV12++; continue; }
+    if (a12 === null) { onlyV13++; continue; }
+    // Both non-null — TS narrows a12/a13 to number after the guards.
+    const delta = a13 - a12;
+    if (Math.abs(delta) < 0.5) tied++;
+    else if (delta < 0) v13Better++;
     else v12Better++;
+    if (Math.abs(delta) >= DIVERGENCE_PX && rA && rB) {
+      divergences.push({ trial: rA.trial, attempt: rA.attempt, v12: a12, v13: a13, v12Frame: rA.frame, v13Frame: rB.frame });
+    }
   }
   console.log(`\n=== paired by (trial, attempt) ===`);
   console.log(
@@ -141,21 +150,7 @@ async function main(): Promise<void> {
       `one run aborted early or dropped rows. Compare arm sizes before trusting the paired verdict.`,
     );
   }
-
-  // Divergence frames: paired rows where detector_minus_ipad differs by ≥15 px.
-  // These deserve visual audit.
-  const divergences: { trial: number; attempt: number; v12: number; v13: number; v12Frame: string; v13Frame: string }[] = [];
-  for (const rB of rowsB) {
-    const rA = keyA.get(`${rB.trial}.${rB.attempt}`);
-    if (!rA) continue;
-    const a12 = num(rA.detector_minus_ipad);
-    const a13 = num(rB.detector_minus_ipad);
-    if (a12 === null || a13 === null) continue;
-    if (Math.abs(a12 - a13) >= 15) {
-      divergences.push({ trial: rB.trial, attempt: rB.attempt, v12: a12, v13: a13, v12Frame: rA.frame, v13Frame: rB.frame });
-    }
-  }
-  console.log(`\n=== divergences (|v12_det_vs_ipad − v13_det_vs_ipad| ≥ 15 px) ===`);
+  console.log(`\n=== divergences (|v12_det_vs_ipad − v13_det_vs_ipad| ≥ ${DIVERGENCE_PX} px) ===`);
   for (const d of divergences) {
     console.log(`  trial ${d.trial} a${d.attempt}: v12=${d.v12.toFixed(1)} v13=${d.v13.toFixed(1)}  Δ=${(d.v13 - d.v12).toFixed(1)}`);
     console.log(`    v12 ${a}/${d.v12Frame}`);

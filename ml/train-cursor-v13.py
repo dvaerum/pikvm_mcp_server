@@ -24,6 +24,7 @@ Output: ml/cursor-v13.pt + ml/cursor-v13.onnx + the two eval manifests.
 """
 import hashlib
 import json
+import os
 import random
 from pathlib import Path
 
@@ -66,7 +67,6 @@ HEATMAP_W, HEATMAP_H = INPUT_W // 4, INPUT_H // 4
 GAUSSIAN_SIGMA = 4.0
 BATCH_SIZE = 16
 LR = 1e-3
-import os
 EPOCHS = int(os.environ.get("V13_EPOCHS", "40"))
 SEED = 1337
 
@@ -239,41 +239,51 @@ def decode_heatmap_peak(heatmap_logits):
 
 
 def eval_split(model, loader):
-    """Returns (median_dist_input_px, det_rate, fp_rate, n_pos, n_neg)."""
-    pos_dists, pos_pres, neg_pres = [], [], []
+    """Returns (median_dist_input_px, det_rate, fp_rate, n_pos, n_neg).
+
+    Vectorized across each batch — no per-sample Python loop or
+    intermediate .item() sync. Prior version forced a GPU→CPU sync
+    per sample × 5000 synth-val frames × 40 epochs = 200 k syncs.
+    """
+    pos_dists_all: list[float] = []
+    pos_pres_all: list[float] = []
+    neg_pres_all: list[float] = []
     model.eval()
     with torch.no_grad():
         for img, heatmap, presence in loader:
-            img = img.to(DEVICE)
-            heatmap = heatmap.to(DEVICE)
+            img = img.to(DEVICE, non_blocking=True)
+            heatmap = heatmap.to(DEVICE, non_blocking=True)
+            presence = presence.to(DEVICE, non_blocking=True)
             pred_heatmap, pred_presence = model(img)
-            pred_presence_prob = torch.sigmoid(pred_presence.view(-1)).cpu()
+            pred_presence_prob = torch.sigmoid(pred_presence.view(-1))
             pred_x, pred_y, _ = decode_heatmap_peak(pred_heatmap)
-            tgt_x_hm = torch.zeros(img.size(0), device=DEVICE)
-            tgt_y_hm = torch.zeros(img.size(0), device=DEVICE)
-            for i in range(img.size(0)):
-                hm_i = heatmap[i, 0]
-                flat_i = hm_i.view(-1)
-                if flat_i.max() > 0.1:
-                    idx = flat_i.argmax()
-                    ty = (idx // HEATMAP_W).float()
-                    tx = (idx % HEATMAP_W).float()
-                    tgt_x_hm[i] = tx * (INPUT_W / HEATMAP_W)
-                    tgt_y_hm[i] = ty * (INPUT_H / HEATMAP_H)
-            for i in range(img.size(0)):
-                if presence[i].item() > 0.5:
-                    dist = float(torch.sqrt(
-                        (pred_x[i] - tgt_x_hm[i]) ** 2 +
-                        (pred_y[i] - tgt_y_hm[i]) ** 2
-                    ))
-                    pos_dists.append(dist)
-                    pos_pres.append(pred_presence_prob[i].item())
+
+            # Target heatmap argmax → (tx, ty) in input-px, batched.
+            # heatmap shape is [B, 1, H, W]; flatten spatial dims.
+            hm_flat = heatmap.view(heatmap.size(0), -1)
+            hm_max, hm_argmax = hm_flat.max(dim=1)
+            ty = (hm_argmax // HEATMAP_W).float() * (INPUT_H / HEATMAP_H)
+            tx = (hm_argmax % HEATMAP_W).float() * (INPUT_W / HEATMAP_W)
+            # Peak <=0.1 → the target-heatmap was masked to zero (absent
+            # frame); still compute (tx,ty) but the presence gate below
+            # routes that sample into the neg bucket regardless.
+
+            dist = torch.sqrt((pred_x - tx) ** 2 + (pred_y - ty) ** 2)
+            is_pos = presence > 0.5
+            # Single .cpu() sync per batch instead of one per sample.
+            pos_mask = is_pos.cpu()
+            dist_cpu = dist.cpu()
+            pres_cpu = pred_presence_prob.cpu()
+            for i in range(pos_mask.size(0)):
+                if pos_mask[i]:
+                    pos_dists_all.append(float(dist_cpu[i]))
+                    pos_pres_all.append(float(pres_cpu[i]))
                 else:
-                    neg_pres.append(pred_presence_prob[i].item())
-    med = float(np.median(pos_dists)) if pos_dists else float("nan")
-    det = (sum(1 for p in pos_pres if p > 0.5) / len(pos_pres)) if pos_pres else 0.0
-    fp = (sum(1 for p in neg_pres if p > 0.5) / len(neg_pres)) if neg_pres else 0.0
-    return med, det, fp, len(pos_pres), len(neg_pres)
+                    neg_pres_all.append(float(pres_cpu[i]))
+    med = float(np.median(pos_dists_all)) if pos_dists_all else float("nan")
+    det = (sum(1 for p in pos_pres_all if p > 0.5) / len(pos_pres_all)) if pos_pres_all else 0.0
+    fp = (sum(1 for p in neg_pres_all if p > 0.5) / len(neg_pres_all)) if neg_pres_all else 0.0
+    return med, det, fp, len(pos_pres_all), len(neg_pres_all)
 
 
 def main():
@@ -352,7 +362,9 @@ def main():
             pred_heatmap, pred_presence = model(img)
 
             pos_pixels = (heatmap >= 0.1).float().sum().clamp(min=1)
-            neg_pixels = (heatmap < 0.1).float().sum()
+            # neg = total − pos avoids a second full reduction over the
+            # heatmap tensor per batch (same result mathematically).
+            neg_pixels = heatmap.numel() - pos_pixels
             pos_weight = neg_pixels / pos_pixels
             pos_loss_per_sample = F.binary_cross_entropy_with_logits(
                 pred_heatmap, heatmap, pos_weight=pos_weight, reduction="none"

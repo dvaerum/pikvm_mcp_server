@@ -31,16 +31,9 @@ export interface CursorPos {
   y: number;
   /** App-side wall-clock (ms since epoch). */
   t_ipad: number;
-  /**
-   * Explicit "the app's PointerTracker has seen ≥1 hover event and
-   * these coords are real" flag. When `false`, x/y are 0/0 sentinels
-   * — treat as no data.
-   *
-   * `undefined` means a legacy iPadCollector (pre-2026-06-18 build)
-   * that doesn't emit the field; callers that need to distinguish
-   * "cursor at logical (0,0)" from "pointer never fired" must fall
-   * back to the (0,0) heuristic OR require a rebuilt binary.
-   */
+  /** True when PointerTracker has fired ≥1 hover; false = x/y are 0/0
+   *  sentinels. `undefined` on pre-2026-06-18 clients — callers should
+   *  use IpadSession.getTrackedCursor() which absorbs the legacy fallback. */
   tracked?: boolean;
 }
 
@@ -276,6 +269,47 @@ export class IpadSession {
 
   async getCursor(): Promise<CursorPos> {
     return await this.request<CursorPos>('get-cursor', {});
+  }
+
+  /**
+   * getCursor + "is this reading real" decision folded into one call.
+   * Returns null when the app reports `tracked: false` (post-2026-06-18
+   * builds), or when a legacy binary returns the (0,0) sentinel. Every
+   * bench that needs iPadCollector ground truth should call this
+   * instead of re-deriving the legacy-vs-modern rule.
+   */
+  async getTrackedCursor(): Promise<CursorPos | null> {
+    const cur = await this.getCursor();
+    if (cur.tracked === false) return null;
+    if (cur.tracked === undefined && cur.x === 0 && cur.y === 0) return null;
+    return cur;
+  }
+
+  /**
+   * Wait for iPadCollector's PointerTracker to see a hover event.
+   * Fresh app launches don't fire `.onContinuousHover` until the
+   * cursor first enters the SceneRendererView; benches that need
+   * a live ground-truth pointer must nudge until getTrackedCursor()
+   * returns non-null. Returns true on success, false after attempts
+   * exhausted.
+   *
+   * `nudge` receives the attempt index (0..attempts-1) and is
+   * responsible for the HID emit + settle delay for that wake pass.
+   * Kept as a callback so the caller owns the PiKVM client + timing
+   * heuristics without this module having to import client.ts.
+   */
+  async awaitPointerAlive(
+    nudge: (attempt: number) => Promise<void>,
+    attempts = 8,
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      await nudge(attempt);
+      try {
+        const cur = await this.getTrackedCursor();
+        if (cur !== null) return true;
+      } catch { /* keep trying */ }
+    }
+    return false;
   }
 
   async subscribeCursor(): Promise<void> {

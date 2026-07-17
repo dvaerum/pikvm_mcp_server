@@ -77,15 +77,10 @@ let v5LoadFailureLogged = false;
 // Falls back to v11 → v9-bordered → v8 if v12 isn't present. Env var
 // still overrides for diagnostic / A-B testing.
 //
-// 2026-06-04 (v13): trained on v12 corpus + 100 on-icon-2026-06-03
-// frames (4.1' targeted Books-icon corpus). Offline head-to-head on
-// 34 held-out on-icon frames: p50 8.2 → 4.7, max 22.8 → 16.6, zero
-// >35 px residuals from either model. v13 is uniformly ~3 px tighter
-// on the cursor-on-icon distribution. **Explicit opt-in only** via
-// PIKVM_ML_V8_MODEL=ml/cursor-v13.onnx for the 4.3' live A/B — v13
-// is deliberately NOT in the auto-load candidate list so it can
-// never silently promote to production if cursor-v12.onnx goes
-// missing (that would defeat the A/B protocol).
+// 2026-06-04 (v13): deliberately NOT in the auto-load candidate list.
+// Opt in for the 4.3' live A/B via PIKVM_ML_V8_MODEL=ml/cursor-v13.onnx.
+// Full offline eval (p50 8.2→4.7 vs v12 on 34 held-out on-icon frames):
+// docs/roadmap-2026-05-31.md § 4.2'.
 const V8_MODEL = (() => {
   if (process.env.PIKVM_ML_V8_MODEL) return path.resolve(process.env.PIKVM_ML_V8_MODEL);
   const candidates = [

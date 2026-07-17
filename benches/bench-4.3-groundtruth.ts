@@ -83,13 +83,39 @@ const TARGETS_HDMI: Record<string, { x: number; y: number }> = {
 
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 
+type XY = { x: number; y: number };
+const distTo = (a: XY | null, b: XY): number =>
+  a ? Math.hypot(a.x - b.x, a.y - b.y) : Number.NaN;
+const nf = (n: number, digits = 1, fallback = 'NA'): string =>
+  Number.isFinite(n) ? n.toFixed(digits) : fallback;
+
+/**
+ * Slam toward top-left (clears any residual displacement), then nudge
+ * toward iPad center so subsequent hover events land inside the
+ * SceneRendererView. Bench uses this both to wake the pointer
+ * initially and to reset cursor state between trials.
+ */
+async function slamThenCenter(client: PiKVMClient): Promise<void> {
+  for (let s = 0; s < 4; s++) await client.mouseMoveRelative(-2000, -2000);
+  await sleep(200);
+  await client.mouseMoveRelative(800, 1000);  // toward iPad center
+  await sleep(300);
+}
+
 function relaunchIpadApp(): void {
   try {
     execSync(
       `xcrun devicectl device process launch --terminate-existing --device ${IPAD_DEVICE_ID} ${IPAD_BUNDLE_ID}`,
       { stdio: 'pipe' },
     );
-  } catch { /* best effort */ }
+  } catch (e) {
+    // Log but don't throw — waitForSession's own 30 s timeout produces
+    // the actionable error. Logging here surfaces devicectl-specific
+    // failures (missing device, wrong bundle id) 30 s earlier during
+    // debugging, so the operator isn't guessing between "iPad asleep"
+    // and "xcrun setup broken".
+    console.error(`[4.3] relaunchIpadApp: xcrun devicectl failed — ${(e as Error).message.slice(0, 200)}`);
+  }
 }
 
 async function waitForSession(
@@ -209,27 +235,16 @@ async function main(): Promise<void> {
 
   // Wake the pointer system: iPadCollector.PointerTracker doesn't
   // fire until .onContinuousHover sees a real event. Slam-then-wiggle
-  // until getCursor reports tracked=true (or a non-(0,0) reading on
-  // legacy binaries without the `tracked` field).
+  // via sess.awaitPointerAlive() — the tracked-vs-legacy logic lives
+  // on IpadSession, not per-bench.
   console.error('[4.3] waking pointer…');
-  for (let s = 0; s < 4; s++) await client.mouseMoveRelative(-2000, -2000);
-  await sleep(200);
-  await client.mouseMoveRelative(800, 1000);  // toward iPad center
-  await sleep(300);
-  let pointerAlive = false;
-  for (let attempt = 0; attempt < 8 && !pointerAlive; attempt++) {
+  await slamThenCenter(client);
+  const pointerAlive = await sess.awaitPointerAlive(async () => {
     await client.mouseMoveRelative(50, 50);
     await sleep(80);
     await client.mouseMoveRelative(-50, -50);
     await sleep(200);
-    try {
-      const probe = await sess.getCursor();
-      if (probe.tracked === true) pointerAlive = true;
-      else if (probe.tracked === undefined && (probe.x !== 0 || probe.y !== 0)) {
-        pointerAlive = true;  // legacy binary fallback
-      }
-    } catch { /* keep trying */ }
-  }
+  });
   // Fail hard rather than run a full bench that silently produces
   // null/skipped ipad_xy rows — the entire ground-truth A/B is
   // worthless without a live pointer.
@@ -273,12 +288,9 @@ async function main(): Promise<void> {
     await fs.mkdir(trialDir, { recursive: true });
     console.error(`=== trial ${trial}/${args.trials} ===`);
 
-    // Reset cursor to a known corner so attempts start from similar
-    // initial state across trials (matches the 1.13 pattern).
-    for (let s = 0; s < 4; s++) await client.mouseMoveRelative(-2000, -2000);
-    await sleep(200);
-    await client.mouseMoveRelative(800, 1000);
-    await sleep(300);
+    // Reset cursor to a known corner + toward-center nudge so trials
+    // start from similar initial state (matches the 1.13 pattern).
+    await slamThenCenter(client);
 
     const startShot = await client.screenshot({ quality: 75 });
     await fs.writeFile(path.join(trialDir, '00-start.jpg'), startShot.buffer);
@@ -303,39 +315,27 @@ async function main(): Promise<void> {
       // them if there's a settle delay, but we're well under the iPad
       // pointer fade window).
       const shot = await client.screenshot({ quality: 75 });
-      let ipadHdmi: { x: number; y: number } | null = null;
+      let ipadHdmi: XY | null = null;
       try {
-        const cur = await sess.getCursor();
-        // Trust the explicit `tracked` field when the app sends it
-        // (post-2026-06-18 rebuild). On legacy binaries `tracked` is
-        // undefined; fall back to the (0,0)=not-tracked heuristic —
-        // acknowledged to drop legitimate top-left cursor positions
-        // but far less noisy than trusting the sentinel as data.
-        const isValid = cur.tracked === true
-          || (cur.tracked === undefined && (cur.x !== 0 || cur.y !== 0));
-        if (isValid) {
-          ipadHdmi = ipadToHdmi(cur.x, cur.y);
-        }
+        const cur = await sess.getTrackedCursor();
+        if (cur !== null) ipadHdmi = ipadToHdmi(cur.x, cur.y);
       } catch (e) {
         // iPadCollector unresponsive — record null, keep going.
         console.error(`  a${attempt}: getCursor failed: ${(e as Error).message.slice(0, 80)}`);
       }
 
-      const residDet = detected
-        ? Math.hypot(detected.x - TARGET.x, detected.y - TARGET.y)
-        : Number.NaN;
-      const residIpad = ipadHdmi
-        ? Math.hypot(ipadHdmi.x - TARGET.x, ipadHdmi.y - TARGET.y)
-        : Number.NaN;
-      const detVsIpad = detected && ipadHdmi
-        ? Math.hypot(detected.x - ipadHdmi.x, detected.y - ipadHdmi.y)
-        : Number.NaN;
+      const residDet = distTo(detected, TARGET);
+      const residIpad = distTo(ipadHdmi, TARGET);
+      const detVsIpad = detected && ipadHdmi ? distTo(detected, ipadHdmi) : Number.NaN;
 
-      const frameName =
-        `a${attempt}-det${detected ? `_${detected.x},${detected.y}` : '_null'}` +
-        `-ipad${ipadHdmi ? `_${Math.round(ipadHdmi.x)},${Math.round(ipadHdmi.y)}` : '_null'}` +
-        `-resD${Number.isFinite(residDet) ? residDet.toFixed(0) : 'NA'}` +
-        `-resI${Number.isFinite(residIpad) ? residIpad.toFixed(0) : 'NA'}.jpg`;
+      const detPart = detected ? `_${detected.x},${detected.y}` : '_null';
+      const ipadPart = ipadHdmi ? `_${Math.round(ipadHdmi.x)},${Math.round(ipadHdmi.y)}` : '_null';
+      const frameName = [
+        `a${attempt}-det${detPart}`,
+        `ipad${ipadPart}`,
+        `resD${nf(residDet, 0)}`,
+        `resI${nf(residIpad, 0)}`,
+      ].join('-') + '.jpg';
       await fs.writeFile(path.join(trialDir, frameName), shot.buffer);
 
       await fs.appendFile(
@@ -345,9 +345,9 @@ async function main(): Promise<void> {
           detected?.x ?? '', detected?.y ?? '',
           ipadHdmi ? Math.round(ipadHdmi.x * 10) / 10 : '',
           ipadHdmi ? Math.round(ipadHdmi.y * 10) / 10 : '',
-          Number.isFinite(residDet) ? residDet.toFixed(1) : '',
-          Number.isFinite(residIpad) ? residIpad.toFixed(1) : '',
-          Number.isFinite(detVsIpad) ? detVsIpad.toFixed(1) : '',
+          nf(residDet, 1, ''),
+          nf(residIpad, 1, ''),
+          nf(detVsIpad, 1, ''),
           `trial-${String(trial).padStart(2, '0')}/${frameName}`,
         ].join('\t') + '\n',
       );
@@ -355,13 +355,11 @@ async function main(): Promise<void> {
       if (errMsg) {
         console.error(`  a${attempt}: moveToPixel THREW — ${errMsg.slice(0, 80)}`);
       } else {
+        const detStr = detected ? `(${detected.x},${detected.y})` : 'null';
+        const ipadStr = ipadHdmi ? `(${Math.round(ipadHdmi.x)},${Math.round(ipadHdmi.y)})` : 'null';
         console.error(
-          `  a${attempt}: ` +
-          `det=${detected ? `(${detected.x},${detected.y})` : 'null'} ` +
-          `ipad=${ipadHdmi ? `(${Math.round(ipadHdmi.x)},${Math.round(ipadHdmi.y)})` : 'null'} ` +
-          `resD=${Number.isFinite(residDet) ? residDet.toFixed(1) : 'NA'} ` +
-          `resI=${Number.isFinite(residIpad) ? residIpad.toFixed(1) : 'NA'} ` +
-          `detVsIpad=${Number.isFinite(detVsIpad) ? detVsIpad.toFixed(1) : 'NA'}px`,
+          `  a${attempt}: det=${detStr} ipad=${ipadStr} ` +
+          `resD=${nf(residDet)} resI=${nf(residIpad)} detVsIpad=${nf(detVsIpad)}px`,
         );
       }
     }

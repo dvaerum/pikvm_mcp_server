@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torchvision import transforms
-from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
+from torchvision.models import mobilenet_v3_small
 from PIL import Image
 
 ROOT = Path(__file__).parent.parent
@@ -55,12 +55,13 @@ print(f"device: {DEVICE}")
 
 class CursorFullFrameNet(nn.Module):
     """Identical to train-cursor-v12.py / train-cursor-v13.py — both
-    checkpoints serialize this exact architecture."""
+    checkpoints serialize this exact architecture. weights=None
+    because every param is overwritten by load_state_dict below;
+    downloading ImageNet weights just to discard them wastes ~20 MB
+    of network/disk per invocation."""
     def __init__(self):
         super().__init__()
-        backbone = mobilenet_v3_small(
-            weights=MobileNet_V3_Small_Weights.IMAGENET1K_V1
-        )
+        backbone = mobilenet_v3_small(weights=None)
         self.backbone = backbone.features
         self.up1 = nn.Sequential(
             nn.ConvTranspose2d(576, 128, 4, 2, 1), nn.ReLU(inplace=True)
@@ -182,56 +183,51 @@ def main():
         "both_abstain": [],       # both < threshold
     }
 
+    # (v12_emits, v13_emits) → bucket for the both-emit-and-far case
+    # is picked separately below; this table only covers the routes
+    # where at least one model would abstain in production.
+    ABSTAIN_ROUTE = {
+        (False, False): "both_abstain",
+        (False, True):  "v12_abstain",
+        (True,  False): "v13_abstain",
+    }
+
     for r in rows:
-        path = r["abs_frame_path"]
         gt = r["cursor"]
         if not gt.get("visible"):
-            # the on-icon manifest is all-positive, but be defensive
-            continue
+            continue  # on-icon manifest is all-positive; defensive
         gt_x, gt_y = gt["x"], gt["y"]
-        img_t, W, H = preprocess(path)
+        img_t, W, H = preprocess(r["abs_frame_path"])
         v12_x, v12_y, v12_pres = predict_native_xy(v12, img_t, W, H)
         v13_x, v13_y, v13_pres = predict_native_xy(v13, img_t, W, H)
+        # Compute distances once; per-frame row always reports them
+        # regardless of routing.
+        v12_d = float(np.hypot(v12_x - gt_x, v12_y - gt_y))
+        v13_d = float(np.hypot(v13_x - gt_x, v13_y - gt_y))
         v12_emits = v12_pres >= PRESENCE_THRESHOLD
         v13_emits = v13_pres >= PRESENCE_THRESHOLD
 
-        # Route abstentions into their own buckets so the distance
-        # buckets only compare frames where BOTH models would emit
-        # in production.
-        if not v12_emits and not v13_emits:
-            buckets["both_abstain"].append(r["frame_id"])
-        elif not v12_emits:
-            buckets["v12_abstain"].append(r["frame_id"])
-        elif not v13_emits:
-            buckets["v13_abstain"].append(r["frame_id"])
+        if not (v12_emits and v13_emits):
+            row_bucket = ABSTAIN_ROUTE[(v12_emits, v13_emits)]
         else:
-            v12_d = float(np.hypot(v12_x - gt_x, v12_y - gt_y))
-            v13_d = float(np.hypot(v13_x - gt_x, v13_y - gt_y))
             v12_dists.append(v12_d)
             v13_dists.append(v13_d)
-            if v12_d < HALLUCINATION_THRESHOLD_PX and v13_d < HALLUCINATION_THRESHOLD_PX:
-                bucket = "both_correct"
-            elif v12_d >= HALLUCINATION_THRESHOLD_PX and v13_d < HALLUCINATION_THRESHOLD_PX:
-                bucket = "v13_fixed_hallu"
-            elif v12_d < HALLUCINATION_THRESHOLD_PX and v13_d >= HALLUCINATION_THRESHOLD_PX:
-                bucket = "v13_regressed"
-            else:
-                bucket = "both_hallucinate"
-        # Per-frame row — always emitted, with bucket describing what
-        # happened (distance-bucket for both-emit; *_abstain otherwise).
-        row_bucket = (
-            "both_abstain" if (not v12_emits and not v13_emits)
-            else "v12_abstain" if not v12_emits
-            else "v13_abstain" if not v13_emits
-            else bucket
-        )
+            v12_hallu = v12_d >= HALLUCINATION_THRESHOLD_PX
+            v13_hallu = v13_d >= HALLUCINATION_THRESHOLD_PX
+            row_bucket = (
+                "both_correct"    if not v12_hallu and not v13_hallu else
+                "v13_fixed_hallu" if v12_hallu     and not v13_hallu else
+                "v13_regressed"   if not v12_hallu and v13_hallu     else
+                "both_hallucinate"
+            )
+        buckets[row_bucket].append(r["frame_id"])
         out.append({
             "frame_id": r["frame_id"],
             "gt": [gt_x, gt_y],
             "v12_xy": [round(v12_x, 1), round(v12_y, 1)],
             "v13_xy": [round(v13_x, 1), round(v13_y, 1)],
-            "v12_dist": round(float(np.hypot(v12_x - gt_x, v12_y - gt_y)), 1),
-            "v13_dist": round(float(np.hypot(v13_x - gt_x, v13_y - gt_y)), 1),
+            "v12_dist": round(v12_d, 1),
+            "v13_dist": round(v13_d, 1),
             "v12_pres": round(v12_pres, 3),
             "v13_pres": round(v13_pres, 3),
             "v12_emits": v12_emits,
