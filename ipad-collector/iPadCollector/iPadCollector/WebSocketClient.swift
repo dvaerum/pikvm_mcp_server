@@ -209,9 +209,16 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func ackCursor(refId: String?) {
+        // 2026-06-18: emit an explicit `tracked` boolean so the Node
+        // side can distinguish "pointer has never fired hover events"
+        // from "cursor is legitimately at logical (0,0)". Legacy
+        // clients that read the payload without `tracked` fall back
+        // to the old (0,0)=not-tracked heuristic — pin the fix by
+        // rebuilding this app.
         let s = pointer.last
         var payload: [String: Any] = [
-            "t_ipad": Date().timeIntervalSince1970 * 1000.0
+            "t_ipad": Date().timeIntervalSince1970 * 1000.0,
+            "tracked": s != nil,
         ]
         if let s {
             payload["x"] = s.x

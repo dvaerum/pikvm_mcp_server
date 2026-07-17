@@ -31,6 +31,17 @@ export interface CursorPos {
   y: number;
   /** App-side wall-clock (ms since epoch). */
   t_ipad: number;
+  /**
+   * Explicit "the app's PointerTracker has seen ≥1 hover event and
+   * these coords are real" flag. When `false`, x/y are 0/0 sentinels
+   * — treat as no data.
+   *
+   * `undefined` means a legacy iPadCollector (pre-2026-06-18 build)
+   * that doesn't emit the field; callers that need to distinguish
+   * "cursor at logical (0,0)" from "pointer never fired" must fall
+   * back to the (0,0) heuristic OR require a rebuilt binary.
+   */
+  tracked?: boolean;
 }
 
 export interface CursorEvent extends CursorPos {

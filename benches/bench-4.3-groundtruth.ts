@@ -186,12 +186,20 @@ async function main(): Promise<void> {
   // silent — the bench falls back to old behavior (stale getCursor).
   let lifecycleAbort: string | null = null;
   let lastGoodTrial = 0;
-  sess.onLifecycle = (ev) => {
-    if (ev.state === 'background' && lifecycleAbort === null) {
-      lifecycleAbort = ev.state;
-      console.error(`[4.3] ABORT: iPadCollector backgrounded (state=${ev.state}) — last good trial=${lastGoodTrial}`);
-    }
+  const setAbort = (state: string): void => {
+    if (lifecycleAbort !== null) return;
+    lifecycleAbort = state;
+    console.error(`[4.3] ABORT: iPadCollector backgrounded (state=${state}) — last good trial=${lastGoodTrial}`);
   };
+  sess.onLifecycle = (ev) => {
+    if (ev.state === 'background') setAbort(ev.state);
+  };
+  // Race guard: a 'background' event that arrived between the WS
+  // handshake and this handler registration would have set
+  // sess.currentLifecycle but fired no callback. Sweep it now so a
+  // background-at-launch aborts the run immediately instead of
+  // silently producing 20 trials of stale data.
+  if (sess.currentLifecycle === 'background') setAbort(sess.currentLifecycle);
 
   // iPad-logical → HDMI px transform (same as bench-collect-on-icon).
   const ipadToHdmi = (x: number, y: number) => ({
@@ -201,7 +209,8 @@ async function main(): Promise<void> {
 
   // Wake the pointer system: iPadCollector.PointerTracker doesn't
   // fire until .onContinuousHover sees a real event. Slam-then-wiggle
-  // until getCursor returns non-zero (same pattern as bench-collect-on-icon).
+  // until getCursor reports tracked=true (or a non-(0,0) reading on
+  // legacy binaries without the `tracked` field).
   console.error('[4.3] waking pointer…');
   for (let s = 0; s < 4; s++) await client.mouseMoveRelative(-2000, -2000);
   await sleep(200);
@@ -215,10 +224,24 @@ async function main(): Promise<void> {
     await sleep(200);
     try {
       const probe = await sess.getCursor();
-      if (probe.x !== 0 || probe.y !== 0) pointerAlive = true;
+      if (probe.tracked === true) pointerAlive = true;
+      else if (probe.tracked === undefined && (probe.x !== 0 || probe.y !== 0)) {
+        pointerAlive = true;  // legacy binary fallback
+      }
     } catch { /* keep trying */ }
   }
-  if (!pointerAlive) console.error('[4.3] WARNING: pointer never woke; ipad_xy may be 0/0');
+  // Fail hard rather than run a full bench that silently produces
+  // null/skipped ipad_xy rows — the entire ground-truth A/B is
+  // worthless without a live pointer.
+  if (!pointerAlive) {
+    await closeServer().catch(() => undefined);
+    throw new Error(
+      'iPadCollector connected but its PointerTracker never fired hover events after ' +
+      '8 wake attempts. Check that iPadCollector is foreground + covers the iPad screen ' +
+      '(TapCaptureView above SceneRendererView routes UIHoverGestureRecognizer to the tracker). ' +
+      'Running the bench in this state would produce a full run of empty ipad_x/ipad_y rows.',
+    );
+  }
 
   // Output dir.
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
@@ -283,7 +306,14 @@ async function main(): Promise<void> {
       let ipadHdmi: { x: number; y: number } | null = null;
       try {
         const cur = await sess.getCursor();
-        if (cur.x !== 0 || cur.y !== 0) {
+        // Trust the explicit `tracked` field when the app sends it
+        // (post-2026-06-18 rebuild). On legacy binaries `tracked` is
+        // undefined; fall back to the (0,0)=not-tracked heuristic —
+        // acknowledged to drop legitimate top-left cursor positions
+        // but far less noisy than trusting the sentinel as data.
+        const isValid = cur.tracked === true
+          || (cur.tracked === undefined && (cur.x !== 0 || cur.y !== 0));
+        if (isValid) {
           ipadHdmi = ipadToHdmi(cur.x, cur.y);
         }
       } catch (e) {
