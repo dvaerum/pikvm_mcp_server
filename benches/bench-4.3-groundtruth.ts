@@ -52,16 +52,25 @@ interface Args {
 }
 
 function parseArgs(): Args {
-  const args = process.argv.slice(2);
+  const argv = process.argv.slice(2);
   const get = (flag: string, fallback: string): string => {
-    const i = args.indexOf(flag);
-    return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
+    const i = argv.indexOf(flag);
+    return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
+  };
+  const parsePositiveInt = (flag: string, fallback: string): number => {
+    const raw = get(flag, fallback);
+    const n = Number(raw);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+      console.error(`FATAL: ${flag} must be a positive integer, got '${raw}'`);
+      process.exit(2);
+    }
+    return n;
   };
   return {
     label: get('--label', 'unlabeled'),
-    trials: Number(get('--trials', '20')),
+    trials: parsePositiveInt('--trials', '20'),
     target: get('--target', 'Books'),
-    attempts: Number(get('--attempts', '4')),
+    attempts: parsePositiveInt('--attempts', '4'),
   };
 }
 
@@ -83,27 +92,60 @@ function relaunchIpadApp(): void {
   } catch { /* best effort */ }
 }
 
-async function waitForSession(): Promise<{ sess: IpadSession; closeServer: () => Promise<void> }> {
-  return new Promise((resolve) => {
+async function waitForSession(
+  timeoutMs = 30_000,
+): Promise<{ sess: IpadSession; closeServer: () => Promise<void> }> {
+  // Only the first inbound connection is captured — the bench assumes
+  // one iPadCollector session for the whole run. If iPadCollector
+  // reconnects mid-run (e.g. brief background cycle, Xcode double-
+  // launch), the second session is accepted by startIpadAppServer but
+  // ignored here; the caller will observe the original `sess` closing
+  // (getCursor throws 'WebSocket closed') and bail via lifecycleAbort
+  // or the outer error path. We deliberately do NOT rebind sess mid-
+  // run because the `sess.onLifecycle` handler binding would be lost.
+  let firstSession: IpadSession | null = null;
+  return new Promise<{ sess: IpadSession; closeServer: () => Promise<void> }>((resolve, reject) => {
     const stop = startIpadAppServer({
       port: PORT,
       onSession: async (sess) => {
+        if (firstSession) return;  // ignore reconnects
+        firstSession = sess;
         const startedAt = Date.now();
         while (!sess.hello && Date.now() - startedAt < 5000) await sleep(20);
         resolve({ sess, closeServer: async () => { (await stop).close(); } });
       },
     });
+    setTimeout(() => {
+      if (!firstSession) {
+        stop.then((s) => s.close()).catch(() => undefined);
+        reject(new Error(
+          `iPadCollector did not connect within ${timeoutMs}ms. ` +
+          `Check: xcrun devicectl launch succeeded, iPad is awake+unlocked, ` +
+          `and the collectorURL in the app points at this Mac's ws://…:${PORT}.`,
+        ));
+      }
+    }, timeoutMs);
   });
 }
 
 async function main(): Promise<void> {
   const args = parseArgs();
-  if (!(args.target in TARGETS_HDMI)) {
+  // Use hasOwnProperty to reject inherited Object.prototype keys
+  // (--target toString / constructor / hasOwnProperty would otherwise
+  // pass `in` and spread into an object with undefined x/y, producing
+  // NaN residuals everywhere).
+  if (!Object.prototype.hasOwnProperty.call(TARGETS_HDMI, args.target)) {
     console.error(`unknown --target ${args.target}; choose: ${Object.keys(TARGETS_HDMI).join(', ')}`);
     process.exit(2);
   }
   const TARGET = { name: args.target, ...TARGETS_HDMI[args.target] };
-  const model = process.env.PIKVM_ML_V8_MODEL ?? '(auto)';
+  // Treat empty-string PIKVM_ML_V8_MODEL as unset, matching the
+  // falsy-check in cursor-ml-detect.ts:89 (which auto-loads v12 for
+  // empty string). Otherwise manifest.json records model='' while the
+  // actual detector under test is cursor-v12.onnx — the analyzer then
+  // attributes results to the wrong arm.
+  const envModel = process.env.PIKVM_ML_V8_MODEL?.trim();
+  const model = envModel ? envModel : '(auto)';
 
   killOrphansOnPort(PORT);
   const cfg = loadConfig();
@@ -293,13 +335,27 @@ async function main(): Promise<void> {
         );
       }
     }
-    lastGoodTrial = trial;
+    // Only advance lastGoodTrial when the attempt loop ran to completion.
+    // On lifecycleAbort the inner loop breaks mid-trial and the trial is
+    // incomplete — bumping lastGoodTrial here would contradict the ABORT
+    // log's "last good trial=N" and overstate coverage.
+    if (!lifecycleAbort) lastGoodTrial = trial;
   }
 
-  console.error(`\n[4.3] DONE label=${args.label}: ran ${lastGoodTrial}/${args.trials} trials`);
+  const aborted = lifecycleAbort !== null;
+  console.error(
+    `\n[4.3] ${aborted ? 'ABORTED' : 'DONE'} label=${args.label}: ` +
+    `ran ${lastGoodTrial}/${args.trials} trials` +
+    (aborted ? ` (reason: iPadCollector ${lifecycleAbort})` : ''),
+  );
   console.error(`Output: ${outDir}`);
-  closeServer().catch(() => undefined);
-  process.exit(0);
+  // await the close so the WS server flushes and releases port 8767
+  // before the next invocation — otherwise rapid back-to-back v12/v13
+  // runs can hit EADDRINUSE under the OS TIME_WAIT window.
+  try { await closeServer(); } catch { /* ignore */ }
+  // Non-zero exit on lifecycleAbort so a wrapper script running both
+  // arms can distinguish a partial run from a complete one.
+  process.exit(aborted ? 3 : 0);
 }
 
 main().catch((e) => { console.error(`FATAL: ${e}`); process.exit(2); });
