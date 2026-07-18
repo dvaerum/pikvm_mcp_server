@@ -5,7 +5,7 @@
  * All mouse operations use the REST API which is more reliable than WebSocket.
  */
 
-import { Agent, fetch } from 'undici';
+import { Agent, ProxyAgent, fetch, type Dispatcher } from 'undici';
 import sharp from 'sharp';
 import { recordEmit } from './cursor-keepalive.js';
 import { CursorBelief, type Bounds as BeliefBounds } from './cursor-belief.js';
@@ -16,6 +16,15 @@ export interface PiKVMConfig {
   password: string;
   verifySsl?: boolean;
   defaultKeymap?: string;
+  /** Optional HTTP CONNECT proxy for ALL outbound PiKVM requests, e.g.
+   *  `http://127.0.0.1:8888`. WHY: on macOS Local Network privacy blocks LAN
+   *  access for nix-built node, so the server (spawned under tmux/stdio) cannot
+   *  reach the PiKVM directly. Routing through a loopback proxy that runs in a
+   *  granted context (Terminal.app) sidesteps the block: the MCP→proxy hop is
+   *  loopback (never gated) and the proxy→PiKVM hop inherits the grant. The
+   *  proxy CONNECT-tunnels HTTPS, so the self-signed-cert handling stays on this
+   *  side (see requestTls below). Empty/unset = direct connection. */
+  proxyUrl?: string;
 }
 
 export interface TypeOptions {
@@ -82,7 +91,7 @@ export interface CalibrationResult {
 
 export class PiKVMClient {
   private config: Required<PiKVMConfig>;
-  private dispatcher: Agent;
+  private dispatcher: Dispatcher;
   private cachedResolution: ScreenResolution | null = null;
   private screenshotScale: {
     scaleX: number;
@@ -110,15 +119,28 @@ export class PiKVMClient {
     this.config = {
       verifySsl: false,
       defaultKeymap: 'en-us',
+      proxyUrl: '',
       ...config,
     };
 
-    // Create dispatcher with SSL configuration
-    this.dispatcher = new Agent({
-      connect: {
-        rejectUnauthorized: this.config.verifySsl,
-      },
-    });
+    // Create the dispatcher. When a proxy is configured, route everything
+    // through it via CONNECT tunnelling; otherwise connect directly. Either
+    // way the origin TLS keeps `rejectUnauthorized: verifySsl` so the PiKVM's
+    // self-signed cert is accepted (verifySsl defaults to false).
+    if (this.config.proxyUrl) {
+      this.dispatcher = new ProxyAgent({
+        uri: this.config.proxyUrl,
+        requestTls: {
+          rejectUnauthorized: this.config.verifySsl,
+        },
+      });
+    } else {
+      this.dispatcher = new Agent({
+        connect: {
+          rejectUnauthorized: this.config.verifySsl,
+        },
+      });
+    }
 
     this.belief = new CursorBelief({
       initialPosition: { x: 0, y: 0 },

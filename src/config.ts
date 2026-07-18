@@ -16,6 +16,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = resolve(__dirname, '..', '.env');
 loadEnv({ path: envPath, quiet: true, override: true });
 
+export type TransportKind = 'stdio' | 'http';
+
 export interface Config {
   pikvm: {
     host: string;
@@ -23,11 +25,40 @@ export interface Config {
     password: string;
     verifySsl: boolean;
     defaultKeymap: string;
+    proxyUrl: string;
   };
   calibration: {
     rounds: number;
     verifyRounds: number;
     moveDelayMs: number;
+  };
+  transport: {
+    kind: TransportKind;
+    /** TCP host to bind when kind === 'http'. Defaults to 127.0.0.1 (loopback
+     *  only) — loopback is exempt from macOS Local Network privacy, so a
+     *  loopback-bound server is reachable even from a caller whose LAN access
+     *  is otherwise blocked. Do NOT bind 0.0.0.0 without adding auth. */
+    httpHost: string;
+    /** TCP port to bind when kind === 'http'. */
+    httpPort: number;
+    /** Optional unix-socket path. When set (and kind === 'http'), the server
+     *  also listens on this socket in addition to the TCP port. */
+    httpSocketPath?: string;
+  };
+}
+
+/** Resolve the transport config from env/argv. `--http` on argv or
+ *  MCP_TRANSPORT=http selects the HTTP transport; otherwise stdio (the
+ *  backward-compatible default the MCP stdio launcher relies on). */
+function loadTransport(argv: string[]): Config['transport'] {
+  const wantHttp =
+    argv.includes('--http') ||
+    (process.env.MCP_TRANSPORT || '').toLowerCase() === 'http';
+  return {
+    kind: wantHttp ? 'http' : 'stdio',
+    httpHost: process.env.MCP_HTTP_HOST || '127.0.0.1',
+    httpPort: parseInt(process.env.MCP_HTTP_PORT || '8390', 10),
+    httpSocketPath: process.env.MCP_HTTP_SOCKET || undefined,
   };
 }
 
@@ -49,11 +80,22 @@ export function loadConfig(): Config {
       password,
       verifySsl: process.env.PIKVM_VERIFY_SSL === 'true',
       defaultKeymap: process.env.PIKVM_DEFAULT_KEYMAP || 'en-us',
+      // Route outbound PiKVM requests through a proxy when configured. Accept
+      // the dedicated PIKVM_PROXY or the conventional HTTPS_PROXY/ALL_PROXY so
+      // it can be set via .mcp.json `env` without touching the nix wrapper.
+      proxyUrl:
+        process.env.PIKVM_PROXY ||
+        process.env.HTTPS_PROXY ||
+        process.env.https_proxy ||
+        process.env.ALL_PROXY ||
+        process.env.all_proxy ||
+        '',
     },
     calibration: {
       rounds: parseInt(process.env.PIKVM_CALIBRATION_ROUNDS || '5', 10),
       verifyRounds: parseInt(process.env.PIKVM_CALIBRATION_VERIFY_ROUNDS || '5', 10),
       moveDelayMs: parseInt(process.env.PIKVM_CALIBRATION_MOVE_DELAY || '300', 10),
     },
+    transport: loadTransport(process.argv.slice(2)),
   };
 }

@@ -7,6 +7,7 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { startHttpServer } from './http-server.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -697,21 +698,29 @@ const tools: Tool[] = [
   ...skillTools,
 ];
 
-// Create MCP server
-const server = new Server(
-  {
-    name: 'pikvm-mcp-server',
-    version: VERSION,
-  },
-  {
-    capabilities: {
-      tools: {},
-      prompts: {},
+// Create MCP server.
+//
+// This is a factory (not a module-global singleton) so the Streamable HTTP
+// transport can mint a fresh Server per session — concurrent clients must not
+// share one Server or they collide on JSON-RPC request IDs. The stdio path
+// calls it exactly once. All heavy shared state (the PiKVMClient, the busy
+// lock, mouseAbsoluteMode) stays in module globals, so per-session Servers are
+// cheap wrappers over the same device connection.
+function createMcpServer(): Server {
+  const server = new Server(
+    {
+      name: 'pikvm-mcp-server',
+      version: VERSION,
     },
-  }
-);
+    {
+      capabilities: {
+        tools: {},
+        prompts: {},
+      },
+    }
+  );
 
-// Handle list prompts request
+  // Handle list prompts request
 server.setRequestHandler(ListPromptsRequestSchema, async () => {
   return {
     prompts: allPrompts.map((p) => ({
@@ -1659,7 +1668,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-});
+  });
+
+  return server;
+}
 
 // Start server
 async function main() {
@@ -1705,9 +1717,25 @@ async function main() {
     );
   }
 
+  if (config.transport.kind === 'http') {
+    await startHttpServer(createMcpServer, {
+      host: config.transport.httpHost,
+      port: config.transport.httpPort,
+      socketPath: config.transport.httpSocketPath,
+    });
+    console.error(
+      `PiKVM MCP Server running (Streamable HTTP). Connect Claude via ` +
+        `http://${config.transport.httpHost}:${config.transport.httpPort}/mcp — ` +
+        `loopback is exempt from macOS Local Network privacy, so this works even ` +
+        `from a tmux/stdio context that cannot reach the PiKVM LAN directly.`,
+    );
+    // The HTTP server keeps the event loop alive; nothing else to do here.
+    return;
+  }
+
   const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error('PiKVM MCP Server running');
+  await createMcpServer().connect(transport);
+  console.error('PiKVM MCP Server running (stdio)');
 }
 
 main().catch((error) => {

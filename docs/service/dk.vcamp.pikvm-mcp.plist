@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the PiKVM MCP HTTP service.
+
+  NOTE: a bare LaunchAgent does NOT clear macOS Local Network privacy on its
+  own (verified: the nix node it runs is silently denied LAN access, same as
+  tmux). Use this only AFTER the underlying grant is established via a granted
+  Terminal.app or an .app-bundle Login Item (see README.md, Options A/B).
+
+  Install:
+    cp docs/service/dk.vcamp.pikvm-mcp.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dk.vcamp.pikvm-mcp.plist
+  Uninstall:
+    launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/dk.vcamp.pikvm-mcp.plist
+
+  Edit the two paths below to match your checkout / node location.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dk.vcamp.pikvm-mcp</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/georg/pikvm_mcp_server/scripts/pikvm-mcp-serve.sh</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MCP_HTTP_HOST</key><string>127.0.0.1</string>
+    <key>MCP_HTTP_PORT</key><string>8390</string>
+    <key>PATH</key><string>/run/current-system/sw/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+
+  <key>StandardOutPath</key><string>/tmp/pikvm-mcp.out.log</string>
+  <key>StandardErrorPath</key><string>/tmp/pikvm-mcp.err.log</string>
+</dict>
+</plist>
