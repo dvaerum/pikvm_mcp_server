@@ -29,6 +29,10 @@ export interface HttpServerOptions {
   socketPath?: string;
   /** Path used for MCP requests. Default '/mcp'. */
   mcpPath?: string;
+  /** Evict a session whose last request is older than this (ms). Guards against
+   *  transports leaking when a client vanishes without a DELETE / onclose.
+   *  Default 30 min; set 0 to disable the sweep. */
+  idleTtlMs?: number;
 }
 
 /** Per-session transport registry, keyed by MCP session id. */
@@ -72,6 +76,10 @@ export async function startHttpServer(
 ): Promise<{ close: () => Promise<void> }> {
   const mcpPath = opts.mcpPath ?? '/mcp';
   const transports: SessionMap = new Map();
+  // Last-activity timestamp per session, so the sweep below can evict a
+  // transport whose client disappeared without ever firing onclose.
+  const lastSeen = new Map<string, number>();
+  const idleTtlMs = opts.idleTtlMs ?? 30 * 60_000;
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -95,6 +103,7 @@ export async function startHttpServer(
       // Reuse an existing session's transport when the client supplies its id.
       if (sessionId && transports.has(sessionId)) {
         const transport = transports.get(sessionId)!;
+        lastSeen.set(sessionId, Date.now());
         await transport.handleRequest(req, res, await readJsonBody(req));
         return;
       }
@@ -111,12 +120,14 @@ export async function startHttpServer(
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id) => {
             transports.set(id, transport);
+            lastSeen.set(id, Date.now());
             log(`session initialized: ${id} (active=${transports.size})`);
           },
         });
         transport.onclose = () => {
           if (transport.sessionId) {
             transports.delete(transport.sessionId);
+            lastSeen.delete(transport.sessionId);
             log(`session closed: ${transport.sessionId} (active=${transports.size})`);
           }
         };
@@ -130,7 +141,12 @@ export async function startHttpServer(
       sendJsonError(res, 400, 'Bad Request: unknown or missing mcp-session-id.');
     } catch (err) {
       log(`request error: ${(err as Error).message}`);
-      if (!res.headersSent) sendJsonError(res, 500, 'Internal server error.');
+      if (!res.headersSent) {
+        // A JSON.parse failure in readJsonBody is a malformed client body → 400,
+        // not an internal server fault.
+        const status = err instanceof SyntaxError ? 400 : 500;
+        sendJsonError(res, status, status === 400 ? 'Bad Request: malformed JSON body.' : 'Internal server error.');
+      }
     }
   };
 
@@ -163,7 +179,24 @@ export async function startHttpServer(
     log(`Streamable HTTP MCP also listening on unix:${opts.socketPath}${mcpPath}`);
   }
 
+  // Periodically evict idle sessions whose client vanished without a DELETE
+  // (which would otherwise leak the transport for the life of the process).
+  // unref() so this timer never keeps the process alive on its own.
+  const sweep =
+    idleTtlMs > 0
+      ? setInterval(() => {
+          const cutoff = Date.now() - idleTtlMs;
+          for (const [id, transport] of transports) {
+            if ((lastSeen.get(id) ?? 0) < cutoff) {
+              log(`session evicted (idle > ${idleTtlMs}ms): ${id}`);
+              transport.close().catch(() => {});
+            }
+          }
+        }, Math.min(idleTtlMs, 60_000)).unref()
+      : undefined;
+
   const close = async (): Promise<void> => {
+    if (sweep) clearInterval(sweep);
     for (const transport of transports.values()) {
       try {
         await transport.close();

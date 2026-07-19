@@ -90,7 +90,10 @@ async function listPikvmToolNameDesc(): Promise<Array<{ name: string; descriptio
     // a non-trivial body.
     let description = '';
     for (let j = i + 1; j <= i + 3 && j < lines.length; j++) {
-      const onLine = /['"`]([^'"`]+)['"`]/.exec(lines[j]);
+      // Greedy from the first quote to the LAST quote on the line, so a valid
+      // description containing embedded quotes (e.g. `'Quick "is the screen
+      // on?" check ...'`) isn't truncated at the first inner quote.
+      const onLine = /['"`](.+)['"`]/.exec(lines[j]);
       if (onLine) {
         description = onLine[1];
         break;

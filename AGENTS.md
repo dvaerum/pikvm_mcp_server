@@ -78,6 +78,10 @@ The server is configured via environment variables or a config file:
 Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt with bench-backed reliability matrix. Phase 65-72 chain: tighter linear correction config, progressive-wake template-match retries, removed legacy probeDelta override, opt-in lock-screen auto-recovery via `autoUnlockOnDetectFail`).
 0a. **`pikvm_health_check`** - One-call deployment health report: server version, mouseAbsoluteMode + safety-guard implication, **streamer source state (Phase 189: distinguishes "PiKVM down" from "device behind HDMI is off")**, live HID profile, iPad bounds detection, screen brightness. Run FIRST after deployment to verify safety guards are active and the target is what you think it is. Surfaces stale deployments (version mismatch), failed startup detection (mouseAbsoluteMode at safe default), source-side outages (e.g. iPad battery dead → `Streamer source: OFFLINE`), and target type (iPad portrait/landscape vs other). **Run this FIRST when `pikvm_screenshot` returns 503** — it tells you whether the issue is PiKVM or the source device.
 
+0b. **`pikvm_screen_state`** - Cheap "is the screen on?" check (one `GET /streamer`). Returns `{ on, resolution }`. When `on: false` the HDMI source is dark (iPad locked/asleep/Touch-ID gate most often). Cheaper than `pikvm_health_check` when you only need the on/off signal.
+
+0c. **`pikvm_hid_reset`** - Reset the USB HID gadget when `mouse/keyboard online: false` and input has no effect. Soft `POST /api/hid/reset` cannot force the host to re-enumerate — if the target isn't bringing the HID link up (charge-only cable, cold-boot USB stack), only a physical re-plug, a target restart, **or a full PiKVM reboot** recovers it (live-verified 2026-07-19). Optional `reconnectUsb` toggles the OTG connection (no-op where `connected` is unwired).
+
 ### Display
 1. **`pikvm_screenshot`** - Capture current screen as JPEG
 2. **`pikvm_get_resolution`** - Get current screen resolution (useful for mouse coordinates)
@@ -105,6 +109,8 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 14a. **`pikvm_ipad_home`** - Return to the iPad home screen via Cmd+H. Idempotent on the home screen; dismisses any foreground app. **Cmd+H does NOT dismiss the App Switcher** — pass `forceHomeViaSwipe: true` (Phase 214 v0.5.202) for guaranteed home-screen state when the iPad may be in App Switcher mode. The swipe path also sends defensive Esc+Enter (Phase 231 v0.5.207, undoes accidental re-lock) followed by 6×100 px chunked Y emits (Phase 235 v0.5.208, deposits cursor mid-screen — the swipe alone leaves cursor pinned at the top edge, blocking subsequent moveToPixel calls to bottom-half targets). Does NOT unlock the lock screen — call `pikvm_ipad_unlock` first.
 14b. **`pikvm_ipad_app_switcher`** - Open the iPad app-switcher (Cmd+\\ or hardware home gesture). Useful to verify which app is foreground or to switch between apps.
 14c. **`pikvm_ipad_launch_app`** - Launch any iPad app via the verified keyboard-first pipeline (unlock → Cmd+Space Spotlight → type → Enter). 100% reliable across Settings, Files, App Store, Maps, Safari (live-validated). Far more reliable than clicking icons.
+14d. **`pikvm_ipad_lock`** - Lock the iPad by sending Ctrl+Cmd+Q (the macOS Lock Screen shortcut; honored on iPadOS 26). Screen turns off within ~2 s → `pikvm_screen_state` reports `on: false`. Mirror of the unlock tools.
+14e. **`pikvm_ipad_unlock_with_code`** - Keyboard-only unlock for a passcode-protected iPad: Space → wait → Space → wait → type each digit → Enter. The `code` is sent verbatim to HID and is never logged, stored, or echoed.
 15. **`pikvm_mouse_move_to`** - Approximate move-to-pixel via slam-to-corner + delta emission. Returns screenshot for visual verification.
 16. **`pikvm_mouse_click_at`** - `pikvm_mouse_move_to` + `mouseClick` + click verification (pre/post screenshot diff; returns `screenChanged: true|false`). Use the verdict to detect missed clicks instead of eyeballing screenshots; opt out via `verifyClick: false`.
 17. **`pikvm_measure_ballistics`** - Characterise relative-mouse px/mickey via screenshot-diff sampling. Writes profile to `./data/ballistics.json`. Best-effort on iPad — fragile on the home screen due to animated widgets.
@@ -155,7 +161,7 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 46** (25 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
+**Total tools: 50** (29 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |

@@ -80,16 +80,13 @@ export function loadConfig(): Config {
       password,
       verifySsl: process.env.PIKVM_VERIFY_SSL === 'true',
       defaultKeymap: process.env.PIKVM_DEFAULT_KEYMAP || 'en-us',
-      // Route outbound PiKVM requests through a proxy when configured. Accept
-      // the dedicated PIKVM_PROXY or the conventional HTTPS_PROXY/ALL_PROXY so
-      // it can be set via .mcp.json `env` without touching the nix wrapper.
-      proxyUrl:
-        process.env.PIKVM_PROXY ||
-        process.env.HTTPS_PROXY ||
-        process.env.https_proxy ||
-        process.env.ALL_PROXY ||
-        process.env.all_proxy ||
-        '',
+      // Route outbound PiKVM requests through a proxy when configured. Only the
+      // DEDICATED PIKVM_PROXY is honored — deliberately NOT the ambient
+      // HTTPS_PROXY/ALL_PROXY, which shells commonly export for internet
+      // traffic. The PiKVM is a LAN host; inheriting an unrelated corporate
+      // proxy would silently reroute (and break) all device traffic with no
+      // opt-in. Set PIKVM_PROXY explicitly (e.g. via .mcp.json `env`).
+      proxyUrl: process.env.PIKVM_PROXY || '',
     },
     calibration: {
       rounds: parseInt(process.env.PIKVM_CALIBRATION_ROUNDS || '5', 10),

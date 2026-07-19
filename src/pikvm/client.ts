@@ -27,6 +27,14 @@ export interface PiKVMConfig {
   proxyUrl?: string;
 }
 
+/** Live HID capability snapshot from `/api/hid`. */
+export interface HidProfile {
+  online: boolean;
+  mouseAbsolute: boolean;
+  mouseOnline: boolean;
+  keyboardOnline: boolean;
+}
+
 export interface TypeOptions {
   keymap?: string;
   slow?: boolean;
@@ -769,10 +777,33 @@ export class PiKVMClient {
   }
 
   /**
-   * Reset HID device
+   * Reset the PiKVM USB HID gadget. Recovery primitive for when mouse/keyboard
+   * report `online: false` and input has no effect on the target.
+   *
+   * NOTE: a soft reset (POST /hid/reset) re-initialises the gadget but cannot
+   * force the *host* (e.g. iPad) to re-enumerate — if the host isn't bringing
+   * the HID link up (charge-only cable, cold-boot USB stack), `online` stays
+   * false and a physical re-plug is required. When `reconnectUsb` is set, this
+   * additionally toggles the OTG connection (set_connected 0→1), the software
+   * equivalent of unplug/replug — but that only has effect on PiKVM builds where
+   * the OTG `connected` control is wired (the `/hid` `connected` field is
+   * non-null; live-verified 2026-07-19 to be null / no-op on our unit).
+   *
+   * With no options this preserves the original void behaviour (fire the soft
+   * reset and return). Pass any option to also sample the post-reset HID profile.
    */
-  async resetHid(): Promise<void> {
+  async resetHid(): Promise<void>;
+  async resetHid(opts: { reconnectUsb?: boolean; settleMs?: number }): Promise<HidProfile>;
+  async resetHid(opts?: { reconnectUsb?: boolean; settleMs?: number }): Promise<void | HidProfile> {
     await this.request('POST', '/hid/reset');
+    if (opts === undefined) return;
+    if (opts.reconnectUsb) {
+      await this.request('POST', '/hid/set_connected?connected=0');
+      await new Promise((r) => setTimeout(r, 1500));
+      await this.request('POST', '/hid/set_connected?connected=1');
+    }
+    await new Promise((r) => setTimeout(r, opts.settleMs ?? 2000));
+    return this.getHidProfile();
   }
 
   /**
@@ -780,12 +811,7 @@ export class PiKVMClient {
    * absolute-mode mouse tools are usable on the current target. iPad and
    * other relative-only HID hosts will report `mouse.absolute=false`.
    */
-  async getHidProfile(): Promise<{
-    online: boolean;
-    mouseAbsolute: boolean;
-    mouseOnline: boolean;
-    keyboardOnline: boolean;
-  }> {
+  async getHidProfile(): Promise<HidProfile> {
     interface HidResponse {
       result: {
         online?: boolean;

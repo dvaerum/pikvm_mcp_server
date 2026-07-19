@@ -318,6 +318,24 @@ const tools: Tool[] = [
     },
   },
   {
+    name: 'pikvm_hid_reset',
+    description:
+      'Reset the PiKVM USB HID gadget — the recovery primitive for when pikvm_health_check reports mouse/keyboard `online: false` and input (keys, mouse moves) has no effect on the target. Sends POST /api/hid/reset (soft re-init of the emulated keyboard+mouse). IMPORTANT LIMITATION (live-verified 2026-07-19): a soft reset CANNOT force the host to re-enumerate — if the target device (e.g. an iPad that just cold-booted from a dead battery) is not bringing the USB HID link up, `online` stays false and only a physical re-plug of the USB-C data cable (or a target restart) fixes it. Pass `reconnectUsb: true` to additionally toggle the OTG connection (set_connected 0→1, the software unplug/replug) — but that only does anything on PiKVM builds where the OTG `connected` control is wired (many are not; the toggle is a no-op there). Returns the HID online state sampled ~2 s after the reset so you can see whether it recovered.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        reconnectUsb: {
+          type: 'boolean',
+          description: 'Also cycle the OTG USB connection (set_connected 0→1) after the soft reset. No-op on PiKVM builds where the `connected` control is not wired. Default false.',
+        },
+        settleMs: {
+          type: 'number',
+          description: 'Milliseconds to wait after the reset before re-reading HID online state. Default 2000.',
+        },
+      },
+    },
+  },
+  {
     name: 'pikvm_ipad_unlock_with_code',
     description: 'Keyboard-only unlock for a passcode-protected iPad. Recipe (verified by user 2026-06-03): sendKey Space → wait 1 s (wakes the screen) → sendKey Space → wait 1 s (dismisses the lock screen and brings up the passcode prompt) → type each passcode digit with ~100 ms between presses → sendKey Enter. Pass the passcode as `code` (digits only, 4–10 chars). Use this instead of pikvm_ipad_unlock when the iPad has a passcode set. **The code is sent verbatim to PiKVM HID and is NOT logged, stored, or echoed in the response** — the response just confirms the digit-count and that Enter was fired. Verify success with pikvm_screen_state (expect on:true) and pikvm_screenshot. Mirror tool for locking: pikvm_ipad_lock.',
     inputSchema: {
@@ -1059,6 +1077,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
 
+      case 'pikvm_hid_reset': {
+        const reconnectUsb = validateBoolean(args.reconnectUsb) ?? false;
+        const settleMs = validateNumber(args.settleMs, 0, 30000);
+        const after = await pikvm.resetHid({ reconnectUsb, settleMs });
+        const recovered = after.mouseOnline && after.keyboardOnline;
+        const lines = [
+          `HID reset sent${reconnectUsb ? ' (+ OTG set_connected 0→1)' : ''}.`,
+          `Post-reset HID: mouse=${after.mouseOnline ? 'online' : 'offline'}/` +
+            `${after.mouseAbsolute ? 'absolute' : 'relative'}, ` +
+            `keyboard=${after.keyboardOnline ? 'online' : 'offline'}.`,
+        ];
+        if (!recovered) {
+          lines.push(
+            'Still offline — a soft reset cannot force the host to re-enumerate. ' +
+            'The target device (e.g. iPad) is not bringing the USB HID link up. ' +
+            'Physically re-plug the USB-C data cable (not charge-only) or restart the target.',
+          );
+        }
+        // Keep the in-process absolute-mode flag consistent with what we just read.
+        mouseAbsoluteMode = after.mouseAbsolute;
+        return { content: [{ type: 'text', text: lines.join('\n') }] };
+      }
+
       case 'pikvm_ipad_unlock_with_code': {
         // 2026-06-03 user-provided keyboard-only unlock recipe.
         // unlockIpadWithCode validates code shape BEFORE any HID
@@ -1718,11 +1759,18 @@ async function main() {
   }
 
   if (config.transport.kind === 'http') {
-    await startHttpServer(createMcpServer, {
+    const { close } = await startHttpServer(createMcpServer, {
       host: config.transport.httpHost,
       port: config.transport.httpPort,
       socketPath: config.transport.httpSocketPath,
     });
+    // Close sessions and remove the unix socket on a clean signal so a leftover
+    // socket file doesn't block the next start.
+    for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+      process.once(sig, () => {
+        close().finally(() => process.exit(0));
+      });
+    }
     console.error(
       `PiKVM MCP Server running (Streamable HTTP). Connect Claude via ` +
         `http://${config.transport.httpHost}:${config.transport.httpPort}/mcp — ` +
