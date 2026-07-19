@@ -303,3 +303,26 @@ ON. Target: hit rate materially above today's baseline.
   944px region — but its clean points M80/100/127 = 115/130/151 match +Y, so no
   real asymmetry.) Implication: a 2D one-shot is per-axis bursts from one curve.
   Running one-shot-2d.ts to validate one-shot to real 2D target pixels next.
+
+- **2026-07-20 (Phase 4b — 2D ONE-SHOT lands on target, one-shot-2d.ts):** from a
+  reset start, read P0 (getCursor), plan per-axis bursts to the target pixel,
+  emit X-burst then Y-burst, measure |landing-target| vs getCursor. N=5 each:
+  Files 0.5px, AppStore 1.3px, Settings 2.6px, Books 5.2px. AGGREGATE N=20:
+  median **1.7px**, p90 **5.3px**, max 5.7px, 100% within 10px. The emit model is
+  comprehensively SOLVED: deterministic, isotropic, invertible curve; one shot
+  hits a 2D pixel to ~5px, no iteration. (Books worst ~5px — farthest/lowest;
+  sequential X-then-Y burst accumulates slightly. Still <6px.)
+  UNCHANGED CAVEAT: getCursor start = perfect; production reads start from the
+  detector (~11px), so a production one-shot floors ~11px, NOT 1.7px. That
+  detector-start step is the ONLY remaining production error source and MUST be
+  tested before any live-win claim (this is exactly where past "offline gains"
+  failed to translate).
+  **PHASE 5 PLAN (next — the real translation test):** (a) add a
+  `strategy:'curve-one-shot'` path to moveToPixel: detect current pos → ONE
+  curve-based open-loop shot → at most ONE detector-fed correction (curve
+  hardcoded from this session for the first A/B; tight region is stable). (b)
+  A/B it vs the current default via bench-4.3, scored on getCursor, N≥80 paired.
+  Success = median ≤ ~12px AND p90 tail collapses (71→<25) beyond the noise floor.
+  (c) ONLY if it wins live: build a calibration routine to learn the curve
+  (cache in ballistics.json) for cross-session/resolution robustness. Do NOT
+  ship on the emit-only numbers — the detector-start test is the gate.
