@@ -292,3 +292,14 @@ ON. Target: hit rate materially above today's baseline.
   curve-based shot to target → at most ONE detector-fed correction. Faster than
   the 4–5-pass micro-step loop AND more accurate. Validate LIVE at N≥80 paired vs
   Phase 0 baseline; success = p90 tail collapses and median ≈ detector floor.
+
+- **2026-07-20 (Phase 4a — transfer function is ISOTROPIC + direction-symmetric,
+  per-axis-probe.ts):** single-report displacement per direction (px, std 0.0):
+  +X and -X are IDENTICAL (15,49,89,120,136,157 for M=20..127); +Y is a constant
+  0.965× of X (14,47,86,115,131,152) — which is EXACTLY the HDMI mapping ratio
+  (Y 0.800 px/logical vs X 0.829; 0.800/0.829=0.965). So in the iPad's LOGICAL
+  space the accel curve is identical on both axes and both directions — ONE curve
+  covers everything. (-Y had 2 bad getCursor reads — 943px/`?`, impossible in a
+  944px region — but its clean points M80/100/127 = 115/130/151 match +Y, so no
+  real asymmetry.) Implication: a 2D one-shot is per-axis bursts from one curve.
+  Running one-shot-2d.ts to validate one-shot to real 2D target pixels next.
