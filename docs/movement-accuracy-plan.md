@@ -356,9 +356,18 @@ ON. Target: hit rate materially above today's baseline.
   therefore the EMIT/MOVEMENT strategy: the curve one-shot places the cursor in
   ONE deterministic shot (~9px) and avoids the baseline's non-converging
   correction. (Emit is NOT "solved at 19/71" either — that was BLACK-surface;
-  baseline convergence DEGRADES to ~50–72px on a realistic scene. Sub-mechanism —
-  overshoot-oscillation vs bail-to-best-pass vs per-pass detection noise feeding
-  bad corrections — being pinned by diag-passes.ts.)
+  baseline convergence DEGRADES to ~50–72px on a realistic scene.)
+  SUB-MECHANISM PINNED (diag-passes.ts, per-pass diagnostics): on the textured
+  home scene moveToPixel's PER-PASS correction detection (motion-diff/shape) is
+  unreliable — Files: motion-diff finds no clean motion on the static background →
+  loop stops after 1 pass at r49 (never iterates); Settings: motion-diff JUMPS —
+  detects at (900,1004)→(1020,738)→(940,507), residuals oscillate 129→212 and
+  210→99→341 (each "correction" worse). So the iterative motion-diff correction
+  machinery is fragile on a real background: goes blind and quits early, or chases
+  noise and oscillates → never converges (44–121px). The curve one-shot sidesteps
+  ALL of it: ONE V8 detection + ONE deterministic emit, no per-pass motion-diff.
+  Win = better detection METHOD (V8 once vs motion-diff cascade) + better emit
+  METHOD (deterministic one-shot vs iterative), both matter.
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
