@@ -1926,6 +1926,17 @@ export function formatDismissResult(result: {
  * click_at quality.
  */
 export function defaultMaxResidualPxFor(mouseAbsoluteMode: boolean): number | undefined {
+  // Config line: PIKVM_CLICK_MAX_RESIDUAL_PX overrides the default for BOTH
+  // modes so the proximity gate can be tuned/disabled without a rebuild.
+  //   PIKVM_CLICK_MAX_RESIDUAL_PX=25   → gate at 25 px
+  //   PIKVM_CLICK_MAX_RESIDUAL_PX=off  (or 0) → disable the gate
+  // Unset → the mode-aware default below (35 px on iPad, none on desktop).
+  const raw = process.env.PIKVM_CLICK_MAX_RESIDUAL_PX;
+  if (raw !== undefined) {
+    if (raw === '0' || raw.toLowerCase() === 'off') return undefined;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
   return mouseAbsoluteMode ? undefined : 35;
 }
 
