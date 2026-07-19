@@ -106,3 +106,25 @@ ON. Target: hit rate materially above today's baseline.
   every ipad_x/ipad_y row is empty and the "measurement" is worthless (this is
   exactly the stale-getCursor failure the roadmap warned about). No movement
   data collected this cycle; blocker is the ground-truth harness, not the mover.
+
+- **2026-07-19 (cycle 1):** Root-caused the harness blocker. iPadCollector
+  **connects fine** (hello 820×1180) and **renders scenes fine** (showScene(gray)
+  → gray portrait region confirmed in a PiKVM screenshot; cursor visible as an
+  arrow OVER the scene). The failure is isolated: the app's **PointerTracker is
+  dead** — raw `getCursor()` returns `{x:0, y:0, tracked:false}` on every poll,
+  under vigorous continuous movement, a tap-to-focus, AND an Escape. The app is
+  alive (t_ipad timestamps update); only hover tracking is stuck off. It WORKED
+  during the earlier bench runs (v13/v12-conf got real tracked positions) → this
+  is a **state regression** introduced during the click-test session (repeated
+  terminate/relaunch + app-switching), not a code bug in the app or the mover.
+  App-level nudges/tap/Escape do NOT recover it.
+  **NEXT-CYCLE ACTION (do this first):** reset the iPad pointer/HID state with
+  `xcrun devicectl device reboot --device CF2B815D-7960-5B60-987B-FA2DC9A65353`
+  (confirmed available). Then: wait ~60–90 s for boot, wake/unlock the iPad
+  (sendKey Enter), relaunch iPadCollector, and **re-verify `getCursor` returns
+  `tracked:true`** with a short poll BEFORE doing anything else. Only once
+  tracking is live, run the Phase 0 varied-target sweep. If a reboot does NOT
+  restore tracking, investigate iPad pointer/AssistiveTouch settings and the
+  app's onContinuousHover wiring (the tracker may need onHover(false)→(true)
+  re-arming, which a full-screen SceneRendererView never gets). Still zero
+  movement data — correctly refusing to fabricate it.
