@@ -77,6 +77,20 @@ ON. Target: hit rate materially above today's baseline.
 - [ ] Claimed lift > ±10 pp noise floor?
 - [ ] Ran newest code (tsx on `src/`)?
 
+## ⚠ HARD-LEARNED GUARDRAILS (read before touching the iPad)
+
+- **DO NOT reboot the iPad to fix pointer/tracker state.** Cycle 2 tried it: the
+  iPad came back with **HID offline + screen off + unreachable via devicectl**,
+  and even a follow-up PiKVM reboot did NOT recover it (the iPad re-enumerates
+  the USB gadget only when awake; a freshly-rebooted asleep iPad does not). Net
+  result: a degraded iPad needing **physical** recovery. Reboots made it worse.
+- **First action EVERY cycle:** health-check the iPad — screen on? HID online?
+  `devicectl` responds? If NOT, the iPad needs physical recovery (power button /
+  USB re-plug by the user) — notify and STOP the cycle. Do not reboot anything.
+- The PointerTracker fix must be a **non-destructive** approach (app-side: verify
+  iPadCollector's onContinuousHover wiring; or a cursor leave/re-enter of the
+  SceneRendererView; NOT a reboot).
+
 ## Progress log
 
 - **2026-07-19 (cycle 0):** Plan created. Baseline from the 15-target real-icon
@@ -128,3 +142,16 @@ ON. Target: hit rate materially above today's baseline.
   app's onContinuousHover wiring (the tracker may need onHover(false)→(true)
   re-arming, which a full-screen SceneRendererView never gets). Still zero
   movement data — correctly refusing to fabricate it.
+
+- **2026-07-19 (cycle 2):** ✗ SETBACK. Tried the cheap fix first (HID reset to
+  re-init hover) — did not restore tracking (0/10). Then executed the plan's
+  reboot fix (`devicectl device reboot`). **It backfired:** the iPad came back
+  with HID offline, screen off, and unreachable via devicectl; HID reset +
+  reconnect didn't help; a PiKVM reboot (which recovered HID earlier when the
+  iPad was awake) also did NOT recover it this time. Stopped escalating after
+  two reboots — further reboots would be thrashing. iPad is now in a degraded
+  state requiring **physical intervention** (power button / USB re-plug).
+  Notified the user. Added the HARD-LEARNED GUARDRAILS above. Still zero
+  movement data; net-negative cycle (made the environment worse, honestly).
+  **Next cycle:** health-check the iPad first; if not recovered, notify + stop;
+  once recovered, pursue a NON-destructive PointerTracker fix (never reboot).
