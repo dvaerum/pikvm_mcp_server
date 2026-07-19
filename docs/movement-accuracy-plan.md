@@ -339,3 +339,34 @@ ON. Target: hit rate materially above today's baseline.
   STILL N=12 — a smoke, NOT a verdict. NEXT: paired A/B (baseline moveToPixel vs
   curve-one-shot, same scene, scored on getCursor) at N≥80 to confirm the win
   beats baseline beyond the noise floor — especially the p90 tail collapse.
+
+- **2026-07-20 (Phase 5 A/B RESULT — VERDICT, N=80 paired, realistic home scene,
+  scored on getCursor, oneshot-ab.ts):**
+  baseline moveToPixel: median **72.9px** p90 **153.9** within-15px **0%**.
+  curve one-shot (V8 start): median **9.1px** p90 **12.4** within-15px **100%**.
+  One-shot better in **80/80 (100%)** paired. Per-target baseline med 53–97px
+  (even its BEST Files attempt = 38px). Huge effect, far beyond the ±10pp floor.
+  CRITICAL ATTRIBUTION (do not over-credit the emit model): the baseline is 72.9
+  here vs 19 in Phase 0 — the ONLY difference is the scene (Phase 0 = black
+  default; this = realistic home via showScene). So the dominant baseline failure
+  is DETECTION: production moveToPixel's cascade (shape/motion/template)
+  false-positives on home-screen icon/wallpaper features and corrects the REAL
+  cursor toward the phantom (documented Phase 310–316 tautological detection). The
+  one-shot uses V8 (reliable on this scene, ~7px) so it avoids that. The WIN =
+  V8-primary detection (dominant) + curve one-shot emit (accuracy + no tail, ~2px
+  on its own). This CORRECTS the loop premise: "detection solved, emit is the
+  problem" held on BLACK (isolated emit at 19/71); on a realistic home screen the
+  bigger live failure is DETECTION, because production uses V8 only as a
+  null-fallback, not primary.
+  CAVEATS: single session / fixed iPad position / hardcoded curve (needs
+  calibration for robustness); static-image scene proxy for live home screen;
+  getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
+  gap); cascade-false-positive mechanism STRONGLY INDICATED but NOT frame-
+  confirmed this run (verify next).
+  **PHASE 6 PLAN (next):** (a) frame-verify the baseline cascade false-positive
+  mechanism (debugDir on a few baseline attempts). (b) Promote into production:
+  make moveToPixel use V8 as PRIMARY detector + a `curve-one-shot` emit path
+  (detect→one shot→optional single V8 correction). (c) Build the emit-curve
+  calibration routine (learn per-axis curve, cache in ballistics.json) for
+  cross-session/resolution robustness. (d) Re-run the A/B on the PRODUCTION code
+  path (not the scratch harness) to confirm the win survives integration.
