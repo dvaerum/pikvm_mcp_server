@@ -169,7 +169,7 @@ async function learnedBallisticsPxPerMickey(
   };
 }
 
-export type MoveStrategy = 'detect-then-move' | 'slam-then-move' | 'assume-at';
+export type MoveStrategy = 'detect-then-move' | 'slam-then-move' | 'assume-at' | 'curve-one-shot';
 export type Axis = 'x' | 'y';
 
 export interface MoveToOptions {
@@ -187,6 +187,14 @@ export interface MoveToOptions {
 
   /** Enable closed-loop correction (default true). */
   correct?: boolean;
+
+  /** strategy='curve-one-shot' only: V8 presence gate for detection (default
+   *  0.5). */
+  minPresence?: number;
+  /** strategy='curve-one-shot' only: when set, run ONE correction shot if the
+   *  post-shot residual exceeds this many px. Undefined = pure single shot
+   *  (matches the validated N=80 A/B). */
+  oneShotCorrectGatePx?: number;
   /** Max correction passes. Default 2. */
   maxCorrectionPasses?: number;
   /** Tolerance for early-exit (px). If observed |residual| below this in
@@ -1426,6 +1434,18 @@ export async function moveToPixel(
   target: { x: number; y: number },
   options: MoveToOptions = {},
 ): Promise<MoveToResult> {
+  // Phase 6 (2026-07-20): curve-based one-shot mover — detect once (V8) + one
+  // deterministic curve-based emit, no iterative motion-diff correction. Beats
+  // the iterative path 80/80 live (median 9 vs 73px on a home scene). Delegated
+  // to a self-contained module; the legacy path below is unchanged.
+  if (options.strategy === 'curve-one-shot') {
+    const { moveByCurveOneShot } = await import('./curve-mover.js');
+    return moveByCurveOneShot(client, target, {
+      minPresence: options.minPresence,
+      correctGatePx: options.oneShotCorrectGatePx,
+    });
+  }
+
   const resolution = await client.getResolution(true);
 
   // Phase B defaults — tuned from live observation of this iPad:
