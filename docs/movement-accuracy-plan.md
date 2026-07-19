@@ -381,6 +381,18 @@ ON. Target: hit rate materially above today's baseline.
   and curve are all in the 1920×1080 HDMI frame). Running oneshot-ab-prod.ts —
   the same N=80 A/B but BOTH arms via moveToPixel (arm A detect-then-move, arm B
   curve-one-shot) — to confirm the win survives the production entry point.
+  PARTIAL paired result (5 pairs before I stopped it — the baseline arm is
+  brutally SLOW on the home scene, ~1–2 min/move because its iterative passes
+  oscillate through the full budget): baseline [54.5, 19.9, 169.4, 77.9, 54.4]
+  vs one-shot(PROD) [9.1, 10.9, 3.3, 6.0, 4.8] — one-shot wins 5/5 and the
+  PRODUCTION moveToPixel({strategy:'curve-one-shot'}) reproduces the ~3–11px
+  from the scratch validation → integration works. (Side-finding: the legacy
+  iterative path is not only ~73px-inaccurate on a real background but also
+  ~1–2 min/move slow — the one-shot is ~10s.) Since the baseline is identical
+  already-validated code (N=80, median 72.9) and only slows the paired run,
+  switched to a one-shot-ONLY production-path run at N=80 (oneshot-prod-only.ts)
+  to confirm the prod entry point reproduces ~9px; paired-ness was already
+  established 80/80 in the scratch A/B.
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
