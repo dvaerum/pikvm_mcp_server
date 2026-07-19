@@ -85,3 +85,24 @@ ON. Target: hit rate materially above today's baseline.
   → safe skips. Next: Phase 0 ground-truth characterization bench (varied grid,
   ground-truth landing vs target, per-axis bias). Prereqs: tinyproxy:8888 up;
   iPadCollector must be relaunched (it was terminated after the click test).
+
+- **2026-07-19 (cycle 0, cont.):** ⚠ Phase 0 sweep (4 targets × 8 trials) FAILED
+  — all 4 runs aborted with `iPadCollector connected but its PointerTracker
+  never fired hover events after 8 wake attempts`. Diagnosed live: after the
+  move-to-centre wake, the PiKVM screenshot shows the cursor as an **I-beam**
+  (text-cursor) near the RIGHT edge of the iPad content (~1290,880), NOT an
+  arrow over a scene. An I-beam means the pointer is over a **text field** — so
+  iPadCollector is presenting its **settings / reconnect screen** (URL text
+  field), not the `SceneRendererView`, so `UIHoverGestureRecognizer` → tracker
+  never fires. Root-cause hypotheses for next cycle, in order:
+    1. iPadCollector is stuck on the settings/URL sheet or the "Lost connection"
+       reconnect screen (it lost the WS server between runs) — dismiss it
+       (Escape / tap) or ensure it lands on the SceneRendererView after launch.
+    2. The fresh signed reinstall today may have reset the persisted WS URL —
+       reconfigure via the `help` keyboard shortcut → ws://10.109.1.251:8767.
+    3. `slamThenCenter` may be depositing the cursor at the content edge /
+       letterbox rather than centre → verify with detectIpadBounds and adjust.
+  **Do NOT run the movement A/B until awaitPointerAlive succeeds** — otherwise
+  every ipad_x/ipad_y row is empty and the "measurement" is worthless (this is
+  exactly the stale-getCursor failure the roadmap warned about). No movement
+  data collected this cycle; blocker is the ground-truth harness, not the mover.
