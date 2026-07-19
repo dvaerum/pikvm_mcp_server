@@ -164,3 +164,15 @@ ON. Target: hit rate materially above today's baseline.
   button / USB re-plug), confirm screen ON + HID online, then re-run
   `/loop 15m <the movement prompt>`. First real action next time: a
   NON-destructive PointerTracker fix (never a reboot), then the Phase 0 sweep.
+
+- **2026-07-20 (loop re-armed, cron af10fb06):** Environment recovered (the
+  cycle-2 iPad reboot + a user-initiated PiKVM reboot fixed HID; harness recovery
+  fully documented in docs/troubleshooting/2026-07-20-ipad-hid-offline-usb-recovery.md).
+  **The PointerTracker bug is GONE** — the iPad reboot cleared the stuck hover
+  state: `getCursor` now returns `tracked:true` 10/10 with real coords
+  (verified this cycle). So iPadCollector ground truth is live again. Health
+  check clean (screenshot OK, connected 820×1180). **Launched the Phase 0
+  varied-target sweep** (bench-4.3 for Files/AppStore/Settings/Books, 8 trials
+  each) in the background — the first REAL movement-accuracy data. Next cycle:
+  analyze per-target ground-truth residual + per-axis bias to answer
+  systematic-bias vs correction-divergence.
