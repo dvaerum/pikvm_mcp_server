@@ -176,3 +176,25 @@ ON. Target: hit rate materially above today's baseline.
   each) in the background — the first REAL movement-accuracy data. Next cycle:
   analyze per-target ground-truth residual + per-axis bias to answer
   systematic-bias vs correction-divergence.
+
+- **2026-07-20 (Phase 0 RESULTS — first real data, N=128, 0% null):** Ground-truth
+  residual (getCursor vs target): median **19px**, p90 **71px**, max 123px.
+  Per-axis bias: dx **−12.5px**, dy **−26.7px** (negative = cursor lands
+  above/left of target = UNDERSHOOT). dy undershoot GROWS with target distance:
+  Files(top) −11 → Books(bottom) −42; Books p90 96px is the worst region.
+  DIAGNOSIS (Phase 1 answered): it's a **systematic undershoot (up-left, scaling
+  with distance)**, NOT correction divergence, and NOT "drift toward the dock" —
+  the earlier eyeballed "toward the dock" claim is REFUTED by ground truth (the
+  cursor lands above, not below). The misses come from the **TAIL** (p90 71px),
+  not the median. Two error sources: (a) systematic undershoot ≈ correction loop
+  leaving residual — likely minResidualPx=25 early-exit + open-loop under-emit on
+  far targets; (b) a fat tail = occasional large errors = the real miss source.
+  Caveat: measured on iPadCollector's black surface (NO icon magnetism, which in
+  real UI snaps the cursor onto icons and helps) — so this is a clean MODEL-error
+  measure and a pessimistic proxy for live hit-rate.
+  **PHASE 2 PLAN (next):** rebuild the correction tail as closed-loop-on-V8 —
+  iterate move→V8-detect-residual→emit-correction until GT/V8 residual < a TIGHT
+  gate (e.g. 12px) on EVERY attempt, killing the p90 tail; and add a
+  distance-aware / bias-corrected emit so the open-loop first move doesn't
+  undershoot far targets. Re-measure at N≥80 paired vs THIS baseline (median 19 /
+  p90 71); promote only if GT residual beats it by > the ±10pp/noise floor.
