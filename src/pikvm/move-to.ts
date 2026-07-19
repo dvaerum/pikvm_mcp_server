@@ -2833,6 +2833,31 @@ export async function moveToPixel(
     passesSinceLastVerification = diagnostics.length - 1 - bailIdx;
   }
 
+  // V8 authoritative fallback (2026-07-19). The correction cascade above
+  // (motion-diff → template-match → shape-detect) misses the cursor on a
+  // large fraction of attempts on this hardware even when it's plainly
+  // visible — but the v8 full-frame CNN (the same model used for origin
+  // discovery at discoverOrigin) reliably finds it. Ground-truth diagnosis:
+  // on 37/37 attempts where the cascade returned null, v8 located the cursor
+  // with presence≈1.0 within ~13 px of the iPadCollector ground truth. v8 was
+  // only ever wired into origin discovery, never the final pass — so those
+  // detections were thrown away. Consult v8 ONLY when the cascade produced no
+  // position, so nothing that already works is disturbed; this just fills in
+  // the misses. `shot` is the end-of-function screenshot (cursor at its final
+  // resting position).
+  if (finalDetectedPosition === null) {
+    const v8Final = await findCursorByV8FullFrame(shot.buffer, shot.screenshotWidth, shot.screenshotHeight);
+    if (v8Final !== null) {
+      finalDetectedPosition = { x: v8Final.x, y: v8Final.y };
+      if (verbose) {
+        console.error(
+          `[move-to] v8 fallback: cascade returned null; v8 found cursor at ` +
+          `(${v8Final.x},${v8Final.y}) presence=${v8Final.presence.toFixed(3)}`,
+        );
+      }
+    }
+  }
+
   const finalResidualPx = finalDetectedPosition
     ? Math.hypot(finalDetectedPosition.x - targetX, finalDetectedPosition.y - targetY)
     : null;
