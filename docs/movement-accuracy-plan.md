@@ -259,9 +259,36 @@ ON. Target: hit rate materially above today's baseline.
   floors near ~11px, NOT 2.8px. Do NOT quote 2.8px as production. The PORTABLE win
   is curve-based micro-stepping that never overshoots — kills the p90 tail
   regardless of feedback source.
-  **PHASE 4 PLAN (next):** port curve-based micro-stepping into production
-  moveToPixel's correction loop (replace the overshoot-prone big-emit linear
-  regime), feedback = visual detector. Validate LIVE at N≥80 paired vs Phase 0
-  baseline; success = p90 tail collapses (target p90 <25px) and median ≤ ~11–15px.
-  Also re-measure the emit curve across regions to confirm it isn't center-
-  specific before hardcoding it.
+  **PHASE 4 PLAN (superseded by Phase 3.5 below).**
+
+- **2026-07-20 (Phase 3.5 — ONE-GO open-loop is accurate & deterministic; user
+  asked "precision over different distances in one go"):** Two probes.
+  KEY HID FACT: mouseMoveRelative clamps every delta to ±127 (int8, one HID
+  report); long moves = a burst of reports.
+  (1) wide-emit-probe.ts — single-report curve is DETERMINISTIC (std 0.0) and
+  nonlinear across the full range: M=20→14.9px, 40→48.6, 60→89, 80→119.6,
+  100→135.6, 127→157.3 (px/mick 0.74→peak 1.49→1.24). Bursts are deterministic
+  AND LINEAR: each 127-report adds exactly 157.3px, std 0.0, NO loss — which also
+  refutes PA38's "30% burst coalescing" (another detector artifact).
+  (2) one-go-confirm.ts — planning one open-loop shot from the measured curve
+  (full 157px-reports + one partial), landing error over distance (N=4 each):
+  D=50→0.6px, 100→3.5, 200→-2.3, 300→0.1, 450→0.1 — all ≤3.5px, std 0.0.
+  Position-independent: D=200 from 3 vertical starts → 197.7px identical.
+  CONCLUSION: the emit→displacement transfer function is a fixed, invertible,
+  position-independent nonlinear curve; ONE open-loop shot hits any distance
+  (50–450px) to ~3.5px. This overturns the project's "open-loop doesn't work"
+  history — prior failures measured with the DETECTOR (too noisy to see the true
+  response) → the overshoot/floor/coalescing folklore.
+  CAVEATS: +X only, N=4/distance, one session. NOT yet confirmed on -X/±Y (curve
+  may be per-axis — HDMI map alone is 0.83 px/logical on X vs 0.80 on Y) or on a
+  diagonal 2D target. And the 3.5px is EMIT accuracy: production learns the start
+  position from the detector (~11px), so a production one-shot lands ~√(3.5²+11²)
+  ≈ ~11px, detector-limited — one shot, no iteration, still far better than Phase
+  0 (median 19/p90 71). Determinism std 0.0 is very clean; re-check cross-session.
+  **PHASE 4 PLAN (revised):** (a) characterize per-axis/direction curves (+X,-X,
+  +Y,-Y) and confirm a diagonal 2D target lands ~one-shot; (b) build a calibration
+  routine that learns the curve (one-time, or cached in ballistics.json); (c)
+  rework production moveToPixel to: detect current pos → ONE open-loop
+  curve-based shot to target → at most ONE detector-fed correction. Faster than
+  the 4–5-pass micro-step loop AND more accurate. Validate LIVE at N≥80 paired vs
+  Phase 0 baseline; success = p90 tail collapses and median ≈ detector floor.
