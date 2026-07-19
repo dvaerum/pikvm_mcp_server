@@ -22,6 +22,16 @@ const OPTIONAL_VARS = [
   'PIKVM_CALIBRATION_ROUNDS',
   'PIKVM_CALIBRATION_VERIFY_ROUNDS',
   'PIKVM_CALIBRATION_MOVE_DELAY',
+  // Proxy + transport (added with the loopback-proxy / HTTP-transport feature).
+  'PIKVM_PROXY',
+  'HTTPS_PROXY',
+  'https_proxy',
+  'ALL_PROXY',
+  'all_proxy',
+  'MCP_TRANSPORT',
+  'MCP_HTTP_HOST',
+  'MCP_HTTP_PORT',
+  'MCP_HTTP_SOCKET',
 ];
 
 describe('loadConfig', () => {
@@ -107,5 +117,81 @@ describe('loadConfig', () => {
     process.env.PIKVM_PASSWORD = 'secret';
     process.env.PIKVM_DEFAULT_KEYMAP = 'da-dk';
     expect(loadConfig().pikvm.defaultKeymap).toBe('da-dk');
+  });
+
+  describe('proxy resolution', () => {
+    beforeEach(() => {
+      process.env.PIKVM_HOST = 'https://kvm.example';
+      process.env.PIKVM_PASSWORD = 'secret';
+    });
+
+    it('proxyUrl defaults to empty (direct connection) when unset', () => {
+      expect(loadConfig().pikvm.proxyUrl).toBe('');
+    });
+
+    it('honours the dedicated PIKVM_PROXY', () => {
+      process.env.PIKVM_PROXY = 'http://127.0.0.1:8888';
+      expect(loadConfig().pikvm.proxyUrl).toBe('http://127.0.0.1:8888');
+    });
+
+    // Regression guard: the PiKVM is a LAN host. Inheriting the ambient
+    // HTTPS_PROXY/ALL_PROXY that shells export for internet traffic would
+    // silently reroute (and break) all device traffic with no opt-in. Only
+    // the dedicated PIKVM_PROXY may configure the proxy.
+    it('IGNORES ambient HTTPS_PROXY / ALL_PROXY (footgun guard)', () => {
+      process.env.HTTPS_PROXY = 'http://corp-proxy:3128';
+      process.env.https_proxy = 'http://corp-proxy:3128';
+      process.env.ALL_PROXY = 'socks5://corp-proxy:1080';
+      process.env.all_proxy = 'socks5://corp-proxy:1080';
+      expect(loadConfig().pikvm.proxyUrl).toBe('');
+    });
+
+    it('PIKVM_PROXY wins even when ambient proxies are also set', () => {
+      process.env.PIKVM_PROXY = 'http://127.0.0.1:8888';
+      process.env.HTTPS_PROXY = 'http://corp-proxy:3128';
+      expect(loadConfig().pikvm.proxyUrl).toBe('http://127.0.0.1:8888');
+    });
+  });
+
+  describe('transport resolution', () => {
+    const originalArgv = process.argv;
+    beforeEach(() => {
+      process.env.PIKVM_HOST = 'https://kvm.example';
+      process.env.PIKVM_PASSWORD = 'secret';
+      // Strip any inherited --http from the runner's argv.
+      process.argv = ['node', 'index.js'];
+    });
+    afterEach(() => {
+      process.argv = originalArgv;
+    });
+
+    it('defaults to stdio', () => {
+      const t = loadConfig().transport;
+      expect(t.kind).toBe('stdio');
+      expect(t.httpHost).toBe('127.0.0.1'); // loopback default
+      expect(t.httpPort).toBe(8390);
+      expect(t.httpSocketPath).toBeUndefined();
+    });
+
+    it('selects http via MCP_TRANSPORT=http (case-insensitive)', () => {
+      process.env.MCP_TRANSPORT = 'HTTP';
+      expect(loadConfig().transport.kind).toBe('http');
+    });
+
+    it('selects http via the --http argv flag', () => {
+      process.argv = ['node', 'index.js', '--http'];
+      expect(loadConfig().transport.kind).toBe('http');
+    });
+
+    it('honours MCP_HTTP_HOST / PORT / SOCKET overrides', () => {
+      process.env.MCP_TRANSPORT = 'http';
+      process.env.MCP_HTTP_HOST = '0.0.0.0';
+      process.env.MCP_HTTP_PORT = '9000';
+      process.env.MCP_HTTP_SOCKET = '/tmp/pikvm.sock';
+      const t = loadConfig().transport;
+      expect(t.httpHost).toBe('0.0.0.0');
+      expect(t.httpPort).toBe(9000);
+      expect(t.httpSocketPath).toBe('/tmp/pikvm.sock');
+    });
   });
 });

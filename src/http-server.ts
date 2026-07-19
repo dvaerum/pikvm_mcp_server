@@ -73,7 +73,7 @@ export async function startHttpServer(
   createMcpServer: () => McpServer,
   opts: HttpServerOptions,
   log: (msg: string) => void = (m) => console.error(m),
-): Promise<{ close: () => Promise<void> }> {
+): Promise<{ close: () => Promise<void>; port: number; baseUrl: string }> {
   const mcpPath = opts.mcpPath ?? '/mcp';
   const transports: SessionMap = new Map();
   // Last-activity timestamp per session, so the sweep below can evict a
@@ -167,7 +167,11 @@ export async function startHttpServer(
   const tcp = createHttpServer(handler);
   httpServers.push(tcp);
   await listenOn(tcp, { port: opts.port, host: opts.host });
-  log(`Streamable HTTP MCP listening on http://${opts.host}:${opts.port}${mcpPath}`);
+  // Read the actually-bound port — opts.port may be 0 (OS-assigned).
+  const addr = tcp.address();
+  const port = addr && typeof addr === 'object' ? addr.port : opts.port;
+  const baseUrl = `http://${opts.host}:${port}`;
+  log(`Streamable HTTP MCP listening on ${baseUrl}${mcpPath}`);
 
   // Optional unix-socket endpoint.
   if (opts.socketPath) {
@@ -216,5 +220,5 @@ export async function startHttpServer(
     }
   };
 
-  return { close };
+  return { close, port, baseUrl };
 }
