@@ -217,12 +217,21 @@ ON. Target: hit rate materially above today's baseline.
   corrections. **The bottleneck is EMIT GRANULARITY, not feedback or detection**
   — ground-truth feedback barely helps once the floor is 25px. So closed-loop is
   necessary but NOT sufficient; it plateaus at the floor.
-  **PHASE 3 PLAN (next):** attack sub-floor fine positioning. Leading candidate:
-  **absolute mouse mode** — position directly to the target pixel, no relative-
-  emit floor, no acceleration, no correction loop for the final approach. Next
-  cycle: does the iPad accept absolute-mode positioning at all? (check
-  mouseAbsoluteMode path + a live getCursor test). If absolute mode works, most
-  of the ballistics/pointer-accel edifice becomes unnecessary for final approach.
-  Fallback candidates if absolute mode is unavailable on iPad: sub-floor emit
-  strategy (micro-burst coalescing) or a settle-and-nudge below the floor.
-  Then validate the winner LIVE at N≥80 paired vs Phase 0 baseline.
+  **ABSOLUTE MOUSE MODE = DEAD END (verified live 2026-07-20).** getHidProfile()
+  reports `mouseAbsolute:false` — the iPad is a relative-only HID host (as the
+  client comment at client.ts:811 already warned). This is WHY the whole
+  ballistics/pointer-accel edifice exists. Pursuing absolute mode would mean
+  reconfiguring PiKVM's USB gadget (risky — cf. the kvmd-otg trap) with low odds
+  iPadOS accepts absolute positioning (it treats mice as relative/trackpad). Not
+  the path. Verified, not assumed.
+  **PHASE 3 PLAN (revised, next):** the ~25px emit floor is a HARD FLOOR in
+  relative mode — accept it. For icon-sized targets (>50px) landing within ~25px
+  of center is already a HIT, so the floor is fine; the real win is KILLING THE
+  p90 TAIL (Phase 0 p90 71px, max 123px → the closed-loop's better design got p90
+  to 29). Action: port the improved loop design (tight gate, adaptive per-axis
+  gain, more passes, NO premature 25px early-exit) into production moveToPixel,
+  correcting on the VISUAL DETECTOR (production-available; ≈ ground truth to
+  11px). Expected: production median ~19→~15 and p90 71→~30, bounded by the floor.
+  Validate LIVE at N≥80 paired vs Phase 0 baseline (median 19 / p90 71); promote
+  only if the p90 tail improves beyond the noise floor. This is built on THIS
+  session's evidence, not an offline model claim.
