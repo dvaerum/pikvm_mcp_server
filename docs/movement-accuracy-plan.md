@@ -368,6 +368,19 @@ ON. Target: hit rate materially above today's baseline.
   ALL of it: ONE V8 detection + ONE deterministic emit, no per-pass motion-diff.
   Win = better detection METHOD (V8 once vs motion-diff cascade) + better emit
   METHOD (deterministic one-shot vs iterative), both matter.
+
+- **2026-07-20 (Phase 6 — PRODUCTION INTEGRATION):** added src/pikvm/curve-mover.ts
+  (validated curve + planAxisEmits + moveByCurveOneShot) and wired a
+  `strategy:'curve-one-shot'` delegation at the top of moveToPixel (non-invasive —
+  legacy iterative path unchanged; opt in via strategy + optional
+  minPresence/oneShotCorrectGatePx). Pure curve functions unit-tested 11/11; tsc
+  clean. NOTE: the 6 pre-existing suite failures (brightness stale-text, click-retry,
+  move-to.forbidSlam/verificationLag) also fail on clean HEAD — NOT caused by this
+  change (verified by re-running with move-to.ts checked out at HEAD). Curve is
+  hardcoded from the validation session (no tight-region dependency: V8, target,
+  and curve are all in the 1920×1080 HDMI frame). Running oneshot-ab-prod.ts —
+  the same N=80 A/B but BOTH arms via moveToPixel (arm A detect-then-move, arm B
+  curve-one-shot) — to confirm the win survives the production entry point.
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
