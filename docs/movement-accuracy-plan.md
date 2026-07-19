@@ -393,6 +393,21 @@ ON. Target: hit rate materially above today's baseline.
   switched to a one-shot-ONLY production-path run at N=80 (oneshot-prod-only.ts)
   to confirm the prod entry point reproduces ~9px; paired-ness was already
   established 80/80 in the scratch A/B.
+  RESULT (N=80, oneshot-prod-only.ts): moveToPixel({strategy:'curve-one-shot'})
+  median **11.4px** p90 **19.9** max **19.9** — **81% within 15px, 100% within
+  20px**. vs baseline (same setup, N=80) median 72.9 / p90 154 / 0% within 15px.
+  Integration CONFIRMED — prod entry point reproduces the one-shot at the V8
+  detector floor. Slightly worse than scratch (9.1/12.4): ~2px run-to-run V8
+  variance, NOT a regression (identical emit path). PHASE 6 DONE.
+  **PHASE 7 PLAN (next — required before making it default):** (a) emit-curve
+  CALIBRATION routine — learn the per-axis single-report curve live (emit probe
+  magnitudes, measure displacement via the DETECTOR, fit), cache in
+  ballistics.json keyed by resolution; the hardcoded curve is geometry-specific
+  and will miss if the iPad screen size/position changes. (b) Then wire the click
+  path (clickAtWithRetry / index.ts) to default iPad targets to curve-one-shot.
+  (c) Optionally test oneShotCorrectGatePx (one V8 correction shot when the first
+  lands >15px) to tighten the p90 tail — but 100% within 20px may already be
+  sufficient for icon-sized targets, so measure before adding latency.
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
