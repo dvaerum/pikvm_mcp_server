@@ -9,6 +9,14 @@ GUI clicking required.
 
 ## Build, install, launch (terminal-only)
 
+> **Must run from a GUI (Aqua) session — a real Terminal.app window, NOT
+> tmux / ssh / a background launchd context.** Codesigning needs the login
+> keychain's signing key, which macOS only releases to the foreground GUI
+> session. From a background session (`launchctl managername` prints
+> `Background`) codesign fails with `errSecInternalComponent` and the keychain
+> reports "User interaction is not allowed" — the app compiles but won't sign.
+> (Same session-isolation as macOS Local Network privacy.)
+
 Plug the iPad in via USB-C, unlock it, tap **Trust This Computer** if
 prompted. Then:
 
@@ -18,13 +26,15 @@ cd /Users/georg/pikvm_mcp_server/ipad-collector/iPadCollector
 # 1. Resolve the device identifier (run once; copy the UDID-looking string)
 xcrun devicectl list devices
 
-# 2. Build for the device (Release config, signed with team 988Y9UCZB7)
+# 2. Build for the device (Release config, signed with team 988Y9UCZB7).
+#    -allowProvisioningUpdates lets xcodebuild fetch/refresh the profile.
 xcodebuild \
   -project iPadCollector.xcodeproj \
   -scheme iPadCollector \
   -configuration Release \
   -destination 'generic/platform=iOS' \
   -derivedDataPath build \
+  -allowProvisioningUpdates \
   build
 
 # 3. Install the resulting .app
@@ -32,10 +42,10 @@ xcrun devicectl device install app \
   --device <DEVICE_ID> \
   build/Build/Products/Release-iphoneos/iPadCollector.app
 
-# 4. Launch it
+# 4. Launch it (bundle id is com.bb.iPadCollector)
 xcrun devicectl device process launch \
   --device <DEVICE_ID> \
-  com.example.pikvm.iPadCollector
+  com.bb.iPadCollector
 ```
 
 First install only: the iPad will refuse to launch with "Untrusted
