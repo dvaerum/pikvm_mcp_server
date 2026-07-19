@@ -194,9 +194,35 @@ ON. Target: hit rate materially above today's baseline.
   and was never a thing on iPad — there is no such behavior. Do not attribute any
   live hit-rate difference to it. The black-surface measurement is simply a clean
   model-error measure; the target pixel must be hit on its own.
-  **PHASE 2 PLAN (next):** rebuild the correction tail as closed-loop-on-V8 —
-  iterate move→V8-detect-residual→emit-correction until GT/V8 residual < a TIGHT
-  gate (e.g. 12px) on EVERY attempt, killing the p90 tail; and add a
-  distance-aware / bias-corrected emit so the open-loop first move doesn't
-  undershoot far targets. Re-measure at N≥80 paired vs THIS baseline (median 19 /
-  p90 71); promote only if GT residual beats it by > the ±10pp/noise floor.
+  **PHASE 2 PLAN (superseded — see Phase 2 RESULTS below):** rebuild correction
+  as a closed-loop on ground truth / V8, tight gate, adaptive gain.
+
+- **2026-07-20 (Phase 2 RESULTS — closed-loop-on-GROUND-TRUTH, N=24 CHARACTER-
+  IZATION, not a verdict):** scratch/closed-loop-gt.ts corrects using
+  getTrackedCursor (mapped to HDMI) as the ONLY feedback — no visual detector in
+  the loop (per user directive: use iPadCollector as the closed-loop feedback,
+  not just a scorer). Adaptive px/mickey gain, 6px gate, ≤10 passes.
+  Aggregate: median **10px**, p90 **29px**, 83% within 25px (vs Phase 0
+  detector-corrected median 19 / p90 71). DO NOT credit "better feedback" — the
+  gap conflates feedback + a tighter loop (6px gate vs 25px early-exit, more
+  passes, adaptive gain); since the detector already ≈ ground truth to 11px, the
+  loop-design change is likely the bigger factor. Not separable at N=24.
+  **STRUCTURAL FINDING (trace-proven, NOT a hypothesis):** the loop converges
+  fast to ~25px then STALLS at the emit floor — 58% of attempts floor-stall.
+  Traces: `Files a2 [465,296,141,21,24]` (reached 21, sub-floor correction
+  swallowed → ended 24); `Files a1 [457,288,132,26,103,51,18]` (reached 26, a
+  coarse 25-mickey step OVERSHOT to 103, oscillated). This is the documented
+  ~25-mickey emit floor (PA38 / [[project_ipad_emit_thresholds]]): a minimum
+  registering relative move ≈ ~25px of travel, so the loop cannot make sub-25px
+  corrections. **The bottleneck is EMIT GRANULARITY, not feedback or detection**
+  — ground-truth feedback barely helps once the floor is 25px. So closed-loop is
+  necessary but NOT sufficient; it plateaus at the floor.
+  **PHASE 3 PLAN (next):** attack sub-floor fine positioning. Leading candidate:
+  **absolute mouse mode** — position directly to the target pixel, no relative-
+  emit floor, no acceleration, no correction loop for the final approach. Next
+  cycle: does the iPad accept absolute-mode positioning at all? (check
+  mouseAbsoluteMode path + a live getCursor test). If absolute mode works, most
+  of the ballistics/pointer-accel edifice becomes unnecessary for final approach.
+  Fallback candidates if absolute mode is unavailable on iPad: sub-floor emit
+  strategy (micro-burst coalescing) or a settle-and-nudge below the floor.
+  Then validate the winner LIVE at N≥80 paired vs Phase 0 baseline.
