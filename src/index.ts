@@ -7,7 +7,6 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { startHttpServer } from './http-server.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -1756,29 +1755,6 @@ async function main() {
       `Warning: could not read HID profile (${(err as Error).message}). ` +
         'Defaulting to absolute mode; relative-mode-only tools may surface confusing errors on this device.',
     );
-  }
-
-  if (config.transport.kind === 'http') {
-    const { close } = await startHttpServer(createMcpServer, {
-      host: config.transport.httpHost,
-      port: config.transport.httpPort,
-      socketPath: config.transport.httpSocketPath,
-    });
-    // Close sessions and remove the unix socket on a clean signal so a leftover
-    // socket file doesn't block the next start.
-    for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-      process.once(sig, () => {
-        close().finally(() => process.exit(0));
-      });
-    }
-    console.error(
-      `PiKVM MCP Server running (Streamable HTTP). Connect Claude via ` +
-        `http://${config.transport.httpHost}:${config.transport.httpPort}/mcp — ` +
-        `loopback is exempt from macOS Local Network privacy, so this works even ` +
-        `from a tmux/stdio context that cannot reach the PiKVM LAN directly.`,
-    );
-    // The HTTP server keeps the event loop alive; nothing else to do here.
-    return;
   }
 
   const transport = new StdioServerTransport();
