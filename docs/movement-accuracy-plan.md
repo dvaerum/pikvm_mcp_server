@@ -326,3 +326,16 @@ ON. Target: hit rate materially above today's baseline.
   (c) ONLY if it wins live: build a calibration routine to learn the curve
   (cache in ballistics.json) for cross-session/resolution robustness. Do NOT
   ship on the emit-only numbers — the detector-start test is the gate.
+
+- **2026-07-20 (Phase 5 SMOKE — one-shot w/ DETECTOR start lands at the detector
+  floor, oneshot-smoke.ts):** production-realistic path — V8 detector for start
+  position (NOT getCursor), realistic home scene via showScene, scored vs
+  getCursor. N=3/target: Files 8.6px, AppStore 4.4, Settings 7.7, Books 9.9 (max
+  14 over 12 attempts). CRUCIAL: the one-shot error ≈ the V8-vs-GT start gap
+  target-by-target (8.6/8.6, 4.4/3.6, 7.7/6.5, 9.9/7.2) — i.e. the EMIT adds ~0;
+  landing accuracy IS detector accuracy, and there is NO overshoot tail. This is
+  the honest predicted result. Detection on this scene was ~7px (better than the
+  ~11px assumption). vs baseline Phase 0 median 19/p90 71.
+  STILL N=12 — a smoke, NOT a verdict. NEXT: paired A/B (baseline moveToPixel vs
+  curve-one-shot, same scene, scored on getCursor) at N≥80 to confirm the win
+  beats baseline beyond the noise floor — especially the p90 tail collapse.
