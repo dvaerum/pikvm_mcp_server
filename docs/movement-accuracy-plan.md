@@ -346,18 +346,19 @@ ON. Target: hit rate materially above today's baseline.
   curve one-shot (V8 start): median **9.1px** p90 **12.4** within-15px **100%**.
   One-shot better in **80/80 (100%)** paired. Per-target baseline med 53–97px
   (even its BEST Files attempt = 38px). Huge effect, far beyond the ±10pp floor.
-  CRITICAL ATTRIBUTION (do not over-credit the emit model): the baseline is 72.9
-  here vs 19 in Phase 0 — the ONLY difference is the scene (Phase 0 = black
-  default; this = realistic home via showScene). So the dominant baseline failure
-  is DETECTION: production moveToPixel's cascade (shape/motion/template)
-  false-positives on home-screen icon/wallpaper features and corrects the REAL
-  cursor toward the phantom (documented Phase 310–316 tautological detection). The
-  one-shot uses V8 (reliable on this scene, ~7px) so it avoids that. The WIN =
-  V8-primary detection (dominant) + curve one-shot emit (accuracy + no tail, ~2px
-  on its own). This CORRECTS the loop premise: "detection solved, emit is the
-  problem" held on BLACK (isolated emit at 19/71); on a realistic home screen the
-  bigger live failure is DETECTION, because production uses V8 only as a
-  null-fallback, not primary.
+  ATTRIBUTION — CORRECTED 2026-07-20 by verify-baseline-fp.ts (I first wrote
+  "cascade false-positives, dominant"; that is REFUTED). On the home scene the
+  baseline's FINAL detection AGREES with getCursor to 9–20px (cascade-vs-real:
+  Files 9/9/9, Settings 11/16/20) — it is NOT detecting a phantom. Yet the cursor
+  lands 44–72px from target and moveToPixel STOPS there despite its own detection
+  saying 47–63px (well past its 8/25px thresholds). So detection is accurate; the
+  baseline's ITERATIVE CORRECTION fails to converge on this surface. The WIN is
+  therefore the EMIT/MOVEMENT strategy: the curve one-shot places the cursor in
+  ONE deterministic shot (~9px) and avoids the baseline's non-converging
+  correction. (Emit is NOT "solved at 19/71" either — that was BLACK-surface;
+  baseline convergence DEGRADES to ~50–72px on a realistic scene. Sub-mechanism —
+  overshoot-oscillation vs bail-to-best-pass vs per-pass detection noise feeding
+  bad corrections — being pinned by diag-passes.ts.)
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
