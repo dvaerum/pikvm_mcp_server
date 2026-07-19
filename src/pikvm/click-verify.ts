@@ -1926,18 +1926,21 @@ export function formatDismissResult(result: {
  * click_at quality.
  */
 export function defaultMaxResidualPxFor(mouseAbsoluteMode: boolean): number | undefined {
-  // Config line: PIKVM_CLICK_MAX_RESIDUAL_PX overrides the default for BOTH
-  // modes so the proximity gate can be tuned/disabled without a rebuild.
-  //   PIKVM_CLICK_MAX_RESIDUAL_PX=25   → gate at 25 px
+  // The proximity gate is an integer argument (`maxResidualPx` on
+  // pikvm_mouse_click_at / clickAtWithRetry). When a positive number is passed,
+  // that value is used. When it is not passed, the default is 25 px on iPad
+  // (tight enough to reject adjacent-icon wrong-clicks; a 70 px icon tolerates
+  // ~half its width). The config line PIKVM_CLICK_MAX_RESIDUAL_PX overrides the
+  // default without a rebuild:
+  //   PIKVM_CLICK_MAX_RESIDUAL_PX=40   → default 40 px
   //   PIKVM_CLICK_MAX_RESIDUAL_PX=off  (or 0) → disable the gate
-  // Unset → the mode-aware default below (35 px on iPad, none on desktop).
   const raw = process.env.PIKVM_CLICK_MAX_RESIDUAL_PX;
   if (raw !== undefined) {
     if (raw === '0' || raw.toLowerCase() === 'off') return undefined;
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  return mouseAbsoluteMode ? undefined : 35;
+  return mouseAbsoluteMode ? undefined : 25;
 }
 
 /** Phase 93 — discriminator for the click-skip reason classes recorded
