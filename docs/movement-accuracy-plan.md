@@ -189,9 +189,11 @@ ON. Target: hit rate materially above today's baseline.
   not the median. Two error sources: (a) systematic undershoot ≈ correction loop
   leaving residual — likely minResidualPx=25 early-exit + open-loop under-emit on
   far targets; (b) a fat tail = occasional large errors = the real miss source.
-  Caveat: measured on iPadCollector's black surface (NO icon magnetism, which in
-  real UI snaps the cursor onto icons and helps) — so this is a clean MODEL-error
-  measure and a pessimistic proxy for live hit-rate.
+  CORRECTION: an earlier version of this note claimed the iPad home screen has
+  "icon snap-assist / magnetism" that pulls the cursor onto icons. That is FALSE
+  and was never a thing on iPad — there is no such behavior. Do not attribute any
+  live hit-rate difference to it. The black-surface measurement is simply a clean
+  model-error measure; the target pixel must be hit on its own.
   **PHASE 2 PLAN (next):** rebuild the correction tail as closed-loop-on-V8 —
   iterate move→V8-detect-residual→emit-correction until GT/V8 residual < a TIGHT
   gate (e.g. 12px) on EVERY attempt, killing the p90 tail; and add a
