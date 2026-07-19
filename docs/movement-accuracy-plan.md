@@ -235,3 +235,33 @@ ON. Target: hit rate materially above today's baseline.
   Validate LIVE at N≥80 paired vs Phase 0 baseline (median 19 / p90 71); promote
   only if the p90 tail improves beyond the noise floor. This is built on THIS
   session's evidence, not an offline model claim.
+  **^ THE ABOVE PHASE 3 PREMISE ("25px hard floor") IS WRONG — see below.**
+
+- **2026-07-20 (Phase 3 RESULTS — the "25px floor" was a FALSE assumption;
+  micro-stepping hits <5px):** Two experiments overturned last cycle's premise.
+  (1) fine-emit-probe.ts — measured the real emit→displacement curve vs getCursor
+  (5 reps, isolated emit + 250ms settle): 5mick→2.4px, 8→4.9px, 12→8.2px,
+  16→11.5px, 20→14.9px, 25→19px. **NO sub-threshold floor**, perfectly
+  deterministic (identical to 0.1px across reps). The old PA38 "25-mickey floor /
+  ≤20=0px" was a v11-DETECTOR resolution artifact (couldn't resolve sub-15px
+  moves) — corrected in [[project_ipad_emit_thresholds]]. And last cycle's
+  "plateaus at ~25px floor" was ALSO false: it was my own hard-coded EMIT_FLOOR=25
+  skip giving up, not the iPad.
+  (2) closed-loop-v2.ts — micro-step on that curve, undershoot 15%/step, settle
+  between steps, no floor. Scored on getCursor, N=24: median **2.8px**, p90
+  **3.4px**, max 4.7px, **100% within 5px**, 4–5 passes, ZERO overshoot (traces
+  descend monotonically, e.g. Books [360,209,57,13,2]). vs v1 median 10/p90 29 vs
+  Phase 0 median 19/p90 71.
+  HONEST CAVEATS: (a) N=24 is below the marginal-verdict noise floor, but the
+  effect is huge+deterministic; the open question is production, not
+  significance. (b) Uses getCursor feedback, which production does NOT have —
+  production uses the visual detector (~11px noise), so a production micro-stepper
+  floors near ~11px, NOT 2.8px. Do NOT quote 2.8px as production. The PORTABLE win
+  is curve-based micro-stepping that never overshoots — kills the p90 tail
+  regardless of feedback source.
+  **PHASE 4 PLAN (next):** port curve-based micro-stepping into production
+  moveToPixel's correction loop (replace the overshoot-prone big-emit linear
+  regime), feedback = visual detector. Validate LIVE at N≥80 paired vs Phase 0
+  baseline; success = p90 tail collapses (target p90 <25px) and median ≤ ~11–15px.
+  Also re-measure the emit curve across regions to confirm it isn't center-
+  specific before hardcoding it.
