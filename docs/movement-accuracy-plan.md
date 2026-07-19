@@ -155,3 +155,12 @@ ON. Target: hit rate materially above today's baseline.
   movement data; net-negative cycle (made the environment worse, honestly).
   **Next cycle:** health-check the iPad first; if not recovered, notify + stop;
   once recovered, pursue a NON-destructive PointerTracker fix (never reboot).
+
+- **2026-07-19 (cycles 3–4):** iPad health check both cycles → still degraded
+  (HID offline, screen off, devicectl unreachable). No-op by design (guardrail).
+  After 2 consecutive skips with the blocker being a PHYSICAL user action, the
+  `/loop 15m` (cron 9bd8e5c1) was **paused** (CronDelete) to avoid firing
+  uselessly every 15 min. **To resume:** physically recover the iPad (power
+  button / USB re-plug), confirm screen ON + HID online, then re-run
+  `/loop 15m <the movement prompt>`. First real action next time: a
+  NON-destructive PointerTracker fix (never a reboot), then the Phase 0 sweep.
