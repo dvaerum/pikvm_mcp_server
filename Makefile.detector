@@ -1,0 +1,37 @@
+# Detector tooling entry points (see docs/detector-tooling.md).
+# Lightweight one-command wrappers so the pipeline + eval tools are easy to run.
+# Python tools use .venv (numpy+torch); TS tools use npx tsx. Live targets need the
+# iPad env (PIKVM_PROXY, tinyproxy, iPadCollector). Usage: `make -f Makefile.detector <target>`
+PY := .venv/bin/python
+TSX := npx tsx
+PROXY := PIKVM_PROXY=http://127.0.0.1:8888
+CASCADE_ENV := PIKVM_ML_CASCADE=1 PIKVM_ML_V8_MODEL=ml/cursor-v14-ep05.onnx PIKVM_ML_VERIFIER_MODEL=ml/crop-verifier.onnx
+
+.PHONY: help data-crops data-synth train-verifier train-proposer export-verifier export-proposer \
+        cascade-eval grid-test holdout-eval integration-test health live-bench detection-ab
+
+help:
+	@grep -E '^[a-z-]+:' Makefile.detector | sed 's/:.*//' | sort | sed 's/^/  make -f Makefile.detector /'
+
+# --- data generation (offline) ---
+data-crops:      ; $(PY) ml/composite-crops.py 15000
+data-synth:      ; $(PY) ml/composite-cursor.py 4000
+
+# --- training (offline, MPS) ---
+train-verifier:  ; VERIFIER_EPOCHS=16 $(PY) ml/train-crop-verifier.py
+train-proposer:  ; $(PY) ml/train-cursor-v14.py
+
+# --- export ONNX (offline) ---
+export-verifier: ; $(PY) ml/export-verifier-onnx.py
+export-proposer: ; $(PY) ml/export-v14-onnx.py
+
+# --- offline eval / gates ---
+cascade-eval:    ; $(TSX) scratch/cascade-eval.ts ml/cursor-v14-ep05.onnx ml/crop-verifier.onnx
+grid-test:       ; $(TSX) scratch/grid-test.ts ml/crop-verifier.onnx
+holdout-eval:    ; $(TSX) scratch/v14-holdout-eval.ts
+integration-test:; $(CASCADE_ENV) $(TSX) scratch/test-cascade-integration.ts
+
+# --- live (need the iPad env) ---
+health:          ; $(PROXY) $(TSX) scratch/healthcheck-shot.ts
+live-bench:      ; $(PROXY) $(CASCADE_ENV) $(TSX) scratch/click-bench80-retry3.ts
+detection-ab:    ; $(PROXY) $(TSX) scratch/detection-ab-gt.ts
