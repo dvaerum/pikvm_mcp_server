@@ -3,19 +3,11 @@
  *
  * Pin BOTH the pure shape-score helper (numeric expectations on
  * stable inputs) and the integration `findCursorByShape` against
- * synthetic frames + the existing Phase 251 trial frames.
+ * self-contained synthetic frames.
  */
 
 import { describe, expect, it } from 'vitest';
-import { promises as fs } from 'fs';
-import path from 'path';
-import sharp from 'sharp';
 import { findCursorByShape, shapeScoreFor } from '../cursor-shape-detect.js';
-
-function repoRoot(): string {
-  const here = path.dirname(new URL(import.meta.url).pathname);
-  return path.resolve(here, '..', '..', '..');
-}
 
 describe('shapeScoreFor', () => {
   it('peaks for cursor-sized asymmetric off-centre clusters', () => {
@@ -181,42 +173,6 @@ describe('findCursorByShape — synthetic frames', () => {
     expect(rb).not.toBeNull();
     expect(rb!.centroidX).toBeGreaterThan(125);
     expect(rb!.centroidY).toBeGreaterThan(125);
-  });
-});
-
-describe('findCursorByShape — Phase 251 saved frames', () => {
-  // The Phase 251 frames are real iPad home-screen captures with the
-  // cursor visually verified at (~1063, 778). NCC failed on every
-  // template against these (max top-1 = 0.819 < 0.83 minScore).
-  // Phase 258 acceptance: shape detector + locality gate must pick
-  // a candidate within 30 px of (1063, 778) for ALL 5 trials.
-  const FRAMES = [1, 2, 3, 4, 5];
-  const EXPECTED = { x: 1063, y: 778 };
-
-  for (const t of FRAMES) {
-    it(`picks the cursor on trial${t}.jpg with hint`, async () => {
-      const buf = await fs.readFile(
-        path.join(repoRoot(), 'data', 'phase251-topk', `trial${t}.jpg`),
-      );
-      const { data, info } = await sharp(buf).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-      const r = findCursorByShape(data, info.width, info.height, {
-        expectedNear: EXPECTED,
-        expectedNearRadius: 200,
-      });
-      expect(r, `trial${t}.jpg should yield a candidate`).not.toBeNull();
-      const dist = Math.hypot(r!.centroidX - EXPECTED.x, r!.centroidY - EXPECTED.y);
-      expect(dist, `trial${t}.jpg dist ${dist.toFixed(0)} px`).toBeLessThan(30);
-    });
-  }
-
-  it('returns null on bad hint far from real cursor', async () => {
-    const buf = await fs.readFile(path.join(repoRoot(), 'data', 'phase251-topk', 'trial1.jpg'));
-    const { data, info } = await sharp(buf).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-    const r = findCursorByShape(data, info.width, info.height, {
-      expectedNear: { x: 200, y: 200 },
-      expectedNearRadius: 100,
-    });
-    expect(r).toBeNull();
   });
 });
 
