@@ -589,3 +589,22 @@ from throwaway `scratch/` frames to the committed `data/seeds/eval-frames/`.
 `emit-residuals*`/`phase*`/`v8-*`/bench dirs, `cursor-templates.*` backups, 371 MB retired models,
 ~2 MB loose logs. **Preserved:** seeds + `data/seeds/human-labels/` (40 jsonls, 988 KB irreplaceable
 human labour) + `data/seeds/REPRODUCE-MANIFEST.sha256` (fingerprints the exact reproduce inputs).
+
+## 2026-07-20 (cycle 24) — loop re-triggered on STALE premise; objective already met → STOP
+Health OK (screenshot: real home page-1, Maps widget present, unlocked, 100%). The loop prompt
+still describes the v13 SINGLE-STAGE FP/FN (Maps 0.999 / Books 0.003) — but that detector is
+RETIRED. Shipped now (verified in cursor-ml-detect.ts): dual-head grid CASCADE, CASCADE_ENABLED
+default-ON, verifier=crop-heatmap.onnx, single-stage proposer skipped (runCascade at top).
+
+Objective ("detector robust to ANY screen") is DONE, evidenced THIS session:
+- N=160 live @ 100% (two N=80 benches) on the real home screen WITH the Maps widget — the FP
+  surface — present. Maps target 10/10, resid 1-3px.
+- Production gate 8/8, margin 0.97, REJ maps-widget=0.01 (held-out reject → robustness-by-design).
+- Reproducible from committed seeds (cycle 23): reproduced model gate-identical + live 80/80.
+
+REFUTED / DO NOT RETRY: the single-stage v13→v14 fine-tune this prompt proposes — it only
+RELOCATED the FP (Maps→Books icon); no global gate separates 0.993 no-cursor from 0.995 cursor
+(memory project_single_stage_detector_ceiling_cascade). The cascade was and is the fix.
+
+DECISION: no non-refuted, not-already-done work remains in this loop → stopping it. Secondary items
+(6 pre-existing test failures) are out of this loop's detector scope; raise separately if wanted.
