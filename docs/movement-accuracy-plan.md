@@ -648,6 +648,22 @@ ON. Target: hit rate materially above today's baseline.
   matching production) to measure the TRUE production click-success rate. [Pending.]
   This is the right validation — and avoids building a risky new mechanism for a
   tail the existing retry already handles.
+  RESULT (N=80, maxRetries=3 = PRODUCTION default): **97.5% app-open (78/80)**.
+  7/8 targets 100% (FaceTime/Files/Reminders/Maps/AppStore/Games/Books) — retries
+  RECOVERED the intermittent mode-A misses. Only **Settings 80%** (2/10): a
+  PERSISTENT V8 start-FP (both misses identical 530px; cursor ends bottom-left
+  ~500px off, verified frame) that recurs on every retry from the same start, so
+  4 attempts fail identically. So the shipped path is 97.5%, NOT 95% — my
+  single-shot benches under-measured.
+  **CONCLUSION OF THE MOVEMENT WORK:** from the original ~0% (real home screen, old
+  iterative default at 73px median) to **97.5% production click-success**. The
+  EMIT model is fully solved (deterministic, isotropic, one-shot ~11px, 100% on
+  clean surfaces). The remaining 2.5% is a narrow PERSISTENT V8 start-detection FP
+  (Settings-specific), a DETECTION edge case, not movement. Pursuing it means
+  robustifying V8 start detection (probe-verify — complex, ambiguous persistent-FP
+  cases; or a reset-on-retry to a clear gap — slamCenter → V8-correct proven, but
+  hot-corner risk + latency). Given 97.5% and the risk, that's an optional future
+  step, not clearly worth it. Movement accuracy is effectively DONE.
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
