@@ -110,7 +110,7 @@ let v8LoadFailureLogged = false;
 // cursor arrow here?") confirms which candidate is the real cursor and rejects
 // icons/buttons/map tiles at native resolution. Offline: 6/6 on the held-out home
 // frames. See docs/detector-retrain-plan.md.
-const CASCADE_ENABLED = process.env.PIKVM_ML_CASCADE === '1';
+const CASCADE_ENABLED = process.env.PIKVM_ML_CASCADE !== '0';  // DEFAULT ON (opt out with =0)
 const VERIFIER_MODEL = process.env.PIKVM_ML_VERIFIER_MODEL
   ? path.resolve(process.env.PIKVM_ML_VERIFIER_MODEL)
   : path.resolve(process.cwd(), 'ml', 'crop-heatmap.onnx');
@@ -355,6 +355,14 @@ export async function findCursorByV8FullFrame(
   frameHeight: number,
   options?: { minPresence?: number },
 ): Promise<{ x: number; y: number; presence: number; heatmapPeak: number } | null> {
+  // DEFAULT detection path (2026-07-20): the dual-head crop CASCADE (grid → presence +
+  // heatmap soft-argmax). Validated LIVE 160/160 across two N=80 benches + 2.8px small-
+  // button precision; both v13 failure modes (Maps-widget FP, Books-icon FN) fixed. Skips
+  // the full-frame proposer entirely (the grid doesn't use it). Opt OUT with
+  // PIKVM_ML_CASCADE=0 to fall back to the legacy single-stage path below.
+  if (CASCADE_ENABLED) {
+    return runCascade(jpegBuffer, frameWidth, frameHeight);
+  }
   const minPresence = options?.minPresence ?? 0.5;
   if (cachedV8Session === null) {
     try {
@@ -407,13 +415,6 @@ export async function findCursorByV8FullFrame(
   const heatmapLogits = results.heatmap_logits.data as Float32Array;
   const presenceLogit = (results.presence_logit.data as Float32Array)[0];
   const presence = 1 / (1 + Math.exp(-presenceLogit));
-
-  // Cascade path: the full-frame presence head is unreliable on the real home
-  // screen (FPs on orange icons); delegate the accept/reject + position to the
-  // crop-verifier over the proposer's top-K peaks. Ignores minPresence by design.
-  if (CASCADE_ENABLED) {
-    return runCascade(jpegBuffer, frameWidth, frameHeight);
-  }
 
   if (presence < minPresence) return null;
 
