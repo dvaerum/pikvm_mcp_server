@@ -577,6 +577,20 @@ ON. Target: hit rate materially above today's baseline.
   RESET fixes the miss — comparing RESET vs NO-RESET Maps-click hit-rate live. If
   RESET ≈ 100% and NO-RESET ≈ 60%, the fix is a pre-detect reset (needs a SAFE one
   — slamCenter uses slam-to-corner, hot-corner risk).
+  RESULT (maps-real-diag2.ts): reset hypothesis NOT confirmed — BOTH RESET (10/10)
+  AND NO-RESET (10/10) = 100% on single-target Maps clicks. NO-RESET trivially hit
+  because the cursor STAYED on Maps (emit ~0) each round. So neither isolated
+  diagnostic reproduces the bench's 60%. KEY: the bench INTERLEAVES 8 targets, so
+  Maps is always reached COMING FROM the previous target (Reminders), and misses
+  4/10 rounds WITH THE SAME START → the intermittency is NOT the start position;
+  it's the LIVE screen state per round (clock hands / widgets) affecting V8. Slam
+  reset did NOT trigger a hot-corner re-lock across 20 slams (noted, still cautious).
+  Running maps-faithful.ts: cursor comes from Reminders→Maps each round, real
+  clicks, FULL instrumentation (V8-start, V8-after-shot, correction-fired?,
+  V8-final) to isolate whether misses come from the START detection, the emit, or
+  the CORRECTION over-correcting on a V8 final-FP. [Result pending.] (Meta: 3
+  flawed diagnostics this phase — each didn't reproduce the bench condition; the
+  discipline is to reproduce faithfully AND check the screenshot before concluding.)
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
