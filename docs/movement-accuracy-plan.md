@@ -562,6 +562,22 @@ ON. Target: hit rate materially above today's baseline.
   stands at ~89% app-open; the emit model is solid — this is a detection edge case
   on the live home screen.
 
+  ** 2026-07-20 (Phase 8 — flawed diagnostic + WRONG conclusion, corrected):**
+  first live-screen diagnostic (maps-real-diag.ts) had TWO bugs: (1) it never
+  CLICKED (only moved) so "0% hit" was meaningless; (2) no cursor reset, so the
+  cursor sat ON Maps from a prior click and the emit was ~0 (no movement to test).
+  I saw V8_start ≈ (1160,570) = Maps target every time p1.00 and WRONGLY concluded
+  "V8 false-positives on the Maps icon." The PRE frame REFUTES that: the real
+  cursor (orange arrow) IS on the Maps icon; V8 was CORRECT. I jumped to a
+  conclusion again without checking the screenshot first — the exact trap.
+  Geometry-drift ALSO ruled out: region identical (610,58,692,956).
+  The real variable surfaced: the SCENE diagnostic that worked did a slamCenter
+  RESET (cursor → clear gap) before detecting; the BENCH does NOT reset. HYPOTHESIS
+  (under proper test now, maps-real-diag2.ts WITH real clicks): a pre-detect cursor
+  RESET fixes the miss — comparing RESET vs NO-RESET Maps-click hit-rate live. If
+  RESET ≈ 100% and NO-RESET ≈ 60%, the fix is a pre-detect reset (needs a SAFE one
+  — slamCenter uses slam-to-corner, hot-corner risk).
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
