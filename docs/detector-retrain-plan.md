@@ -265,6 +265,22 @@ then LIVE. The grid runCascade + v6 are committed but OPT-IN (default path uncha
   drag-pan), Photos (dark UI), small "+"/modal buttons, and the dock edge. Memory:
   [[project_dual_head_crop_detector]].
 
+## cycle 22 — nix run wiring + broader app exploration (2026-07-20)
+- NIX (#1): exposed the detector tools as flake apps (flake.nix, 11 apps via mkTs/mkLive/mkPy
+  helpers): offline (heatmap-gate, cascade-eval, integration-test), LIVE (health, live-bench,
+  maps-precision, explore), ML pipeline (gen-crops, train-heatmap, export-heatmap) + label-review.
+  mkLive defaults PIKVM_PROXY to the loopback tinyproxy; mkPy uses the repo .venv (torch/MPS not
+  nixified — documented). VALIDATED end-to-end: `nix run .#heatmap-gate` builds + runs = 8/8
+  margin 0.97. docs/detector-tooling.md updated with the run commands. (Freed disk first — rm'd
+  the 451M regenerable data/synth-v14; disk was 97% full.)
+- EXPLORATION (#2): validated detection on novel busy surfaces the benches never touch —
+  App Store (dense colorful app-icon cards: cursor detected 5-7px, NO FP on the colourful icons)
+  and Books (grid of colourful book covers incl. a bright-ORANGE Sherlock cover: cursor detected
+  13px, NO FP). Both are the richest "any-screen" confuser surfaces; detection robust throughout.
+  Cursor also cleanly detected at the LEFT edge (~630,465) post-drag (edge fix holding). NET: the
+  "robust to ANY screen" goal is validated across home / Settings / Maps(animated) / Photos /
+  App Store / Books + all region edges. Memory: [[project_dual_head_crop_detector]].
+
 ## Progress log
 - **2026-07-20 (cycle 14): LIVE BENCH = 94% (75/80) — NOT a win; live testing caught
   a real gap the offline 6/6 missed. The cascade is NOT yet validated live.** Honest
