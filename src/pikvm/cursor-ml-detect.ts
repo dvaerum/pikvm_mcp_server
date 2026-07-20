@@ -101,6 +101,85 @@ const V8_HEATMAP_H = V8_INPUT_H / 4;  // 120
 let cachedV8Session: ort.InferenceSession | null = null;
 let v8LoadFailureLogged = false;
 
+// --- Cascade verifier (cursor-v14 PROPOSER + crop-VERIFIER). Opt-in via
+// PIKVM_ML_CASCADE=1 (proposer = PIKVM_ML_V8_MODEL). The full-frame heatmap can't
+// separate the cursor from orange app icons at 192×120 (the arrow is ~3-4px, so it
+// keys on colour and FPs on the Maps widget / Books icon at ~0.99). The cascade
+// PROPOSES the top-K heatmap peaks, then a 96px-crop binary VERIFIER ("is there a
+// cursor arrow here?") confirms which candidate is the real cursor and rejects
+// icons/buttons/map tiles at native resolution. Offline: 6/6 on the held-out home
+// frames. See docs/detector-retrain-plan.md.
+const CASCADE_ENABLED = process.env.PIKVM_ML_CASCADE === '1';
+const VERIFIER_MODEL = process.env.PIKVM_ML_VERIFIER_MODEL
+  ? path.resolve(process.env.PIKVM_ML_VERIFIER_MODEL)
+  : path.resolve(process.cwd(), 'ml', 'crop-verifier.onnx');
+const CASCADE_K = Number(process.env.PIKVM_ML_CASCADE_K ?? '20');
+const CASCADE_NMS = 70;   // native-px min separation between candidate peaks
+const CASCADE_CROP = 96;  // native-px verifier crop (MUST match training)
+const VERIFY_THRESH = Number(process.env.PIKVM_ML_VERIFY_THRESH ?? '0.5');
+let cachedVerifierSession: ort.InferenceSession | null = null;
+let verifierLoadFailureLogged = false;
+
+/** Verifier score (sigmoid) for the 96px crop centred on (cx,cy) in native px. */
+async function verifyCropAt(
+  jpegBuffer: Buffer, cx: number, cy: number, frameW: number, frameH: number,
+): Promise<number> {
+  const left = Math.max(0, Math.min(frameW - CASCADE_CROP, Math.round(cx - CASCADE_CROP / 2)));
+  const top = Math.max(0, Math.min(frameH - CASCADE_CROP, Math.round(cy - CASCADE_CROP / 2)));
+  const { data: rgb } = await sharp(jpegBuffer)
+    .extract({ left, top, width: CASCADE_CROP, height: CASCADE_CROP })
+    .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const plane = CASCADE_CROP * CASCADE_CROP;
+  const inp = new Float32Array(3 * plane);
+  for (let i = 0; i < plane; i++) {
+    inp[i] = (rgb[i * 3] / 255 - MEAN[0]) / STD[0];
+    inp[plane + i] = (rgb[i * 3 + 1] / 255 - MEAN[1]) / STD[1];
+    inp[2 * plane + i] = (rgb[i * 3 + 2] / 255 - MEAN[2]) / STD[2];
+  }
+  const r = await cachedVerifierSession!.run({
+    crop: new ort.Tensor('float32', inp, [1, 3, CASCADE_CROP, CASCADE_CROP]),
+  });
+  const logit = (r.logit.data as Float32Array)[0];
+  return 1 / (1 + Math.exp(-logit));
+}
+
+/** Cascade: proposer heatmap → top-K NMS peaks → verifier per crop → best. */
+async function runCascade(
+  jpegBuffer: Buffer, heatmapLogits: Float32Array, frameW: number, frameH: number,
+): Promise<{ x: number; y: number; presence: number; heatmapPeak: number } | null> {
+  if (cachedVerifierSession === null) {
+    try {
+      await fs.access(VERIFIER_MODEL);
+      cachedVerifierSession = await ort.InferenceSession.create(VERIFIER_MODEL);
+    } catch (e) {
+      if (!verifierLoadFailureLogged) {
+        console.error(
+          `[cursor-ml-detect] failed to load verifier at ${VERIFIER_MODEL}: ` +
+          `${(e as Error).message}. Cascade disabled.`,
+        );
+        verifierLoadFailureLogged = true;
+      }
+      return null;
+    }
+  }
+  const order = Array.from(heatmapLogits.keys()).sort((a, b) => heatmapLogits[b] - heatmapLogits[a]);
+  const peaks: { x: number; y: number; peak: number }[] = [];
+  for (const i of order) {
+    const nx = Math.round((i % V8_HEATMAP_W) / V8_HEATMAP_W * frameW);
+    const ny = Math.round(Math.floor(i / V8_HEATMAP_W) / V8_HEATMAP_H * frameH);
+    if (peaks.some((p) => Math.hypot(p.x - nx, p.y - ny) < CASCADE_NMS)) continue;
+    peaks.push({ x: nx, y: ny, peak: 1 / (1 + Math.exp(-heatmapLogits[i])) });
+    if (peaks.length >= CASCADE_K) break;
+  }
+  let best: { x: number; y: number; peak: number; v: number } | null = null;
+  for (const p of peaks) {
+    const v = await verifyCropAt(jpegBuffer, p.x, p.y, frameW, frameH);
+    if (best === null || v > best.v) best = { ...p, v };
+  }
+  if (best === null || best.v < VERIFY_THRESH) return null;
+  return { x: best.x, y: best.y, presence: best.v, heatmapPeak: best.peak };
+}
+
 /** Result type returned by findCursorByML. */
 export interface MLCursorResult {
   /** Cursor x in full-frame screenshot pixels. */
@@ -301,6 +380,13 @@ export async function findCursorByV8FullFrame(
   const heatmapLogits = results.heatmap_logits.data as Float32Array;
   const presenceLogit = (results.presence_logit.data as Float32Array)[0];
   const presence = 1 / (1 + Math.exp(-presenceLogit));
+
+  // Cascade path: the full-frame presence head is unreliable on the real home
+  // screen (FPs on orange icons); delegate the accept/reject + position to the
+  // crop-verifier over the proposer's top-K peaks. Ignores minPresence by design.
+  if (CASCADE_ENABLED) {
+    return runCascade(jpegBuffer, heatmapLogits, frameWidth, frameHeight);
+  }
 
   if (presence < minPresence) return null;
 
