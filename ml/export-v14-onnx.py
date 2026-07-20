@@ -2,14 +2,17 @@
 Export ml/cursor-v14.pt -> ml/cursor-v14.onnx. Architecture identical to v13
 (train-cursor-v14.py only changed the training DATA, not the net).
 """
+import sys
 from pathlib import Path
 import torch
 import torch.nn as nn
 from torchvision.models import mobilenet_v3_small
 
 ROOT = Path(__file__).resolve().parent
-PT = ROOT / "cursor-v14.pt"
-ONNX = ROOT / "cursor-v14.onnx"
+# Optional argv: [in.pt] [out.onnx] — lets us export a snapshot (cursor-v14-ep05.pt)
+# without touching cursor-v14.pt which the live training run overwrites each epoch.
+PT = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "cursor-v14.pt"
+ONNX = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "cursor-v14.onnx"
 INPUT_W, INPUT_H = 768, 480
 
 

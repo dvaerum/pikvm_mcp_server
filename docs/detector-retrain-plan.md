@@ -90,6 +90,38 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 7): DECISIVE — single-stage full-frame has hit its ceiling;
+  pivot to the CASCADE (evidence-backed, verified by eye).** Trained v14 run-2 (14%
+  negatives, 50/50 synth-v14). Heatmap CONVERGED beautifully on real cursors: the
+  Books frame v13 MISSED (0.0012) is now 11px @ peak 0.992–0.997; clean-cursor on
+  wallpaper 9px @ 0.995. BUT the ep05 GATE (scratch/v14-holdout-eval.ts on
+  cursor-v14-ep05) exposed the ceiling: on the 4 NO-CURSOR home frames the heatmap
+  PEAKS 0.993 at (760,819), and — VERIFIED BY EYE (scratch/peak-annotated.jpg) —
+  (760,819) is EXACTLY THE ORANGE BOOKS APP ICON. The map FP is gone (hm@widget
+  0.999→0.51) but the FP just RELOCATED from the Maps widget (v13) to the Books icon
+  (v14). SAME failure mode (fires on an orange icon), different icon. NO GLOBAL GATE
+  SEPARATES: no-cursor home = 0.993 peak, real cursors = 0.995 — presence AND peak
+  both overlap. Presence head is also unusable (over-fires at 3.5% neg, under-fires
+  0.01–0.04 at 14% neg). ROOT CAUSE (fundamental, not a data bug): at 768×480 input →
+  192×120 heatmap the 31×38px arrow shrinks to ~3–4px — indistinguishable by SHAPE
+  from a similar-scale orange icon; the model keys on color/blob because it has no
+  resolution to see the arrow. On plain wallpaper (no competing orange icon) it's
+  perfect (9px). TWO independent single-stage models (v13 @0.999 Maps, v14 @0.993
+  Books) failing the SAME way on TWO different orange icons = robust evidence, not a
+  noisy sample. CONCLUSION: more single-stage data/epochs won't fix a resolution
+  limit → the CASCADE (user's idea) is the right architecture: v14 as PROPOSER (its
+  heatmap now makes the real cursor a TOP peak — a strong proposer) → a high-res
+  CROP-VERIFIER that sees each candidate at NATIVE resolution, where the arrow is
+  large (~40% of an ~96px crop) and its shape IS separable from a book icon.
+  REFUTED (do not retry): single-stage full-frame heatmap/presence gating for
+  robust cursor-vs-orange-icon separation — ceiling verified twice by eye. NEXT:
+  build the crop-verifier training data (reuse ml/cursor-sprite.png + data/bg-real +
+  compositor, but emit ~96px CROPS: positives = crop containing the composited arrow;
+  negatives = crops of backgrounds incl. orange-icon/map textures with NO arrow),
+  train a small crop classifier, wire the cascade (v14 proposer top-K → verifier),
+  gate on the same hold-out (must reject the Books-icon crop, accept the cursor
+  crop), then LIVE N=80. Single-stage v14 training killed (GPU freed for the
+  verifier); cursor-v14-ep05 kept as the proposer.
 - **2026-07-20 (cycle 6):** trained v14 run-1, ran the ONNX hold-out GATE on the
   epoch-0 checkpoint (production-faithful cubic; scratch/v14-holdout-eval.ts) — the
   single most informative probe so far. RESULTS (evidence):

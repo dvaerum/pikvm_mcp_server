@@ -82,6 +82,10 @@ async function evalModel(tag: string, onnxPath: string) {
     `  ${cdist < 80 ? '<-- DETECTED' : '<-- MISS'}`);
 }
 
-const v14 = process.argv.includes('--v14-only');
-if (!v14) await evalModel('v13 (baseline)', 'ml/cursor-v13.onnx');
-await evalModel('v14 (robust)', 'ml/cursor-v14.onnx');
+// Optional: pass a v14 onnx path as the first non-flag arg (e.g. a snapshot
+// ml/cursor-v14-ep05.onnx) so we can gate a checkpoint without racing the live
+// cursor-v14.onnx. `--v14-only` skips the v13 baseline.
+const v14only = process.argv.includes('--v14-only');
+const v14Path = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 'ml/cursor-v14.onnx';
+if (!v14only) await evalModel('v13 (baseline)', 'ml/cursor-v13.onnx');
+await evalModel(`v14 (${v14Path})`, v14Path);
