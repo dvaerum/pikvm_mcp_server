@@ -208,7 +208,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_health_check',
-    description: `Diagnose the running MCP server's deployment-critical state in one call. Returns: (1) embedded version (compare against main to detect stale deployment), (2) mouseAbsoluteMode (the gate for absolute-mode tools and forbidSlamFallback — if startup HID-profile detection failed and this is the safe default 'false', non-iPad targets will see absolute-mode tools refused), (3) live HID profile from /api/hid (mouse absolute/relative + online status), (4) attempted iPad bounds detection (orientation + letterbox dimensions if detected). Call this FIRST after deployment to verify the server is healthy and the target is what you think it is. Especially important to run if cursor click_at calls are misbehaving — it'll surface whether the safety guards are active.`,
+    description: 'One-call diagnostic: server version, HID mouse/keyboard online + absolute/relative mode, streamer HDMI-source online, and detected iPad bounds/orientation. Run first after deploy or when click_at misbehaves.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -216,7 +216,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_screenshot',
-    description: 'Capture a screenshot from the PiKVM video stream. Returns the current screen as a JPEG image. On iPad targets, iPadOS fades the cursor after a few seconds of inactivity — pass `keepCursorAlive: true` (Phase 202 v0.5.197) to emit a ±1 px wake nudge immediately before the snapshot so the cursor stays visible. The nudge displaces by 0 net px (no UI side effects). Critical for visual cursor verification or any human-in-the-loop debugging of click_at residuals.',
+    description: 'Capture a JPEG from the PiKVM video stream. On iPad pass keepCursorAlive:true to emit a net-zero ±1px nudge just before the snapshot so the auto-fading cursor stays visible for verification.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -314,7 +314,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_screen_state',
-    description: 'Quick "is the screen on?" check via the PiKVM streamer API. Returns { on: boolean, resolution: { width, height } }. When `on: false`, the HDMI source is not transmitting (iPad screen off — most commonly LOCKED / asleep / Touch ID gate, less commonly powered off or unplugged); pikvm_screenshot will return 503 UnavailableError until the screen comes back. Wake the iPad first (sendKey Enter wakes the screen and on iPadOS 26 also dismisses the lock screen when no passcode is set; see also pikvm_ipad_unlock for the swipe-based path on passcode-protected devices). When `on: true`, the source is healthy and cursor/click tools should work normally. Cheaper than pikvm_health_check — exactly one PiKVM API call.',
+    description: 'Fast "is the screen on?" check via the streamer API; returns { on, resolution }. on:false means no HDMI signal (iPad locked/asleep/off) and pikvm_screenshot 503s. Cheaper than pikvm_health_check — one API call.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -322,8 +322,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_hid_reset',
-    description:
-      'Reset the PiKVM USB HID gadget — the recovery primitive for when pikvm_health_check reports mouse/keyboard `online: false` and input (keys, mouse moves) has no effect on the target. Sends POST /api/hid/reset (soft re-init of the emulated keyboard+mouse). IMPORTANT LIMITATION (live-verified 2026-07-19): a soft reset CANNOT force the host to re-enumerate — if the target device (e.g. an iPad that just cold-booted from a dead battery) is not bringing the USB HID link up, `online` stays false and only a physical re-plug of the USB-C data cable (or a target restart) fixes it. Pass `reconnectUsb: true` to additionally toggle the OTG connection (set_connected 0→1, the software unplug/replug) — but that only does anything on PiKVM builds where the OTG `connected` control is wired (many are not; the toggle is a no-op there). Returns the HID online state sampled ~2 s after the reset so you can see whether it recovered.',
+    description: 'Recovery when HID mouse/keyboard shows online:false: soft-reinits the emulated HID and returns online state after settleMs. A soft reset cannot force host re-enumeration — the target may need a physical cable replug.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -340,7 +339,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_unlock_with_code',
-    description: 'Keyboard-only unlock for a passcode-protected iPad. Recipe (verified by user 2026-06-03): sendKey Space → wait 1 s (wakes the screen) → sendKey Space → wait 1 s (dismisses the lock screen and brings up the passcode prompt) → type each passcode digit with ~100 ms between presses → sendKey Enter. Pass the passcode as `code` (digits only, 4–10 chars). Use this instead of pikvm_ipad_unlock when the iPad has a passcode set. **The code is sent verbatim to PiKVM HID and is NOT logged, stored, or echoed in the response** — the response just confirms the digit-count and that Enter was fired. Verify success with pikvm_screen_state (expect on:true) and pikvm_screenshot. Mirror tool for locking: pikvm_ipad_lock.',
+    description: 'Keyboard-only unlock for a passcode-protected iPad: wakes the screen, types the digits, presses Enter. Code is sent to HID but never logged, stored, or echoed. Use instead of pikvm_ipad_unlock when a passcode is set.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -354,7 +353,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_lock',
-    description: 'Lock the iPad screen by sending Ctrl+Cmd+Q (the standard macOS Lock Screen shortcut; live-verified 2026-06-03 to lock an iPad running iPadOS 26). After firing, the iPad screen turns off → PiKVM HDMI source goes offline → pikvm_screenshot returns 503 until the iPad wakes again. Verify by calling pikvm_screen_state immediately after — should report on:false within ~2 s. To unlock again on a passcode-free iPad: sendKey Enter wakes the screen and on iPadOS 26 also dismisses the lock screen (Phase 217). For passcode-protected iPads: pikvm_ipad_unlock fires the swipe-up gesture instead. Use cases: end-of-session cleanup; recovering from a stuck modal that absorbed Escape but where the user expected the iPad to sleep anyway; tests that want a known-locked starting state.',
+    description: 'Lock the iPad via Ctrl+Cmd+Q. DESTRUCTIVE: turns the screen off, so HDMI goes offline and pikvm_screenshot 503s until wake. Verify with pikvm_screen_state (on:false). Unlock a passcode-free iPad with sendKey Enter.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -362,7 +361,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_dismiss_popup',
-    description: 'Run the hidden-popup dismiss recipe (Escape → 60ms → Enter → 60ms). Useful when click_at lands on a known-correct target but produces no UI change — the dominant explanation is an iOS HDMI-blocked security popup (Apple Pay / Face ID / password / Low Battery / app permission) eating the input. Live-verified that Escape DOES dismiss visible system popups (a Low Battery 10% modal cleared cleanly with one Escape). Optional opt-in escalation `force: true` appends Cmd+H (system Home shortcut) AFTER Escape+Enter — use only when Escape+Enter alone produced no visible state change AND you accept that Cmd+H will exit any foreground app (verified 2026-06-03 to dismiss a stuck Low Battery 5% modal that absorbed Escape). Best-effort: errors are captured and returned, never thrown. Returns { keysSent, errors }.',
+    description: 'Runs the hidden-popup dismiss recipe (Escape then Enter) when a click lands right but nothing happens (an iOS security popup ate it). Best-effort. force:true also sends Cmd+H — DESTRUCTIVE: exits the foreground app.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -484,7 +483,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_unlock',
-    description: 'Unlock an iPad from its lock screen. Phase 217 (v0.5.205): tries `Escape` + `Enter` + `Space` keys in sequence FIRST — Enter is the actual unlock key on iPadOS 26 lock screens (Space alone stopped working between Phase 210 and 2026-05-10). When key presses succeed, no swipe is emitted (Phase 219 v0.5.206 default `swipeOnKeyPressFailure: true` only fires the swipe if keys don\'t unlock — protects already-unlocked iPads from being re-locked by a stray swipe). Falls back to a USB HID swipe-up gesture covering 1500 px (Phase 209 default). Returns a post-unlock screenshot so the caller can confirm the iPad is on the home screen. SIDE EFFECTS: idempotent on an already-unlocked iPad (keys are no-ops on home screen, swipe is skipped). Pass `tryKeyPressFirst: false` to force the legacy swipe-only path, or `swipeOnKeyPressFailure: false` to disable the fallback entirely.',
+    description: 'Unlock an iPad from the lock screen: tries Escape/Enter/Space keys first (Enter unlocks iPadOS), then falls back to a USB-HID swipe-up. Idempotent on an already-unlocked iPad. Returns a post-unlock screenshot.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -500,7 +499,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_detect_orientation',
-    description: 'Detect the iPad content bounds and orientation within the HDMI capture frame. Useful for landscape-aware automation — returns the iPad bounding rect (x/y/width/height), centre point, orientation (portrait or landscape), and full HDMI resolution. Both pikvm_ipad_unlock and pikvm_mouse_move_to call this automatically when their offset arguments are not specified, so most callers do not need to invoke it directly. Use this tool when you want to inspect the iPad layout, or precompute slam/swipe origins for repeated calls.',
+    description: 'Detect the iPad content bounds in the HDMI frame: returns rect (x/y/w/h), centre, orientation (portrait/landscape), and HDMI resolution. Rarely needed directly — unlock and move_to invoke it automatically.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -510,7 +509,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_home',
-    description: 'Return the iPad to the home screen from any foreground app via Cmd+H. Idempotent on the home screen. **Cmd+H does NOT dismiss the App Switcher** (Phase 214 finding) — pass `forceHomeViaSwipe: true` for guaranteed home-screen state when the iPad may be in App Switcher mode. The swipe path also (Phase 231 v0.5.207) sends defensive Esc+Enter to undo accidental re-lock and (Phase 235 v0.5.208) deposits cursor mid-screen via 6×100 px chunked Y emits — without that deposit the cursor is pinned at the top edge after the swipe and subsequent moveToPixel calls to bottom-half targets fail. Does NOT unlock the lock screen — use pikvm_ipad_unlock for that.',
+    description: 'Return the iPad to the home screen via Cmd+H; idempotent there. Cmd+H does NOT dismiss the App Switcher — pass forceHomeViaSwipe:true for that. Does NOT unlock the lock screen — use pikvm_ipad_unlock.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -532,7 +531,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_launch_app',
-    description: 'Launch an iPad app via the verified keyboard-first pipeline: unlock (if locked) → Spotlight (Cmd+Space) → type the app name → Enter. Returns a post-launch screenshot. Far more reliable than clicking an app icon — bypasses cursor positioning entirely. Verified on iPadOS 26.1 for Files, Settings, App Store. If the named app does not appear in Spotlight (typo, app not installed, locale-specific name), iPad returns to the home screen and the screenshot will reflect that.',
+    description: 'Launch an iPad app keyboard-first: unlock (optional) then Spotlight (Cmd+Space), type appName, Enter. More reliable than clicking an icon. If the app is not found the iPad returns home. Returns a post-launch screenshot.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -547,7 +546,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_move_to',
-    description: 'Move the mouse pointer to an approximate target pixel on a PiKVM target in RELATIVE mouse mode (e.g. iPad). Default strategy ("detect-then-move") probes+diffs to locate the cursor without moving it much, then emits a chunked delta sequence to the target. Runs up to 2 correction passes (probe-driven) and a ground-truth detection pass so the returned message reports the actual cursor landing position. Returns a post-move screenshot. Use pikvm_mouse_click_at for "move then click".',
+    description: 'Move the pointer to a target HDMI pixel on a relative-mouse target (iPad). Default strategy on iPad is curve-one-shot: one detect + one deterministic curve emit (~11px). Use pikvm_mouse_click_at to move+click.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -575,7 +574,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_click_at',
-    description: 'Move the mouse to an approximate target pixel (via pikvm_mouse_move_to) and then click. Returns a post-click screenshot. Inherits pikvm_mouse_move_to\'s detection/correction pipeline. With verifyClick=true (default), also takes a pre-click screenshot and reports whether the click triggered a visible screen change — use this signal to detect a missed click rather than relying on screenshot inspection alone. With maxRetries>0, automatically retries up to N times when the verification reports no screen change; each retry runs a fresh detect-then-move probe so the cursor position is rediscovered from scratch (does NOT compound errors like Phase 17). Phase 38: on iPad targets (mouse.absolute=false), checks screen brightness before clicking — if the iPad display is dimmed below mean=50/255 (live-verified failure threshold for cursor detection), aborts with a "wake the iPad" message instead of wasting attempts on a known-bad environment.',
+    description: 'Move to a target HDMI pixel via pikvm_mouse_move_to then click. verifyClick (default) reports whether the click changed the screen; maxRetries re-probes on no-change; a brightness gate aborts on a dim iPad.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -603,7 +602,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_measure_ballistics',
-    description: 'Characterise the relative-mouse acceleration curve of a PiKVM target in RELATIVE mouse mode (mouse.absolute=false, e.g. iPad). Slams the pointer to the top-left corner, then sweeps (axis × delta magnitude × pace) and measures the resulting pixel displacement per emitted mickey. Writes a ballistics profile JSON used by pikvm_mouse_move_to and pikvm_mouse_click_at. One-off per device; re-run if resolution or orientation changes. Takes a few minutes. Other tools are blocked during measurement.',
+    description: 'Characterise a relative-mouse target acceleration curve: slams to top-left, sweeps axis x magnitude x pace, and writes a ballistics profile used by move_to/click_at. One-off per device; takes minutes; blocks other tools.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -651,7 +650,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_auto_calibrate',
-    description: 'Automatically calibrate mouse coordinates by detecting the cursor position via screenshot diffing. This is more accurate than manual calibration. Moves the mouse multiple times, compares screenshots to find the cursor, and computes calibration factors. Other tools are blocked during calibration.',
+    description: 'Auto-calibrate mouse coordinates by moving the cursor and diffing screenshots to locate it, then computing calibration factors. More accurate than manual pikvm_calibrate. Blocks other tools while running.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -688,16 +687,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_seed_cursor_template',
-    description:
-      'Seed an initial cursor template by emitting a small relative-mouse motion, taking before/after screenshots, ' +
-      "diffing them to locate the cursor, and persisting a 24×24 cursor template to data/cursor-templates/. " +
-      'Use ONCE after a fresh deployment (or after `data/cursor-templates/` is cleared) to bootstrap Phase 51 ' +
-      "pre-click cursor verification — without an initial template, the verification chain has nothing to validate against. " +
-      'Subsequent clicks will accumulate additional templates automatically via the regular motion-diff path. ' +
-      'The captured template is validated by `looksLikeCursor` (cohesion + brightness + saturation gates); ' +
-      'if validation fails, the template is NOT persisted and the response indicates the failure reason. ' +
-      "Returns: { ok, cursorPosition, templatePersisted, reason }. " +
-      'Safe on iPad — uses small relative emits only, never slams to corner.',
+    description: 'Bootstrap cursor detection: emit a small relative move, diff before/after to find the cursor, save a 24×24 template to data/cursor-templates/. Run once after a fresh deploy or when that dir is cleared. Safe on iPad.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -307,7 +307,7 @@ Take a final screenshot to verify the form was accepted (look for success messag
   // ---------- navigate-desktop-workflow ----------
   {
     name: 'ipad-keyboard-first-workflow',
-    description: 'Reliable keyboard-first iPad workflow that bypasses cursor positioning. Live-validated 2026-04-26: app launches via Spotlight (Cmd+Space → type → Enter) succeed 100% of the time across Settings, Files, App Store. Prefer this pattern over `pikvm_mouse_click_at` for any iPad target where a keyboard equivalent exists — cursor clicks on tiny (<50 px) targets are ~50% reliable per attempt due to iPadOS pointer-acceleration variance, and even with retries=2 only ~88% reliable (Phase 70 bench).',
+    description: 'Keyboard-first iPad workflow that bypasses cursor positioning — e.g. launch apps via Spotlight (Cmd+Space → type app name → Enter). Prefer over pikvm_mouse_click_at whenever a keyboard equivalent exists; cursor clicks on tiny (<50px) iPad targets are unreliable due to pointer-acceleration variance.',
     arguments: [
       {
         name: 'goal',
