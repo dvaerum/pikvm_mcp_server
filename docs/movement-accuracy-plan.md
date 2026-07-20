@@ -775,6 +775,20 @@ ON. Target: hit rate materially above today's baseline.
   fixable, deferred to a model-retrain project.
   =========================================================================
 
+  ** 2026-07-20 (Phase 12 — color-check mitigation ALSO refuted; simple fixes now
+  EXHAUSTED):** tested the last untested orthogonal signal — color (cursor is
+  orange, widgets green/blue/dark). color-check.ts sampled a 24px window at the
+  cursor vs the Maps-widget FP location: REAL cursor meanRGB (222,173,126)
+  orange_frac 47%; Maps-widget FP (92,78,51) orange_frac 25%. NOT a clean split —
+  the map's tan land reads ~25% orange and peak-orange-strength is nearly identical
+  (248 vs 235). Also fragile (background-dependent; the CLOCK widget is bright/white
+  so a brightness component would pass a clock FP; breaks if the pointer color
+  changes). REFUTED. DEFINITIVE: all 4 simple detection mitigations tested &
+  refuted (presence gate, color, reset-on-retry, probe-verify). The Maps-widget V8
+  FP is only fixable by a detection-MODEL retrain (hard-negative widget crops) — a
+  separate ML project. Emit/movement objective fully met (~98–99%, emit solved);
+  further gains need the detector project, out of this loop's movement scope.
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
