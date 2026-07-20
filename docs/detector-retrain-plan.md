@@ -104,6 +104,27 @@ Ladder: (a) robust cursor detection on ANY screen [cascade — validating now] �
 sub-5px cursor precision [crop-refiner] → (c) precise target localisation. (a) is the
 prerequisite for both. Crawl → walk → run.
 
+## cycle 17 — heatmap-ONLY traded rejection for recall → DUAL-HEAD (presence + heatmap)
+Implemented the crop heatmap-detector (cycle 16 plan). RESULT: it DETECTS all cursors
+robustly incl. the offset-hard ones (books-cursor 0.86-0.96, mapsicon-cursor 0.99-1.00 —
+the exact cases the binary classifier collapsed on) — offset-robustness CONFIRMED. BUT
+its rejection (peak height = MAX over the heatmap) plateaued HIGH on the orange confusers
+(books-icon ~0.87, maps-widget ~0.88 across epochs 0-6, would not converge) because the
+MAX latches onto the most cursor-tip-like pixel in an icon, where the binary classifier's
+GLOBAL pooling averaged it to 0.00. So heatmap-max rejection is the wrong confidence signal.
+KEY INSIGHT: the binary classifier's OFFSET-sensitivity came from its NARROW ±22 training
+jitter, NOT from global pooling. With the tip now jittered across the WHOLE crop, a
+global-pool PRESENCE head is offset-INVARIANT for accept AND averages out local confusers
+for rejection. FIX = DUAL-HEAD crop detector (the proposer's own architecture at crop res):
+PRESENCE head (global avg-pool → linear) for accept/reject; HEATMAP head (Gaussian + soft-
+argmax) for sub-pixel position. Detection = presence>thresh → heatmap tip. This should give
+strong rejection (presence, like the classifier's 0.00) + offset-robust accept (wide jitter)
++ sub-pixel position (heatmap) — all three at once. Training now (ml/train-crop-heatmap.py,
+CropDetector). REFUTED: heatmap-MAX as the confidence/rejection signal (plateaus on
+confusers). NEXT: watch the presence gate (rejects <0.5, accepts >0.5); if good → export,
+integrate the dual-head into runCascade (grid → presence per crop → max-presence crop →
+heatmap tip), gate on the production-faithful TS gate, then LIVE.
+
 ## RESEARCH-GROUNDED PIVOT (2026-07-20, cycle 16) — crop CLASSIFIER → crop HEATMAP-DETECTOR
 User prompt: stop reinventing, check prior art. Two established results resolve the two
 tensions cleanly (sources in the git commit / below):

@@ -172,14 +172,36 @@ def smooth_crop():
     return Image.fromarray(arr).convert("RGBA")
 
 
+def map_crop():
+    """MAP-TERRAIN negative: green/teal land + blue water blobs + thin roads — the
+    live Maps-widget content the verifier FP'd 0.99 on (docs cycle 14, a green/blue
+    water shape read as cursor-like). The animated map is a real background class;
+    the cursor is ORANGE and never green/blue, so this + reduced colour-jitter lets
+    the verifier reject map terrain by colour AND shape."""
+    land = (random.randint(90, 150), random.randint(150, 200), random.randint(120, 170))
+    a = np.ones((CROP, CROP, 3), np.uint8) * np.array(land, np.uint8)
+    img = Image.fromarray(a); d = ImageDraw.Draw(img)
+    for _ in range(random.randint(1, 4)):  # water bodies (blue, irregular)
+        x, y, r = random.randint(0, CROP), random.randint(0, CROP), random.randint(20, 70)
+        d.ellipse([x - r, y - r, x + int(r * random.uniform(0.5, 1.5)), y + r],
+                  fill=(random.randint(40, 110), random.randint(90, 150), random.randint(150, 210)))
+    for _ in range(random.randint(3, 10)):  # roads
+        x0, y0 = random.randint(0, CROP), random.randint(0, CROP)
+        d.line([x0, y0, x0 + random.randint(-CROP, CROP), y0 + random.randint(-CROP, CROP)],
+               fill=(random.randint(210, 245),) * 3, width=random.randint(1, 3))
+    return img.convert("RGBA")
+
+
 def neg_bg():
     r = random.random()
-    if r < 0.25:
+    if r < 0.22:
         return smooth_crop()        # plain/gradient wallpaper-like (no arrow)
-    if _REAL and r < 0.55:
-        return real_crop()          # real app-icon-laden crops
+    if r < 0.40:
+        return map_crop()           # map terrain (green/blue land+water+roads)
+    if _REAL and r < 0.62:
+        return real_crop()          # real app-icon-laden crops (incl. the Maps app)
     if r < 0.85:
-        return icon_crop()          # procedural hard orange-icon negatives
+        return icon_crop()          # procedural hard orange-icon/button/arrow negatives
     return noise_crop()
 
 
@@ -203,23 +225,28 @@ def main():
             sw, sh = int(sprite.width * scale), int(sprite.height * scale)
             spr = sprite.resize((sw, sh))
             hx, hy = int(hot[0] * scale), int(hot[1] * scale)
-            # crop is centered on the arrow hot-point + jitter (proposer error)
-            jx, jy = random.randint(-22, 22), random.randint(-22, 22)
-            # place hot-point at (CROP/2 - jx, CROP/2 - jy) within the crop
-            px = CROP // 2 - jx - hx; py = CROP // 2 - jy - hy
+            # Tip (hot-point) lands ANYWHERE in the crop — wide jitter (±38, tip in
+            # ~[10,86] of 96) so the HEATMAP detector learns to localise the cursor
+            # off-center too (translation-equivariant → the grid works at any stride;
+            # a binary classifier trained only near-center collapsed off-center 0.68→0).
+            tx = random.randint(10, CROP - 10)
+            ty = random.randint(10, CROP - 10)
+            px = tx - hx; py = ty - hy
             bg.alpha_composite(spr, (px, py))
-            label = 1
+            # label kept for the legacy binary trainer; cursor = tip target for the heatmap.
+            row = {"frame_id": f"frames/crop-{i:06d}.jpg", "label": 1,
+                   "cursor": {"visible": True, "x": tx, "y": ty}}
         else:
             bg = neg_bg().copy()
-            label = 0
-        fid = f"frames/crop-{i:06d}.jpg"
-        bg.convert("RGB").save(OUT / fid, quality=90)
-        rows.append({"frame_id": fid, "abs_frame_path": str(OUT / fid), "label": label})
+            row = {"frame_id": f"frames/crop-{i:06d}.jpg", "label": 0, "cursor": {"visible": False}}
+        bg.convert("RGB").save(OUT / row["frame_id"], quality=90)
+        row["abs_frame_path"] = str(OUT / row["frame_id"])
+        rows.append(row)
     with open(OUT / "manifest.jsonl", "w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
     pos = sum(r["label"] for r in rows)
-    print(f"wrote {n} crops ({pos} pos / {n - pos} neg) -> {OUT}/manifest.jsonl")
+    print(f"wrote {n} crops ({pos} pos / {n - pos} neg, heatmap-tip targets) -> {OUT}/manifest.jsonl")
 
 
 if __name__ == "__main__":
