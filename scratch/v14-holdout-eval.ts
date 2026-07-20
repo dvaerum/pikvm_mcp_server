@@ -24,6 +24,11 @@ const sig = (z: number) => 1 / (1 + Math.exp(-z));
 const HOME = [13, 15, 17, 18].map((n) => `scratch/hc${n}.jpg`);
 const MAPS_WIDGET = { x: 1110, y: 297 };
 const BOOKS = { path: 'scratch/instrumented-bench/MISS-t5-Settings-V8start_1110_297-V8fin_660_1026-PRE.jpg', x: 757, y: 846 };
+// EASY positive: the SAME real home screen as the hc frames but WITH the cursor,
+// on plain blue wallpaper at the left edge (verified by eye, v13 scored 0.9993).
+// Pairs with the home-FP frames: same screen, cursor present vs absent — the exact
+// separation we want. Guards against the more-negatives model regressing easy detect.
+const CLEAN = { path: 'scratch/clean-cursor.jpg', x: 620, y: 432 };
 
 async function infer(sess: ort.InferenceSession, src: string) {
   const { data: rgb } = await sharp(src).resize(IW, IH, { fit: 'fill', kernel: 'cubic' }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -69,6 +74,12 @@ async function evalModel(tag: string, onnxPath: string) {
   console.log(`  pres=${b.pres.toFixed(3)} peak=${b.peak.toFixed(3)} @(${b.nx},${b.ny})  ` +
     `dist-to-cursor=${dist.toFixed(0)}px  hm@cursor=${b.at(BOOKS.x, BOOKS.y).toFixed(4)}` +
     `  ${dist < 80 ? '<-- DETECTED' : '<-- MISS'}`);
+  console.log('-- CLEAN-POS hold-out (same home screen, cursor on blue wallpaper @620,432) --');
+  const c = await infer(sess, CLEAN.path);
+  const cdist = Math.hypot(c.nx - CLEAN.x, c.ny - CLEAN.y);
+  console.log(`  pres=${c.pres.toFixed(3)} peak=${c.peak.toFixed(3)} @(${c.nx},${c.ny})  ` +
+    `dist-to-cursor=${cdist.toFixed(0)}px  hm@cursor=${c.at(CLEAN.x, CLEAN.y).toFixed(4)}` +
+    `  ${cdist < 80 ? '<-- DETECTED' : '<-- MISS'}`);
 }
 
 const v14 = process.argv.includes('--v14-only');
