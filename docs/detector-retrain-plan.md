@@ -90,6 +90,31 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 9): crop-verifier WORKS in principle (separates the Books icon)
+  but OVERFIT — found + fixed the generalization gap.** Verifier run-1 epoch-0 gate
+  (held-out real frames): REJECT books-icon=0.30, maps-widget=0.00, ACCEPT
+  clean-cursor=0.84, books-cursor=1.00 — the exact separation the single stage could
+  NOT do (0.993 vs 0.995). PROOF-OF-CONCEPT that the cascade resolves the ceiling.
+  BUT across epochs the real clean-cursor score DROPPED every epoch: 0.84→0.78→0.73→
+  0.52→0.04→0.02 (by epoch 5 even books-cursor fell to 0.34). Synthetic val hit 1.0 by
+  epoch 1, train-loss 1e-4 = OVERFITTING. DIAGNOSIS (verified by the pattern): the
+  clean-cursor is the arrow on SMOOTH blue wallpaper; my crop backgrounds were ALL busy
+  (icons/noise/app-crops) → "arrow on smooth bg" was OOD → the overfit model rejected
+  it, while books-cursor (busy bg) stayed high. FIXES (both principled): (1) added
+  smooth/gradient/near-solid backgrounds to composite-crops.py (smooth_crop, ~25% of
+  bgs) — verified by eye (scratch/crops-sheet2.jpg: arrow now shown on green/blue/pink
+  smooth fields; smooth negatives too); (2) trainer now SELECTS the checkpoint on the
+  real-frame GATE margin (min_accept − max_reject among all-correct epochs) instead of
+  the saturated synthetic val, so the overfit late epochs can't win; (3) stronger aug
+  (wider jitter + 30% GaussianBlur — the synthetic arrow is crisp, the real HDMI arrow
+  is slightly soft) + weight_decay 1e-4→3e-4. Retrain launched (run-2). Built the
+  END-TO-END cascade eval (scratch/cascade-eval.ts: proposer top-K NMS peaks →
+  verifier per 96px crop → detect best-verified>thresh else NULL) + verifier ONNX
+  export. NEXT: pick the best-gate verifier snapshot → export → run cascade-eval on the
+  no-cursor home frames (must return NULL — every icon rejected) + cursor frames (must
+  detect) → wire into findCursorByV8FullFrame opt-in → LIVE N=80. NOT-YET-VALIDATED:
+  the 4-frame gate is promising but not a verdict; the full cascade eval + LIVE are the
+  real tests (offline gains have failed to translate before).
 - **2026-07-20 (cycle 8): built the CASCADE crop-verifier (data + trainer) and
   launched training.** ml/composite-crops.py emits 96px crops from the SAME sprite +
   data/bg-real + procedural: POSITIVES = arrow composited, crop centered on it with

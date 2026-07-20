@@ -70,7 +70,14 @@ def crop_native(path: Path, cx: int, cy: int) -> Image.Image:
 class CropDataset(Dataset):
     def __init__(self, rows, is_train):
         self.rows = rows
-        self.jitter = transforms.ColorJitter(brightness=0.2, contrast=0.2) if is_train else None
+        # Stronger aug (blur + wider jitter) to fight the fast overfitting that
+        # degraded real-frame generalization (synthetic val hit 1.0 by epoch 1 and
+        # the real clean-cursor dropped 0.84->0.04). Blur helps the synthetic-crisp
+        # arrow match the real (slightly soft) HDMI-captured arrow.
+        self.aug = transforms.Compose([
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+            transforms.RandomApply([transforms.GaussianBlur(3, sigma=(0.1, 1.5))], p=0.3),
+        ]) if is_train else None
 
     def __len__(self):
         return len(self.rows)
@@ -80,8 +87,8 @@ class CropDataset(Dataset):
         img = Image.open(r["abs_frame_path"]).convert("RGB")
         if img.size != (CROP, CROP):
             img = img.resize((CROP, CROP), Image.BILINEAR)
-        if self.jitter is not None:
-            img = self.jitter(img)
+        if self.aug is not None:
+            img = self.aug(img)
         return _norm(_to_tensor(img)), torch.tensor(float(r["label"]))
 
 
@@ -96,9 +103,13 @@ class CropVerifier(nn.Module):
         return self.head(self.backbone(x)).view(-1)
 
 
-def gate_report(model):
+def gate_eval(model):
+    """Score the held-out real-frame gate. Returns (report, min_accept, max_reject,
+    all_ok). Selection uses the MARGIN (min_accept - max_reject) among all-correct
+    epochs — the synthetic val saturates at 1.0 so it can't select; the real frames
+    are the only signal that tracks generalization (and we confirm LIVE after)."""
     model.eval()
-    out = []
+    out = []; accepts = []; rejects = []; all_ok = True
     with torch.no_grad():
         for name, path, cx, cy, exp in GATE:
             if not path.exists():
@@ -106,8 +117,12 @@ def gate_report(model):
             t = _norm(_to_tensor(crop_native(path, cx, cy))).unsqueeze(0).to(DEVICE)
             p = torch.sigmoid(model(t)).item()
             ok = (p > 0.5) == bool(exp)
+            all_ok = all_ok and ok
+            (accepts if exp else rejects).append(p)
             out.append(f"{name}={p:.2f}{'ok' if ok else 'XX'}")
-    return "  ".join(out)
+    min_acc = min(accepts) if accepts else 0.0
+    max_rej = max(rejects) if rejects else 1.0
+    return "  ".join(out), min_acc, max_rej, all_ok
 
 
 def main():
@@ -126,9 +141,10 @@ def main():
     val_loader = DataLoader(CropDataset(val_rows, False), batch_size=BATCH, num_workers=2)
 
     model = CropVerifier().to(DEVICE)
-    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=3e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=EPOCHS)
 
+    best_margin = -1.0
     for epoch in range(EPOCHS):
         model.train()
         tl = 0.0; n = 0
@@ -147,10 +163,18 @@ def main():
                 p = (torch.sigmoid(model(img)).cpu() > 0.5).float()
                 correct += (p == lbl).sum().item(); vn += lbl.size(0)
         val_acc = correct / max(1, vn)
+        report, min_acc, max_rej, all_ok = gate_eval(model)
+        margin = min_acc - max_rej
+        sel = ""
+        # Select the best-GENERALIZING epoch: all real gate frames correct AND the
+        # widest accept-vs-reject margin. Guards against the overfit late epochs
+        # that reject the real cursor.
+        if all_ok and margin > best_margin:
+            best_margin = margin
+            torch.save(model.state_dict(), OUT_DIR / "crop-verifier.pt")
+            sel = f" *SEL margin={margin:.2f}*"
         print(f"epoch {epoch:3d} train={tl/max(1,n):.4f} val_acc={val_acc:.3f}  "
-              f"GATE[ {gate_report(model)} ]", flush=True)
-
-        torch.save(model.state_dict(), OUT_DIR / "crop-verifier.pt")
+              f"GATE[ {report} ] margin={margin:+.2f}{sel}", flush=True)
         if epoch % 5 == 0 or epoch == EPOCHS - 1:
             torch.save(model.state_dict(), OUT_DIR / f"crop-verifier-ep{epoch:02d}.pt")
 

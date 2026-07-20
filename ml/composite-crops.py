@@ -94,9 +94,28 @@ def noise_crop():
     return Image.fromarray(np.array(Image.fromarray(base).resize((CROP, CROP)))).convert("RGBA")
 
 
+def smooth_crop():
+    """SMOOTH/plain wallpaper-like crop (gradient or near-solid, any hue incl. the
+    blue/dark wallpaper tones). Added because the real cursor lives on plain
+    wallpaper too (clean-cursor @620,432); without smooth backgrounds the verifier
+    overfit to busy crops and REJECTED the arrow-on-wallpaper (0.04). Robustness by
+    design = ANY background, smooth included — not the exact wallpaper (per-screen)."""
+    if random.random() < 0.6:
+        c0 = np.array(rand_color(), float); c1 = np.array(rand_color(), float)
+        t = (np.linspace(0, 1, CROP)[None, :, None] if random.random() < 0.5
+             else np.linspace(0, 1, CROP)[:, None, None])
+        arr = (c0 * (1 - t) + c1 * t).astype(np.uint8) * np.ones((CROP, CROP, 3), np.uint8)
+    else:
+        arr = np.ones((CROP, CROP, 3), np.uint8) * np.array(rand_color(), np.uint8)
+        arr = np.clip(arr.astype(int) + np.random.randint(-8, 8, (CROP, CROP, 3)), 0, 255).astype(np.uint8)
+    return Image.fromarray(arr).convert("RGBA")
+
+
 def neg_bg():
     r = random.random()
-    if _REAL and r < 0.5:
+    if r < 0.25:
+        return smooth_crop()        # plain/gradient wallpaper-like (no arrow)
+    if _REAL and r < 0.55:
         return real_crop()          # real app-icon-laden crops
     if r < 0.85:
         return icon_crop()          # procedural hard orange-icon negatives
