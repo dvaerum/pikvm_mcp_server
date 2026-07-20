@@ -505,6 +505,15 @@ ON. Target: hit rate materially above today's baseline.
   presence/heatmap-confidence gate; or cross-check V8 vs a second method. This is a
   DETECTION improvement, distinct from the (now-solved) emit model.
 
+  ** 2026-07-20 (Phase 7d — proper N=80 click success bench):** the 94% was N=16.
+  Running click-bench80.ts: shipped default (curve-one-shot + correction), 8 apps
+  × 10 trials = 80 clicks, AUTOMATED hit detection (post-click frame vs home
+  baseline: an opened app fills the iPad region → >15% pixels changed = HIT; a
+  miss stays on home). Reports overall + per-target app-open rate + residuals, and
+  saves MISS frames for inspection. Gives a mandate-compliant N≥80 rate for the
+  shipped default and tells us whether the V8-widget-FP detection fix is actually
+  needed. [Result pending.]
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
