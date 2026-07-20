@@ -432,6 +432,28 @@ ON. Target: hit rate materially above today's baseline.
   recalibrate (or region-ratio-scale as a free first guess: scaleX≈region_w/680).
   (b) Wire clickAtWithRetry/index.ts to default iPad targets to strategy
   'curve-one-shot'. (c) Re-validate the defaulted click path live at N≥80.
+
+- **2026-07-20 (Phase 7b — END-TO-END CLICK test):** clickAtWithRetry accepts a
+  caller `moveToOptions`, so tested curve-one-shot through the REAL production
+  click path (move+click+verify) WITHOUT changing defaults yet — click-test-
+  oneshot.ts on the REAL home screen (iPadCollector NOT foregrounded, since a
+  click must actually open an app). 4 targets × 2 trials, post-click frames saved
+  for VISUAL verification (the payoff metric is "did the CORRECT app open", not
+  just move residual). [Result pending — inspecting screenshots.] Only if clicks
+  reliably open the right app do we proceed to make curve-one-shot the DEFAULT for
+  iPad targets. Move accuracy (11px, N=80) is validated; this tests that it
+  converts to CLICK SUCCESS.
+  RUN 1 INVALIDATED: the iPad had AUTO-LOCKED during the long cycles, and I only
+  printed the health screenshot's dimensions instead of LOOKING at it (guardrail
+  violation — screenshot, not flags, and actually inspect it). So the clicks hit
+  the LOCK SCREEN (t1-Files frame = lock screen at 02.22, cursor correctly at the
+  Files target ~10px but nothing to click). The MOVE still worked (residuals
+  7–13px through the production click path); only the surface was wrong. Confirmed
+  by look.jpg: iPad now on the real home screen (unlocked, no passcode). RE-RUN
+  (click-test2) with a wiggle+home keepalive to fight the idle-lock, on the
+  confirmed-unlocked home screen — inspecting frames for correct-app-open.
+  (Anomaly to watch: t1-Settings resid 508px on the lock screen — a lock-screen
+  V8 artifact; should be gone on the home screen.)
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
