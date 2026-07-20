@@ -90,6 +90,27 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 8): built the CASCADE crop-verifier (data + trainer) and
+  launched training.** ml/composite-crops.py emits 96px crops from the SAME sprite +
+  data/bg-real + procedural: POSITIVES = arrow composited, crop centered on it with
+  ±22px jitter (matches the proposer's 11–27px peak error), often over HARD (orange
+  icon / map) backgrounds so the arrow must be found OVER icon textures; NEGATIVES =
+  crops with NO arrow incl. procedural warm/colorful rounded-rect "app icons" + real
+  app-screenshot crops (full of real icons) + noise — teaching "arrow SHAPE present?"
+  not "orange present?". VERIFIED BY EYE (scratch/crops-sheet.jpg): positives show a
+  clear arrow incl. over orange icons; negatives are diverse hard orange/colorful
+  icon crops with no arrow. Generated 12000 crops (6016 pos/5984 neg, 57MB).
+  ml/train-crop-verifier.py = MobileNetV3-small (pretrained) → GAP → Linear(1), binary
+  BCE, with a REAL-FRAME GATE reported every epoch (NEVER trained on): REJECT 96px
+  crops of the held-out Books icon (760,819) + Maps widget (1110,297); ACCEPT crops of
+  the real cursors (clean-cursor 620,432, books 757,846). Training running (bg,
+  scratch/verifier-train.log, Monitor armed). The verifier gets what the single stage
+  lacked: RESOLUTION (arrow ~40% of a 96px crop). SUCCESS = REJECT crops <0.5 AND
+  ACCEPT crops >0.5, esp. rejecting the Books-icon crop it never trained on (proves
+  generalization). NEXT: read the gate trajectory → export ONNX → wire the cascade
+  (v14-ep05 proposer top-K peaks via NMS → verifier scores each 96px crop → pick
+  best-verified above threshold) into findCursorByV8FullFrame as an opt-in →
+  offline hold-out (no Books-icon FP + real cursors detected) → LIVE N=80.
 - **2026-07-20 (cycle 7): DECISIVE — single-stage full-frame has hit its ceiling;
   pivot to the CASCADE (evidence-backed, verified by eye).** Trained v14 run-2 (14%
   negatives, 50/50 synth-v14). Heatmap CONVERGED beautifully on real cursors: the
