@@ -551,8 +551,8 @@ const tools: Tool[] = [
         y: { type: 'number', description: 'Target Y coordinate in HDMI-screenshot pixels' },
         strategy: {
           type: 'string',
-          enum: ['detect-then-move', 'slam-then-move', 'assume-at'],
-          description: 'Origin discovery. "detect-then-move" (default) probes+diffs to find the cursor (safe — no slam). "slam-then-move" pins cursor to top-left (risky on iPad: hot-corner re-lock). "assume-at" requires assumeCursorAtX/Y.',
+          enum: ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'],
+          description: 'Movement strategy. "curve-one-shot" (DEFAULT on iPad/relative-mode): detect cursor once with V8 + one deterministic curve-based emit — no iterative correction; validated N=80 ≈11px + 8/8 correct-app-open vs the iterative path\'s ~73px on a real home screen. "detect-then-move" (default on desktop/absolute): probes+diffs to find the cursor then iteratively corrects. "slam-then-move" pins cursor to top-left (risky on iPad: hot-corner re-lock). "assume-at" requires assumeCursorAtX/Y.',
         },
         assumeCursorAtX: { type: 'number', description: 'With strategy="assume-at", HDMI X where cursor currently is.' },
         assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
@@ -1360,8 +1360,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const ty = requireNumber(args.y, 'y');
         const strategyStr = validateEnum(
           args.strategy,
-          ['detect-then-move', 'slam-then-move', 'assume-at'] as const,
-          'detect-then-move',
+          ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'] as const,
+          // iPad (relative-mode) DEFAULTS to the validated curve-one-shot mover:
+          // N=80 move ≈11px + 8/8 correct-app-open, vs the iterative path's ~73px
+          // median on a real home screen (its per-pass motion-diff correction
+          // oscillates/goes blind on textured backgrounds). Desktop (absolute)
+          // keeps detect-then-move. Failure mode is safe: the proximity gate
+          // skips rather than wrong-clicks. Curve is calibrated for the current
+          // iPad-in-HDMI geometry (see curve-mover.ts / calibrateFullReport).
+          !mouseAbsoluteMode ? 'curve-one-shot' : 'detect-then-move',
         );
         const assumeX = validateNumber(args.assumeCursorAtX);
         const assumeY = validateNumber(args.assumeCursorAtY);
@@ -1408,8 +1415,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const button = validateEnum(args.button, VALID_BUTTONS, 'left');
         const strategyStr = validateEnum(
           args.strategy,
-          ['detect-then-move', 'slam-then-move', 'assume-at'] as const,
-          'detect-then-move',
+          ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'] as const,
+          // iPad (relative-mode) DEFAULTS to the validated curve-one-shot mover:
+          // N=80 move ≈11px + 8/8 correct-app-open, vs the iterative path's ~73px
+          // median on a real home screen (its per-pass motion-diff correction
+          // oscillates/goes blind on textured backgrounds). Desktop (absolute)
+          // keeps detect-then-move. Failure mode is safe: the proximity gate
+          // skips rather than wrong-clicks. Curve is calibrated for the current
+          // iPad-in-HDMI geometry (see curve-mover.ts / calibrateFullReport).
+          !mouseAbsoluteMode ? 'curve-one-shot' : 'detect-then-move',
         );
         const assumeX = validateNumber(args.assumeCursorAtX);
         const assumeY = validateNumber(args.assumeCursorAtY);

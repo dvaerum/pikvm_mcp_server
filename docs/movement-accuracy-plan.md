@@ -454,6 +454,23 @@ ON. Target: hit rate materially above today's baseline.
   confirmed-unlocked home screen — inspecting frames for correct-app-open.
   (Anomaly to watch: t1-Settings resid 508px on the lock screen — a lock-screen
   V8 artifact; should be gone on the home screen.)
+  RE-RUN RESULT (unlocked home screen, 8 clicks via production click path +
+  curve-one-shot): 8/8 SUCCESS. VISUALLY VERIFIED (screenshots) 4/4 distinct apps
+  opened correctly: Settings(9.5px)→Settings, Files(22.5)→Files,
+  AppStore(18.2)→App Store, Books(645px*)→Books. (*Books t2 residual 645px was a
+  V8 false-positive on the app UI AFTER the click — detector-residual-is-not-
+  ground-truth again — the click itself was correct.) So the ~11px move CONVERTS
+  to correct-app-open every time; residuals 9.5–28px are well within icon hit
+  areas.
+  **SHIPPED (2026-07-20): curve-one-shot is now the DEFAULT for iPad targets** in
+  index.ts pikvm_mouse_move_to + pikvm_mouse_click_at (!mouseAbsoluteMode →
+  'curve-one-shot'; desktop keeps detect-then-move). Failure mode is safe (the
+  proximity gate skips, never wrong-clicks). tsc clean, curve-mover tests 14/14.
+  REMAINING (non-blocking, geometry is stable): auto-wire calibrateFullReport so
+  the curve self-adjusts if the iPad-in-HDMI geometry changes (resolution/screen
+  position); until then the curve is hardcoded to the current setup. Also worth a
+  larger click bench (more targets/trials) to firm up the 8/8 smoke, and app-side
+  fix for the idle-lock + getCursor-staleness that keep biting benches.
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
