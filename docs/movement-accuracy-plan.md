@@ -532,6 +532,20 @@ ON. Target: hit rate materially above today's baseline.
   don't. Validate by re-running click-bench80 and targeting >95% app-open,
   especially lifting Maps/Books/Settings.
 
+  ** 2026-07-20 (Phase 8 — locateCursor hypothesis REFUTED by smoke; diagnosing
+  with ground truth first):** hypothesis was that locateCursor (probe+motion-diff)
+  would be more widget-robust than V8 for the START detection. Smoke (smoke-
+  locate.ts) REFUTES it: at 5 cursor positions, V8's before/after tracked the
+  probe (~60px) = it WAS following the real cursor, and near-Maps.jpg confirms
+  V8-after (940,180) matched the VISIBLE cursor (~940,195) while locateCursor gave
+  garbage (1013,730). So locateCursor is WORSE, not better — did NOT build it.
+  Good that I smoke-tested before a 35-min bench + a wrong fix. This means I don't
+  yet understand the Maps-miss mechanism. Running maps-diag.ts (getCursor GROUND
+  TRUTH): per Maps move, log V8-start vs getCursor-start and the real getCursor
+  final residual, to see whether it's the V8 start detection that's wrong (and how
+  the correction fails to recover). No fix until the ground-truth data shows the
+  actual mechanism. [Result pending.]
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
