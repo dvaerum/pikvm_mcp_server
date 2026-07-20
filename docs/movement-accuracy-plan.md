@@ -665,6 +665,18 @@ ON. Target: hit rate materially above today's baseline.
   hot-corner risk + latency). Given 97.5% and the risk, that's an optional future
   step, not clearly worth it. Movement accuracy is effectively DONE.
 
+  ** 2026-07-20 (Phase 9 cont. — testing reset-on-retry for the persistent Settings
+  FP):** key insight — a slamCenter reset OVERRIDES the start position (cursor →
+  clear gap ~(880,306) where V8 detects reliably, proven for Maps in
+  maps-real-diag2), so the persistent FP (which depends on the bad start position)
+  should vanish. And slamCenter has run dozens of times this session with NO
+  re-lock (empirically safe on this iPad, despite the documented hot-corner
+  warning). Running settings-reset-test.ts: Books→Settings, NO-RESET vs RESET,
+  N=12 each, real clicks, hit-rate + a re-lock safety check each round. If RESET
+  ≈100% and NO-RESET reproduces ~80% with no re-lock, the fix is a reset-on-retry
+  (reset the cursor before the retry's re-detect, breaking persistent FPs) — low
+  latency cost (only on the ~few% that miss). [Result pending.]
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
