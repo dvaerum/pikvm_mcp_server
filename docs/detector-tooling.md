@@ -26,12 +26,15 @@ environment (tinyproxy, iPadCollector).
      the failure-driven negative classes.)
 4. **Train**:
    - Proposer (cursor-v14): `.venv/bin/python ml/train-cursor-v14.py` (V14_EPOCHS env)
-   - Verifier: `VERIFIER_EPOCHS=16 .venv/bin/python ml/train-crop-verifier.py`
-     (selects on a REAL-FRAME gate, not the saturated synth-val; saves `crop-verifier.pt`
-     + periodic snapshots.)
+   - **Crop detector (CURRENT — dual-head presence+heatmap):**
+     `HEATMAP_EPOCHS=20 .venv/bin/python ml/train-crop-heatmap.py` → `crop-heatmap.pt`.
+     Presence head = offset-invariant accept/reject; heatmap head = sub-pixel tip. This
+     is what the cascade uses. (Legacy binary verifier `ml/train-crop-verifier.py` →
+     `crop-verifier.pt` is offset-sensitive; superseded — kept for reference.)
 5. **Export ONNX**:
    - `.venv/bin/python ml/export-v14-onnx.py [in.pt] [out.onnx]`
-   - `.venv/bin/python ml/export-verifier-onnx.py [in.pt] [out.onnx]`
+   - `.venv/bin/python ml/export-crop-heatmap-onnx.py [in.pt] [out.onnx]` (dual-head)
+   - `.venv/bin/python ml/export-verifier-onnx.py [in.pt] [out.onnx]` (legacy binary)
 
 ## Analysis / eval tools (offline unless noted)
 
@@ -40,6 +43,11 @@ environment (tinyproxy, iPadCollector).
   offline gate.
 - `scratch/grid-test.ts [verifier.onnx]` — GRID+batched-verifier over the iPad region on
   no-cursor + cursor frames (the robust candidate source; ~110ms for ~230 crops).
+- `scratch/heatmap-gate.ts [crop-heatmap.onnx]` — **production-faithful** gate for the
+  CURRENT dual-head detector (sharp/ONNX presence at each real gate point). The trustworthy
+  selection signal (the Python trainer gate is PIL and disagreed with production).
+- `scratch/offset-falloff-dual.ts` — presence vs crop offset (proves offset-robustness).
+- `scratch/verifier-gate.ts [onnx]` — same, for the legacy binary verifier.
 - `scratch/v14-holdout-eval.ts [verifier-onnx]` — single-stage proposer hold-out
   (presence + heatmap-peak on the home-FP frames + Books/clean positives).
 - `scratch/detection-ab-gt.ts` — **LIVE** detection-accuracy A/B vs getCursor ground

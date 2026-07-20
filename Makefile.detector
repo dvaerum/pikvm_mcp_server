@@ -18,16 +18,17 @@ data-crops:      ; $(PY) ml/composite-crops.py 15000
 data-synth:      ; $(PY) ml/composite-cursor.py 4000
 
 # --- training (offline, MPS) ---
-train-verifier:  ; VERIFIER_EPOCHS=16 $(PY) ml/train-crop-verifier.py
+train-heatmap:   ; HEATMAP_EPOCHS=20 $(PY) ml/train-crop-heatmap.py   # CURRENT dual-head crop detector
+train-verifier:  ; VERIFIER_EPOCHS=16 $(PY) ml/train-crop-verifier.py # legacy binary verifier
 train-proposer:  ; $(PY) ml/train-cursor-v14.py
 
 # --- export ONNX (offline) ---
+export-heatmap:  ; $(PY) ml/export-crop-heatmap-onnx.py
 export-verifier: ; $(PY) ml/export-verifier-onnx.py
 export-proposer: ; $(PY) ml/export-v14-onnx.py
 
 # --- offline eval / gates ---
-cascade-eval:    ; $(TSX) scratch/cascade-eval.ts ml/cursor-v14-ep05.onnx ml/crop-verifier.onnx
-grid-test:       ; $(TSX) scratch/grid-test.ts ml/crop-verifier.onnx
+heatmap-gate:    ; $(TSX) scratch/heatmap-gate.ts        # production-faithful dual-head gate
 holdout-eval:    ; $(TSX) scratch/v14-holdout-eval.ts
 integration-test:; $(CASCADE_ENV) $(TSX) scratch/test-cascade-integration.ts
 
