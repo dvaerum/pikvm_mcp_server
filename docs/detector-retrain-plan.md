@@ -104,6 +104,30 @@ Ladder: (a) robust cursor detection on ANY screen [cascade — validating now] �
 sub-5px cursor precision [crop-refiner] → (c) precise target localisation. (a) is the
 prerequisite for both. Crawl → walk → run.
 
+## RESEARCH-GROUNDED PIVOT (2026-07-20, cycle 16) — crop CLASSIFIER → crop HEATMAP-DETECTOR
+User prompt: stop reinventing, check prior art. Two established results resolve the two
+tensions cleanly (sources in the git commit / below):
+- OFFSET-SENSITIVITY is inherent to a binary patch CLASSIFIER (fires only when centered:
+  measured v6 books-cursor 0.68 centered → 0.00 at 24px, scratch/offset-falloff.ts). The
+  standard keypoint-localization fix is a translation-equivariant FULLY-CONVOLUTIONAL HEATMAP
+  detector (Gaussian target on the tip) decoded by SOFT-ARGMAX/centroid for sub-pixel accuracy
+  (arXiv 2407.11668, 2203.02351). A CNN heatmap fires wherever the cursor is in the crop.
+- ORANGE-ON-ORANGE is literally CAMOUFLAGED OBJECT DETECTION (target colour≈background); the
+  known answer is EDGE/BOUNDARY cues, not colour (arXiv 2501.00426; MDPI appl-sci 14/6/2494).
+  Maps onto the cursor's distinctive BLACK OUTLINE (survives orange-on-orange).
+UNIFYING FIX (one model, three problems): replace the binary crop-VERIFIER with a small crop
+HEATMAP-DETECTOR — Gaussian target on the cursor tip within the 96px crop, soft-argmax decode.
+Solves: (1) offset-robustness → the grid works at any stride (fixes the Books-cursor grid miss,
+which was OFFSET not rejection — correcting cycle-15's wrong "0.23 rejected", that was a
+diag-script resize artifact; production-faithful gate scratch/verifier-gate.ts shows v6 is 8/8
+CENTERED, books-cursor 0.68); (2) sub-pixel precision ~2-4px = the small-button/crop-refiner
+goal, folded in; (3) confuser rejection = low peak height on icons/nav-arrows/map. Optionally
+add an EDGE channel / edge auxiliary loss for the camouflage case instead of a colour prior
+(colour prior REFUTED — whipsaws v4↔v6). NEXT: composite-crops.py emit Gaussian-heatmap targets
+(zeros for no-cursor negatives) instead of binary labels; train a small FCN (few 3x3 conv
+layers, e.g. 16-16-64-64-1) → per-crop heatmap; grid → pick crop with max peak → soft-argmax
+tip. Select on the production-faithful TS gate (verifier-gate.ts), not the PIL gate. Then live.
+
 ## HONEST STATE (2026-07-20, cycle 15) — cascade is a promising architecture but NOT a
 ## validated win; two genuine tensions + a preprocessing bug remain. Do NOT ship as default.
 The cascade (full-frame proposer OR grid → 96px crop-verifier) fixes MANY cases (icons,
