@@ -587,8 +587,9 @@ from throwaway `scratch/` frames to the committed `data/seeds/eval-frames/`.
 
 **Then deleted (~13.4 GB):** `scene-backgrounds` (8.3 GB), all `cursor-collect-*` corpora,
 `emit-residuals*`/`phase*`/`v8-*`/bench dirs, `cursor-templates.*` backups, 371 MB retired models,
-~2 MB loose logs. **Preserved:** seeds + `data/seeds/human-labels/` (40 jsonls, 988 KB irreplaceable
-human labour) + `data/seeds/REPRODUCE-MANIFEST.sha256` (fingerprints the exact reproduce inputs).
+~2 MB loose logs. **Preserved:** seeds + `data/seeds/REPRODUCE-MANIFEST.sha256` (fingerprints the
+exact reproduce inputs). (The 40 human-label jsonls were briefly kept, then DELETED per the user
+2026-07-20 — the current cascade does not use them.)
 
 ## 2026-07-20 (cycle 24) — loop re-triggered on STALE premise; objective already met → STOP
 Health OK (screenshot: real home page-1, Maps widget present, unlocked, 100%). The loop prompt
