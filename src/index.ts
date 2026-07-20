@@ -16,6 +16,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { PiKVMClient } from './pikvm/client.js';
 import { loadConfig } from './config.js';
+import { parseCliOptions, helpText } from './cli.js';
+import { startHttpServer } from './http-server.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
@@ -723,7 +725,7 @@ const tools: Tool[] = [
 // calls it exactly once. All heavy shared state (the PiKVMClient, the busy
 // lock, mouseAbsoluteMode) stays in module globals, so per-session Servers are
 // cheap wrappers over the same device connection.
-function createMcpServer(): Server {
+export function createMcpServer(): Server {
   const server = new Server(
     {
       name: 'pikvm-mcp-server',
@@ -1729,6 +1731,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // Start server
 async function main() {
+  // Parse CLI first so --help works without any PiKVM config/credentials.
+  const cli = parseCliOptions(process.argv.slice(2));
+  if (cli.help) {
+    console.log(helpText());
+    return;
+  }
+
   // Load configuration (deferred to here for proper error handling)
   const config = loadConfig();
   pikvm = new PiKVMClient(config.pikvm);
@@ -1771,9 +1780,15 @@ async function main() {
     );
   }
 
-  const transport = new StdioServerTransport();
-  await createMcpServer().connect(transport);
-  console.error('PiKVM MCP Server running (stdio)');
+  if (cli.transport === 'http') {
+    // Streamable HTTP: one Server per session, minted by createMcpServer.
+    const handle = await startHttpServer(createMcpServer, { host: cli.host, port: cli.port });
+    console.error(`PiKVM MCP Server running (Streamable HTTP) at ${handle.url}`);
+  } else {
+    const transport = new StdioServerTransport();
+    await createMcpServer().connect(transport);
+    console.error('PiKVM MCP Server running (stdio)');
+  }
 }
 
 main().catch((error) => {

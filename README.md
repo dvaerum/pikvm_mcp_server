@@ -218,6 +218,32 @@ Or if using the .env file:
 }
 ```
 
+## Transports (stdio & HTTP)
+
+The server speaks **stdio** by default (what Claude Code launches above). It can also serve the
+modern **Streamable HTTP** transport for remote/networked clients:
+
+```bash
+# stdio (default)
+node dist/index.js
+
+# Streamable HTTP on 127.0.0.1:3000 (see --help for all flags)
+node dist/index.js --transport http            # or the --http shorthand
+node dist/index.js --http --host 0.0.0.0 --port 8080
+```
+
+| Flag | Env fallback | Default | Meaning |
+|------|--------------|---------|---------|
+| `--transport <stdio\|http>` | `PIKVM_MCP_TRANSPORT` | `stdio` | transport to serve |
+| `--http` | — | — | shorthand for `--transport http` |
+| `--host <addr>` | `PIKVM_MCP_HOST` | `127.0.0.1` | HTTP bind address |
+| `--port <n>` | `PIKVM_MCP_PORT` | `3000` | HTTP port |
+| `-h`, `--help` | — | — | show help and exit |
+
+In HTTP mode the Streamable HTTP transport is served at `POST/GET/DELETE /mcp` (stateful: each
+session is created by an `initialize` request and identified by the `Mcp-Session-Id` header), plus
+a `GET /health` liveness check. CLI flags take precedence over the environment variables.
+
 ## Available Tools
 
 ### Diagnostics

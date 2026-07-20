@@ -49,7 +49,7 @@ buildNpmPackage {
 
   # Regenerate when package-lock.json changes:
   #   nix run nixpkgs#prefetch-npm-deps -- package-lock.json
-  npmDepsHash = "sha256-1No6pxaHapoSG23MDaTjj9oW6WXnFSy6gynHHBwYRVI=";
+  npmDepsHash = "sha256-1X79e/0/m80I7TUABipEjfUwEk8fcsmGhhgsRgx12dE=";
 
   # Use buildNpmPackage's default nodejs (current maintained major). Node 20
   # is EOL and flagged insecure in nixpkgs 26.05.
