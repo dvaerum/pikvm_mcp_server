@@ -73,25 +73,47 @@ def real_crop():
     return Image.fromarray(img[y:y + CROP, x:x + CROP]).convert("RGBA")
 
 
+def _arrow_glyph(d, cx, cy, sz, col):
+    """A DIRECTIONAL arrow/triangle NOT matching the cursor sprite — nav arrows
+    (Maps' white-up-arrow-in-blue-circle), compass arrows, play buttons. The live
+    bench FP'd on the Maps APP ICON's nav arrow (docs cycle 14): the verifier keyed
+    on 'arrow shape' loosely. These teach it the cursor is a SPECIFIC pointer
+    (orange, up-left, tailed), not any arrow. Random direction (incl. up/down/right
+    and up-RIGHT — deliberately spanning orientations away from the sprite) + a plain
+    triangle shape (no pointer tail), so the real cursor sprite stays distinct."""
+    import math as _m
+    ang = random.uniform(0, 2 * _m.pi)
+    h = sz * random.uniform(0.3, 0.5)
+    w = h * random.uniform(0.5, 0.9)
+    # tip + two base corners of a plain isosceles triangle, rotated by ang
+    def rot(px, py):
+        return (cx + px * _m.cos(ang) - py * _m.sin(ang), cy + px * _m.sin(ang) + py * _m.cos(ang))
+    pts = [rot(h / 2, 0), rot(-h / 2, -w / 2), rot(-h / 2, w / 2)]
+    d.polygon(pts, fill=col)
+
+
 def _glyph(d, x0, y0, sz):
-    """A light symbol on a button (fork/lines/cross/dot) — like the Maps widget's
-    white-on-orange food/fuel buttons the verifier FP'd on."""
+    """A light symbol on a button (fork/lines/cross/dot/ARROW) — like the Maps
+    widget's white-on-orange buttons AND the Maps app icon's nav arrow the verifier
+    FP'd on."""
     g = (random.randint(220, 255),) * 3
     k = random.random()
     cx, cy = x0 + sz // 2, y0 + sz // 2
-    if k < 0.35:  # vertical bars (fork-ish)
+    if k < 0.3:  # vertical bars (fork-ish)
         for j in range(random.randint(2, 4)):
             gx = x0 + sz // 4 + j * sz // 8
             d.line([gx, y0 + sz // 4, gx, y0 + 3 * sz // 4], fill=g, width=max(2, sz // 20))
-    elif k < 0.6:  # cross / plus
+    elif k < 0.5:  # cross / plus
         d.line([cx, y0 + sz // 5, cx, y0 + 4 * sz // 5], fill=g, width=max(2, sz // 16))
         d.line([x0 + sz // 5, cy, x0 + 4 * sz // 5, cy], fill=g, width=max(2, sz // 16))
-    elif k < 0.8:  # ring
+    elif k < 0.65:  # ring
         r = sz // 4
         d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=g, width=max(2, sz // 20))
-    else:  # dot
+    elif k < 0.8:  # dot
         r = sz // 6
         d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=g)
+    else:  # nav ARROW (Maps-icon style) — white or coloured directional triangle
+        _arrow_glyph(d, cx, cy, sz, g if random.random() < 0.6 else rand_color())
 
 
 def icon_crop():

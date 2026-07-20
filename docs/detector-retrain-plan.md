@@ -89,7 +89,52 @@ was trained on too-clean a background distribution → not robust. Fix = diverse
 background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
+## NEXT MILESTONE (user-endorsed 2026-07-20): SUB-5px precision for SMALL buttons
+The north star is not just opening 80px app icons (100% today) but reliably hitting
+SMALL targets — e.g. a ~30px "+" add button. Two capabilities, tracked separately:
+- (b) CURSOR PRECISION below the ~11px full-frame floor: add a POSITION-REGRESSION
+  head to the cascade's 96px crop-verifier (native resolution → arrow-tip to ~2-4px,
+  engineering estimate not yet measured). Reuses the crop model already built for the
+  cascade — a build-on, not a restart. This is the endorsed next milestone AFTER the
+  current robustness milestone (the cascade) is validated. The emit is already sub-5px
+  (micro-step+settle, memory ipad_emit_thresholds), so detection is the sole limiter.
+- (c) TARGET LOCALISATION (which pixel IS the "+"): screen/UI-element understanding —
+  a SEPARATE track (a vision model reading the screenshot), not cursor detection.
+Ladder: (a) robust cursor detection on ANY screen [cascade — validating now] → (b)
+sub-5px cursor precision [crop-refiner] → (c) precise target localisation. (a) is the
+prerequisite for both. Crawl → walk → run.
+
 ## Progress log
+- **2026-07-20 (cycle 14): LIVE BENCH = 94% (75/80) — NOT a win; live testing caught
+  a real gap the offline 6/6 missed. The cascade is NOT yet validated live.** Honest
+  result (this is the "offline didn't translate" pattern the guardrails warn about):
+  trials 1-9 = 72/72 (100%), trial 10 collapsed to 3/8 — a CLUSTER of 5 consecutive
+  "cursor not verified" (resid=null) misses. LOOKED at the MISS frame: the cursor was
+  clearly VISIBLE on the Maps APP ICON (~1162,570), yet the cascade returned null; once
+  stuck there, every subsequent target failed (couldn't re-detect → no move).
+  DIAGNOSED precisely (scratch/diag-miss-frame.ts): verifier score AT the cursor =
+  1.000 but the PROPOSER (v14) proposed NO peak within 60px of it — the weak proposer's
+  RECALL failed, so the good verifier never scored the right crop. Tried a GRID+batched
+  verifier to decouple from the proposer (scratch/test-grid-verifier.ts: 234 crops in
+  111ms, fast enough) — it FOUND the cursor BUT also exposed a VERIFIER FP: on the 4
+  NO-CURSOR home frames a grid crop at (1138,538) scores 0.998-1.00. LOOKED
+  (scratch/mapsicon-compare.png): that is the MAPS APP ICON's built-in WHITE NAVIGATION
+  ARROW in a blue circle — the verifier keyed on "arrow shape" loosely and fires on the
+  icon's own arrow, cursor or not. So my earlier "verifier=1.00 at cursor" was partly
+  firing on the icon glyph. Two real defects: (1) proposer recall (misses cursor on the
+  Maps icon); (2) verifier FPs on the Maps-icon nav-arrow. TWO-PART FIX (principled, not
+  per-screen): (a) add DIRECTIONAL-ARROW negatives to the verifier (nav arrows/compass/
+  play-buttons at random orientations+colours, plain triangles w/o the cursor's pointer
+  tail) so it learns the cursor's SPECIFIC shape (orange, up-left, tailed) vs any arrow
+  — composite-crops.py _arrow_glyph; positives already put the cursor OVER these icons so
+  cursor-on-Maps-icon stays positive; added Maps-icon REJECT gate points. (b) switch the
+  cascade candidate source from proposer-peaks to a GRID over the iPad region + batched
+  verifier (fixes recall). Retraining v5. NEXT: offline test grid+v5 → null on no-cursor
+  home (incl. Maps icon) AND detect cursor-on-Maps-icon → wire grid into runCascade →
+  RE-RUN the live bench. REFUTED so far: cascade with proposer-peak candidates alone
+  (recall gap); loose-arrow verifier (FPs on nav-arrow icons). VALUE: the click bench,
+  even though 1-2pp is below its noise floor, DID catch a >10pp-class failure (the
+  Maps-icon cluster) — exactly the no-regression role it can play.
 - **2026-07-20 (cycle 12-13): cascade 6/6 OFFLINE, wired into production, LIVE bench
   running.** v4 verifier (rich UI-element negatives) → cascade-eval 6/6: no-cursor home
   frames NULL, real cursors detected 1.00 (incl. the Books-icon cursor v13 missed).

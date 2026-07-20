@@ -54,6 +54,8 @@ GATE = [
     ("REJECT books-icon", SCRATCH / "hc13.jpg", 760, 819, 0),
     ("REJECT books-edge", SCRATCH / "hc13.jpg", 690, 819, 0),  # the partial-icon EDGE that FP'd 0.96 in the cascade
     ("REJECT maps-widget", SCRATCH / "hc13.jpg", 1110, 297, 0),
+    ("REJECT maps-app-icon", SCRATCH / "hc13.jpg", 1162, 570, 0),  # nav-arrow glyph the live bench FP'd on
+    ("REJECT maps-icon-off", SCRATCH / "hc13.jpg", 1138, 538, 0),  # the exact grid crop that scored 1.00
     ("ACCEPT clean-cursor", SCRATCH / "clean-cursor.jpg", 620, 432, 1),
     ("ACCEPT books-cursor",
      SCRATCH / "instrumented-bench" / "MISS-t5-Settings-V8start_1110_297-V8fin_660_1026-PRE.jpg",
