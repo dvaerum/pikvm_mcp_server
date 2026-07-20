@@ -21,6 +21,7 @@
 import { promises as fs } from 'fs';
 import * as fsSync from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import * as ort from 'onnxruntime-node';
 import { detectIpadRegion, NATIVE_MARGIN } from './ipad-region-detect.js';
@@ -111,9 +112,26 @@ let v8LoadFailureLogged = false;
 // icons/buttons/map tiles at native resolution. Offline: 6/6 on the held-out home
 // frames. See docs/detector-retrain-plan.md.
 const CASCADE_ENABLED = process.env.PIKVM_ML_CASCADE !== '0';  // DEFAULT ON (opt out with =0)
-const VERIFIER_MODEL = process.env.PIKVM_ML_VERIFIER_MODEL
-  ? path.resolve(process.env.PIKVM_ML_VERIFIER_MODEL)
-  : path.resolve(process.cwd(), 'ml', 'crop-heatmap.onnx');
+
+/**
+ * Locate the shipped cascade model. The model is BUNDLED with the package
+ * (nix/package.nix copies ml/crop-heatmap.onnx into the install tree), so it
+ * resolves relative to this module first — `<pkg>/ml/crop-heatmap.onnx` from
+ * `<pkg>/dist/pikvm/cursor-ml-detect.js` (identical layout when run from source
+ * via tsx: `<repo>/src/pikvm/...`). Falls back to `./ml` under the cwd, then an
+ * explicit PIKVM_ML_VERIFIER_MODEL override. This makes the detector work in a
+ * headless install regardless of the working directory.
+ */
+function resolveVerifierModel(): string {
+  if (process.env.PIKVM_ML_VERIFIER_MODEL) {
+    return path.resolve(process.env.PIKVM_ML_VERIFIER_MODEL);
+  }
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url)); // dist/pikvm or src/pikvm
+  const bundled = path.resolve(moduleDir, '..', '..', 'ml', 'crop-heatmap.onnx');
+  const cwdLocal = path.resolve(process.cwd(), 'ml', 'crop-heatmap.onnx');
+  return [bundled, cwdLocal].find((p) => fsSync.existsSync(p)) ?? bundled;
+}
+const VERIFIER_MODEL = resolveVerifierModel();
 const HM_OUT = 24;  // dual-head heatmap output resolution (crop 96 / 4)
 const CASCADE_CROP = 96;  // native-px verifier crop (MUST match training)
 const GRID_STRIDE = Number(process.env.PIKVM_ML_GRID_STRIDE ?? '48');  // native-px grid step

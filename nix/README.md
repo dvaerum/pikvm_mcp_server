@@ -121,9 +121,10 @@ to `passwordFile`/`usernameFile`. A NixOS VM test
 (`nix build .#checks.x86_64-linux.nixos-service`) boots the service and asserts
 the endpoint is up and the password is delivered via the credential, not the env.
 
-> **Note:** the ML cursor-detection tools need `ml/*.onnx` models, which are not
-> bundled in the package (they resolve from the working directory). The core
-> tools (screenshot, keyboard, mouse, calibration) work without them.
+> **Note:** the shipped cascade model (`ml/crop-heatmap.onnx`, 196 KB) is bundled
+> in the package and resolved relative to the binary, so the cursor-detection
+> tools work headless too — no working-directory dependence. (The legacy
+> training-only models are intentionally not shipped.)
 
 ## Updating the npm dependency hash
 

@@ -34,7 +34,9 @@ buildNpmPackage {
         # NOT loaded from the package at runtime (models resolve from process.cwd()/ml/,
         # see cursor-ml-detect.ts). Excluding them keeps the build lean (ml/ alone is
         # ~200 MB of model binaries; scratch/ holds experiment scripts + screenshots).
-        || topLevel == "ml"
+        # Exclude ml/ EXCEPT the shipped cascade model, which is bundled into
+        # the install tree (see postInstall) so the detector works headless.
+        || (topLevel == "ml" && rel != "ml" && rel != "ml/crop-heatmap.onnx")
         || topLevel == "scratch"
         || topLevel == "tools"
         || topLevel == "docs"
@@ -64,6 +66,16 @@ buildNpmPackage {
   };
 
   npmBuildScript = "build";
+
+  # Bundle the shipped cascade model next to dist/ in the install tree so the
+  # runtime resolves it relative to its own module (cursor-ml-detect.ts
+  # resolveVerifierModel) — no dependence on the working directory. Only the
+  # 196 KB crop-heatmap.onnx is shipped; the legacy models stay out.
+  postInstall = ''
+    for d in "$out"/lib/node_modules/*/dist; do
+      install -Dm444 ml/crop-heatmap.onnx "$(dirname "$d")/ml/crop-heatmap.onnx"
+    done
+  '';
 
   meta = {
     description = "MCP server for controlling remote machines via PiKVM";
