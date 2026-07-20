@@ -90,6 +90,25 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 12-13): cascade 6/6 OFFLINE, wired into production, LIVE bench
+  running.** v4 verifier (rich UI-element negatives) → cascade-eval 6/6: no-cursor home
+  frames NULL, real cursors detected 1.00 (incl. the Books-icon cursor v13 missed).
+  Wired into findCursorByV8FullFrame behind PIKVM_ML_CASCADE=1 (proposer top-K NMS →
+  96px verifier per crop → best>thresh else null); env PIKVM_ML_VERIFIER_MODEL /
+  _CASCADE_K / _VERIFY_THRESH. PRODUCTION-PATH integration test = 6/6 (matches
+  standalone). Canonical ml/crop-verifier.onnx = v4 selected epoch-0 (gate margin
+  0.99). Health-check: iPad awake/100%/charging (was in Clock → bench does ipadGoHome;
+  region stable 610,58,692,956). curve-mover.ts:93 uses findCursorByV8FullFrame, so
+  PIKVM_ML_CASCADE=1 makes the LIVE mover use the cascade. Launched click-bench80-retry3
+  with the cascade (proposer cursor-v14-ep05, verifier crop-verifier.onnx).
+  ⚠️ STATISTICAL CAVEAT (be critical): the mover is already ~98-99%, so the cascade's
+  benefit (fixing the ~1-2% widget-FP misses) is BELOW the ±10pp N=80 noise floor — a
+  click bench CANNOT prove a 1-2pp lift. It IS a valid NO-REGRESSION / integration test
+  (a broken cascade returning null would drop the rate >10pp, which N=80 detects). The
+  SENSITIVE proof of the FP-fix is a getCursor-paired DETECTION-accuracy A/B on the
+  failure surface (v13 vs cascade gross-miss rate near widgets/icons) — build + run
+  after the click bench (can't run concurrently — both drive the iPad). NEXT: read
+  click-bench result (expect ~98-99%, no regression) → run the detection A/B.
 - **2026-07-20 (cycle 11): cascade v3 = 5/6 (icon FPs FIXED); last FP = the animated
   Maps-widget orange BUTTON → richer UI-element negatives.** Cascade-eval on v3: the
   books-icon AND books-edge are now rejected (v=0.00), hc15/17/18 return NULL (map
