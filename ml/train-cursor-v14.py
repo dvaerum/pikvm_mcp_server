@@ -401,9 +401,18 @@ def main():
             flush=True,
         )
 
+        # synth-val is SATURATED for v14 (the heatmap aces the clean synth-val set
+        # from epoch 0: 4px/99.9%/0%fp), so strict-< selection FROZE the checkpoint
+        # at an undertrained epoch 0 (verified: books presence 0.20). The metric that
+        # matters — presence/peak SEPARATION between real cursors and real no-cursor
+        # screens — is not in synth-val. So save the LATEST model every epoch (fully
+        # trained by the end) + periodic snapshots, and make the REAL selection
+        # downstream via the ONNX hold-out gate + LIVE N=80, which cannot be gamed.
         if combined < best_combined:
             best_combined = combined
-            torch.save(model.state_dict(), OUT_DIR / "cursor-v14.pt")
+        torch.save(model.state_dict(), OUT_DIR / "cursor-v14.pt")
+        if epoch % 5 == 0 or epoch == EPOCHS - 1:
+            torch.save(model.state_dict(), OUT_DIR / f"cursor-v14-ep{epoch:02d}.pt")
 
 
 if __name__ == "__main__":

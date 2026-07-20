@@ -90,6 +90,39 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 6):** trained v14 run-1, ran the ONNX hold-out GATE on the
+  epoch-0 checkpoint (production-faithful cubic; scratch/v14-holdout-eval.ts) — the
+  single most informative probe so far. RESULTS (evidence):
+  - v13 baseline (bug reproduced): all 4 home frames peak **0.999 ON the Maps widget
+    (1110,297)**, pres 0.87–0.99; Books frame peaks on the map, **hm@cursor=0.0002 =
+    total MISS**. Exactly the documented failure.
+  - v14 epoch-0: map FP is SHIFTING — hm@widget **0.999→0.70–0.76**, peak moved
+    410–542px OFF the widget; Books hm@cursor **0.0002→0.914** (heatmap now finds the
+    cursor on the orange icon = false-negative fixed at the position level).
+  TWO PROBLEMS EXPOSED (both now addressed):
+  1. SELECTION BUG (verified): synth-val SATURATES at 4px/99.9%/0%fp from epoch 0, so
+     strict-< froze cursor-v14.pt at an undertrained epoch 0 (books presence 0.20).
+     The metric that matters (presence/peak SEPARATION on REAL cursor vs REAL no-cursor
+     screens) is not in synth-val. FIX: save latest every epoch + periodic snapshots
+     (cursor-v14-ep{NN}.pt); real selection = the ONNX gate + LIVE N=80 (ungameable).
+  2. TWO DISTINCT FP MECHANISMS needing TWO data fixes: (a) the HEATMAP still peaks
+     ~0.88–0.92 at a *different* no-cursor home feature (~760,700) — the FP RELOCATED,
+     didn't vanish; peak does NOT yet separate no-cursor home (0.92) from the real
+     Books cursor (0.96). Heatmap FP is fixed only by cursor-on-hard-bg POSITIVES
+     (heatmap loss is presence-masked → negatives give it no gradient). (b) the
+     PRESENCE head over-fires: at epoch 2, as it learned to fire on the real cursor
+     (books pres 0.24→0.85), home-FP jumped 0/4→3/4. Presence FP is fixed by more
+     cursor-free NEGATIVES. ROOT ENABLER: v13's corpora are ~all positives, so
+     negatives were only 435/12575 = **3.5%** of training — almost no pressure to ever
+     say "no cursor here". FIX: rebalanced synth-v14 to **50/50 at 4000 frames** (1955
+     hard positives + 2045 hard negatives, up from 1121/379) → negatives now 2101/15075
+     = **14%**, hard positives ~1955. Retrain launched (run-2). NEXT: watch the gate on
+     converged run-2 — want peak AND presence to SEPARATE real-cursor from home. If the
+     single-stage still can't separate (home features stay cursor-like), that's the
+     evidence the CASCADE (crop-verifier) is needed, not more single-stage data.
+  NOT-YET-REFUTED, do not over-claim: the map-FP shift is real but the FP relocated to
+  another home feature — v14 is NOT proven robust until a converged model separates on
+  the gate AND the LIVE N=80 improves (offline shifts have failed to translate before).
 - **2026-07-20 (cycle 5):** WROTE + LAUNCHED the v14 training (ml/train-cursor-v14.py).
   DESIGN DECISION (best-practice, memory feedback_decisions_best_practice_long_term):
   v14 = v13's EXACT recipe (same MobileNetV3 net, LR=1e-3, 40 epochs, cosine, same

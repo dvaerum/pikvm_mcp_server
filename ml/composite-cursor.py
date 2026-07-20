@@ -119,7 +119,14 @@ def main():
     rows = []
     for i in range(n):
         bg = Image.fromarray(pick_bg(FW, FH)).convert("RGBA")
-        visible = random.random() < 0.75  # 75% positives, 25% cursor-free negatives
+        # 50/50 positives/negatives. Two FP mechanisms need two data fixes (verified
+        # via the epoch-0 hold-out gate, docs/detector-retrain-plan.md): the HEATMAP
+        # FP (peaks on a no-cursor home feature) is fixed by cursor-on-hard-bg
+        # POSITIVES (map+cursor teaches "map=0 except the sprite"); the PRESENCE-head
+        # FP (fires "cursor present" on the map) is fixed by cursor-free NEGATIVES
+        # (negatives only train the presence head — heatmap loss is presence-masked).
+        # v13's corpora are ~all positives, so negatives were only ~3.5% of training.
+        visible = random.random() < 0.5
         if visible:
             scale = random.uniform(0.85, 1.15)
             sw, sh = int(sprite.width * scale), int(sprite.height * scale)
