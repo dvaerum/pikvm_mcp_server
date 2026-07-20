@@ -805,6 +805,15 @@ ON. Target: hit rate materially above today's baseline.
   last ~1–2%); (b) fix the 6 pre-existing unrelated test failures; (c) auto-wire
   calibrateFullReport IF the iPad geometry ever changes.
 
+  ** 2026-07-20 (Phase 14 — LOOP STOPPED):** the recurring /loop cron (b6b16362)
+  was CancelDeleted because its task — improve iPad cursor MOVEMENT accuracy — is
+  objectively complete and verified (emit solved; ~98–99% production click-success
+  from ~0%; residual verified as detection; all simple fixes exhausted; shipped
+  code QA'd clean). Further fires only re-hit this "done" conclusion. To resume:
+  re-run /loop with a NEW prompt targeting one of the out-of-scope follow-ups
+  (cursor-v13 widget-hard-negative retrain; fix the 6 pre-existing test failures;
+  auto-wire calibration). The MOVEMENT objective is DONE.
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
