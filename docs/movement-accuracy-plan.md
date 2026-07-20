@@ -693,6 +693,21 @@ ON. Target: hit rate materially above today's baseline.
   emit model is solved; the last 2.5% is an elusive full-bench-flow V8 start-FP
   that resists targeted fixing. Movement work is DONE.
 
+  ** 2026-07-20 (Phase 10 — confirming stability; the loop premise is now
+  OUTDATED):** no movement improvement remains — the emit reaches the target pixel
+  (one-shot ~11px deterministic, validated N=80 paired getCursor: 9.1 vs baseline
+  72.9), and the residual failures are DETECTION (V8 start-FP on live widgets), not
+  "the cursor not reaching the target." So the loop's stated premise ("remaining
+  failures are real emit/movement error ~19px/p90 71px") no longer holds — that
+  was the OLD iterative default; the shipped curve-one-shot fixed it. The only
+  remaining lever is a DETECTION-model fix (retrain cursor-v13 with hard-negative
+  widget crops so V8 stops FPing on clock/map/calendar widgets) — a separate
+  detection project, out of this loop's movement scope, and the mandate itself
+  says detection is solved. Running a SECOND N=80 production bench (maxRetries=3)
+  to confirm 97.5% is stable, not a lucky single draw (prior: 95% single-shot, 97.5%
+  retry3 — one run each). [Result pending.] If it lands ~95–98%, the shipped result
+  is solid and the movement work is definitively complete.
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
