@@ -52,6 +52,8 @@ data/*
 # reproducibility seed for the cascade verifier (docs/data-and-model-storage.md T1). Not
 # regenerable without the iPad, so tracked.
 !data/bg-real/
+# SEED eval-gate frames — held-out ground-truth accept/reject frames (captured live, ~900KB).
+!data/seeds/
 
 # Code Assistants
 .mcp.json
