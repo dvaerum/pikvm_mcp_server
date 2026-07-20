@@ -90,6 +90,31 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 5):** WROTE + LAUNCHED the v14 training (ml/train-cursor-v14.py).
+  DESIGN DECISION (best-practice, memory feedback_decisions_best_practice_long_term):
+  v14 = v13's EXACT recipe (same MobileNetV3 net, LR=1e-3, 40 epochs, cosine, same
+  synth-val + combined-metric selection, ImageNet-pretrained start) with the ONLY
+  change being +synth-v14 as a training source — so any behavior change is
+  attributable to the DATA, not a recipe tweak. Trained FROM SCRATCH (not fine-tune
+  from v13.pt) deliberately: v13's map→cursor FP is a strongly-learned bias (0.999);
+  a fresh fit on [v13 corpora + robustness data] avoids the "fine-tune failed to
+  unlearn the bias" risk and is cleaner to reason about. KEY INSIGHT on WHY synth-v14
+  fixes the heatmap FP: the heatmap loss is masked by presence (negatives train only
+  the presence head), so cursor-free negatives alone would NOT fix the heatmap peak
+  on the map. It's the synth-v14 POSITIVES (1121 cursor-on-map/orange/colorful-bg
+  frames) that fix it — each shows the model a hard texture with the cursor at ONE
+  spot and target-zero everywhere else on that texture, directly teaching "map tile
+  → 0 except the real sprite". Data loaded clean: 12575 train (12140 pos/435 neg),
+  synth-val 5000, on-icon held-out 34. GENERALIZATION GATE built (clean hold-out,
+  NOT used for selection): scratch/v14-holdout-eval.ts runs BOTH v13 & v14 (ONNX,
+  production-faithful cubic resize) on (a) HOME-FP = hc13/15/17/18 no-cursor home
+  frames — v14 must NOT peak on the Maps widget (~1110,297); (b) BOOKS-POS = the
+  exact frame v13 missed (cursor on Books @757,846, v13 hm 0.0012) — v14 must detect
+  near it. Also wrote ml/export-v14-onnx.py. Training runs in bg (scratch/v14-train.log,
+  Monitor armed). NEXT: when it finishes → export ONNX → run the hold-out gate →
+  if home-FP gone AND books detected AND synth-val not regressed → wire v14 into the
+  detector → LIVE N=80. If home-FP persists on the best-synth-val epoch: add MORE/
+  harder negatives + more cursor-on-hard-bg positives (data fix, NOT epoch-cherry-pick).
 - **2026-07-20 (cycle 4):** health OK (went home off the leftover white iPadCollector
   scene; looked — real home screen). CAPTURED 15 REAL cursor-free app-interior
   backgrounds (scratch/capture-bg-real.ts → data/bg-real/): launched each app via
