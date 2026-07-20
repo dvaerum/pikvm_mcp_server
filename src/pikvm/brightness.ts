@@ -107,7 +107,7 @@ export function classifyBrightness(mean: number, stddev: number = 100): {
     return {
       severity: 'very-dim',
       hint:
-        ' ⚠ iPad DISPLAY BLOCKED — uniform dark frame in HDMI capture. ' +
+        ' ⚠ VERY DIM — iPad DISPLAY BLOCKED (uniform dark frame in HDMI capture). ' +
         '2026-05-27 finding: iPad auto-brightness does NOT affect the HDMI ' +
         'mirror, so a dim HDMI capture means an iOS modal/permission/security ' +
         'prompt is dimming the screen. AUTOMATION CANNOT PROCEED until a human ' +
