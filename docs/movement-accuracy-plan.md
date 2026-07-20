@@ -485,6 +485,26 @@ ON. Target: hit rate materially above today's baseline.
   when the first lands beyond the gate); re-running the diverse bench to see if it
   recovers the tail, then update the shipped default if so.
 
+  ** 2026-07-20 (Phase 7c cont. — correction pass ENABLED by default):** re-ran the
+  diverse N=16 bench with oneShotCorrectGatePx=30. Result: 15/16 (~94%) — the two
+  prior misses RECOVERED (t1 Books 187→18px, t2 Settings 532→7px), but a NEW miss
+  appeared (t1 Settings, 538px, HOME). Verified t1-Settings frame: cursor ended
+  bottom-LEFT ~400px off → the emit went the WRONG DIRECTION, which means V8's
+  START detection false-positived on a top-right home-screen WIDGET (read the
+  cursor as up-right, so it emitted left+down). Correction can't recover when the
+  DETECTOR itself is wrong on both passes. ROOT CAUSE of the residual tail is
+  therefore DETECTION, not emit: V8 occasionally false-positives on the widget-
+  laden real home screen (~6% here, clustered on bottom targets near the top
+  widgets). The emit model is deterministic/solved; "detection solved ~11px" holds
+  on CLEAN surfaces but has a false-positive tail on the real home screen.
+  ACTION TAKEN: enabled correction by default in curve-mover.ts (correctGatePx=30,
+  net 87.5%→94%, safe failure mode, negligible latency since good shots skip it).
+  tsc clean, tests 14/14. NEXT (detection-side, the real remaining problem): make
+  the START detection robust to widget false-positives — candidates: a small known
+  probe-move + verify the detected position tracked it (reject if not); or a
+  presence/heatmap-confidence gate; or cross-check V8 vs a second method. This is a
+  DETECTION improvement, distinct from the (now-solved) emit model.
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start

@@ -73,9 +73,10 @@ export interface CurveOneShotOptions {
   settleMs?: number;
   /** V8 presence gate for start/verify detection (default 0.5). */
   minPresence?: number;
-  /** When set, run ONE correction shot if the post-shot residual exceeds this
-   *  many px. Undefined = pure open-loop single shot (matches the validated
-   *  N=80 A/B). */
+  /** Run ONE correction shot (re-detect + re-shoot) if the first shot's residual
+   *  exceeds this many px. Default 30 — recovers the ~12% start-detection miss
+   *  tail (see moveByCurveOneShot). Set to a huge number (e.g. 1e9) to force a
+   *  pure single shot (as in the validated N=80 move A/B). */
   correctGatePx?: number;
   /** Per-axis curve scale for the current geometry (default 1 = reference
    *  session, 680×944 region). Measure via calibrateFullReport: scaleX =
@@ -193,8 +194,15 @@ export async function moveByCurveOneShot(
 
   let landed = await detect(client, minPresence);
 
-  // Optional single correction shot (opt-in via correctGatePx).
-  if (options.correctGatePx !== undefined && landed && dist(landed, target) > options.correctGatePx) {
+  // One correction shot when the first lands beyond the gate (default 30px).
+  // A diverse N=16 click bench (2026-07-20) showed the pure single shot has a
+  // ~12% miss tail — a single V8 start-detection false-positive on a home-screen
+  // widget sends the whole open-loop shot astray with no recovery. Re-detecting
+  // and re-shooting recovers most of these (bench: 87.5% → 94% correct-app-open).
+  // Never hurts: good shots (<gate) skip it; a persistent V8 false-positive is no
+  // worse than without. Set correctGatePx to a huge number to force pure one-shot.
+  const correctGatePx = options.correctGatePx ?? 30;
+  if (landed && dist(landed, target) > correctGatePx) {
     const m2 = await emitToward(client, landed, target, paceMs, scaleX, scaleY);
     await sleep(settleMs);
     emitted = { x: emitted.x + m2.x, y: emitted.y + m2.y };
