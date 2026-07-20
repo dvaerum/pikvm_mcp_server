@@ -50,9 +50,12 @@ export function mickeysForReport(px: number, curve = EMIT_CURVE_X, full = FULL_R
 }
 
 /** Plan a signed sequence of per-report deltas (one axis) to move `d` px:
- *  full ±127 reports for the bulk + one partial report for the remainder. */
-export function planAxisEmits(d: number, full = FULL_REPORT_PX, curve = EMIT_CURVE_X): number[] {
-  const sign = Math.sign(d), D = Math.abs(d);
+ *  full ±127 reports for the bulk + one partial report for the remainder.
+ *  `scale` accounts for the current geometry: actual displacement = scale ×
+ *  reference-curve displacement, so we plan against the reference curve using
+ *  the scaled-down distance `d/scale`. scale=1 is the reference session. */
+export function planAxisEmits(d: number, full = FULL_REPORT_PX, curve = EMIT_CURVE_X, scale = 1): number[] {
+  const sign = Math.sign(d), D = Math.abs(d) / scale;
   const nFull = Math.floor(D / full), rem = D - nFull * full;
   const out: number[] = [];
   for (let i = 0; i < nFull; i++) out.push(sign * 127);
@@ -74,6 +77,11 @@ export interface CurveOneShotOptions {
    *  many px. Undefined = pure open-loop single shot (matches the validated
    *  N=80 A/B). */
   correctGatePx?: number;
+  /** Per-axis curve scale for the current geometry (default 1 = reference
+   *  session, 680×944 region). Measure via calibrateFullReport: scaleX =
+   *  measured.x / FULL_REPORT_PX, scaleY = measured.y / (FULL_REPORT_PX×Y_SCALE). */
+  curveScaleX?: number;
+  curveScaleY?: number;
 }
 
 async function detect(client: PiKVMClient, minPresence: number): Promise<{ x: number; y: number } | null> {
@@ -82,13 +90,61 @@ async function detect(client: PiKVMClient, minPresence: number): Promise<{ x: nu
   return v8 ? { x: v8.x, y: v8.y } : null;
 }
 
-async function emitToward(client: PiKVMClient, from: { x: number; y: number }, target: { x: number; y: number }, paceMs: number): Promise<{ x: number; y: number }> {
-  const ex = planAxisEmits(target.x - from.x, FULL_REPORT_PX, EMIT_CURVE_X);
-  const ey = planAxisEmits(target.y - from.y, FULL_REPORT_PX * Y_SCALE, CURVE_Y as unknown as ReadonlyArray<readonly [number, number]>);
+async function emitToward(client: PiKVMClient, from: { x: number; y: number }, target: { x: number; y: number }, paceMs: number, scaleX = 1, scaleY = 1): Promise<{ x: number; y: number }> {
+  const ex = planAxisEmits(target.x - from.x, FULL_REPORT_PX, EMIT_CURVE_X, scaleX);
+  const ey = planAxisEmits(target.y - from.y, FULL_REPORT_PX * Y_SCALE, CURVE_Y as unknown as ReadonlyArray<readonly [number, number]>, scaleY);
   let mx = 0, my = 0;
   for (const e of ex) { await client.mouseMoveRelative(e, 0); mx += e; await sleep(paceMs); }
   for (const e of ey) { await client.mouseMoveRelative(0, e); my += e; await sleep(paceMs); }
   return { x: mx, y: my };
+}
+
+/**
+ * Calibrate the emit-curve SCALE for the current iPad-in-HDMI geometry.
+ *
+ * The curve shape is device-intrinsic (iPad pointer accel in logical px); only
+ * the scale (HDMI px per logical px = region-size / logical-resolution) changes
+ * when the iPad's screen size/position in the frame changes. So we measure one
+ * scale per axis: emit a LARGE burst (reports × ±127, ~300px) where the ~11px
+ * detector noise is negligible, and read the per-full-report displacement. The
+ * returned {x,y} are measured FULL_REPORT_PX per axis; divide by FULL_REPORT_PX
+ * (X) / FULL_REPORT_PX×Y_SCALE (Y) to get the scale factor for the curve.
+ *
+ * Uses the same V8 detector as production (no getCursor needed). Averages `reps`.
+ */
+export async function calibrateFullReport(
+  client: PiKVMClient,
+  opts: { reports?: number; reps?: number; minPresence?: number; settleMs?: number; paceMs?: number } = {},
+): Promise<{ x: number; y: number; samplesX: number[]; samplesY: number[] }> {
+  const reports = opts.reports ?? 2;
+  const reps = opts.reps ?? 3;
+  const minPresence = opts.minPresence ?? 0.5;
+  const settleMs = opts.settleMs ?? 300;
+  const paceMs = opts.paceMs ?? 110;
+  const slamCorner = async (): Promise<void> => { for (let s = 0; s < 6; s++) await client.mouseMoveRelative(-127, -127); await sleep(settleMs); };
+
+  const measure = async (axis: 'x' | 'y'): Promise<number[]> => {
+    const out: number[] = [];
+    for (let r = 0; r < reps; r++) {
+      await slamCorner();
+      // inset a little off the hard corner so detection isn't clipped
+      await client.mouseMoveRelative(axis === 'x' ? 15 : 40, axis === 'x' ? 40 : 15);
+      await sleep(settleMs);
+      const start = await detect(client, minPresence);
+      if (!start) continue;
+      for (let i = 0; i < reports; i++) { await client.mouseMoveRelative(axis === 'x' ? 127 : 0, axis === 'y' ? 127 : 0); await sleep(paceMs); }
+      await sleep(settleMs);
+      const end = await detect(client, minPresence);
+      if (!end) continue;
+      const disp = axis === 'x' ? (end.x - start.x) : (end.y - start.y);
+      if (disp > reports * 40) out.push(disp / reports); // sanity: a full report is ~150px; reject tiny/stale
+    }
+    return out;
+  };
+  const samplesX = await measure('x');
+  const samplesY = await measure('y');
+  const med = (a: number[]): number => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : NaN; };
+  return { x: med(samplesX), y: med(samplesY), samplesX, samplesY };
 }
 
 /**
@@ -129,7 +185,8 @@ export async function moveByCurveOneShot(
     };
   }
 
-  const m1 = await emitToward(client, start, target, paceMs);
+  const scaleX = options.curveScaleX ?? 1, scaleY = options.curveScaleY ?? 1;
+  const m1 = await emitToward(client, start, target, paceMs, scaleX, scaleY);
   await sleep(settleMs);
   let emitted = { ...m1 };
   let chunkCount = 1;
@@ -138,7 +195,7 @@ export async function moveByCurveOneShot(
 
   // Optional single correction shot (opt-in via correctGatePx).
   if (options.correctGatePx !== undefined && landed && dist(landed, target) > options.correctGatePx) {
-    const m2 = await emitToward(client, landed, target, paceMs);
+    const m2 = await emitToward(client, landed, target, paceMs, scaleX, scaleY);
     await sleep(settleMs);
     emitted = { x: emitted.x + m2.x, y: emitted.y + m2.y };
     chunkCount += 1;

@@ -408,6 +408,30 @@ ON. Target: hit rate materially above today's baseline.
   (c) Optionally test oneShotCorrectGatePx (one V8 correction shot when the first
   lands >15px) to tighten the p90 tail — but 100% within 20px may already be
   sufficient for icon-sized targets, so measure before adding latency.
+
+- **2026-07-20 (Phase 7a — calibration capability):** added
+  calibrateFullReport(client) to curve-mover.ts — measures the per-axis
+  full-report scale via a LARGE burst (reports×±127, ~300px where ~11px detector
+  noise is negligible) using the V8 detector (no getCursor needed). Added
+  curveScaleX/curveScaleY options to moveByCurveOneShot that scale the emit plan
+  (planAxisEmits now takes `scale`: plans against the reference curve using
+  d/scale). Unit tests 14/14 (3 new for scaled planning). VALIDATED
+  (calib-validate.ts): geometry is STABLE this session (region 680×944 = the
+  reference), and detector-based calibration measured X full-report=155px (ref
+  157, ~1% off), Y=157.5 (ref 152, ~4% — likely V8 Y-localization bias). The
+  detector reproducing the getCursor-derived reference confirms detector-based
+  scale calibration is trustworthy for X; Y within noise. (getCursor cross-check
+  read 0.0 — recurring tracker-staleness — so that leg was inconclusive; the
+  detector-vs-reference match covers it for X.)
+  DONE this cycle: measurement + application capability, unit-tested. NOT done:
+  auto-caching the scale in ballistics.json keyed by resolution + auto-detecting
+  a geometry change to trigger recalibration; and the click-path default. Because
+  geometry is stable, default scale=1 (hardcoded curve) remains correct now.
+  **PHASE 7b PLAN (next):** (a) cache calibration in ballistics.json keyed by
+  resolution; on move, if the detected iPad region differs from the cached one,
+  recalibrate (or region-ratio-scale as a free first guess: scaleX≈region_w/680).
+  (b) Wire clickAtWithRetry/index.ts to default iPad targets to strategy
+  'curve-one-shot'. (c) Re-validate the defaulted click path live at N≥80.
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
