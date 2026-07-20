@@ -48,6 +48,10 @@ test_prompt.txt
 # cursor. Gitignore everything in data/ EXCEPT cursor-templates/.
 data/*
 !data/cursor-templates/
+# SEED backgrounds — 15 real cursor-free iPad app screens captured live (1.3 MB); the
+# reproducibility seed for the cascade verifier (docs/data-and-model-storage.md T1). Not
+# regenerable without the iPad, so tracked.
+!data/bg-real/
 
 # Code Assistants
 .mcp.json
@@ -64,8 +68,11 @@ tools/**/*.o
 
 # ML model binaries — regenerable from the committed training/export scripts (like
 # data/). Old cursor-v0..v12 are already tracked (pre-existing ~200MB); this stops NEW
-# ones (crop-heatmap.onnx, etc.) from being committed by an accidental `git add -A`.
+# ones from being committed by an accidental `git add -A`.
 ml/*.onnx
 ml/*.onnx.data
 ml/*.pt
+# EXCEPT the shipped detector — tiny (196 KB) + the deployable (docs/data-and-model-storage.md
+# T2). Committed so the cascade is ready-to-go without retraining.
+!ml/crop-heatmap.onnx
 
