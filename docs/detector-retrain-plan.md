@@ -229,6 +229,22 @@ then resolve the colour-vs-shape tension with richer cursor-on-hard-icon positiv
 colour prior), re-validate offline with the GRID cascade on ALL cases (incl. Books-cursor),
 then LIVE. The grid runCascade + v6 are committed but OPT-IN (default path unchanged).
 
+## cycle 20 — SHIPPED as default + exploratory live test + drag support (2026-07-20)
+- SHIPPED: made the dual-head cascade the DEFAULT detection path (user-approved). PIKVM_ML_CASCADE
+  defaults ON (opt out =0); cascade branch moved to the top of findCursorByV8FullFrame (skips the
+  full-frame proposer). Full test suite now **808/808** (was 804/4) — the change FIXED the 4
+  black-frame-FP tests (dual-head returns null on black). No regressions.
+- EXPLORATORY LIVE TEST (not the scripted bench; scratch/explore.ts drives the shipped cascade+
+  mover): navigated home→Settings→Display&Brightness (dark rows), toggled Bold Text (~50px switch,
+  5.1px) and restored it, opened Maps (cursor detected on the BUSY ANIMATED MAP at 1.0px — the
+  original v13 FP surface — no FP), DRAG-panned the map ~1:1 (drag = mover-to-start + button-down +
+  chunked relative moves + button-up), clicked the small "+" Add button (13px → Add Pin opened).
+  Residuals 1-13px across diverse real surfaces; small buttons hit; dragging works; ZERO detection
+  FPs/misses. One minor Maps-app navigation quirk (clicking near a search field navigated to Places)
+  — an APP nuance, not a detector issue. DRAG primitive: client.mouseClick('left',{state:true/false}).
+- NET: detector solved + shipped + validated live two ways (160/160 scripted, plus free-form
+  exploration incl. small buttons + drag on the animated map). Memory: [[project_dual_head_crop_detector]].
+
 ## Progress log
 - **2026-07-20 (cycle 14): LIVE BENCH = 94% (75/80) — NOT a win; live testing caught
   a real gap the offline 6/6 missed. The cascade is NOT yet validated live.** Honest
