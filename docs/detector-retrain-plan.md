@@ -127,8 +127,21 @@ averages out local confusers (strong rejection); HEATMAP head = translation-equi
 sub-pixel position; wide tip jitter → offset-robust. Grounded in cycle-16 prior art (keypoint
 heatmap + soft-argmax; the dual-head is the proposer's own architecture at crop resolution).
 STILL OPT-IN (PIKVM_ML_CASCADE=1). NOT yet a win until LIVE — the offline 6/6 that preceded
-the 94% live bench is the cautionary tale. NEXT: health-check + LIVE N=80 with the dual-head
-cascade; if it holds (no Maps-icon/widget cluster, ~99%) THEN it's real.
+the 94% live bench is the cautionary tale.
+** VALIDATED LIVE (2026-07-20, cycle 19): the dual-head cascade IS the win. **
+- LIVE N=80 click bench (dual-head cascade) = **80/80 = 100%** (0 misses, badPre 0), CLEARED
+  trial 10 where the binary cascade collapsed to 94% with the 5-miss Maps-icon cluster — that
+  systematic failure is GONE. Per-target resid 1.4-17px (Books 3.2px vs 19px with v13; NOTE
+  resid is the detector's own number, NOT ground truth — the app-open 100% IS ground truth).
+- SMALL-BUTTON PRECISION (user idea; scratch/maps-buttons-precision.ts; getCursor GROUND
+  TRUTH): the 4 Maps-widget buttons (~40px, ~58px spacing) — median landing error **2.8px**,
+  right-button **20/20 = 100%** (search 3.8, fuel 1.4, food 2.8 [the orange confuser], bag
+  2.6). This is the small-+-button regime, ground-truth-validated at ~2.8px — the heatmap
+  soft-argmax + closed-loop mover converge tighter than the ~11px static estimate. The
+  separate crop-refiner may be unnecessary.
+CONCLUSION: detection robustness on ANY screen achieved via the dual-head grid cascade; both
+v13 failure modes (Maps-widget FP, orange-Books-icon FN) fixed and LIVE-validated; small-
+button precision reached. Memory: [[project_dual_head_crop_detector]].
 
 ## cycle 17 — heatmap-ONLY traded rejection for recall → DUAL-HEAD (presence + heatmap)
 Implemented the crop heatmap-detector (cycle 16 plan). RESULT: it DETECTS all cursors
