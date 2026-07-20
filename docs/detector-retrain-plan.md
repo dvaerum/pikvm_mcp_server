@@ -90,6 +90,19 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 2):** corrected strategy to robustness-by-design (user
+  directive — memory feedback_detector_must_generalize_any_screen; loop prompt
+  updated). Heatmap diag (above): verified TWO failures — FN on hard bg (0.0012 on
+  Books) + intermittent map FP (0.999). EXTRACTED the exact cursor sprite via
+  2-background alpha matting (extract-cursor-sprite.ts): showScene solid black +
+  white, solve alpha/color per px → ml/cursor-sprite.png (180×180 RGBA, cursor
+  centered on the getCursor label point, 725 opaque px). Verified clean by eye
+  (orange arrow, transparent bg). This is the foundation for compositing. NEXT:
+  (1) assemble a DIVERSE background corpus (app screenshots, maps, photos,
+  textures, gradients, noise, hard/busy regions); (2) build the compositing script
+  (paste sprite at random pos/scale onto random bg → frame + label; the getCursor
+  point = sprite center); (3) generate a large synthetic set; (4) fine-tune
+  v13→v14 with a HOLD-OUT (Maps widget excluded) to PROVE generalization.
 - **2026-07-20 (cycle 1):** health OK (real home screen). Surveyed ml/ pipeline
   (train-cursor-v13.py, export-v13-onnx.py, manifest format). CONFIRMED root cause
   OFFLINE (v13-fp-check.ts): v13 FPs on the Maps widget (1110,297) in 4/4 no-cursor
