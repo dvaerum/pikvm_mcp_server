@@ -27,25 +27,39 @@ failed — the model is extremely confident the map tile is a cursor.
 FAST OFFLINE EVAL LOOP now available: a good cursor-v14 must return NULL / low
 presence on these no-cursor home frames.
 
-## The fix — retrain/fine-tune to cursor-v14 with current-home-screen data
+## The fix — ROBUSTNESS BY DESIGN (NOT per-screen). See memory
+## feedback_detector_must_generalize_any_screen (user directive, VERY important).
+A detector that needs the exact failing screen in its training set is fragile
+whack-a-mole — it'll FP on the NEXT novel background. The cursor is a FIXED, KNOWN
+sprite (orange arrow); the task is "find THIS sprite against ANY background". So
+train it composited onto MAXIMALLY DIVERSE backgrounds so it generalizes.
+
 Training format (v13): full PiKVM frame + `{cursor:{visible,x,y}}`. visible →
 gaussian heatmap + presence 1.0; absent → zeros + presence 0.0. MobileNetV3
 backbone, heatmap + presence heads.
 
-DATA to add (the whole point):
-- HARD-NEGATIVES: current home-screen frames with NO cursor (cursor faded/absent)
-  → presence 0, showing the Maps/clock/calendar/weather widgets as background.
-  Collect on the REAL home screen (no getCursor needed for absent frames). Vary
-  clock time / map state for robustness.
-- POSITIVES: current home-screen frames with the cursor at KNOWN positions (via
-  iPadCollector showScene(home-image) + getCursor ground truth, as in the click
-  benches), INCLUDING cursor over/near the widgets (teach cursor-over-widget vs
-  widget-alone).
-Keep a held-out set (never trained on) for eval.
+STRATEGY (robust, screen-agnostic):
+- SYNTHETIC COMPOSITING: extract the EXACT cursor sprite (with its alpha/border/
+  anti-aliasing) and paste it at known positions onto a huge diversity of
+  backgrounds — real iPad app screenshots, maps, photos, textures, widget crops,
+  gradients, noise. Label = paste position. This teaches the cursor's INVARIANT
+  appearance vs ~infinite backgrounds. (v13 HAD synthetic data but still FPs, so
+  this must be done RIGHT: realistic blend, far more/harder background diversity.)
+- HARD backgrounds especially: map tiles, clock faces, calendar grids, colorful
+  app UIs — the cursor-like-feature sources. As BACKGROUNDS (negatives), not as
+  "the current home screen to memorize".
+- Keep the model's real-cursor positives (existing corpora) so it still nails the
+  real cursor (~11px).
 
-APPROACH options: (A) fine-tune cursor-v13.pt on [new data + a sample of old
-positives to avoid forgetting] → cursor-v14 (faster, lower-risk); (B) full retrain
-per train-cursor-v13.py with the new sources added. Start with (A).
+PROVE GENERALIZATION (the key test, not memorization): HOLD OUT the current home
+screen's Maps widget entirely from training, then eval — v14 must NOT FP on it. If
+it stays clean on a background it never saw, it truly generalized. (If it only
+works after adding that widget, that's whack-a-mole and REJECTED.)
+
+APPROACH: fine-tune cursor-v13.pt on [diverse-background synthetic + existing real
+positives] → cursor-v14. NOTE: this needs the cursor sprite (extract from a
+ground-truth frame) + a background corpus. Bigger than a quick data-collect —
+scope it deliberately.
 
 ## Validation (CRITICAL — offline gains must translate to LIVE, like prior fails)
 Prior retrains (v2/v3, v12.1) showed OFFLINE lifts that did NOT translate to live
