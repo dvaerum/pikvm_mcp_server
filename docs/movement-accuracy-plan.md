@@ -743,6 +743,20 @@ ON. Target: hit rate materially above today's baseline.
   POST frames on every miss. DECISIVE TEST: PRE-frame real cursor vs logged
   V8_start — if they AGREE, V8 was right → miss is EMIT (movement work remains); if
   they DISAGREE, V8 false-positived → DETECTION (confirmed out-of-scope). [Pending.]
+  RESULT — VERIFIED DETECTION (ground truth): 98% single-shot (78/80), 2 misses,
+  BOTH with identical V8_start=(1110,297) p0.83/0.89 = the MAPS WIDGET (top-right).
+  DECISIVE: MISS-t5-Settings PRE frame shows the REAL cursor (orange arrow) on the
+  BOOKS icon (~757,837) — NOT at (1110,297). So V8 FALSE-POSITIVED on the Maps
+  widget while the real cursor was at Books; the emit = (Settings − Maps-widget)
+  applied to the real cursor → sent it to the bottom (V8_final 660,1026, matches
+  arithmetic) → miss. HYPOTHESIS CONFIRMED, not assumed: residual = V8 start-FP on
+  the Maps WIDGET, NOT emit. Emit model definitively solved.
+  KEY: the Maps-widget FP has presence 0.83–0.89, while real-cursor detections run
+  ~1.00 (maps-real-diag/smoke all p1.00). That GAP suggests a low-risk mitigation:
+  raise the mover's minPresence gate (~0.92) so the widget FP is REJECTED (→ null
+  → retry re-detects the real cursor). Checking the presence distribution to see if
+  the gate is viable (real detections must stay ≥ gate). This is a detection-GATE
+  tweak (a mover parameter, not model retrain) directly targeting the VERIFIED cause.
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
