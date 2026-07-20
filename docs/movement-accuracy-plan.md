@@ -544,7 +544,23 @@ ON. Target: hit rate materially above today's baseline.
   TRUTH): per Maps move, log V8-start vs getCursor-start and the real getCursor
   final residual, to see whether it's the V8 start detection that's wrong (and how
   the correction fails to recover). No fix until the ground-truth data shows the
-  actual mechanism. [Result pending.]
+  actual mechanism.
+  MAPS-DIAG RESULT (N=15 on the iPadCollector home SCENE): the move is PERFECT and
+  IDENTICAL every attempt — V8-start (880,306) agrees with getCursor (873,312) to
+  9px, lands 10px from Maps, ZERO misses. So the STATIC SCENE does NOT reproduce
+  the real-screen Maps miss. KEY METHODOLOGY LIMIT: getCursor ground truth REQUIRES
+  iPadCollector foregrounded showing a static image scene — which FREEZES the live
+  widgets (clock second-hand, Maps widget). The real-screen miss must depend on
+  something LIVE the frozen snapshot lacks (hypothesis, unconfirmed: V8 false-
+  positives on the moving CLOCK hands — a cursor-like shape at certain positions —
+  which would explain the INTERMITTENCE). So the mandate's preferred getCursor
+  harness is BLIND to this particular bug: it can't reproduce a live-home-screen
+  phenomenon on a static scene. NEXT (real-screen diagnostic, no getCursor):
+  reproduce the miss on the LIVE home screen with V8-start + emit + V8-final
+  logged and misses visually verified from screenshots, to see where V8-start
+  actually goes wrong. Interim: the shipped default (curve-one-shot + correction)
+  stands at ~89% app-open; the emit model is solid — this is a detection edge case
+  on the live home screen.
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
