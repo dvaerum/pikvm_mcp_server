@@ -52,6 +52,7 @@ _to_tensor = transforms.ToTensor()
 # Real-frame gate crops (frame, native center x,y, expected label).
 GATE = [
     ("REJECT books-icon", SCRATCH / "hc13.jpg", 760, 819, 0),
+    ("REJECT books-edge", SCRATCH / "hc13.jpg", 690, 819, 0),  # the partial-icon EDGE that FP'd 0.96 in the cascade
     ("REJECT maps-widget", SCRATCH / "hc13.jpg", 1110, 297, 0),
     ("ACCEPT clean-cursor", SCRATCH / "clean-cursor.jpg", 620, 432, 1),
     ("ACCEPT books-cursor",

@@ -74,18 +74,24 @@ def real_crop():
 
 
 def icon_crop():
-    """Procedural HARD negative: a warm/colorful rounded-rect 'app icon' filling
-    most of the crop on a contrasting field — the exact orange-blob the single
-    stage FPs on, but with NO arrow."""
+    """Procedural HARD negative: warm/colorful rounded-rect 'app icons' at RANDOM
+    positions/sizes — INCLUDING partially off the crop edge. Position is randomized
+    (not centered) on purpose: v1 centered the icon, so the verifier learned the
+    spurious rule "off-center orange = cursor, centered orange = not" and FP'd on the
+    Books-icon EDGE at (690,819) v=0.96 (docs cycle 10). Now an orange blob at ANY
+    offset is a NEGATIVE, forcing the verifier to key on the ARROW SHAPE, not the
+    icon's position — positives put the arrow over these same off-center icons."""
     base = Image.new("RGBA", (CROP, CROP), rand_color() + (255,))
     d = ImageDraw.Draw(base)
-    m = random.randint(4, 16)
-    col = warm_color() if random.random() < 0.55 else rand_color()
-    d.rounded_rectangle([m, m, CROP - m, CROP - m], radius=random.randint(10, 26), fill=col + (255,))
-    # a couple of inner glyph-ish marks so it reads like an icon, not a flat square
-    for _ in range(random.randint(0, 3)):
-        cx, cy, r = random.randint(20, 76), random.randint(20, 76), random.randint(6, 20)
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=rand_color() + (255,))
+    for _ in range(random.randint(1, 2)):
+        sz = random.randint(40, 96)
+        cx, cy = random.randint(0, CROP), random.randint(0, CROP)  # center may sit at/over an edge
+        x0, y0 = cx - sz // 2, cy - sz // 2
+        col = warm_color() if random.random() < 0.55 else rand_color()
+        d.rounded_rectangle([x0, y0, x0 + sz, y0 + sz], radius=random.randint(8, 24), fill=col + (255,))
+        for _ in range(random.randint(0, 2)):  # inner glyph marks
+            gx, gy, r = random.randint(x0, x0 + sz), random.randint(y0, y0 + sz), random.randint(5, 16)
+            d.ellipse([gx - r, gy - r, gx + r, gy + r], fill=rand_color() + (255,))
     return base
 
 

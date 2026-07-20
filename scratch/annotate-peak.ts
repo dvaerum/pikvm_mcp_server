@@ -3,9 +3,8 @@
 import sharp from 'sharp';
 const src = process.argv[2] ?? 'scratch/hc13.jpg';
 const pts: { x: number; y: number; c: string; label: string }[] = [
-  { x: 760, y: 819, c: 'red', label: 'v14 peak 0.993 (no cursor here)' },
-  { x: 1110, y: 297, c: 'yellow', label: 'old v13 Maps-widget FP' },
-  { x: 620, y: 432, c: 'lime', label: 'clean-cursor location' },
+  { x: 690, y: 819, c: 'red', label: 'cascade DETECT v=0.96 (690,819) - cursor or FP?' },
+  { x: 760, y: 819, c: 'yellow', label: 'Books icon (verifier rejects 0.05)' },
 ];
 const { width, height } = await sharp(src).metadata();
 const circles = pts.map((p) =>

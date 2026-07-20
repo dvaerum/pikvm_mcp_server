@@ -90,6 +90,29 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 10): end-to-end cascade eval found a POSITION spurious-
+  correlation in the verifier — fixed.** Ran scratch/cascade-eval.ts (proposer
+  v14-ep05 + selected verifier, top-20 NMS peaks/frame → verifier per crop). Result:
+  2/6 — the no-cursor home frames FAILED. The verifier CORRECTLY rejected the CENTERED
+  Books icon (760,819) at v=0.05, but ACCEPTED a candidate at (690,819) at v=0.96.
+  VERIFIED BY EYE (scratch/peak-annotated.jpg): (690,819) is empty blue wallpaper just
+  LEFT of the Books icon — the 96px crop there catches the icon's LEFT EDGE (partial,
+  off-center orange). ROOT CAUSE: my hard-negative icons were always CENTERED while
+  positives had the arrow JITTERED off-center → the verifier learned the spurious rule
+  "off-center orange = cursor, centered orange = not" (a POSITION heuristic, not
+  shape). So it rejects a centered icon but fires on the icon's edge. FIX (principled):
+  icon_crop now draws icons at RANDOM positions incl. partially off the crop edge, so
+  an orange blob at ANY offset is a NEGATIVE — the ONLY positive/negative difference is
+  the ARROW SHAPE. Verified by eye (scratch/crops-sheet3.jpg: negatives now have
+  edge/corner/partial icons; positives arrow-over-icon). Also added (690,819) as a
+  REJECT point to the trainer's selection GATE so it can't pick a model that repeats
+  the edge FP, and the cascade-eval remains the broad proof. Retraining (v3). NOTE the
+  method working here: each cascade-eval exposes a MORE SPECIFIC failure (map→books
+  icon→books edge) and the fix gets more targeted — converging, not whack-a-mole,
+  because every fix is a general robustness property (shape-not-color, shape-not-
+  position), proven on HELD-OUT frames. NEXT: cascade-eval on v3 → must return NULL on
+  all no-cursor frames (all icon crops rejected) → wire into findCursorByV8FullFrame
+  opt-in → LIVE N=80.
 - **2026-07-20 (cycle 9): crop-verifier WORKS in principle (separates the Books icon)
   but OVERFIT — found + fixed the generalization gap.** Verifier run-1 epoch-0 gate
   (held-out real frames): REJECT books-icon=0.30, maps-widget=0.00, ACCEPT
