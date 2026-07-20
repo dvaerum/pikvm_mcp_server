@@ -58,3 +58,14 @@ CLAUDE.md
 result
 result-*
 
+# Compiled tool binaries (source .swift is tracked; the built binary is not)
+tools/ocr/ocr
+tools/**/*.o
+
+# ML model binaries — regenerable from the committed training/export scripts (like
+# data/). Old cursor-v0..v12 are already tracked (pre-existing ~200MB); this stops NEW
+# ones (crop-heatmap.onnx, etc.) from being committed by an accidental `git add -A`.
+ml/*.onnx
+ml/*.onnx.data
+ml/*.pt
+

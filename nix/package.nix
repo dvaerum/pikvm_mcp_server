@@ -30,6 +30,14 @@ buildNpmPackage {
         || topLevel == "data"
         || topLevel == "node_modules"
         || topLevel == "nix"
+        # Dev/eval-only trees — NOT needed to build the server (tsc uses only src/) and
+        # NOT loaded from the package at runtime (models resolve from process.cwd()/ml/,
+        # see cursor-ml-detect.ts). Excluding them keeps the build lean (ml/ alone is
+        # ~200 MB of model binaries; scratch/ holds experiment scripts + screenshots).
+        || topLevel == "ml"
+        || topLevel == "scratch"
+        || topLevel == "tools"
+        || topLevel == "docs"
         || topLevel == "flake.nix"
         || topLevel == "flake.lock"
         || topLevel == "test-client.ts"
