@@ -142,6 +142,16 @@ the 94% live bench is the cautionary tale.
 CONCLUSION: detection robustness on ANY screen achieved via the dual-head grid cascade; both
 v13 failure modes (Maps-widget FP, orange-Books-icon FN) fixed and LIVE-validated; small-
 button precision reached. Memory: [[project_dual_head_crop_detector]].
+- REPRODUCIBILITY (rigor — "no verdicts from small samples"; the binary cascade also looked
+  perfect through trial 9 before collapsing): ran a SECOND independent N=80 at a different time
+  with a DIFFERENT Maps-widget animation state = **80/80 = 100% again** (0 misses). Two runs =
+  **160/160**, near-identical per-target resid (Books 3.2/3.6, Maps 1.4/2.0). The intermittent
+  map-FP failure is definitively gone, not a lucky state.
+- Parallel test-fix agent (2026-07-20): fixed 2 brightness-hint tests (45459f2); the other 4
+  failures are a PRE-EXISTING OLD-MODEL (v12/v13) black-frame FP at (1710,909) — verified the
+  dual-head cascade AND v14 both return NULL on black (strictly better), so the cascade would
+  not reintroduce it. Cascade remains OPT-IN (PIKVM_ML_CASCADE=1); making it default is a
+  deliberate shipping decision left to the user.
 
 ## cycle 17 — heatmap-ONLY traded rejection for recall → DUAL-HEAD (presence + heatmap)
 Implemented the crop heatmap-detector (cycle 16 plan). RESULT: it DETECTS all cursors
