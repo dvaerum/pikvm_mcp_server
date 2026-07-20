@@ -616,7 +616,22 @@ ON. Target: hit rate materially above today's baseline.
   Running the N=80 bench with the cap (click-bench80.ts, unchanged — shipped
   default now has correctMaxPx=80) as the proper validation: ~5 FP opportunities
   across 80 clicks; if the cap works, the rate should rise from 89% toward ~95%.
-  [Result pending.]
+  RESULT (N=80, capped correction): **95.0% app-open (76/80)**, UP from 89%.
+  Per-target: Files/Reminders/AppStore 100%, **Maps 60%→100%** (the diagnosed
+  target — unambiguous confirmation the cap fixed the correction-over-corrects-on-
+  FP bug), FaceTime/Games/Books/Settings 90%. +6pp overall is modest but Maps
+  60→100 is the smoking gun. VERDICT: the correction-cap fix is VALIDATED.
+  REMAINING TAIL (4/80 ≈ 5%) is a DIFFERENT mechanism — mode-A: V8 START-detection
+  false-positives (verified: MISS-t2-FaceTime frame = home, cursor at bottom-left
+  ~400px off; residuals 171–418px). The first open-loop shot lands wrong because
+  the ONE start detection was a widget FP; the cap correctly skips correction
+  (can't fix a bad start). So mode-B (correction-induced, ~6%) is FIXED; mode-A
+  (start-FP, ~5%) remains.
+  **PHASE 9 PLAN (next, optional — diminishing returns at 95%):** attack mode-A by
+  probe-verifying the START detection — emit a tiny known probe and confirm the V8
+  candidate MOVED by it (smoke showed V8 tracks the real cursor when right); if the
+  candidate is static (widget FP), re-detect before the big shot. Adds latency to
+  every move — weigh vs the 95% already achieved.
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
