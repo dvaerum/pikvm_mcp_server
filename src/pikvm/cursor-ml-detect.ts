@@ -23,6 +23,7 @@ import * as fsSync from 'fs';
 import path from 'path';
 import sharp from 'sharp';
 import * as ort from 'onnxruntime-node';
+import { detectIpadRegion, NATIVE_MARGIN } from './ipad-region-detect.js';
 
 /** Crop dimension (must match training: train-cursor-v1.py CROP_SIZE). */
 const CROP_SIZE = 256;
@@ -113,39 +114,24 @@ const CASCADE_ENABLED = process.env.PIKVM_ML_CASCADE === '1';
 const VERIFIER_MODEL = process.env.PIKVM_ML_VERIFIER_MODEL
   ? path.resolve(process.env.PIKVM_ML_VERIFIER_MODEL)
   : path.resolve(process.cwd(), 'ml', 'crop-verifier.onnx');
-const CASCADE_K = Number(process.env.PIKVM_ML_CASCADE_K ?? '20');
-const CASCADE_NMS = 70;   // native-px min separation between candidate peaks
 const CASCADE_CROP = 96;  // native-px verifier crop (MUST match training)
+const GRID_STRIDE = Number(process.env.PIKVM_ML_GRID_STRIDE ?? '48');  // native-px grid step
 const VERIFY_THRESH = Number(process.env.PIKVM_ML_VERIFY_THRESH ?? '0.5');
 let cachedVerifierSession: ort.InferenceSession | null = null;
 let verifierLoadFailureLogged = false;
+let cachedRegion: { x: number; y: number; w: number; h: number } | null = null;
 
-/** Verifier score (sigmoid) for the 96px crop centred on (cx,cy) in native px. */
-async function verifyCropAt(
-  jpegBuffer: Buffer, cx: number, cy: number, frameW: number, frameH: number,
-): Promise<number> {
-  const left = Math.max(0, Math.min(frameW - CASCADE_CROP, Math.round(cx - CASCADE_CROP / 2)));
-  const top = Math.max(0, Math.min(frameH - CASCADE_CROP, Math.round(cy - CASCADE_CROP / 2)));
-  const { data: rgb } = await sharp(jpegBuffer)
-    .extract({ left, top, width: CASCADE_CROP, height: CASCADE_CROP })
-    .removeAlpha().raw().toBuffer({ resolveWithObject: true });
-  const plane = CASCADE_CROP * CASCADE_CROP;
-  const inp = new Float32Array(3 * plane);
-  for (let i = 0; i < plane; i++) {
-    inp[i] = (rgb[i * 3] / 255 - MEAN[0]) / STD[0];
-    inp[plane + i] = (rgb[i * 3 + 1] / 255 - MEAN[1]) / STD[1];
-    inp[2 * plane + i] = (rgb[i * 3 + 2] / 255 - MEAN[2]) / STD[2];
-  }
-  const r = await cachedVerifierSession!.run({
-    crop: new ort.Tensor('float32', inp, [1, 3, CASCADE_CROP, CASCADE_CROP]),
-  });
-  const logit = (r.logit.data as Float32Array)[0];
-  return 1 / (1 + Math.exp(-logit));
-}
-
-/** Cascade: proposer heatmap → top-K NMS peaks → verifier per crop → best. */
+/**
+ * Cascade detection: run the VERIFIER over a dense grid of 96px crops covering the
+ * iPad region (batched in ONE inference), take the max-scoring crop, and refine to
+ * the score-weighted centroid of the winning cluster for sub-cell precision. This
+ * DECOUPLES detection from the full-frame proposer, whose recall failed live (it
+ * missed the cursor on the Maps app icon — verifier=1.0 there but the proposer never
+ * proposed it). The proposer heatmap is intentionally NOT used. ~230 crops / ~110ms.
+ * See docs/detector-retrain-plan.md cycle 14.
+ */
 async function runCascade(
-  jpegBuffer: Buffer, heatmapLogits: Float32Array, frameW: number, frameH: number,
+  jpegBuffer: Buffer, frameW: number, frameH: number,
 ): Promise<{ x: number; y: number; presence: number; heatmapPeak: number } | null> {
   if (cachedVerifierSession === null) {
     try {
@@ -162,22 +148,54 @@ async function runCascade(
       return null;
     }
   }
-  const order = Array.from(heatmapLogits.keys()).sort((a, b) => heatmapLogits[b] - heatmapLogits[a]);
-  const peaks: { x: number; y: number; peak: number }[] = [];
-  for (const i of order) {
-    const nx = Math.round((i % V8_HEATMAP_W) / V8_HEATMAP_W * frameW);
-    const ny = Math.round(Math.floor(i / V8_HEATMAP_W) / V8_HEATMAP_H * frameH);
-    if (peaks.some((p) => Math.hypot(p.x - nx, p.y - ny) < CASCADE_NMS)) continue;
-    peaks.push({ x: nx, y: ny, peak: 1 / (1 + Math.exp(-heatmapLogits[i])) });
-    if (peaks.length >= CASCADE_K) break;
+  if (cachedRegion === null) {
+    try {
+      const r = await detectIpadRegion(jpegBuffer);
+      cachedRegion = { x: r.x + NATIVE_MARGIN, y: r.y + NATIVE_MARGIN, w: r.w - 2 * NATIVE_MARGIN, h: r.h - 2 * NATIVE_MARGIN };
+    } catch {
+      cachedRegion = { x: 0, y: 0, w: frameW, h: frameH };
+    }
   }
-  let best: { x: number; y: number; peak: number; v: number } | null = null;
-  for (const p of peaks) {
-    const v = await verifyCropAt(jpegBuffer, p.x, p.y, frameW, frameH);
-    if (best === null || v > best.v) best = { ...p, v };
+  const reg = cachedRegion;
+  const { data: full, info } = await sharp(jpegBuffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const FW = info.width, half = CASCADE_CROP / 2;
+  const centers: { x: number; y: number }[] = [];
+  for (let cy = reg.y + half; cy <= reg.y + reg.h - half; cy += GRID_STRIDE) {
+    for (let cx = reg.x + half; cx <= reg.x + reg.w - half; cx += GRID_STRIDE) {
+      centers.push({ x: Math.round(cx), y: Math.round(cy) });
+    }
   }
-  if (best === null || best.v < VERIFY_THRESH) return null;
-  return { x: best.x, y: best.y, presence: best.v, heatmapPeak: best.peak };
+  if (centers.length === 0) return null;
+  const N = centers.length, plane = CASCADE_CROP * CASCADE_CROP;
+  const batch = new Float32Array(N * 3 * plane);
+  for (let n = 0; n < N; n++) {
+    const left = Math.max(0, Math.min(FW - CASCADE_CROP, centers[n].x - half));
+    const top = Math.max(0, Math.min(info.height - CASCADE_CROP, centers[n].y - half));
+    const base = n * 3 * plane;
+    for (let yy = 0; yy < CASCADE_CROP; yy++) {
+      for (let xx = 0; xx < CASCADE_CROP; xx++) {
+        const si = ((top + yy) * FW + (left + xx)) * 3, di = yy * CASCADE_CROP + xx;
+        batch[base + di] = (full[si] / 255 - MEAN[0]) / STD[0];
+        batch[base + plane + di] = (full[si + 1] / 255 - MEAN[1]) / STD[1];
+        batch[base + 2 * plane + di] = (full[si + 2] / 255 - MEAN[2]) / STD[2];
+      }
+    }
+  }
+  const r = await cachedVerifierSession.run({ crop: new ort.Tensor('float32', batch, [N, 3, CASCADE_CROP, CASCADE_CROP]) });
+  const logits = r.logit.data as Float32Array;
+  let bi = 0;
+  for (let i = 1; i < N; i++) if (logits[i] > logits[bi]) bi = i;
+  const maxV = 1 / (1 + Math.exp(-logits[bi]));
+  if (maxV < VERIFY_THRESH) return null;
+  // score-weighted centroid of the winning cluster (sub-cell precision)
+  let sx = 0, sy = 0, sw = 0;
+  for (let i = 0; i < N; i++) {
+    const v = 1 / (1 + Math.exp(-logits[i]));
+    if (v >= maxV - 0.15 && Math.hypot(centers[i].x - centers[bi].x, centers[i].y - centers[bi].y) < GRID_STRIDE * 1.6) {
+      sx += centers[i].x * v; sy += centers[i].y * v; sw += v;
+    }
+  }
+  return { x: Math.round(sx / sw), y: Math.round(sy / sw), presence: maxV, heatmapPeak: maxV };
 }
 
 /** Result type returned by findCursorByML. */
@@ -385,7 +403,7 @@ export async function findCursorByV8FullFrame(
   // screen (FPs on orange icons); delegate the accept/reject + position to the
   // crop-verifier over the proposer's top-K peaks. Ignores minPresence by design.
   if (CASCADE_ENABLED) {
-    return runCascade(jpegBuffer, heatmapLogits, frameWidth, frameHeight);
+    return runCascade(jpegBuffer, frameWidth, frameHeight);
   }
 
   if (presence < minPresence) return null;

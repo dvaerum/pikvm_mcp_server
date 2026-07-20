@@ -104,6 +104,37 @@ Ladder: (a) robust cursor detection on ANY screen [cascade — validating now] �
 sub-5px cursor precision [crop-refiner] → (c) precise target localisation. (a) is the
 prerequisite for both. Crawl → walk → run.
 
+## HONEST STATE (2026-07-20, cycle 15) — cascade is a promising architecture but NOT a
+## validated win; two genuine tensions + a preprocessing bug remain. Do NOT ship as default.
+The cascade (full-frame proposer OR grid → 96px crop-verifier) fixes MANY cases (icons,
+buttons, off-center, nav-arrows, map terrain — all rejected offline) and the grid source
+(runCascade rewritten: dense grid over the iPad region + batched verifier + score-weighted
+centroid; PIKVM_ML_CASCADE=1, ~230 crops/110ms) fixes the proposer-recall FN that broke the
+live bench. BUT unresolved, verified this cycle:
+1. **ORANGE-ON-ORANGE tension (the core hard case).** To reject the green/blue Maps-widget
+   TERRAIN (cycle 14 FP) I emphasised the cursor's orange colour (removed saturation jitter +
+   added map negatives → v6). That REGRESSED the orange-cursor-on-orange-BOOKS-icon case (the
+   ORIGINAL v13 false-negative): v6 verifier scores the real Books-cursor **0.23** in
+   production (rejected). A colour-emphasis that rejects the map can't separate an orange
+   cursor ON an orange icon. Earlier v4 (no colour emphasis) got books-cursor 1.00 but FP'd on
+   map terrain. This trade is the crux and is NOT yet solved — likely needs (a) far more
+   cursor-ON-orange-icon AND cursor-ON-map positives so the verifier learns the specific
+   pointer shape regardless of colour overlap, NOT a global colour prior.
+2. **TRAIN-GATE vs PRODUCTION preprocessing MISMATCH (real bug).** The Python selection gate
+   (PIL decode) reports books-cursor 0.68 while production (sharp/ONNX) reports 0.23 for the
+   SAME crop+model. So model SELECTION optimised a signal that doesn't match production. FIX:
+   the verifier's selection gate must use the SAME preprocessing as production (sharp) — e.g.
+   a TS gate, or match PIL↔sharp decode. Until then, gate numbers are not trustworthy for
+   production.
+3. **Precision trade:** grid+centroid detects clean-cursor ~47px off (vs proposer's ~9px).
+   Fine for icons, not for the small-button goal — the crop-REFINER (position head) is the fix.
+REFUTED / dead-ends (do not retry): global orange-colour prior (breaks orange-on-orange);
+proposer-peak-only candidates (recall gap); trusting the Python gate for production selection.
+NEXT (future session): fix gate/production preprocessing parity FIRST (so selection is real),
+then resolve the colour-vs-shape tension with richer cursor-on-hard-icon positives (not a
+colour prior), re-validate offline with the GRID cascade on ALL cases (incl. Books-cursor),
+then LIVE. The grid runCascade + v6 are committed but OPT-IN (default path unchanged).
+
 ## Progress log
 - **2026-07-20 (cycle 14): LIVE BENCH = 94% (75/80) — NOT a win; live testing caught
   a real gap the offline 6/6 missed. The cascade is NOT yet validated live.** Honest
