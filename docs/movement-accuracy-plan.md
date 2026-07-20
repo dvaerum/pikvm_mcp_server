@@ -789,6 +789,22 @@ ON. Target: hit rate materially above today's baseline.
   separate ML project. Emit/movement objective fully met (~98–99%, emit solved);
   further gains need the detector project, out of this loop's movement scope.
 
+  ** 2026-07-20 (Phase 13 — QA of the shipped code; no non-marginal movement work
+  remains):** with the emit solved, the residual verified as detection, and all 4
+  simple detection fixes refuted, there is no further non-marginal MOVEMENT
+  improvement (detector-retrain = separate ML project for ~1%; auto-calibration
+  risks regressing the currently-STABLE geometry with measurement noise vs the
+  exact hardcoded curve). So this cycle = QA the shipped work instead of
+  manufacturing marginal features. Full suite: tsc CLEAN; curve-mover (shipped
+  code) 14/14 PASS. 6 pre-existing failures (brightness stale-text, click-retry,
+  move-to.forbidSlam/verificationLag) are in test files I NEVER touched (0 of my
+  commits modified them) — confirmed NOT my regression (also verified Phase 6 on
+  clean HEAD). Shipped movement fix is solid + well-tested. The movement-accuracy
+  objective is COMPLETE and QA-verified. Remaining out-of-scope items for a future
+  session: (a) cursor-v13 retrain w/ widget hard-negatives (the only lever for the
+  last ~1–2%); (b) fix the 6 pre-existing unrelated test failures; (c) auto-wire
+  calibrateFullReport IF the iPad geometry ever changes.
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
