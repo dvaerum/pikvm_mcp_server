@@ -707,6 +707,29 @@ ON. Target: hit rate materially above today's baseline.
   to confirm 97.5% is stable, not a lucky single draw (prior: 95% single-shot, 97.5%
   retry3 — one run each). [Result pending.] If it lands ~95–98%, the shipped result
   is solid and the movement work is definitively complete.
+  RESULT (2nd N=80, maxRetries=3): **100.0% (80/80)** — ALL 8 targets 100%,
+  including Settings (was 80% last run). So two production N=80 runs = 97.5% and
+  100.0% (mean ~98.75%). TWO CONCLUSIONS: (1) the shipped result is STABLE and
+  excellent (~98–99% production click-success). (2) the Settings "persistent" FP
+  was actually INTERMITTENT (80%→100% run-to-run) — it depends on the live screen
+  state, NOT a deterministic condition. This re-confirms rejecting the reset fix
+  was correct: there was no persistent problem to fix, and the intermittent FP is
+  handled by retries + run-to-run variance.
+
+  ==================== FINAL SUMMARY (movement accuracy) ====================
+  From ~0% (real home screen, old iterative default: median 73px, motion-diff
+  correction oscillated/went blind on textured backgrounds) to **~98–99% production
+  click-success** (two N=80 runs: 97.5%, 100%). The EMIT MODEL IS SOLVED:
+  deterministic, isotropic, invertible curve; one open-loop shot lands ~11px
+  (100% on clean surfaces; N=80 paired vs getCursor 9.1 vs baseline 72.9).
+  Shipped: src/pikvm/curve-mover.ts + strategy 'curve-one-shot' (iPad default),
+  correction capped to [30,80]px, maxRetries=3. Overturned 3 false beliefs the
+  codebase was built on (25-mickey floor, 30% burst coalescing, "open-loop doesn't
+  work" — all detector artifacts from measuring with the detector not getCursor).
+  Residual ~1–2% = intermittent V8 start-FP on live widgets (DETECTION, not
+  movement); only further lever is a detection-model retrain (hard-negative widget
+  crops) — a separate project. MOVEMENT ACCURACY WORK COMPLETE.
+  =========================================================================
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
