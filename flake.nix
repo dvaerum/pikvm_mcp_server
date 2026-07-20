@@ -113,6 +113,37 @@
             echo "Regenerate npmDepsHash with: prefetch-npm-deps package-lock.json"
           '';
         };
+
+        # NixOS VM test for the system service (Linux only — nixosTest needs a
+        # Linux builder). Boots the service with credential FILES, asserts the
+        # Streamable HTTP endpoint is up and that the secret was delivered via
+        # systemd credentials, NOT the process environment.
+        checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          nixos-service = pkgs.testers.runNixOSTest {
+            name = "pikvm-mcp-service";
+            nodes.machine = { ... }: {
+              imports = [ self.nixosModules.pikvm-mcp ];
+              environment.etc."pikvm-secrets/password".text = "testpassword";
+              environment.etc."pikvm-secrets/username".text = "operator";
+              services.pikvm-mcp = {
+                enable = true;
+                host = "https://pikvm.invalid";
+                passwordFile = "/etc/pikvm-secrets/password";
+                usernameFile = "/etc/pikvm-secrets/username";
+                openFirewall = true;
+              };
+            };
+            testScript = ''
+              machine.wait_for_unit("pikvm-mcp.service")
+              machine.wait_for_open_port(3000)
+              machine.succeed("curl -sf http://127.0.0.1:3000/health | grep -q streamable-http")
+              pid = machine.succeed("systemctl show -p MainPID --value pikvm-mcp.service").strip()
+              # The password must NOT be in the service's environment (it comes
+              # from a systemd credential file instead).
+              machine.fail(f"tr '\\0' '\\n' < /proc/{pid}/environ | grep -q testpassword")
+            '';
+          };
+        };
       }))
     // {
       # Cross-system outputs — independent of the host platform.
@@ -127,6 +158,14 @@
           nixitin.homeManagerModules.default
           ./nix/home-module.nix
         ];
+      };
+
+      nixosModules.default = self.nixosModules.pikvm-mcp;
+      nixosModules.pikvm-mcp = { ... }: {
+        # Bring our overlay so services.pikvm-mcp.package defaults to
+        # pkgs.pikvm-mcp-server without the consumer wiring the overlay.
+        imports = [ ./nix/nixos-module.nix ];
+        nixpkgs.overlays = [ overlay ];
       };
     };
 }

@@ -6,7 +6,8 @@
  */
 
 import { config as loadEnv } from 'dotenv';
-import { resolve, dirname } from 'path';
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 // Load .env file from project root
@@ -32,21 +33,63 @@ export interface Config {
   };
 }
 
+function readSecretFile(path: string): string {
+  // Secret files (sops-nix, systemd credentials, docker secrets) conventionally
+  // carry a trailing newline from `echo`; strip trailing newlines only.
+  return readFileSync(path, 'utf8').replace(/[\r\n]+$/, '');
+}
+
+/**
+ * Resolve a config/secret value from, in precedence order:
+ *   1. the direct env var `name` (e.g. PIKVM_PASSWORD),
+ *   2. a file named by `${name}_FILE` (e.g. PIKVM_PASSWORD_FILE) — its contents,
+ *   3. `$CREDENTIALS_DIRECTORY/<credName>` — the directory systemd populates from
+ *      LoadCredential / LoadCredentialEncrypted (and where sops-nix secrets can be
+ *      pointed). Returns undefined when none is set.
+ *
+ * This lets the username and password each come from a SEPARATE file (sops-nix
+ * secret paths, or two systemd credentials) with no plaintext in the unit/env.
+ */
+export function resolveSecret(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  credName?: string,
+): string | undefined {
+  const direct = env[name];
+  if (direct !== undefined && direct !== '') return direct;
+
+  const filePath = env[`${name}_FILE`];
+  if (filePath) return readSecretFile(filePath);
+
+  const credDir = env.CREDENTIALS_DIRECTORY;
+  if (credDir && credName) {
+    const credPath = join(credDir, credName);
+    if (existsSync(credPath)) return readSecretFile(credPath);
+  }
+  return undefined;
+}
+
 export function loadConfig(): Config {
-  const host = process.env.PIKVM_HOST;
+  const host = resolveSecret(process.env, 'PIKVM_HOST', 'pikvm-host');
   if (!host) {
-    throw new Error('PIKVM_HOST environment variable is required');
+    throw new Error(
+      'PiKVM host is required — set PIKVM_HOST, PIKVM_HOST_FILE, or provide a ' +
+        'systemd credential named "pikvm-host" (LoadCredential).',
+    );
   }
 
-  const password = process.env.PIKVM_PASSWORD;
+  const password = resolveSecret(process.env, 'PIKVM_PASSWORD', 'pikvm-password');
   if (!password) {
-    throw new Error('PIKVM_PASSWORD environment variable is required');
+    throw new Error(
+      'PiKVM password is required — set PIKVM_PASSWORD, PIKVM_PASSWORD_FILE, or ' +
+        'provide a systemd credential named "pikvm-password" (LoadCredential).',
+    );
   }
 
   return {
     pikvm: {
       host,
-      username: process.env.PIKVM_USERNAME || 'admin',
+      username: resolveSecret(process.env, 'PIKVM_USERNAME', 'pikvm-username') || 'admin',
       password,
       verifySsl: process.env.PIKVM_VERIFY_SSL === 'true',
       defaultKeymap: process.env.PIKVM_DEFAULT_KEYMAP || 'en-us',

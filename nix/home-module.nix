@@ -22,17 +22,19 @@ let
       mkdir -p "$DATA_DIR"
 
       export PIKVM_HOST=${lib.escapeShellArg cfg.host}
-      export PIKVM_USERNAME=${lib.escapeShellArg cfg.username}
       export PIKVM_VERIFY_SSL=${lib.escapeShellArg (lib.boolToString cfg.verifySsl)}
       export PIKVM_DEFAULT_KEYMAP=${lib.escapeShellArg cfg.defaultKeymap}
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (k: v: "export ${k}=${lib.escapeShellArg v}")
         cfg.extraEnv)}
 
-      # Read the password fresh on every spawn so password rotations
-      # don't require home-manager switch.
-      PIKVM_PASSWORD="$(cat ${lib.escapeShellArg (toString cfg.passwordFile)})"
-      export PIKVM_PASSWORD
+      # The server reads secrets from files itself (config.ts resolveSecret), so
+      # rotations take effect on the next spawn without a home-manager switch and
+      # no secret lands in the Nix store or the process environment.
+      export PIKVM_PASSWORD_FILE=${lib.escapeShellArg (toString cfg.passwordFile)}
+      ${if cfg.usernameFile != null
+        then "export PIKVM_USERNAME_FILE=${lib.escapeShellArg (toString cfg.usernameFile)}"
+        else "export PIKVM_USERNAME=${lib.escapeShellArg cfg.username}"}
 
       cd "$DATA_DIR"
       exec ${lib.getExe cfg.package} "$@"
@@ -70,13 +72,25 @@ in
       description = "PiKVM API username.";
     };
 
+    usernameFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = "/run/user/1000/secrets/pikvm-username";
+      description = ''
+        Optional path to a file containing the PiKVM username. When set it is
+        read at MCP startup (via PIKVM_USERNAME_FILE) and overrides
+        {option}`username`; never enters the Nix store. Pair with sops-nix or
+        agenix. Leave null to use the literal {option}`username`.
+      '';
+    };
+
     passwordFile = lib.mkOption {
       type = lib.types.path;
       description = ''
         Path to a file containing the PiKVM password.
-        Read at MCP startup; never enters the Nix store. Pair this with
-        sops-nix or agenix for secret management; the MCP server picks
-        up changes without a home-manager switch.
+        Read at MCP startup (via PIKVM_PASSWORD_FILE); never enters the Nix
+        store. Pair this with sops-nix or agenix for secret management; the MCP
+        server picks up changes without a home-manager switch.
       '';
     };
 

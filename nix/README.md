@@ -1,14 +1,18 @@
 # Nix flake — `pikvm-mcp-server`
 
-This directory holds the Nix packaging and a home-manager module that
-installs the MCP server, wires its environment, and registers it with
-Claude Code.
+This directory holds the Nix packaging and two consumer modules:
 
-The MCP server speaks **stdio** — Claude Code spawns it on demand. There
-is no long-running daemon. The home-manager module installs a wrapper on
-`PATH`, ensures runtime data lives under `$XDG_DATA_HOME/pikvm-mcp/`, and
-deep-merges an `mcpServers.pikvm` entry into your existing `~/.claude.json`
-without touching anything else in that file.
+- **home-manager module** (`services.pikvm-mcp`) — installs the server for
+  **stdio** use: Claude Code spawns it on demand, no daemon. It puts a wrapper
+  on `PATH`, keeps runtime data under `$XDG_DATA_HOME/pikvm-mcp/`, and
+  deep-merges an `mcpServers.pikvm` entry into your `~/.claude.json`.
+- **NixOS module** (`services.pikvm-mcp`) — runs the server as a hardened
+  **systemd system service** speaking the **Streamable HTTP** transport, for
+  networked/remote MCP clients.
+
+Both take the PiKVM **username and password from files** (never the Nix store):
+via `PIKVM_USERNAME_FILE` / `PIKVM_PASSWORD_FILE` (home-manager) or systemd
+`LoadCredential` (NixOS), so they compose directly with **sops-nix** / **agenix**.
 
 ## Consumer flake — minimal example
 
@@ -71,7 +75,8 @@ See `home-module.nix` for the authoritative list. Highlights:
 |---|---|---|
 | `services.pikvm-mcp.enable` | `false` | Master switch. |
 | `services.pikvm-mcp.host` | *(required)* | E.g. `"https://pikvm01.lan"`. |
-| `services.pikvm-mcp.username` | `"admin"` | |
+| `services.pikvm-mcp.username` | `"admin"` | Literal; ignored when `usernameFile` is set. |
+| `services.pikvm-mcp.usernameFile` | `null` | Optional path to the username (sops-nix/agenix). Overrides `username`. |
 | `services.pikvm-mcp.passwordFile` | *(required)* | Path read at MCP startup. Never enters the Nix store. |
 | `services.pikvm-mcp.verifySsl` | `false` | Many PiKVMs ship with self-signed certs. |
 | `services.pikvm-mcp.defaultKeymap` | `"en-us"` | |
@@ -79,6 +84,46 @@ See `home-module.nix` for the authoritative list. Highlights:
 | `services.pikvm-mcp.extraEnv` | `{}` | E.g. `{ PIKVM_CALIBRATION_ROUNDS = "10"; }`. |
 | `services.pikvm-mcp.claudeCode.enable` | `false` | Register in `~/.claude.json`. |
 | `services.pikvm-mcp.claudeCode.name` | `"pikvm"` | Key under `mcpServers`. |
+
+## NixOS system service (Streamable HTTP)
+
+For a headless, long-running server exposed over HTTP, use the NixOS module. It
+runs the server under `DynamicUser` with systemd hardening and pulls the username
+and password from **systemd credentials** (`LoadCredential`) — the secrets live
+on tmpfs at mode `0400`, never in the Nix store, the unit env, or the process
+cmdline. The server reads them by credential name (`pikvm-password`,
+`pikvm-username`) from `$CREDENTIALS_DIRECTORY`.
+
+```nix
+# flake inputs: nixpkgs, sops-nix, pikvm-mcp (with inputs.nixpkgs.follows)
+{
+  imports = [ pikvm-mcp.nixosModules.default sops-nix.nixosModules.sops ];
+
+  # sops-nix decrypts these to files at /run/secrets/... at activation.
+  sops.secrets."pikvm/username" = { };
+  sops.secrets."pikvm/password" = { };
+
+  services.pikvm-mcp = {
+    enable = true;
+    host = "https://pikvm01.lan";
+    usernameFile = config.sops.secrets."pikvm/username".path;
+    passwordFile = config.sops.secrets."pikvm/password".path;
+    address = "0.0.0.0";   # bind for remote clients (default 127.0.0.1)
+    port = 3000;
+    openFirewall = true;
+  };
+}
+```
+
+The MCP endpoint is then `http://<host>:3000/mcp` (Streamable HTTP) with a
+`GET /health` liveness check. agenix works the same way — pass its secret path
+to `passwordFile`/`usernameFile`. A NixOS VM test
+(`nix build .#checks.x86_64-linux.nixos-service`) boots the service and asserts
+the endpoint is up and the password is delivered via the credential, not the env.
+
+> **Note:** the ML cursor-detection tools need `ml/*.onnx` models, which are not
+> bundled in the package (they resolve from the working directory). The core
+> tools (screenshot, keyboard, mouse, calibration) work without them.
 
 ## Updating the npm dependency hash
 
@@ -131,11 +176,13 @@ moment.
 ## Layout
 
 ```
-flake.nix            # inputs + outputs (packages, devShells, overlays, homeManagerModules)
+flake.nix            # outputs: packages, apps, devShells, overlays,
+                     #          homeManagerModules, nixosModules, checks (Linux)
 flake.lock           # pinned input revisions (committed)
 nix/
 ├── package.nix      # buildNpmPackage derivation
-├── home-module.nix  # services.pikvm-mcp module body
+├── home-module.nix  # services.pikvm-mcp — home-manager (stdio) module body
+├── nixos-module.nix # services.pikvm-mcp — NixOS systemd (HTTP) module body
 ├── overlay.nix      # adds pkgs.pikvm-mcp-server
 └── README.md        # this file
 ```
