@@ -80,9 +80,16 @@ PIKVM_PROXY=http://127.0.0.1:8888 PIKVM_ML_CASCADE=1 \
   npx tsx scratch/click-bench80-retry3.ts
 ```
 
-## nix run (TODO / follow-up)
+## nix run
 
-The `ml/` toolchain needs torch+MPS (currently `.venv`) and the `scratch/` tools need
-`tsx`; wrapping these as `nix run` apps is a separate chunk (nixifying torch/MPS is
-non-trivial). Lighter interim option: Makefile / npm-script targets for the common
-commands above. Not yet done — flagged here so it isn't lost.
+The detector tools are exposed as flake apps (flake.nix). Run from anywhere in the
+checkout (or set `PIKVM_MCP_REPO`). TS tools use the repo's node_modules; ML tools use
+the repo's `.venv` (torch/MPS is not nixified). Live tools default `PIKVM_PROXY` to the
+loopback tinyproxy.
+
+- Offline eval:  `nix run .#heatmap-gate` · `nix run .#cascade-eval` · `nix run .#integration-test`
+- Live (iPad):   `nix run .#health` · `nix run .#live-bench` · `nix run .#maps-precision` ·
+                 `nix run .#explore -- click 951 985`
+- ML pipeline:   `nix run .#gen-crops -- 15000` · `nix run .#train-heatmap` · `nix run .#export-heatmap`
+
+`nix eval .#apps.<system> --apply builtins.attrNames` lists them.
