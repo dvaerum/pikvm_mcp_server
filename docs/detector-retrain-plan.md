@@ -104,6 +104,32 @@ Ladder: (a) robust cursor detection on ANY screen [cascade — validating now] �
 sub-5px cursor precision [crop-refiner] → (c) precise target localisation. (a) is the
 prerequisite for both. Crawl → walk → run.
 
+## cycle 18 — DUAL-HEAD WORKS: unified offline win (offset-robust + rejection + sub-pixel).
+The dual-head crop detector (ml/train-crop-heatmap.py CropDetector) is the breakthrough:
+- PRODUCTION-FAITHFUL gate (scratch/heatmap-gate.ts, sharp/ONNX) = **8/8, margin 0.97**:
+  ALL confusers rejected ≤0.03 (books-icon 0.03, books-edge 0.01, maps-widget 0.01,
+  maps-app-icon 0.00, map-terrain 0.00); ALL cursors ≥0.99 (clean 1.00, books-cursor 0.99,
+  mapsicon 1.00). AND it MATCHES the PIL gate (no preprocessing mismatch — the 0.97 margin
+  means it's not boundary-sensitive, so decode differences don't flip it; the earlier v6
+  0.68↔0.23 flip was because that classifier sat on the boundary).
+- OFFSET-ROBUST (scratch/offset-falloff-dual.ts): presence stays ~1.00 to 24px and
+  0.77-0.99 at 36px from the tip (vs the binary classifier 0.68→0.00 at 24px). So the grid
+  reliably catches the cursor.
+- INTEGRATED into runCascade (src/pikvm/cursor-ml-detect.ts): grid → batched dual-head →
+  max-PRESENCE crop (accept/reject) → HEATMAP soft-argmax for the sub-pixel tip. Default
+  VERIFIER_MODEL = ml/crop-heatmap.onnx. Production-path integration test = **6/6**: no FP
+  on any no-cursor home frame AND detects the books-cursor at (747,836) — THE EXACT CASE
+  THAT FAILED LIVE (binary grid returned null there) — with **~11-14px precision** (vs the
+  binary grid's ~47px), from the heatmap soft-argmax. That precision also seeds the small-
+  button/crop-refiner goal.
+Why it works (all three at once): PRESENCE head = global pool → offset-invariant accept +
+averages out local confusers (strong rejection); HEATMAP head = translation-equivariant →
+sub-pixel position; wide tip jitter → offset-robust. Grounded in cycle-16 prior art (keypoint
+heatmap + soft-argmax; the dual-head is the proposer's own architecture at crop resolution).
+STILL OPT-IN (PIKVM_ML_CASCADE=1). NOT yet a win until LIVE — the offline 6/6 that preceded
+the 94% live bench is the cautionary tale. NEXT: health-check + LIVE N=80 with the dual-head
+cascade; if it holds (no Maps-icon/widget cluster, ~99%) THEN it's real.
+
 ## cycle 17 — heatmap-ONLY traded rejection for recall → DUAL-HEAD (presence + heatmap)
 Implemented the crop heatmap-detector (cycle 16 plan). RESULT: it DETECTS all cursors
 robustly incl. the offset-hard ones (books-cursor 0.86-0.96, mapsicon-cursor 0.99-1.00 —

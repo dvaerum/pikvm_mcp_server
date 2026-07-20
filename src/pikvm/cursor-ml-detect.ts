@@ -113,7 +113,8 @@ let v8LoadFailureLogged = false;
 const CASCADE_ENABLED = process.env.PIKVM_ML_CASCADE === '1';
 const VERIFIER_MODEL = process.env.PIKVM_ML_VERIFIER_MODEL
   ? path.resolve(process.env.PIKVM_ML_VERIFIER_MODEL)
-  : path.resolve(process.cwd(), 'ml', 'crop-verifier.onnx');
+  : path.resolve(process.cwd(), 'ml', 'crop-heatmap.onnx');
+const HM_OUT = 24;  // dual-head heatmap output resolution (crop 96 / 4)
 const CASCADE_CROP = 96;  // native-px verifier crop (MUST match training)
 const GRID_STRIDE = Number(process.env.PIKVM_ML_GRID_STRIDE ?? '48');  // native-px grid step
 const VERIFY_THRESH = Number(process.env.PIKVM_ML_VERIFY_THRESH ?? '0.5');
@@ -181,21 +182,29 @@ async function runCascade(
       }
     }
   }
-  const r = await cachedVerifierSession.run({ crop: new ort.Tensor('float32', batch, [N, 3, CASCADE_CROP, CASCADE_CROP]) });
-  const logits = r.logit.data as Float32Array;
+  const out = await cachedVerifierSession.run({ crop: new ort.Tensor('float32', batch, [N, 3, CASCADE_CROP, CASCADE_CROP]) });
+  const presence = out.presence_logit.data as Float32Array;   // [N]
+  const heatmap = out.heatmap_logits.data as Float32Array;    // [N,1,HM,HM]
+  // PRESENCE head (offset-invariant, confuser-rejecting) picks the crop; the HEATMAP
+  // head gives the sub-pixel tip within it via soft-argmax.
   let bi = 0;
-  for (let i = 1; i < N; i++) if (logits[i] > logits[bi]) bi = i;
-  const maxV = 1 / (1 + Math.exp(-logits[bi]));
-  if (maxV < VERIFY_THRESH) return null;
-  // score-weighted centroid of the winning cluster (sub-cell precision)
-  let sx = 0, sy = 0, sw = 0;
-  for (let i = 0; i < N; i++) {
-    const v = 1 / (1 + Math.exp(-logits[i]));
-    if (v >= maxV - 0.15 && Math.hypot(centers[i].x - centers[bi].x, centers[i].y - centers[bi].y) < GRID_STRIDE * 1.6) {
-      sx += centers[i].x * v; sy += centers[i].y * v; sw += v;
+  for (let i = 1; i < N; i++) if (presence[i] > presence[bi]) bi = i;
+  const maxP = 1 / (1 + Math.exp(-presence[bi]));
+  if (maxP < VERIFY_THRESH) return null;
+  const hmScale = CASCADE_CROP / HM_OUT, off = bi * HM_OUT * HM_OUT;
+  let mx = -Infinity;
+  for (let k = 0; k < HM_OUT * HM_OUT; k++) mx = Math.max(mx, heatmap[off + k]);
+  let sum = 0, ex = 0, ey = 0;
+  for (let gy = 0; gy < HM_OUT; gy++) {
+    for (let gx = 0; gx < HM_OUT; gx++) {
+      const w = Math.exp(heatmap[off + gy * HM_OUT + gx] - mx);
+      sum += w; ex += gx * w; ey += gy * w;
     }
   }
-  return { x: Math.round(sx / sw), y: Math.round(sy / sw), presence: maxV, heatmapPeak: maxV };
+  ex /= sum; ey /= sum;
+  const left = Math.max(0, Math.min(FW - CASCADE_CROP, centers[bi].x - half));
+  const top = Math.max(0, Math.min(info.height - CASCADE_CROP, centers[bi].y - half));
+  return { x: Math.round(left + ex * hmScale), y: Math.round(top + ey * hmScale), presence: maxP, heatmapPeak: maxP };
 }
 
 /** Result type returned by findCursorByML. */
