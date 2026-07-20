@@ -102,7 +102,7 @@
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            nodejs_20
+            nodejs
             pkg-config
             python3
             vips

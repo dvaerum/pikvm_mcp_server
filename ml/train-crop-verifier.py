@@ -56,6 +56,7 @@ GATE = [
     ("REJECT maps-widget", SCRATCH / "hc13.jpg", 1110, 297, 0),
     ("REJECT maps-app-icon", SCRATCH / "hc13.jpg", 1162, 570, 0),  # nav-arrow glyph the live bench FP'd on
     ("REJECT maps-icon-off", SCRATCH / "hc13.jpg", 1138, 538, 0),  # the exact grid crop that scored 1.00
+    ("REJECT map-terrain", SCRATCH / "hc17.jpg", 1218, 186, 0),  # animated map water/land shape FP'd 0.99
     ("ACCEPT clean-cursor", SCRATCH / "clean-cursor.jpg", 620, 432, 1),
     ("ACCEPT books-cursor",
      SCRATCH / "instrumented-bench" / "MISS-t5-Settings-V8start_1110_297-V8fin_660_1026-PRE.jpg",
@@ -77,8 +78,11 @@ class CropDataset(Dataset):
         # degraded real-frame generalization (synthetic val hit 1.0 by epoch 1 and
         # the real clean-cursor dropped 0.84->0.04). Blur helps the synthetic-crisp
         # arrow match the real (slightly soft) HDMI-captured arrow.
+        # NO saturation/hue jitter: the cursor is reliably ORANGE and map terrain /
+        # nav-arrows that FP'd are green/blue/white — colour is a real discriminator,
+        # so don't train it away (docs cycle 14). Keep mild brightness/contrast + blur.
         self.aug = transforms.Compose([
-            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+            transforms.ColorJitter(brightness=0.15, contrast=0.15),
             transforms.RandomApply([transforms.GaussianBlur(3, sigma=(0.1, 1.5))], p=0.3),
         ]) if is_train else None
 

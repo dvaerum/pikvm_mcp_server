@@ -2,7 +2,6 @@
   lib,
   buildNpmPackage,
   fetchpatch,
-  nodejs_20,
   pkg-config,
   python3,
   vips,
@@ -42,9 +41,10 @@ buildNpmPackage {
 
   # Regenerate when package-lock.json changes:
   #   nix run nixpkgs#prefetch-npm-deps -- package-lock.json
-  npmDepsHash = "sha256-VSx49QGiTJkg/RKBEDoXouSj0MpTIvOG6Gl57Yug/0E=";
+  npmDepsHash = "sha256-1No6pxaHapoSG23MDaTjj9oW6WXnFSy6gynHHBwYRVI=";
 
-  nodejs = nodejs_20;
+  # Use buildNpmPackage's default nodejs (current maintained major). Node 20
+  # is EOL and flagged insecure in nixpkgs 26.05.
 
   # sharp ships pre-built binaries that aren't compatible with NixOS's
   # glibc. Force build-from-source against the host's vips.
