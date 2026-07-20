@@ -31,7 +31,6 @@ import numpy as np
 ROOT = Path(__file__).parent.parent
 OUT_DIR = ROOT / "ml"
 DATA = ROOT / "data" / "synth-crops"
-SCRATCH = ROOT / "scratch"
 CROP = 96
 HM = 24
 SCALE = CROP / HM
@@ -51,14 +50,17 @@ MEAN, STD = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
 _norm = transforms.Normalize(mean=MEAN, std=STD)
 _to_tensor = transforms.ToTensor()
 
-BOOKS = SCRATCH / "instrumented-bench" / "MISS-t5-Settings-V8start_1110_297-V8fin_660_1026-PRE.jpg"
-MAPSICON = SCRATCH / "click-bench80-2026-07-20T07-01-52" / "MISS-t10-Books-frac0.01-rnull.jpg"
+# Eval-gate frames: the committed reproducibility seed (data/seeds/eval-frames),
+# relocated from scratch/ so a from-scratch reproduce depends ONLY on tracked data.
+SEEDS = ROOT / "data" / "seeds" / "eval-frames"
+BOOKS = SEEDS / "MISS-t5-Settings-V8start_1110_297-V8fin_660_1026-PRE.jpg"
+MAPSICON = SEEDS / "MISS-t10-Books-frac0.01-rnull.jpg"
 GATE = [
-    ("REJ books-icon", SCRATCH / "hc13.jpg", 760, 819, 0),
-    ("REJ maps-widget", SCRATCH / "hc13.jpg", 1110, 297, 0),
-    ("REJ maps-app-icon", SCRATCH / "hc13.jpg", 1162, 570, 0),
-    ("REJ map-terrain", SCRATCH / "hc17.jpg", 1218, 186, 0),
-    ("ACC clean-cursor", SCRATCH / "clean-cursor.jpg", 620, 432, 1),
+    ("REJ books-icon", SEEDS / "hc13.jpg", 760, 819, 0),
+    ("REJ maps-widget", SEEDS / "hc13.jpg", 1110, 297, 0),
+    ("REJ maps-app-icon", SEEDS / "hc13.jpg", 1162, 570, 0),
+    ("REJ map-terrain", SEEDS / "hc17.jpg", 1218, 186, 0),
+    ("ACC clean-cursor", SEEDS / "clean-cursor.jpg", 620, 432, 1),
     ("ACC books-cursor", BOOKS, 757, 846, 1),
     ("ACC mapsicon-cursor", MAPSICON, 1180, 600, 1),
 ]

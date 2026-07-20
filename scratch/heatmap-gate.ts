@@ -2,13 +2,15 @@
  * presence (sigmoid) at each real gate point. REJECT->want<0.5, ACCEPT->want>0.5. */
 import ort from 'onnxruntime-node'; import sharp from 'sharp';
 const CROP=96,MEAN=[0.485,0.456,0.406],STD=[0.229,0.224,0.225];const sig=(z:number)=>1/(1+Math.exp(-z));
-const BOOKS='scratch/instrumented-bench/MISS-t5-Settings-V8start_1110_297-V8fin_660_1026-PRE.jpg';
-const MAPSICON='scratch/click-bench80-2026-07-20T07-01-52/MISS-t10-Books-frac0.01-rnull.jpg';
+// Eval-gate frames = the committed reproducibility seed (data/seeds/eval-frames).
+const S='data/seeds/eval-frames';
+const BOOKS=`${S}/MISS-t5-Settings-V8start_1110_297-V8fin_660_1026-PRE.jpg`;
+const MAPSICON=`${S}/MISS-t10-Books-frac0.01-rnull.jpg`;
 const GATE:[string,string,number,number,number][]=[
-  ['REJ books-icon','scratch/hc13.jpg',760,819,0],['REJ books-edge','scratch/hc13.jpg',690,819,0],
-  ['REJ maps-widget','scratch/hc13.jpg',1110,297,0],['REJ maps-app-icon','scratch/hc13.jpg',1162,570,0],
-  ['REJ map-terrain','scratch/hc17.jpg',1218,186,0],
-  ['ACC clean-cursor','scratch/clean-cursor.jpg',620,432,1],['ACC books-cursor',BOOKS,757,846,1],['ACC mapsicon-cursor',MAPSICON,1180,600,1]];
+  ['REJ books-icon',`${S}/hc13.jpg`,760,819,0],['REJ books-edge',`${S}/hc13.jpg`,690,819,0],
+  ['REJ maps-widget',`${S}/hc13.jpg`,1110,297,0],['REJ maps-app-icon',`${S}/hc13.jpg`,1162,570,0],
+  ['REJ map-terrain',`${S}/hc17.jpg`,1218,186,0],
+  ['ACC clean-cursor',`${S}/clean-cursor.jpg`,620,432,1],['ACC books-cursor',BOOKS,757,846,1],['ACC mapsicon-cursor',MAPSICON,1180,600,1]];
 const ver=await ort.InferenceSession.create(process.argv[2]??'ml/crop-heatmap.onnx');
 async function pres(f:string,cx:number,cy:number){
   const{data}=await sharp(f).extract({left:cx-48,top:cy-48,width:96,height:96}).removeAlpha().raw().toBuffer({resolveWithObject:true});

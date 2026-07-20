@@ -563,3 +563,29 @@ then LIVE. The grid runCascade + v6 are committed but OPT-IN (default path uncha
   cursor faded/off), (b) current-home cursor-POSITIVE frames via showScene(home)+
   getCursor at known positions incl. over widgets. Then fine-tune v13→v14, verify
   offline (no widget FP + no positive regression), then LIVE N=80 click bench.
+
+## 2026-07-20 (cycle 23) — REPRODUCIBILITY PROVEN + retired data/models deleted
+User directive: keep everything needed to reproduce what's CURRENTLY working; retired
+(unused) stuff can be deleted — but PROVE reproducibility BEFORE deleting anything.
+
+**What reproduces the shipped detector (the WHOLE dependency set, verified by grep of the
+data-gen/train/export/runtime paths):** committed seeds `data/bg-real/` + `ml/cursor-sprite.png`
++ `data/seeds/eval-frames/`, plus the committed scripts `composite-crops.py` →
+`train-crop-heatmap.py` → `export-crop-heatmap-onnx.py`. Derived-and-regenerable:
+`data/synth-crops/`. Runtime loads ONLY `ml/crop-heatmap.onnx`. Nothing else in the 13 GB
+`data/` was touched by the current chain.
+
+**Made the reproduce self-contained:** repointed `train-crop-heatmap.py`'s gate + `heatmap-gate.ts`
+from throwaway `scratch/` frames to the committed `data/seeds/eval-frames/`.
+
+**Reproduced + verified (this is the proof the user asked for):**
+- Retrain from seeds → gate = 8/8, margin 0.97 — IDENTICAL to the shipped model to 2 dp.
+- Live N=80 on the reproduced model = 100% (80/80), all 8 targets 10/10.
+- Quarantine test: moved all 76 non-cascade models aside (cursor-v0..v14, crop-verifier*,
+  emit-mlp*, pointer-accel*), ran the default pipeline N=80 = 100% (80/80), ZERO load errors —
+  proving the working path needs only `crop-heatmap.onnx`.
+
+**Then deleted (~13.4 GB):** `scene-backgrounds` (8.3 GB), all `cursor-collect-*` corpora,
+`emit-residuals*`/`phase*`/`v8-*`/bench dirs, `cursor-templates.*` backups, 371 MB retired models,
+~2 MB loose logs. **Preserved:** seeds + `data/seeds/human-labels/` (40 jsonls, 988 KB irreplaceable
+human labour) + `data/seeds/REPRODUCE-MANIFEST.sha256` (fingerprints the exact reproduce inputs).
