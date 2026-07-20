@@ -1,5 +1,8 @@
 # Target localization plan — "which pixel is the X?" (GUI grounding)
 
+> **STATUS: DEFERRED (future work — not active).** Backlog: docs/FUTURE-WORK.md.
+> Stage 1 (OCR text) is a working prototype; Stage 2 is an open fork. Resume when chosen.
+
 Started 2026-07-20. NEW capability, separate from the (solved) cursor DETECTOR and MOVER.
 Goal: given a screenshot + a target ("the + button", "Continue", "Settings"), output the
 pixel to click — so the system can act on named targets without a human picking coordinates.
