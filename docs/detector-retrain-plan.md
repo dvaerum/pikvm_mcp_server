@@ -72,6 +72,23 @@ click-rate. So v14 is only real if:
    misses vanish. Target >99% app-open.
 Detector residual is NOT ground truth. No verdicts from small samples.
 
+## Heatmap diagnostic (2026-07-20, heatmap-diag.ts) — TWO failure modes, verified
+Ran cursor-v13 and read the full heatmap (192×120, sigmoid) at specific locations:
+- Frame: cursor REALLY on Books icon (757,846), V8 FP'd on Maps. heatmap @ real
+  cursor = **0.0012** (essentially zero — model MISSES it); heatmap @ Maps widget
+  = **0.9991**; top-5 peaks ALL on the Maps widget. → double failure.
+- Frame: cursor on CLEAN blue wallpaper (620,432, verified by eye). heatmap @ real
+  cursor = **0.9993** (detected great); heatmap @ Maps = **0.0001** (no FP).
+CONCLUSION (verified, not hypothesis): (1) RECOGNITION/false-negative — the model
+detects the cursor brilliantly on clean bg (0.9993) but MISSES it on hard/similar-
+color backgrounds like the orange Books icon (0.0012). (2) FALSE-POSITIVE is
+INTERMITTENT — the Maps widget scores 0.9991 in one frame, 0.0001 in another,
+because the LIVE map content animates; some map states have a cursor-like feature.
+This is why live misses are intermittent. BOTH are the same root problem: the model
+was trained on too-clean a background distribution → not robust. Fix = diverse-
+background compositing (cursor on hard bg as positives + maps/textures as
+negatives). "Detection solved ~11px" holds only on clean surfaces.
+
 ## Progress log
 - **2026-07-20 (cycle 1):** health OK (real home screen). Surveyed ml/ pipeline
   (train-cursor-v13.py, export-v13-onnx.py, manifest format). CONFIRMED root cause
