@@ -513,6 +513,24 @@ ON. Target: hit rate materially above today's baseline.
   saves MISS frames for inspection. Gives a mandate-compliant N≥80 rate for the
   shipped default and tells us whether the V8-widget-FP detection fix is actually
   needed. [Result pending.]
+  RESULT (N=80): **88.8% app-open (71/80)** on the real home screen (badPre
+  resets 0 — home reset always worked). Per-target: Files/Reminders/AppStore/Games
+  100%, FaceTime 90%, Books 80%, Settings 80%, **Maps 60%** (worst). vs old
+  default ~0% at 73px median. The N=16 "94%" OVERESTIMATED — honest rate ~89%.
+  All 9 misses verified REAL (post-frame frac 0.00–0.01 = home, not a hit-detect
+  false-negative; MISS-t2-Maps frame = home, cursor drifted ~280px below Maps).
+  Misses are V8 START-detection false-positives: DETERMINISTIC wrong spots (all 4
+  Maps misses = identical 273px; Books ×2 = 220px) → identical wrong emit → cursor
+  drifts to bottom/dock, stays home. Maps worst because its icon sits under the
+  top-right Maps WIDGET that V8 mistakes for the cursor. CONCLUSION: the emit model
+  is solved; the 11% ceiling is DETECTION (V8 start FP on widgets). The fix IS
+  needed.
+  **PHASE 8 PLAN (next — the detection fix):** motion-verified start detection —
+  emit a small KNOWN probe, and use motion (screenshot diff, or V8-tracked-the-
+  probe check) to confirm which candidate actually MOVED = the real cursor;
+  reject static widget false-positives. The cursor moves with the emit, widgets
+  don't. Validate by re-running click-bench80 and targeting >95% app-open,
+  especially lifting Maps/Books/Settings.
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
