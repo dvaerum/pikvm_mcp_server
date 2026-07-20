@@ -731,6 +731,19 @@ ON. Target: hit rate materially above today's baseline.
   crops) — a separate project. MOVEMENT ACCURACY WORK COMPLETE.
   =========================================================================
 
+  ** 2026-07-20 (Phase 11 — VERIFYING the "residual = detection" claim, being
+  critical of my own conclusion):** I have ASSERTED the residual ~1–2% is "V8
+  start-FP (detection)" but never actually captured the V8-start value on a REAL
+  reproduced bench miss — my isolated diagnostics couldn't reproduce it, and the
+  production bench (clickAtWithRetry) hides the trace. So "mode-A = detection" is a
+  HYPOTHESIS, not verified (per the mandate: cite or mark hypothesis). If it's
+  secretly an EMIT issue, there's movement work left. Running instrumented-bench.ts:
+  interleaved 8-target bench (reproduces misses), SINGLE-SHOT (raw first shot, no
+  correction/retry), logging V8_start + V8_final and saving PRE(cursor-at-start)+
+  POST frames on every miss. DECISIVE TEST: PRE-frame real cursor vs logged
+  V8_start — if they AGREE, V8 was right → miss is EMIT (movement work remains); if
+  they DISAGREE, V8 false-positived → DETECTION (confirmed out-of-scope). [Pending.]
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
