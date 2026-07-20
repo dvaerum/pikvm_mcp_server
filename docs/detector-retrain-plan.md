@@ -90,6 +90,22 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 3):** built the compositing pipeline (ml/composite-cursor.py,
+  runs on .venv/bin/python which has numpy+torch). Cleaned the sprite alpha
+  (matting left faint margin noise → zeroed alpha<55) → trims to a tight 31×38px
+  cursor, hot-point (2,8) at the arrow tip. Composites the sprite at random
+  pos/scale onto procedural backgrounds (gradient/noise/checker/colorful-blobs-incl-
+  orange/map-like) → data/synth-v14/{frames,manifest.jsonl} in v13 format (75%
+  positives + 25% cursor-free negatives). VERIFIED (check-synth.ts + contact
+  sheet): cursor composites cleanly at the labeled position; v13 detects it at
+  4–5px on easy backgrounds (p=1.00) and MISSES it on hard ones = the training
+  signal we want. HONEST CONCERN: procedural bg is diverse but ARTIFICIAL, and v13
+  already had synthetic data and didn't generalize — so procedural ALONE likely
+  won't transfer. NEXT (priority): capture REAL cursor-free backgrounds (Maps app,
+  App Store, Photos, Files, Settings interiors — the map/orange-button textures
+  that actually FP), composite onto those too; weight the bg mix toward realistic +
+  the FP-triggering textures; then combine with existing v13 real-cursor positives
+  and fine-tune v13→v14; eval on held-out home frames.
 - **2026-07-20 (cycle 2):** corrected strategy to robustness-by-design (user
   directive — memory feedback_detector_must_generalize_any_screen; loop prompt
   updated). Heatmap diag (above): verified TWO failures — FN on hard bg (0.0012 on
