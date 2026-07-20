@@ -12,8 +12,10 @@ import { ipadGoHome } from '../src/pikvm/ipad-unlock.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const TARGETS: Record<string, { x: number; y: number }> = {
-  Settings: { x: 1027, y: 837 }, Files: { x: 1162, y: 435 },
-  AppStore: { x: 1027, y: 702 }, Books: { x: 757, y: 837 },
+  FaceTime: { x: 1027, y: 435 }, Files: { x: 1162, y: 435 },
+  Reminders: { x: 1027, y: 570 }, Maps: { x: 1162, y: 570 },
+  AppStore: { x: 1027, y: 702 }, Games: { x: 1162, y: 702 },
+  Books: { x: 757, y: 837 }, Settings: { x: 1027, y: 837 },
 };
 
 async function main() {
@@ -32,7 +34,7 @@ async function main() {
       let postShot: Buffer | null = null;
       try {
         const r = await clickAtWithRetry(client, target, {
-          moveToOptions: { strategy: 'curve-one-shot' },
+          moveToOptions: { strategy: 'curve-one-shot', oneShotCorrectGatePx: 30 },
           maxRetries: 0,
         });
         resid = r.finalMoveResult.finalResidualPx != null ? r.finalMoveResult.finalResidualPx.toFixed(1) : 'null';

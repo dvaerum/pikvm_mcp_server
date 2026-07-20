@@ -471,6 +471,20 @@ ON. Target: hit rate materially above today's baseline.
   position); until then the curve is hardcoded to the current setup. Also worth a
   larger click bench (more targets/trials) to firm up the 8/8 smoke, and app-side
   fix for the idle-lock + getCursor-staleness that keep biting benches.
+
+  ** 2026-07-20 (Phase 7c — diverse bench REVEALS a miss tail; 8/8 was too small):**
+  8 DISTINCT apps × 2 trials = 16 clicks, visually verified. 14/16 opened the
+  correct app (residuals 7.6–22px); **2/16 BAD MISSES** — t1 Books (187px), t2
+  Settings (532px), BOTH bottom-row, cursor drifted to the DOCK, stayed on HOME
+  (t2 Settings' "SUCCESS" was a FALSE POSITIVE: the dock recents changed, tripping
+  screenChanged). Honest rate ~**87.5% correct-app-open + ~12% safe-miss** (no
+  wrong app opened — safe-failure claim HOLDS), NOT the 100% implied from N=8. I
+  jumped to a verdict on a small sample — the exact trap. ROOT: the pure one-shot
+  is OPEN-LOOP (one V8 detect, one emit, no recovery); a single detection failure
+  = uncorrected miss. FIX under test: oneShotCorrectGatePx=30 (re-detect + re-shoot
+  when the first lands beyond the gate); re-running the diverse bench to see if it
+  recovers the tail, then update the shipped default if so.
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
