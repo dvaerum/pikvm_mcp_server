@@ -61,7 +61,7 @@ npm run build
 
 ### Nix / home-manager
 
-A flake at the repo root packages the server reproducibly and exposes a home-manager module (`services.pikvm-mcp`) that installs it, reads the password from a file at runtime, and registers the MCP server in `~/.claude.json` via deep-merge so it coexists with other producers. See [`docs/nix.md`](docs/nix.md) (or [`nix/README.md`](nix/README.md) for the full guide).
+A flake at the repo root packages the server reproducibly and exposes a home-manager module (`services.pikvm-mcp`) that installs it and reads the password from a file at runtime; you register it with Claude Code yourself via `claude mcp add`. See [`docs/nix.md`](docs/nix.md) (or [`nix/README.md`](nix/README.md) for the full guide).
 
 ## Configuration
 

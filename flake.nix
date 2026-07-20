@@ -4,15 +4,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-
-    # Declarative file-merge tool used by the home-manager module to splice
-    # this server's entry into the user's existing ~/.claude.json without
-    # clobbering other writers.
-    nixitin.url = "git+https://cms.best.aau.dk/ai-projects/nix-it-in";
-    nixitin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, nixitin, ... }:
+  outputs = { self, nixpkgs, flake-utils, ... }:
     let
       overlay = import ./nix/overlay.nix;
     in
@@ -150,15 +144,7 @@
       overlays.default = overlay;
 
       homeManagerModules.default = self.homeManagerModules.pikvm-mcp;
-      homeManagerModules.pikvm-mcp = { ... }: {
-        # Compose the upstream nixitin home-manager module so consumers get
-        # services.nixitin wired automatically when they enable our
-        # services.pikvm-mcp.claudeCode.enable.
-        imports = [
-          nixitin.homeManagerModules.default
-          ./nix/home-module.nix
-        ];
-      };
+      homeManagerModules.pikvm-mcp = import ./nix/home-module.nix;
 
       nixosModules.default = self.nixosModules.pikvm-mcp;
       nixosModules.pikvm-mcp = { ... }: {

@@ -41,18 +41,6 @@ let
     '';
   };
 
-  wrapperBin = "${wrapperPkg}/bin/pikvm-mcp-server-wrapped";
-
-  # Fragment to merge into ~/.claude.json. The deepMerge strategy on the
-  # outer object preserves any other top-level keys the user has, and
-  # the deepMerge on `mcpServers` preserves any other registered MCP
-  # servers from other tools.
-  claudeFragment = pkgs.writers.writeJSON "pikvm-mcp-claude-fragment.json" {
-    mcpServers.${cfg.claudeCode.name} = {
-      command = wrapperBin;
-      args = [ ];
-    };
-  };
 in
 {
   options.services.pikvm-mcp = {
@@ -128,56 +116,18 @@ in
       description = "Additional environment variables to export when launching the server.";
     };
 
-    claudeCode = {
-      enable = lib.mkEnableOption "register the MCP server in ~/.claude.json";
-
-      name = lib.mkOption {
-        type = lib.types.str;
-        default = "pikvm";
-        description = ''
-          Key under `mcpServers` in ~/.claude.json — also the name Claude
-          Code uses to refer to this server in `claude mcp list`.
-        '';
-      };
-    };
-
     # TODO(http-transport): Once the server gains an HTTP/SSE transport,
     # add `http.enable` here plus a systemd.user.services unit that runs
     # the wrapper as a long-lived listener. Currently stdio-only.
   };
 
-  config = lib.mkIf cfg.enable (lib.mkMerge [
-    {
-      home.packages = [ wrapperPkg cfg.package ];
+  config = lib.mkIf cfg.enable {
+    home.packages = [ wrapperPkg cfg.package ];
 
-      home.activation.pikvmMcpData =
-        lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-          $DRY_RUN_CMD mkdir -p ${lib.escapeShellArg cfg.dataDir}
-          $DRY_RUN_CMD chmod 700 ${lib.escapeShellArg cfg.dataDir}
-        '';
-    }
-
-    (lib.mkIf cfg.claudeCode.enable {
-      # Delegate the actual deep-merge into ~/.claude.json to nix-it-in's
-      # own home-manager module. Pulling in nix-it-in is the consumer's
-      # responsibility (the flake's homeManagerModules.pikvm-mcp imports
-      # nixitin's module so they get composed automatically).
-      services.nixitin = {
-        enable = true;
-        runOnActivation = true;
-        merges.pikvm-mcp = {
-          src = claudeFragment;
-          dst = ".claude.json";
-          outputFormat = "json";
-          objectMergeStrategy = "deepMerge";
-          # Defensive: we don't write arrays, but if Claude Code does,
-          # accumulate rather than replace.
-          arrayMergeStrategy = "append";
-          conflictResolution = "preferSource";
-          createDstFileIfMissing = true;
-          createDstFileParentFolderIfMissing = true;
-        };
-      };
-    })
-  ]);
+    home.activation.pikvmMcpData =
+      lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        $DRY_RUN_CMD mkdir -p ${lib.escapeShellArg cfg.dataDir}
+        $DRY_RUN_CMD chmod 700 ${lib.escapeShellArg cfg.dataDir}
+      '';
+  };
 }

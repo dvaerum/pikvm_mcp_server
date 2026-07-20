@@ -4,8 +4,8 @@ This directory holds the Nix packaging and two consumer modules:
 
 - **home-manager module** (`services.pikvm-mcp`) — installs the server for
   **stdio** use: Claude Code spawns it on demand, no daemon. It puts a wrapper
-  on `PATH`, keeps runtime data under `$XDG_DATA_HOME/pikvm-mcp/`, and
-  deep-merges an `mcpServers.pikvm` entry into your `~/.claude.json`.
+  on `PATH` and keeps runtime data under `$XDG_DATA_HOME/pikvm-mcp/`. You
+  register it with Claude Code yourself (one `claude mcp add`, see below).
 - **NixOS module** (`services.pikvm-mcp`) — runs the server as a hardened
   **systemd system service** speaking the **Streamable HTTP** transport, for
   networked/remote MCP clients.
@@ -46,7 +46,6 @@ via `PIKVM_USERNAME_FILE` / `PIKVM_PASSWORD_FILE` (home-manager) or systemd
             # Anything that produces a path containing the password works:
             # sops-nix, agenix, or just a plain file outside the Nix store.
             passwordFile = "/run/secrets/pikvm-password";
-            claudeCode.enable = true;
           };
         })
       ];
@@ -60,12 +59,15 @@ via `PIKVM_USERNAME_FILE` / `PIKVM_PASSWORD_FILE` (home-manager) or systemd
 1. Build `pikvm-mcp-server` and its wrapper.
 2. Place `pikvm-mcp-server` and `pikvm-mcp-server-wrapped` on `PATH`.
 3. Create `~/.local/share/pikvm-mcp/` (mode `0700`).
-4. Deep-merge `{ "mcpServers": { "pikvm": { "command": "<wrapper>", "args": [] } } }`
-   into `~/.claude.json` via `nix-it-in`. Any other top-level keys and
-   any other `mcpServers.*` entries are preserved.
 
-Open Claude Code; the `pikvm` server is auto-discovered and can be
-invoked with the existing `pikvm_*` tools.
+Then register the wrapper with Claude Code once:
+
+```sh
+claude mcp add pikvm pikvm-mcp-server-wrapped
+```
+
+Open Claude Code; the `pikvm` server can be invoked with the existing
+`pikvm_*` tools.
 
 ## All options
 
@@ -82,8 +84,6 @@ See `home-module.nix` for the authoritative list. Highlights:
 | `services.pikvm-mcp.defaultKeymap` | `"en-us"` | |
 | `services.pikvm-mcp.dataDir` | `${config.xdg.dataHome}/pikvm-mcp` | Holds `ballistics.json`, `cursor-template.jpg`. |
 | `services.pikvm-mcp.extraEnv` | `{}` | E.g. `{ PIKVM_CALIBRATION_ROUNDS = "10"; }`. |
-| `services.pikvm-mcp.claudeCode.enable` | `false` | Register in `~/.claude.json`. |
-| `services.pikvm-mcp.claudeCode.name` | `"pikvm"` | Key under `mcpServers`. |
 
 ## NixOS system service (Streamable HTTP)
 
@@ -136,29 +136,16 @@ nix run nixpkgs#prefetch-npm-deps -- package-lock.json
 # paste the output into npmDepsHash
 ```
 
-## Multi-producer `~/.claude.json`
+## Registering with Claude Code
 
-The merge is delegated to [nix-it-in](https://cms.best.aau.dk/ai-projects/nix-it-in)
-with `objectMergeStrategy = "deepMerge"` and
-`arrayMergeStrategy = "append"`. Any other tool that writes to
-`~/.claude.json` (Claude Code itself, `claude mcp add`, another
-home-manager module) coexists without conflict, as long as no two
-producers write the *same* key.
-
-**Caveat — disable cleanup.** When you set `services.pikvm-mcp.enable = false`
-and re-switch, the binary leaves `PATH` and the wrapper goes away, but the
-`mcpServers.pikvm` entry stays in `~/.claude.json` (orphaned). nix-it-in
-doesn't yet track ownership; until it does, remove the orphaned entry by
-hand:
+The home-manager module installs the wrapper but does **not** touch
+`~/.claude.json` — you register it yourself, which keeps this module free of
+external merge tooling and leaves your Claude config entirely under your own
+control. Add and remove it with Claude Code's own CLI:
 
 ```sh
-jq 'del(.mcpServers.pikvm)' ~/.claude.json | sponge ~/.claude.json
-```
-
-Or tell Claude Code itself:
-
-```sh
-claude mcp remove pikvm
+claude mcp add pikvm pikvm-mcp-server-wrapped   # register
+claude mcp remove pikvm                          # unregister
 ```
 
 ## Platform support
