@@ -676,6 +676,22 @@ ON. Target: hit rate materially above today's baseline.
   ≈100% and NO-RESET reproduces ~80% with no re-lock, the fix is a reset-on-retry
   (reset the cursor before the retry's re-detect, breaking persistent FPs) — low
   latency cost (only on the ~few% that miss). [Result pending.]
+  RESULT — HYPOTHESIS REFUTED (settings-reset-test.ts): NO-RESET **100% (12/12)**,
+  RESET **58% (7/12)** — the reset made it WORSE. Two findings: (1) the persistent
+  Settings FP does NOT reproduce in the isolated Books→Settings flow (100% without
+  reset) — it's a full-interleaved-bench artifact, not isolable/targetable. (2) The
+  slamCenter reset HURTS: it lands the cursor at (880,~337) OVER the calendar
+  widget where V8 detection is slightly off (reads y=333 vs real ~376), and for the
+  far-down Settings target that ~40px start error amplifies over the ~500px emit →
+  overshoot → cursor lands just BELOW Settings (verified frame: RESET-MISS-0 cursor
+  at ~1025,880, bottom edge, outside the tappable area) → miss. No re-lock in 24
+  slams (safe, but irrelevant since the reset hurts). CONCLUSION: reset-on-retry is
+  DEAD (regresses the rate); good that I tested before shipping — it would have
+  hurt production. No safe/working fix found for the last 2.5% (FP not reproducible
+  in isolation; reset refuted; probe-verify dead-ends on persistent FPs).
+  **FINAL: movement accuracy = 97.5% production click-success (from ~0%).** The
+  emit model is solved; the last 2.5% is an elusive full-bench-flow V8 start-FP
+  that resists targeted fixing. Movement work is DONE.
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
