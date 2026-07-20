@@ -29,6 +29,29 @@ mirror the detector's crawl→walk→run.
   detector (OmniParser-style YOLO, or a small trained one) + match.
 - STAGE 3 (run) — full grounding for arbitrary phrasing (a grounding VLM or parse+VLM-match).
 
+## Stage 2 assessment (2026-07-20) — icon-only targets; the real fork
+Stage 1 (OCR text) covers the MAJORITY of real targets (text buttons/rows/links/menu items)
+robustly. The gap is (a) ICON-ONLY elements with no text (+, search, back, X) and (b) the
+label→clickable mapping (app icons: label ~26px below the icon). Options for the element
+detector (icon-only):
+- **OmniParser v2** (microsoft) — YOLOv8 icon detector (~100MB, **AGPL**) + Florence-2 caption
+  (~200MB, MIT), ~0.6s/A100 (→ ~2-5s on MPS). Robust + pre-built, BUT: AGPL license (copyleft —
+  a real concern for a shipped tool), 300MB + a VLM dependency, latency. Don't-reinvent, but
+  heavy + license-encumbered.
+- **Custom small element detector** — train a YOLO-ish icon/button detector on UI screenshots
+  (mirrors the cursor-detector philosophy: small, self-contained). Needs UI-element training
+  data (a big labelling effort) — the whole reason robustness-by-design worked for the cursor
+  was a FIXED sprite; arbitrary UI elements are not fixed.
+- **Classical CV + OCR fusion** — detect rounded-rect/button regions (edges/contours) + fuse
+  with OCR. Lightweight, no license/model deps, but less robust (misses many element types).
+- **App-icon OFFSET heuristic (Stage 1.5)** — bounded: for a home-screen/dock label match, click
+  ~26px above (the icon). A hack, home-screen-specific, but makes "launch app by name" work.
+RECOMMENDATION: Stage 1 (OCR text) is the robust, self-contained foundation — PROMOTE it to a
+src/ module + a tap-by-text command/nix app (real capability, no license/deps). Stage 1.5
+(app-icon offset) is a cheap bridge for launching apps. Stage 2 (icon-only) is a genuine FORK
+with tradeoffs (OmniParser's AGPL+size+latency vs a lighter custom/CV approach vs deferring
+icon-only targets) — needs a product-level decision, not an autonomous pick.
+
 ## Progress
 - **2026-07-20 (Stage 1 — WORKS for text targets):** OCR = Apple Vision (native, accurate,
   no deps, gives boxes). tools/ocr/ocr.swift (VNRecognizeTextRequest, .accurate) → JSON
