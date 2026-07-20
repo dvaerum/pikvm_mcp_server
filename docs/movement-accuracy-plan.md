@@ -592,6 +592,22 @@ ON. Target: hit rate materially above today's baseline.
   flawed diagnostics this phase — each didn't reproduce the bench condition; the
   discipline is to reproduce faithfully AND check the screenshot before concluding.)
 
+  ** 2026-07-20 (Phase 8 — MECHANISM FOUND: the CORRECTION over-corrects on a
+  V8-mid FP):** maps-faithful.ts (Reminders→Maps, 15 rounds, full instrumentation)
+  reproduced it: 14/15, and n=6 is diagnostic — V8_start (1030,576) CORRECT, first
+  shot landed on Maps (14 other rounds confirm midRes 4–14), but V8_mid
+  FALSE-POSITIVED at (1110,297) reporting midRes=278; the correction FIRED
+  (278>30), computed its emit from the false position, and shoved the correctly-
+  placed cursor DOWN to (1220,846) → MISS. So the correction pass I added Phase 7c
+  is CAUSING misses when V8_mid FPs — the OPPOSITE of its intent. Explains why "94%
+  with correction" barely beat "87.5% without": it both fixes and creates misses.
+  FIX (data-backed): the emit is deterministic (~11px), so a first-shot residual
+  ≫ that is physically impossible from a correct start = a V8 FP, not a real miss.
+  So CAP the correction to the plausible band [30,80]px (clean gap in the data:
+  good ≤14, FP 278). Above the cap, trust the first shot. Implemented correctMaxPx
+  (default 80) in curve-mover.ts. Validating: re-run faithful (n=6 should now be a
+  HIT → 15/15) then the N=80 bench (expect Maps/overall to rise).
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start

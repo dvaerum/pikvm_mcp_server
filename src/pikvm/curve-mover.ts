@@ -73,11 +73,14 @@ export interface CurveOneShotOptions {
   settleMs?: number;
   /** V8 presence gate for start/verify detection (default 0.5). */
   minPresence?: number;
-  /** Run ONE correction shot (re-detect + re-shoot) if the first shot's residual
-   *  exceeds this many px. Default 30 — recovers the ~12% start-detection miss
-   *  tail (see moveByCurveOneShot). Set to a huge number (e.g. 1e9) to force a
-   *  pure single shot (as in the validated N=80 move A/B). */
+  /** Run ONE correction shot (re-detect + re-shoot) only if the first shot's
+   *  residual is in the PLAUSIBLE miss band [correctGatePx, correctMaxPx].
+   *  Default gate 30. Set correctGatePx huge for a pure single shot. */
   correctGatePx?: number;
+  /** Upper bound of the correction band (default 80px). A residual above this
+   *  after a deterministic emit is a V8 false-positive, not a real miss — trust
+   *  the first shot rather than let the correction shove a good landing away. */
+  correctMaxPx?: number;
   /** Per-axis curve scale for the current geometry (default 1 = reference
    *  session, 680×944 region). Measure via calibrateFullReport: scaleX =
    *  measured.x / FULL_REPORT_PX, scaleY = measured.y / (FULL_REPORT_PX×Y_SCALE). */
@@ -194,15 +197,18 @@ export async function moveByCurveOneShot(
 
   let landed = await detect(client, minPresence);
 
-  // One correction shot when the first lands beyond the gate (default 30px).
-  // A diverse N=16 click bench (2026-07-20) showed the pure single shot has a
-  // ~12% miss tail — a single V8 start-detection false-positive on a home-screen
-  // widget sends the whole open-loop shot astray with no recovery. Re-detecting
-  // and re-shooting recovers most of these (bench: 87.5% → 94% correct-app-open).
-  // Never hurts: good shots (<gate) skip it; a persistent V8 false-positive is no
-  // worse than without. Set correctGatePx to a huge number to force pure one-shot.
+  // One correction shot when the first lands in the PLAUSIBLE miss band
+  // [correctGatePx, correctMaxPx] (default 30–80px). The emit is deterministic
+  // (~11px), so a first-shot residual much larger than that is physically
+  // impossible from a correct start — it can ONLY be a V8 false-positive on a
+  // widget (confirmed 2026-07-20, maps-faithful.ts n=6: V8_mid FP'd at 278px, the
+  // correction then shoved the correctly-placed cursor to the bottom → MISS).
+  // Correcting above the cap does more harm than good, so trust the first shot
+  // there. Below the gate is good enough. Set correctGatePx huge for pure one-shot.
   const correctGatePx = options.correctGatePx ?? 30;
-  if (landed && dist(landed, target) > correctGatePx) {
+  const correctMaxPx = options.correctMaxPx ?? 80;
+  const landedRes = landed ? dist(landed, target) : Infinity;
+  if (landed && landedRes > correctGatePx && landedRes < correctMaxPx) {
     const m2 = await emitToward(client, landed, target, paceMs, scaleX, scaleY);
     await sleep(settleMs);
     emitted = { x: emitted.x + m2.x, y: emitted.y + m2.y };
