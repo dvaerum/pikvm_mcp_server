@@ -633,6 +633,22 @@ ON. Target: hit rate materially above today's baseline.
   candidate is static (widget FP), re-detect before the big shot. Adds latency to
   every move — weigh vs the 95% already achieved.
 
+  ** 2026-07-20 (Phase 9 — REALIZATION: my benches under-measured the production
+  rate):** started to build a complex probe-verified correction for mode-A, but it
+  has genuinely ambiguous persistent-FP cases (V8 detecting the same static widget
+  on both probe frames = "not tracked" is ambiguous: cursor-on-target+FP vs
+  cursor-off+FP). Before that risk, checked the shipped path: pikvm_mouse_click_at
+  DEFAULTS to **maxRetries=3** on iPad (index.ts:592) — a mode-A miss produces a
+  large residual → the click is skipped/unverified → clickAtWithRetry RETRIES with
+  a FRESH detect-then-move (independent trial, not compounded). My benches all used
+  maxRetries=0 (SINGLE-SHOT), so the 95% is the per-attempt rate; PRODUCTION runs 4
+  independent attempts. Since mode-A FPs are intermittent (1/10 per target), retries
+  should recover most → cumulative rate well above 95%. So the simplest, lowest-risk
+  mode-A mitigation is ALREADY SHIPPED. Running click-bench80-retry3.ts (maxRetries=3,
+  matching production) to measure the TRUE production click-success rate. [Pending.]
+  This is the right validation — and avoids building a risky new mechanism for a
+  tail the existing retry already handles.
+
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
   getCursor-staleness (mitigated — smoke cross-checked one-shot err ≈ V8 start
