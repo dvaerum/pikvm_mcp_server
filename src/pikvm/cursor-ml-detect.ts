@@ -160,12 +160,26 @@ async function runCascade(
   const reg = cachedRegion;
   const { data: full, info } = await sharp(jpegBuffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   const FW = info.width, half = CASCADE_CROP / 2;
-  const centers: { x: number; y: number }[] = [];
-  for (let cy = reg.y + half; cy <= reg.y + reg.h - half; cy += GRID_STRIDE) {
-    for (let cx = reg.x + half; cx <= reg.x + reg.w - half; cx += GRID_STRIDE) {
-      centers.push({ x: Math.round(cx), y: Math.round(cy) });
+  // Crop centers covering the FULL region INCLUDING its edges. A plain inset grid
+  // ([reg+half, reg+dim-half]) leaves a ~stride/1 blind-spot at the far edges, which
+  // MISSED the cursor in the DOCK / bottom edge (y≈1010) in live exploration. Build
+  // each axis with an explicit far-edge value so any cursor gets a near-centered crop;
+  // clamp so the 96px crop stays fully in-frame (edge crops just extend into the bezel).
+  const axis = (lo: number, hi: number, frameMax: number): number[] => {
+    const raw: number[] = [];
+    for (let v = lo; v < hi; v += GRID_STRIDE) raw.push(v);
+    raw.push(hi);
+    const seen = new Set<number>(), out: number[] = [];
+    for (const v of raw) {
+      const c = Math.round(Math.max(half, Math.min(frameMax - half, v)));
+      if (!seen.has(c)) { seen.add(c); out.push(c); }
     }
-  }
+    return out;
+  };
+  const ys = axis(reg.y, reg.y + reg.h, info.height);
+  const xs = axis(reg.x, reg.x + reg.w, FW);
+  const centers: { x: number; y: number }[] = [];
+  for (const cy of ys) for (const cx of xs) centers.push({ x: cx, y: cy });
   if (centers.length === 0) return null;
   const N = centers.length, plane = CASCADE_CROP * CASCADE_CROP;
   const batch = new Float32Array(N * 3 * plane);

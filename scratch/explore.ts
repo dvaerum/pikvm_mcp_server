@@ -32,8 +32,16 @@ async function shot(tag = 'shot') {
 switch (cmd) {
   case 'shot': await shot(); break;
   case 'home': await ipadGoHome(client); await sleep(1500); await shot('home'); break;
+  case 'move': {
+    const [x, y] = args.map(Number);
+    await client.mouseMoveRelative(8, 8); await sleep(60); await client.mouseMoveRelative(-8, -8); await sleep(200);  // wake faded cursor
+    const r = await moveToPixel(client, { x, y }, { strategy: 'curve-one-shot' });
+    console.log(`move (${x},${y}) resid=${r.finalResidualPx?.toFixed(1)}px`);
+    await sleep(600); await shot('move'); break;
+  }
   case 'click': {
     const [x, y] = args.map(Number);
+    await client.mouseMoveRelative(8, 8); await sleep(60); await client.mouseMoveRelative(-8, -8); await sleep(200);  // wake faded cursor (10-12s fade)
     const r = await clickAtWithRetry(client, { x, y }, { moveToOptions: { strategy: 'curve-one-shot' }, maxRetries: 3 });
     console.log(`click (${x},${y}) success=${r.success} resid=${r.finalMoveResult.finalResidualPx?.toFixed(1)}px outcome=${r.success ? 'OK' : (r.attemptHistory.at(-1)?.skippedClickReason ?? 'UNVERIFIED')}`);
     await sleep(1300); await shot('click'); break;
