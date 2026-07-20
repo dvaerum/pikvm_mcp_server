@@ -31,6 +31,10 @@ async function shot(tag = 'shot') {
 
 switch (cmd) {
   case 'shot': await shot(); break;
+  case 'nudge': {  // raw relative move (no detection) — recover a cut-off/off-screen cursor
+    const [dx, dy] = args.map(Number);
+    await client.mouseMoveRelative(dx, dy); await sleep(300); await shot('nudge'); break;
+  }
   case 'home': await ipadGoHome(client); await sleep(1500); await shot('home'); break;
   case 'move': {
     const [x, y] = args.map(Number);

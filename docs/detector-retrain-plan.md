@@ -245,6 +245,26 @@ then LIVE. The grid runCascade + v6 are committed but OPT-IN (default path uncha
 - NET: detector solved + shipped + validated live two ways (160/160 scripted, plus free-form
   exploration incl. small buttons + drag on the animated map). Memory: [[project_dual_head_crop_detector]].
 
+## cycle 21 — deeper exploration flushed out a real EDGE blind-spot (fixed) (2026-07-20)
+- Extended the exploratory live test to Photos (dark UI) after Settings/Maps. It exposed a
+  REAL gap the scripted bench can't: opening Photos from the dock FAILED ("cursor not
+  verified") with the cursor VISIBLE at the dock/bottom edge (~960,1010). ROOT CAUSE: the
+  grid's crop centers stopped at reg+dim-half, leaving a ~44px EDGE BLIND-SPOT (presence
+  drops past ~36px offset). FIX (src/pikvm/cursor-ml-detect.ts runCascade): build each grid
+  axis with an explicit FAR-EDGE center so any cursor gets a near-centered crop (extraction
+  clamps to frame). VALIDATED offline on the exact failure position: cursor composited at
+  (960,1010) now DETECTED 1px pres 1.00 (was missed live pre-fix); dock-icon (950,985) 1px.
+  808/808 tests still pass. Then confirmed LIVE: Photos opened (3.0px), modal "Don't Allow"
+  hit, all clean.
+- SECOND finding: the cursor FADES (10-12s) during slow interactive pacing → "cursor not
+  verified" (detector CORRECTLY reports no-cursor; not a bug). Added a wake-wiggle (8px) +
+  a raw 'nudge' recovery to the explore harness (scratch/explore.ts) so exploration isn't
+  derailed by fade / a cut-off-at-edge cursor.
+- NET: detector shipped as DEFAULT (cycle 20) + hardened at the region edges. Validated on
+  home (160/160), Settings (dark rows + small toggle 5.1px), Maps (animated map 1.0px +
+  drag-pan), Photos (dark UI), small "+"/modal buttons, and the dock edge. Memory:
+  [[project_dual_head_crop_detector]].
+
 ## Progress log
 - **2026-07-20 (cycle 14): LIVE BENCH = 94% (75/80) — NOT a win; live testing caught
   a real gap the offline 6/6 missed. The cascade is NOT yet validated live.** Honest
