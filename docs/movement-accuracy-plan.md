@@ -607,6 +607,16 @@ ON. Target: hit rate materially above today's baseline.
   good ≤14, FP 278). Above the cap, trust the first shot. Implemented correctMaxPx
   (default 80) in curve-mover.ts. Validating: re-run faithful (n=6 should now be a
   HIT → 15/15) then the N=80 bench (expect Maps/overall to rise).
+  CAPPED FAITHFUL RESULT: 15/15 (100%) — but CRITICAL CAVEAT: no V8-mid-FP case
+  occurred this run (all midRes ≤25), so the correction never fired and I did NOT
+  directly observe the cap SKIPping an FP. 14/15→15/15 across two N=15 runs is
+  within noise (the FP is intermittent ~1/15) — CONSISTENT with the fix, NOT proof.
+  Also confirmed the live Maps widget IS dynamic (hc12 shows it zoomed to a
+  different map than earlier) — supports the live-screen-only V8-FP mechanism.
+  Running the N=80 bench with the cap (click-bench80.ts, unchanged — shipped
+  default now has correctMaxPx=80) as the proper validation: ~5 FP opportunities
+  across 80 clicks; if the cap works, the rate should rise from 89% toward ~95%.
+  [Result pending.]
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
