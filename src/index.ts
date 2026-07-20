@@ -5,6 +5,8 @@
  * Provides MCP tools for controlling remote machines via PiKVM.
  */
 
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -1791,7 +1793,21 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+// Auto-start only when executed directly, so tests (and other importers) can
+// pull in createMcpServer without booting the server. realpathSync resolves the
+// bin symlink (node_modules/.bin/pikvm-mcp-server -> dist/index.js) to the real
+// module path so the deployed CLI still starts.
+function isDirectRun(): boolean {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
+  main().catch((error) => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}
