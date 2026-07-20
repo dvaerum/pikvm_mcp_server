@@ -90,6 +90,25 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 11): cascade v3 = 5/6 (icon FPs FIXED); last FP = the animated
+  Maps-widget orange BUTTON → richer UI-element negatives.** Cascade-eval on v3: the
+  books-icon AND books-edge are now rejected (v=0.00), hc15/17/18 return NULL (map
+  candidates 0.04-0.07) — the position fix worked. Only hc13 FAILs: a candidate at
+  (1130,324) scores v=0.75. Extracted + LOOKED at that 96px crop (scratch/crop-
+  compare.png): it's the Maps widget's round ORANGE "food" BUTTON (white fork/knife
+  glyph). The verifier rejects rounded-SQUARE icons (0.00) but accepted a round BUTTON
+  with a glyph — a UI style my negatives (only rounded-rects) lacked. Intermittent
+  because the live map animates (hc13 state has it, hc15/17/18 don't). FIX (general,
+  not per-screen): expanded icon_crop to a DIVERSE UI-element mix — rounded rects,
+  CIRCLES/buttons, buttons-with-GLYPHS (fork/cross/ring/dot), thin lines (roads) +
+  markers, all random position. Verified by eye (scratch/negs-sheet.jpg). Retrain (v4,
+  14000 crops). METHOD CHECK (is this whack-a-mole? NO): each fix is a GENERAL shape
+  property (not-color, not-position, not-button-style), proven on HELD-OUT frames, and
+  the failures shrink each round (map→icon→edge→button; now 5/6). If v4 still leaves a
+  rare map-state FP, options: (a) even more map-texture negatives, (b) raise the
+  verifier threshold (FP was 0.75 vs real 0.96-1.00 — a 0.85 gate separates), (c) also
+  require a min PROPOSER peak (map FP p=0.57 vs real p=1.00). NEXT: cascade-eval v4 →
+  6/6 → wire opt-in cascade into findCursorByV8FullFrame → LIVE N=80.
 - **2026-07-20 (cycle 10): end-to-end cascade eval found a POSITION spurious-
   correlation in the verifier — fixed.** Ran scratch/cascade-eval.ts (proposer
   v14-ep05 + selected verifier, top-20 NMS peaks/frame → verifier per crop). Result:

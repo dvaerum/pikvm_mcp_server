@@ -73,25 +73,58 @@ def real_crop():
     return Image.fromarray(img[y:y + CROP, x:x + CROP]).convert("RGBA")
 
 
+def _glyph(d, x0, y0, sz):
+    """A light symbol on a button (fork/lines/cross/dot) — like the Maps widget's
+    white-on-orange food/fuel buttons the verifier FP'd on."""
+    g = (random.randint(220, 255),) * 3
+    k = random.random()
+    cx, cy = x0 + sz // 2, y0 + sz // 2
+    if k < 0.35:  # vertical bars (fork-ish)
+        for j in range(random.randint(2, 4)):
+            gx = x0 + sz // 4 + j * sz // 8
+            d.line([gx, y0 + sz // 4, gx, y0 + 3 * sz // 4], fill=g, width=max(2, sz // 20))
+    elif k < 0.6:  # cross / plus
+        d.line([cx, y0 + sz // 5, cx, y0 + 4 * sz // 5], fill=g, width=max(2, sz // 16))
+        d.line([x0 + sz // 5, cy, x0 + 4 * sz // 5, cy], fill=g, width=max(2, sz // 16))
+    elif k < 0.8:  # ring
+        r = sz // 4
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=g, width=max(2, sz // 20))
+    else:  # dot
+        r = sz // 6
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=g)
+
+
 def icon_crop():
-    """Procedural HARD negative: warm/colorful rounded-rect 'app icons' at RANDOM
-    positions/sizes — INCLUDING partially off the crop edge. Position is randomized
-    (not centered) on purpose: v1 centered the icon, so the verifier learned the
-    spurious rule "off-center orange = cursor, centered orange = not" and FP'd on the
-    Books-icon EDGE at (690,819) v=0.96 (docs cycle 10). Now an orange blob at ANY
-    offset is a NEGATIVE, forcing the verifier to key on the ARROW SHAPE, not the
-    icon's position — positives put the arrow over these same off-center icons."""
+    """Procedural HARD negatives: a DIVERSE mix of UI elements at RANDOM positions/
+    sizes (incl. partially off the crop edge) with NO arrow. Diversity matters —
+    v2 had only rounded-RECTS so the verifier FP'd 0.75 on a round ORANGE BUTTON with
+    a white fork glyph (Maps widget, docs cycle 11). Now: rounded rects, CIRCLES/
+    buttons, buttons-with-GLYPHS, thin lines (roads/map), and markers — so the
+    verifier must key on the ARROW SHAPE, not 'a coloured UI element'. Random position
+    (not centered) keeps it shape-not-position (cycle 10)."""
     base = Image.new("RGBA", (CROP, CROP), rand_color() + (255,))
     d = ImageDraw.Draw(base)
-    for _ in range(random.randint(1, 2)):
-        sz = random.randint(40, 96)
-        cx, cy = random.randint(0, CROP), random.randint(0, CROP)  # center may sit at/over an edge
+    for _ in range(random.randint(1, 3)):
+        sz = random.randint(30, 96)
+        cx, cy = random.randint(0, CROP), random.randint(0, CROP)
         x0, y0 = cx - sz // 2, cy - sz // 2
-        col = warm_color() if random.random() < 0.55 else rand_color()
-        d.rounded_rectangle([x0, y0, x0 + sz, y0 + sz], radius=random.randint(8, 24), fill=col + (255,))
-        for _ in range(random.randint(0, 2)):  # inner glyph marks
-            gx, gy, r = random.randint(x0, x0 + sz), random.randint(y0, y0 + sz), random.randint(5, 16)
-            d.ellipse([gx - r, gy - r, gx + r, gy + r], fill=rand_color() + (255,))
+        col = warm_color() if random.random() < 0.5 else rand_color()
+        kind = random.random()
+        if kind < 0.4:  # rounded-rect app icon
+            d.rounded_rectangle([x0, y0, x0 + sz, y0 + sz], radius=random.randint(6, 24), fill=col + (255,))
+            if random.random() < 0.4:
+                _glyph(d, x0, y0, sz)
+        elif kind < 0.75:  # circular button (+ often a glyph)
+            d.ellipse([x0, y0, x0 + sz, y0 + sz], fill=col + (255,))
+            if random.random() < 0.6:
+                _glyph(d, x0, y0, sz)
+        else:  # thin lines (roads/map) + markers
+            for _ in range(random.randint(2, 6)):
+                a = (random.randint(0, CROP), random.randint(0, CROP))
+                b = (a[0] + random.randint(-CROP, CROP), a[1] + random.randint(-CROP, CROP))
+                d.line([a, b], fill=(random.randint(180, 255),) * 3, width=random.randint(1, 4))
+            mx, my, r = random.randint(0, CROP), random.randint(0, CROP), random.randint(4, 12)
+            d.ellipse([mx - r, my - r, mx + r, my + r], fill=warm_color() + (255,))
     return base
 
 
