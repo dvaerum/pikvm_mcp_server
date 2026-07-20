@@ -757,6 +757,23 @@ ON. Target: hit rate materially above today's baseline.
   → retry re-detects the real cursor). Checking the presence distribution to see if
   the gate is viable (real detections must stay ≥ gate). This is a detection-GATE
   tweak (a mover parameter, not model retrain) directly targeting the VERIFIED cause.
+  PRESENCE-CHECK RESULT (presence-check.ts): minPresence gate REFUTED. Real-cursor
+  presence is 0.974–1.000, BUT V8 detected the Maps widget (1110,297) at presence
+  **0.983** here — the widget FP presence VARIES 0.83→0.983 and OVERLAPS real
+  detections (min 0.974). No clean gate: 0.92 lets the 0.983 FP through, 0.98
+  rejects real detections. So the presence gate can't fix it.
+  ==================== DETECTION TAIL — FINAL ASSESSMENT ====================
+  The residual ~1–2% is VERIFIED to be V8 start-detection false-positives on the
+  MAPS WIDGET (cursor-v13 finds it cursor-like at high, variable confidence). ALL
+  simple fixes exhausted and REFUTED: reset-on-retry (worse, 58% vs 100%),
+  probe-verify (dead-ends on persistent FP), minPresence gate (presence overlaps).
+  ONLY remaining fix = a DETECTION-MODEL retrain (cursor-v13 + hard-negative crops
+  of the Maps/clock/calendar widgets) — a separate ML project, out of this movement
+  loop's scope; the mandate itself treats detection as solved. The intermittent
+  tail is handled by the shipped maxRetries=3 → ~98–99% production. MOVEMENT
+  ACCURACY: DONE (emit solved, ~98–99%). DETECTION TAIL: characterized, not simply
+  fixable, deferred to a model-retrain project.
+  =========================================================================
 
   CAVEATS: single session / fixed iPad position / hardcoded curve (needs
   calibration for robustness); static-image scene proxy for live home screen;
