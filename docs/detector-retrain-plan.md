@@ -90,6 +90,22 @@ background compositing (cursor on hard bg as positives + maps/textures as
 negatives). "Detection solved ~11px" holds only on clean surfaces.
 
 ## Progress log
+- **2026-07-20 (cycle 4):** health OK (went home off the leftover white iPadCollector
+  scene; looked — real home screen). CAPTURED 15 REAL cursor-free app-interior
+  backgrounds (scratch/capture-bg-real.ts → data/bg-real/): launched each app via
+  devicectl WITHOUT moving the mouse (cursor stays faded → cursor-free), screenshot.
+  Verified diverse + cursor-free by contact sheet (scratch/bg-sheet.jpg): incl. the
+  KEY FP textures — Maps app (full colorful map + orange star + buttons), Clock
+  world-map, TV posters, Books covers, App Store/Settings colorful icons. Wired the
+  compositor (ml/composite-cursor.py: pick_bg = 60% real + 40% procedural) so these
+  real textures are both cursor-FREE negatives ("map ≠ cursor") AND positive
+  backgrounds ("cursor over a map is still detectable"). Verified compositing on
+  real bgs (scratch/synth-real-sheet.jpg: cursor correctly placed on Books/AppStore/
+  Notes UIs). GENERATED 1500-frame set (data/synth-v14: 1121 pos, 379 neg, 172MB).
+  NEXT: (1) look at train-cursor-v13.py to write the FINE-TUNE (v13.pt → v14) that
+  mixes synth-v14 + existing v13 real-cursor positives (avoid forgetting real
+  cursors); (2) export ONNX; (3) OFFLINE eval — v14 must NOT FP on the held-out
+  home frames (hc13/15/17/18) AND detect the Books-cursor frame; (4) LIVE N=80.
 - **2026-07-20 (cycle 3):** built the compositing pipeline (ml/composite-cursor.py,
   runs on .venv/bin/python which has numpy+torch). Cleaned the sprite alpha
   (matting left faint margin noise → zeroed alpha<55) → trims to a tight 31×38px
