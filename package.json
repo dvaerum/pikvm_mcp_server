@@ -30,7 +30,7 @@
     "@types/ws": "^8.18.1",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "onnxruntime-node": "^1.26.0",
+    "onnxruntime-node": "~1.24.3",
     "sharp": "^0.33.0",
     "undici": "^7.19.1",
     "ws": "^8.21.0"
