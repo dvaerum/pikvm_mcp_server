@@ -65,6 +65,7 @@ import {
 } from './pointer-accel.js';
 import { sleep } from './util.js';
 import { loadSettings } from '../settings.js';
+import { emitChunked } from './gesture.js';
 
 /** iPad logical resolution assumed by the pointer-accel v1 model.
  *  The trajectory bench collected `iPadHello.logicalW/H = 820 × 1180`
@@ -1130,29 +1131,7 @@ async function discoverOrigin(
 // Chunked relative emission
 // ============================================================================
 
-async function emitChunked(
-  client: PiKVMClient,
-  totalX: number,
-  totalY: number,
-  chunkMag: number,
-  chunkPaceMs: number,
-): Promise<number> {
-  let remX = Math.abs(totalX);
-  let remY = Math.abs(totalY);
-  const sx = Math.sign(totalX);
-  const sy = Math.sign(totalY);
-  let chunks = 0;
-  while (remX > 0 || remY > 0) {
-    const stepX = remX > 0 ? Math.min(chunkMag, remX) * sx : 0;
-    const stepY = remY > 0 ? Math.min(chunkMag, remY) * sy : 0;
-    await client.mouseMoveRelative(stepX, stepY);
-    remX = Math.max(0, remX - Math.abs(stepX));
-    remY = Math.max(0, remY - Math.abs(stepY));
-    chunks++;
-    if (chunkPaceMs > 0 && (remX > 0 || remY > 0)) await sleep(chunkPaceMs);
-  }
-  return chunks;
-}
+// emitChunked moved to ./gesture.js (shared with ipad-unlock). Imported above.
 
 // ============================================================================
 // Motion diff — find a cursor pair whose displacement matches a commanded

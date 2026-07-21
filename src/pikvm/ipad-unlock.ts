@@ -34,6 +34,7 @@ import {
   LEGACY_PORTRAIT_UNLOCK_START,
 } from './orientation.js';
 import { sleep } from './util.js';
+import { emitChunked } from './gesture.js';
 
 export interface IpadUnlockOptions {
   /** Whether to slam to top-left first to establish a known cursor position
@@ -187,31 +188,18 @@ export async function unlockIpad(
   const dy = Math.round((startY - originY) / ppm);
 
   // Emit chunked deltas to reach start position. Use mag=127 chunks.
-  let remX = dx;
-  let remY = dy;
-  while (remX > 0 || remY > 0) {
-    const stepX = remX > 0 ? Math.min(127, remX) : 0;
-    const stepY = remY > 0 ? Math.min(127, remY) : 0;
-    await client.mouseMoveRelative(stepX, stepY);
-    remX -= stepX;
-    remY -= stepY;
-    await sleep(20);
-  }
+  // (trailing sleep(20) preserved to match the pre-refactor per-chunk pacing —
+  // the old inline loop slept after every chunk, including the last.)
+  const posChunks = await emitChunked(client, dx, dy, 127, 20);
+  if (posChunks > 0) await sleep(20);
   await sleep(200);
 
   // 3. Press button.
   await client.mouseClick('left', { state: true });
 
-  // 4. Rapid-fire upward drag.
+  // 4. Rapid-fire upward drag (no inter-chunk pacing).
   const swipeStart = Date.now();
-  let remDrag = dragPx;
-  let chunkCount = 0;
-  while (remDrag > 0) {
-    const step = Math.min(chunkMickeys, remDrag);
-    await client.mouseMoveRelative(0, -step);
-    remDrag -= step;
-    chunkCount++;
-  }
+  const chunkCount = await emitChunked(client, 0, -dragPx, chunkMickeys, 0);
   const swipeDurationMs = Date.now() - swipeStart;
 
   // 5. Release.
@@ -396,24 +384,13 @@ export async function ipadGoHome(
     });
     const start = bounds ? unlockStartFromBounds(bounds) : LEGACY_PORTRAIT_UNLOCK_START;
     const slamOrigin = bounds ? slamOriginFromBounds(bounds) : LEGACY_PORTRAIT_SLAM_ORIGIN;
-    let remX = Math.round(start.x - slamOrigin.x);
-    let remY = Math.round(start.y - slamOrigin.y);
-    while (remX > 0 || remY > 0) {
-      const stepX = remX > 0 ? Math.min(127, remX) : 0;
-      const stepY = remY > 0 ? Math.min(127, remY) : 0;
-      await client.mouseMoveRelative(stepX, stepY);
-      remX -= stepX;
-      remY -= stepY;
-      await sleep(20);
-    }
+    const posX = Math.round(start.x - slamOrigin.x);
+    const posY = Math.round(start.y - slamOrigin.y);
+    const posChunks = await emitChunked(client, posX, posY, 127, 20);
+    if (posChunks > 0) await sleep(20);
     await sleep(200);
     await client.mouseClick('left', { state: true });
-    let remDrag = dragPx;
-    while (remDrag > 0) {
-      const step = Math.min(30, remDrag);
-      await client.mouseMoveRelative(0, -step);
-      remDrag -= step;
-    }
+    await emitChunked(client, 0, -dragPx, 30, 0);
     await client.mouseClick('left', { state: false });
     await sleep(1000);
     // Phase 231 (v0.5.207): defensive Esc + Enter after the swipe.
@@ -434,15 +411,12 @@ export async function ipadGoHome(
     // cursor at mid-screen here using chunked Y emits — pure
     // downward motion (~540 px) split into 6 chunks of 100 px so
     // iPadOS registers each separately rather than clamping.
+    // Trailing sleep(40) preserved: the old inline loops slept after every
+    // chunk, including the last.
     if (bounds) {
-      const targetY = Math.round(bounds.y + bounds.height / 2);
-      let remDescend = Math.max(0, targetY);
-      while (remDescend > 0) {
-        const step = Math.min(100, remDescend);
-        await client.mouseMoveRelative(0, step);
-        remDescend -= step;
-        await sleep(40);
-      }
+      const targetY = Math.max(0, Math.round(bounds.y + bounds.height / 2));
+      const depositChunks = await emitChunked(client, 0, targetY, 100, 40);
+      if (depositChunks > 0) await sleep(40);
     } else {
       // No detected iPad bounds — fall back to a fixed descent that
       // works for the reference iPad portrait layout (~1050 px tall
@@ -450,10 +424,8 @@ export async function ipadGoHome(
       // overshoots mid-screen on shorter frames but iPadOS clamps
       // benign movement at the bottom edge — the deposit's goal is
       // "not at top edge anymore", not pixel-perfect centering.
-      for (let i = 0; i < 6; i++) {
-        await client.mouseMoveRelative(0, 100);
-        await sleep(40);
-      }
+      await emitChunked(client, 0, 600, 100, 40);
+      await sleep(40);
     }
     messagePart += ' Followed by slam-corner + swipe-up + defensive Esc+Enter (Phase 231) + mid-screen cursor deposit (Phase 235).';
   }
