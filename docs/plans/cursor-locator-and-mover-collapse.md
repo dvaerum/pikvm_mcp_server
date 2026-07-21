@@ -191,6 +191,43 @@ or reuse `origin`'s ML head.
 
 **Revised C1 P3 order:** origin ✅ → curve → openLoopShape → (verify absorbed by C2 P1).
 
+#### Phase 3 — reachability + bench-coverage audit (2026-07-21, prompted by "do we really use all 4?")
+
+Traced BOTH production paths. iPad: `pikvm_mouse_click_at` (default `maxRetries=3`) →
+`clickAtWithRetry` with `moveToOptions.strategy='curve-one-shot'` (index.ts:1335/1403,
+default at :1246) → `moveToPixel` **returns early at :1341**, before `discoverOrigin` and
+the Phase-B block. Desktop (`mouseAbsoluteMode`): defaults to `detect-then-move` (:1246)
+and `maxRetries=0` (:596 single-shot, no retry loop) → `moveToPixel` runs the FULL Phase-B
+path (`discoverOrigin` then the open-loop shape fallback). No absolute-mode short-circuit
+inside moveToPixel. The four profiles split almost perfectly by target (near-disjoint):
+
+| profile | who runs it (default path) | benchable via §0? |
+|---|---|---|
+| `curve` (curve-mover.detect) | **iPad**, every move | ❌ **NO bench uses `curve-one-shot`**; curve-mover is do-NOT-touch |
+| `verify` (click-verify ×3) | **iPad** retry loop (maxRetries=3) | partial (bench-5.1 fix-on proxy) — unpreservable → C2 P1 |
+| `origin` (discoverOrigin) | **desktop**, every move (+ bench-5.1 control / explicit detect-then-move) | ✅ bench-5.1 control (done) |
+| `openLoopShape` | **desktop**, deep fallback only (motion-diff+template both fail) | ❌ no bench reproduces the shape fallback |
+
+Nothing is dead code — but each profile lives on ONE target's path. This RESCUES the origin
+work: routing `origin` serves the `--target desktop` mover, not a dead path. It does NOT
+rescue `openLoopShape`'s gate (even on desktop it's the deep fallback no bench reproduces).
+
+**Two hard blockers on the remaining C1 P3 reroutes:**
+1. **`curve` — FORBIDDEN.** CLAUDE.md standing rule outranks this plan: *"The MOVER is
+   SOLVED — do NOT touch it. curve-mover.ts + strategy:'curve-one-shot'."* Routing curve
+   edits `curve-mover.ts`. And there is **no bench** to catch a regression if it did. It's
+   also a single call to the already-canonical detector — ceremony, not consolidation. **SKIP.**
+2. **`openLoopShape` — UNVERIFIABLE.** Near-dead on the iPad (curve path never reaches it)
+   and **no bench exercises the shape-fallback**, so the §0 live gate cannot cover it. Editing
+   the do-NOT-touch mover on an un-benchable path violates the "the bench is what makes a
+   mover change safe" rule. Faithful reroute is offline-provable (prox reconstructable, real
+   wiggle closures), but offline-only ≠ the mandated gate. **DEFER (offline-only, low value).**
+
+**Net C1 P3 outcome:** `origin` ✅ is the real, benched win (consolidated the 3-stage legacy
+cascade). `verify` → C2 P1. `curve`/`openLoopShape` are not safely/verifiably routable under
+the standing rules + current harness. The remaining verifiable value is **C2** (collapse the
+second mover / stop click-verify re-implementing detection — the LIVE verify path).
+
 **Phase 4 — (optional, later) merge equivalent profiles** — only after a bench
 shows two land identically. Not required for the refactor to be valuable.
 
