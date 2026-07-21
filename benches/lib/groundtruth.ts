@@ -160,6 +160,8 @@ export async function slamToCorner(client: PiKVMClient): Promise<void> {
 
 export interface Residual {
   cursorLogical: { x: number; y: number };
+  /** UNROUNDED HDMI px — safe to feed back as assumeCursorAt (retry benches rely
+   *  on full precision here; round only when writing output). */
   ipadHdmi: { x: number; y: number };
   residualHdmi: number;
 }
@@ -182,7 +184,7 @@ export async function measureResidual(
   const residualHdmi = Math.hypot(ipadHdmi.x - target.x, ipadHdmi.y - target.y);
   return {
     cursorLogical: { x: cursor.x, y: cursor.y },
-    ipadHdmi: { x: Math.round(ipadHdmi.x), y: Math.round(ipadHdmi.y) },
+    ipadHdmi,
     residualHdmi: Number(residualHdmi.toFixed(1)),
   };
 }
