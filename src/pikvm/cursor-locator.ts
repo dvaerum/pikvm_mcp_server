@@ -170,6 +170,7 @@ export class CursorLocator {
     h: number,
     profile: LocateProfile,
     hint?: { x: number; y: number },
+    opts?: { minPresence?: number },
   ): Promise<CursorFix | null> {
     switch (profile) {
       case 'origin':
@@ -179,7 +180,7 @@ export class CursorLocator {
       case 'verify':
         return this.locateVerify(hint);
       case 'curve':
-        return this.locateCurve(frame, w, h);
+        return this.locateCurve(frame, w, h, opts?.minPresence);
     }
   }
 
@@ -436,11 +437,18 @@ export class CursorLocator {
     return null;
   }
 
-  /** curve-mover.ts:91 detect(): V8 full-frame at minPresence 0.5 on the given
-   *  frame. The simplest profile. */
-  private async locateCurve(frame: Buffer, w: number, h: number): Promise<CursorFix | null> {
+  /** curve-mover.ts detect(): V8 full-frame on the given frame. curve-mover's
+   *  detect() is parameterised by minPresence (caller-overridable via moveToPixel →
+   *  moveByCurveOneShot); the caller threads it so the reroute stays byte-identical.
+   *  Defaults to CURVE_MIN_PRESENCE (0.5) when omitted. */
+  private async locateCurve(
+    frame: Buffer,
+    w: number,
+    h: number,
+    minPresence: number = CURVE_MIN_PRESENCE,
+  ): Promise<CursorFix | null> {
     const v8 = await this.deps.findCursorByV8FullFrame(frame, w, h, {
-      minPresence: CURVE_MIN_PRESENCE,
+      minPresence,
     });
     if (v8 !== null) {
       return {

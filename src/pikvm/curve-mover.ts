@@ -22,6 +22,36 @@
 import type { PiKVMClient } from './client.js';
 import { findCursorByV8FullFrame } from './cursor-ml-detect.js';
 import type { MoveToResult, MoveStrategy } from './move-to.js';
+import { CursorLocator, type CursorLocatorDeps } from './cursor-locator.js';
+
+/** Deps for the 'curve' locator profile, which only touches the belief + the V8
+ *  dual-head cascade. Every other profile's dep is a throwing stub — never reached
+ *  by `locate('curve')` (matches move-to.ts's makeLocatorDeps stub pattern). */
+function makeCurveLocatorDeps(client: PiKVMClient): CursorLocatorDeps {
+  const notWired = (name: string) => (): never => {
+    throw new Error(`cursor-locator: '${name}' dep not wired for the curve profile`);
+  };
+  return {
+    belief: client.belief,
+    screenshot: notWired('screenshot'),
+    decode: notWired('decode'),
+    mouseMoveRelative: notWired('mouseMoveRelative'),
+    sleep: notWired('sleep'),
+    getCachedTemplates: notWired('getCachedTemplates'),
+    isMlDisabled: notWired('isMlDisabled'),
+    findCursorByV8FullFrame,
+    locateCursor: notWired('locateCursor'),
+    findCursorByTemplateSet: notWired('findCursorByTemplateSet'),
+    findCursorByMLMultiHint: notWired('findCursorByMLMultiHint'),
+    findCursorByShape: notWired('findCursorByShape'),
+    buildMLHints: notWired('buildMLHints'),
+    mlWiggleVerify: notWired('mlWiggleVerify'),
+    wiggleVerifyCandidate: notWired('wiggleVerifyCandidate'),
+    shouldFireSecondOpinion: notWired('shouldFireSecondOpinion'),
+    shouldAdoptSecondOpinion: notWired('shouldAdoptSecondOpinion'),
+    tautologyProxThreshold: 0,
+  };
+}
 
 /** Single-report displacement curve: [mickeys, |HDMI px|] on the X axis.
  *  Measured via getCursor ground truth (fine-emit-probe + wide-emit-probe). */
@@ -90,8 +120,14 @@ export interface CurveOneShotOptions {
 
 async function detect(client: PiKVMClient, minPresence: number): Promise<{ x: number; y: number } | null> {
   const shot = await client.screenshot({ quality: 80 });
-  const v8 = await findCursorByV8FullFrame(shot.buffer, shot.screenshotWidth, shot.screenshotHeight, { minPresence });
-  return v8 ? { x: v8.x, y: v8.y } : null;
+  // Route the "where is the cursor?" call through the single CursorLocator front
+  // door (C1 P3 curve). Byte-identical to the prior inline call: same screenshot,
+  // same findCursorByV8FullFrame(buffer, w, h, { minPresence }) via locate('curve').
+  const locator = new CursorLocator(makeCurveLocatorDeps(client));
+  const fix = await locator.locate(
+    shot.buffer, shot.screenshotWidth, shot.screenshotHeight, 'curve', undefined, { minPresence },
+  );
+  return fix ? { x: fix.position.x, y: fix.position.y } : null;
 }
 
 async function emitToward(client: PiKVMClient, from: { x: number; y: number }, target: { x: number; y: number }, paceMs: number, scaleX = 1, scaleY = 1): Promise<{ x: number; y: number }> {
