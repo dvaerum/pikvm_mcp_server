@@ -40,24 +40,16 @@
  */
 
 import { promises as fs } from 'fs';
-import path from 'path';
-import { execSync } from 'child_process';
 import sharp from 'sharp';
-import {
-  killOrphansOnPort,
-  startIpadAppServer,
-  IpadSession,
-  TapEvent,
-} from '../src/pikvm/ipad-app-ws.js';
+import type { TapEvent } from '../src/pikvm/ipad-app-ws.js';
 import { detectIpadRegion, NATIVE_MARGIN } from '../src/pikvm/ipad-region-detect.js';
 import { loadConfig } from '../src/config.js';
 import { PiKVMClient } from '../src/pikvm/client.js';
 import { clickAtWithRetry, defaultMaxRetriesFor, defaultMaxResidualPxFor } from '../src/pikvm/click-verify.js';
 import { ipadGoHome } from '../src/pikvm/ipad-unlock.js';
 import { loadProfile } from '../src/pikvm/ballistics.js';
-import { detectIpadBounds } from '../src/pikvm/orientation.js';
+import { connectIpadSession, setupImageScene, sleep } from './lib/groundtruth.js';
 
-const PORT = 8767;
 const ARM = (() => {
   const i = process.argv.indexOf('--arm');
   if (i < 0 || !process.argv[i + 1]) throw new Error('--arm <constant|v2-wider> required');
@@ -65,8 +57,6 @@ const ARM = (() => {
 })();
 const TRIALS = Number(process.argv[process.argv.indexOf('--trials') + 1] || 5);
 const HIT_RADIUS_PX = 35;  // matches production maxResidualPx in HDMI-px space
-const IPAD_DEVICE_ID = 'CF2B815D-7960-5B60-987B-FA2DC9A65353';
-const IPAD_BUNDLE_ID = 'com.bb.iPadCollector';
 
 const TARGETS_HDMI = [
   { name: 'Settings',  x: 1027, y: 837 },
@@ -75,63 +65,24 @@ const TARGETS_HDMI = [
   { name: 'Files',     x: 1162, y: 435 },
 ];
 
-function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
-
-function relaunchIpadApp(): void {
-  try {
-    execSync(
-      `xcrun devicectl device process launch --terminate-existing --device ${IPAD_DEVICE_ID} ${IPAD_BUNDLE_ID}`,
-      { stdio: 'pipe' },
-    );
-  } catch (e) {
-    console.error(`  [relaunch failed: ${(e as Error).message}]`);
-  }
-}
-
-async function waitForSession(): Promise<{ sess: IpadSession; closeServer: () => Promise<void> }> {
-  return new Promise((resolve) => {
-    const stop = startIpadAppServer({
-      port: PORT,
-      onSession: async (sess) => {
-        const startedAt = Date.now();
-        while (!sess.hello && Date.now() - startedAt < 5000) await sleep(20);
-        resolve({ sess, closeServer: async () => { (await stop).close(); } });
-      },
-    });
-  });
-}
-
 async function main() {
-  killOrphansOnPort(PORT);
   console.error(`[gt-cf] arm=${ARM}, trials=${TRIALS}/target, ${TARGETS_HDMI.length} targets`);
 
-  // Step 1: capture a fresh home-screen PiKVM screenshot WHILE iPad is
-  // on home (iPadCollector is NOT yet foreground).
-  const cfg = loadConfig();
-  const client = new PiKVMClient(cfg.pikvm);
+  // Step 1: capture a fresh home-screen PiKVM screenshot WHILE the iPad is on
+  // home (iPadCollector NOT yet foreground), then crop to the iPad region and
+  // render it back as an image scene so the detectors see the production
+  // home-screen surface. Tap events report logical coords inside the iPad
+  // view, mapped to HDMI via the shared geometry.
+  const client = new PiKVMClient(loadConfig().pikvm);
   await ipadGoHome(client);
   await sleep(1500);
   console.error('[gt-cf] capturing home-screen screenshot…');
   const homeShot = await client.screenshot();
-  // Detect iPad region in the HDMI frame, then crop the screenshot to
-  // just the iPad portion. The cropped image gets sent to iPadCollector
-  // as an `image` scene, so the iPad will display the home-screen
-  // pixels under iPadCollector's view. Visual surface matches
-  // production exactly; tap events report logical coords inside the
-  // iPad view, which we map back to HDMI via the same crop transform.
   const region = await detectIpadRegion(homeShot.buffer);
   const tight = {
-    x: region.x + NATIVE_MARGIN,
-    y: region.y + NATIVE_MARGIN,
-    w: region.w - 2 * NATIVE_MARGIN,
-    h: region.h - 2 * NATIVE_MARGIN,
+    x: region.x + NATIVE_MARGIN, y: region.y + NATIVE_MARGIN,
+    w: region.w - 2 * NATIVE_MARGIN, h: region.h - 2 * NATIVE_MARGIN,
   };
-  console.error(`[gt-cf] iPad tight region: ${JSON.stringify(tight)}`);
-
-  // JPEG over PNG: a 700×970 PNG runs 500-800 KB and has crashed the
-  // iPadCollector WS at the larger end. JPEG q=80 is ~80-150 KB,
-  // visually identical for our purposes (the screenshot detector
-  // and the iPad cursor render don't care about lossless).
   const croppedJpeg = await sharp(homeShot.buffer)
     .extract({ left: tight.x, top: tight.y, width: tight.w, height: tight.h })
     .jpeg({ quality: 80 })
@@ -141,34 +92,13 @@ async function main() {
   await fs.mkdir('data/bench-gt-clickflow', { recursive: true });
   await fs.writeFile(`data/bench-gt-clickflow/${ARM}-scene.jpg`, croppedJpeg);
 
-  // Step 2: launch iPadCollector and connect.
-  relaunchIpadApp();
-  await sleep(3000);
-  console.error('[gt-cf] waiting for iPad app to connect…');
-  const { sess, closeServer } = await waitForSession();
-  if (!sess.hello) throw new Error('no hello payload');
-  console.error(`[gt-cf] connected: logicalW=${sess.hello.logicalW} logicalH=${sess.hello.logicalH}`);
-
-  // Conversion: tap event in iPad logical → HDMI px.
-  //   tap.x in [0, logicalW] maps to [tight.x, tight.x + tight.w]
-  const ipadToHdmi = (x: number, y: number) => ({
-    x: tight.x + (x / sess.hello!.logicalW) * tight.w,
-    y: tight.y + (y / sess.hello!.logicalH) * tight.h,
-  });
-
-  // Inverse: HDMI px → iPad logical.
-  const hdmiToIpad = (x: number, y: number) => ({
-    x: ((x - tight.x) / tight.w) * sess.hello!.logicalW,
-    y: ((y - tight.y) / tight.h) * sess.hello!.logicalH,
-  });
-
-  // Step 3: send the cropped home screenshot to iPadCollector.
-  await sess.showScene({ kind: 'image', image: croppedB64 });
-  await sleep(800);
+  // Step 2: connect (relaunches iPadCollector) + render the cropped home as the
+  // image scene. setupImageScene computes geometry + syncs clock + populates
+  // the bounds cache moveToPixel reads.
+  const sess = await connectIpadSession();
+  console.error(`[gt-cf] connected: logicalW=${sess.hello!.logicalW} logicalH=${sess.hello!.logicalH}`);
+  const geom = await setupImageScene(sess, client, croppedB64, region);
   console.error('[gt-cf] scene shown');
-
-  await sess.syncClock(5);
-  await detectIpadBounds(client);  // populate the bounds cache moveToPixel reads
   const profile = await loadProfile('./data/ballistics.json').catch(() => null);
 
   // Tap collection — set BEFORE each clickAtWithRetry call; cleared
@@ -190,7 +120,7 @@ async function main() {
   for (const t of TARGETS_HDMI) results[t.name] = { hit: 0, miss_no_tap: 0, miss_offtarget: 0, skipped_no_click: 0 };
 
   for (const target of TARGETS_HDMI) {
-    const targetLogical = hdmiToIpad(target.x, target.y);
+    const targetLogical = geom.hdmiToIpad(target.x, target.y);
     for (let trial = 1; trial <= TRIALS; trial++) {
       // Slam cursor to upper-left as known starting position. Don't
       // call ipadGoHome — that would background iPadCollector.
@@ -229,7 +159,7 @@ async function main() {
       const minDist = tapDists.length > 0 ? Math.min(...tapDists) : NaN;
 
       // Convert HIT_RADIUS from HDMI to logical (the iPad's coord system).
-      const scaleHdmiPerLogicalAvg = ((tight.w / sess.hello.logicalW) + (tight.h / sess.hello.logicalH)) / 2;
+      const scaleHdmiPerLogicalAvg = (geom.scaleHdmiPerLogical.x + geom.scaleHdmiPerLogical.y) / 2;
       const hitRadiusLogical = HIT_RADIUS_PX / scaleHdmiPerLogicalAvg;
       const anyHit = tapDists.some(d => d <= hitRadiusLogical);
 
@@ -281,8 +211,6 @@ async function main() {
   console.error(`TOTAL HIT: ${totalHit}/${totalN} = ${(totalHit / totalN * 100).toFixed(0)}%`);
   console.error('');
   console.error(`Output: ${outPath}`);
-
-  closeServer().catch(() => undefined);
   process.exit(0);
 }
 

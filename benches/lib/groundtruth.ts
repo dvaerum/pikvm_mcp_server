@@ -45,22 +45,35 @@ export function relaunchIpadApp(): void {
   }
 }
 
+/** The WS server started by the most recent connectIpadSession, tracked so a
+ *  reconnect (just call connectIpadSession again) closes it first instead of
+ *  leaking the port (EADDRINUSE) — this is what makes the call reconnect-safe. */
+let activeServer: { close(): Promise<void> } | null = null;
+
 /**
  * Start the WS server and wait for the iPad app to connect + send `hello`.
  * When `relaunch` is true (default) the app is (re)launched first for a fresh
- * tracker — the degradation-mitigation the retry benches rely on.
+ * tracker — the degradation-mitigation the retry benches rely on. Calling this
+ * again mid-bench is a full RECONNECT: it closes the previous server, kills the
+ * port, relaunches the app, and returns a fresh session (recovers a WS a
+ * catastrophic over-emit crashed).
  */
 export async function connectIpadSession(
   opts: { relaunch?: boolean; port?: number } = {},
 ): Promise<IpadSession> {
   const port = opts.port ?? GT_PORT;
+  if (activeServer) {
+    try { await activeServer.close(); } catch { /* best effort */ }
+    activeServer = null;
+    await sleep(300);
+  }
   killOrphansOnPort(port);
   if (opts.relaunch ?? true) {
     relaunchIpadApp();
     await sleep(3000);
   }
   return new Promise<IpadSession>((resolve) => {
-    startIpadAppServer({
+    activeServer = startIpadAppServer({
       port,
       onSession: async (sess) => {
         const startedAt = Date.now();
@@ -108,8 +121,12 @@ function computeGeometry(
 /** Render the standard solid-grey detection scene, detect geometry, sync clock,
  *  populate the bounds cache moveToPixel reads. The clean-surface default used by
  *  the mover benches (grey 0.55 → orange cursor pops for the detectors). */
-export async function setupGreyScene(sess: IpadSession, client: PiKVMClient): Promise<Geometry> {
-  await sess.showScene({ kind: 'procedural', params: { proc_kind: 'solid', r: 0.55, g: 0.55, b: 0.55 } });
+export async function setupGreyScene(
+  sess: IpadSession,
+  client: PiKVMClient,
+  brightness = 0.55,
+): Promise<Geometry> {
+  await sess.showScene({ kind: 'procedural', params: { proc_kind: 'solid', r: brightness, g: brightness, b: brightness } });
   await sleep(400);
   const shot = await client.screenshot();
   const region = await detectIpadRegion(shot.buffer);
@@ -166,6 +183,22 @@ export interface Residual {
   residualHdmi: number;
 }
 
+/** Read the REAL cursor position from iPadCollector and map to HDMI (unrounded).
+ *  Returns null if getCursor fails. Used for start-position reads (seed belief)
+ *  and as the basis of measureResidual. */
+export async function readCursorHdmi(
+  sess: IpadSession,
+  geom: Geometry,
+): Promise<{ cursorLogical: { x: number; y: number }; ipadHdmi: { x: number; y: number } } | null> {
+  let cursor;
+  try {
+    cursor = await sess.getCursor();
+  } catch {
+    return null;
+  }
+  return { cursorLogical: { x: cursor.x, y: cursor.y }, ipadHdmi: geom.ipadToHdmi(cursor.x, cursor.y) };
+}
+
 /** Read the REAL cursor position from iPadCollector, map to HDMI, and compute the
  *  residual to `target` (HDMI px). The single ground-truth measurement used by all
  *  mover benches. Returns null if getCursor fails. */
@@ -174,17 +207,8 @@ export async function measureResidual(
   geom: Geometry,
   target: { x: number; y: number },
 ): Promise<Residual | null> {
-  let cursor;
-  try {
-    cursor = await sess.getCursor();
-  } catch {
-    return null;
-  }
-  const ipadHdmi = geom.ipadToHdmi(cursor.x, cursor.y);
-  const residualHdmi = Math.hypot(ipadHdmi.x - target.x, ipadHdmi.y - target.y);
-  return {
-    cursorLogical: { x: cursor.x, y: cursor.y },
-    ipadHdmi,
-    residualHdmi: Number(residualHdmi.toFixed(1)),
-  };
+  const c = await readCursorHdmi(sess, geom);
+  if (!c) return null;
+  const residualHdmi = Math.hypot(c.ipadHdmi.x - target.x, c.ipadHdmi.y - target.y);
+  return { cursorLogical: c.cursorLogical, ipadHdmi: c.ipadHdmi, residualHdmi: Number(residualHdmi.toFixed(1)) };
 }
