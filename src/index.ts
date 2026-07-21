@@ -74,35 +74,35 @@ async function refreshProfile(path?: string): Promise<void> {
   cachedProfile = await loadProfile(path ?? './data/ballistics.json').catch(() => null);
 }
 
-/** List of tool names that only work on a target with `mouse.absolute=true`.
- *  When the device reports relative mode, these are gated with a clear
- *  error pointing the caller to the relative-mode tools. */
-const ABSOLUTE_MOUSE_TOOLS = new Set<string>([
-  'pikvm_calibrate',
-  'pikvm_set_calibration',
-  'pikvm_get_calibration',
-  'pikvm_clear_calibration',
-  'pikvm_auto_calibrate',
-]);
 const ABSOLUTE_MOUSE_NOTE =
   'This target reports mouse.absolute=false (typical for iPad / boot-mouse HID). ' +
   'Use the relative-mode tools instead: pikvm_ipad_unlock, pikvm_mouse_move with relative:true, ' +
   'pikvm_mouse_click_at, pikvm_mouse_move_to, pikvm_mouse_click. See docs/skills/ipad-keyboard-workflow.md ' +
   'for the recommended pattern.';
 
-/** For pikvm_mouse_move and pikvm_mouse_click, x/y arguments mean *absolute*
- *  positioning which doesn't work on a relative-only target. Detect that
- *  call shape and gate it. */
-function callsAbsoluteMode(name: string, args: Record<string, unknown>): boolean {
-  if (name === 'pikvm_mouse_move') {
-    // Absolute is the default unless relative:true is set.
-    return args.relative !== true;
-  }
-  if (name === 'pikvm_mouse_click') {
-    // Absolute only when both x and y are supplied.
-    return typeof args.x === 'number' && typeof args.y === 'number';
-  }
-  return false;
+/**
+ * The single source of truth for "which calls need mouse.absolute=true".
+ * Each entry is a predicate over the call's args (a bare `() => true` for tools
+ * that are always absolute-only). Previously this knowledge was split across a
+ * name Set and a separate `callsAbsoluteMode` special-case function. When the
+ * device reports relative mode, a matching call is gated with ABSOLUTE_MOUSE_NOTE.
+ */
+const ABSOLUTE_MOUSE_GATE: Record<string, (args: Record<string, unknown>) => boolean> = {
+  // Calibration tools drive absolute positioning end-to-end.
+  pikvm_calibrate: () => true,
+  pikvm_set_calibration: () => true,
+  pikvm_get_calibration: () => true,
+  pikvm_clear_calibration: () => true,
+  pikvm_auto_calibrate: () => true,
+  // For move/click the SHAPE of the call decides: x/y mean absolute pixels.
+  pikvm_mouse_move: (args) => args.relative !== true, // absolute unless relative:true
+  pikvm_mouse_click: (args) => typeof args.x === 'number' && typeof args.y === 'number',
+};
+
+/** True when this call requires an absolute-mode mouse on the target. */
+function requiresAbsoluteMouse(name: string, args: Record<string, unknown>): boolean {
+  const gate = ABSOLUTE_MOUSE_GATE[name];
+  return gate ? gate(args) : false;
 }
 
 // ============================================================================
@@ -783,7 +783,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   // The relative-mode tools (pikvm_mouse_move with relative:true,
   // pikvm_mouse_click_at, etc.) remain available.
   if (!mouseAbsoluteMode) {
-    if (ABSOLUTE_MOUSE_TOOLS.has(name) || callsAbsoluteMode(name, args as Record<string, unknown>)) {
+    if (requiresAbsoluteMouse(name, args as Record<string, unknown>)) {
       return {
         content: [
           {
