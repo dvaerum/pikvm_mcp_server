@@ -16,7 +16,7 @@ import {
   GetPromptRequestSchema,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { PiKVMClient } from './pikvm/client.js';
+import { PiKVMClient, createDefaultBelief } from './pikvm/client.js';
 import { loadConfig } from './config.js';
 import { parseCliOptions, helpText } from './cli.js';
 import { startHttpServer } from './http-server.js';
@@ -1627,7 +1627,12 @@ async function main() {
 
   // Load configuration (deferred to here for proper error handling)
   const config = loadConfig();
-  pikvm = new PiKVMClient(config.pikvm);
+  // C1 P2 (candidate 5): the CursorBelief is created at startup and injected into
+  // the client, so it is no longer owned by PiKVMClient. Phase 3 wraps this same
+  // instance in the CursorLocator (which becomes its front door); client.belief +
+  // wrappers + the emit predict delegate to it. Behaviour is identical.
+  const cursorBelief = createDefaultBelief();
+  pikvm = new PiKVMClient(config.pikvm, cursorBelief);
   calibrationConfig = config.calibration;
 
   // Verify connection on startup

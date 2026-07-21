@@ -11,6 +11,20 @@ import { recordEmit } from './cursor-keepalive.js';
 import { CursorBelief, type Bounds as BeliefBounds } from './cursor-belief.js';
 import { loadSettings } from '../settings.js';
 
+/**
+ * The client's default CursorBelief (wide initial variance + wide bounds so
+ * predict() can't drift off-screen before orientation sets real bounds). Shared
+ * by the client's own-belief fallback AND the startup CursorLocator so the
+ * injected and default beliefs are byte-identical (C1 P2, candidate 5).
+ */
+export function createDefaultBelief(): CursorBelief {
+  return new CursorBelief({
+    initialPosition: { x: 0, y: 0 },
+    initialPositionVariance: 10000, // wide — caller should reset on first known position
+    bounds: { x: 0, y: 0, width: 4096, height: 2160 },
+  });
+}
+
 export interface PiKVMConfig {
   host: string;
   username: string;
@@ -124,7 +138,15 @@ export class PiKVMClient {
    */
   belief: CursorBelief;
 
-  constructor(config: PiKVMConfig) {
+  /**
+   * @param belief  Candidate 5 (C1 P2): the CursorBelief is now OWNED outside the
+   *  client (by the CursorLocator, constructed at startup) and injected here, so
+   *  `client.belief` + the wrappers + the mouseMoveRelative predict become thin
+   *  delegators to the one shared instance. Omitted → the client creates its own
+   *  identical default (backward-compat for the many test/bench construction
+   *  sites). Behaviour is identical either way.
+   */
+  constructor(config: PiKVMConfig, belief?: CursorBelief) {
     this.config = {
       verifySsl: false,
       defaultKeymap: 'en-us',
@@ -151,17 +173,7 @@ export class PiKVMClient {
       });
     }
 
-    this.belief = new CursorBelief({
-      initialPosition: { x: 0, y: 0 },
-      initialPositionVariance: 10000, // wide — caller should reset on first known position
-      // v0.5.240: wide default bounds prevent belief.predict() from
-      // drifting off-screen during unlock/home swipe emits that fire
-      // before orientation detection's setBeliefBounds call. Phase 315
-      // diagnostic showed belief at (-3051, -4130) after a single
-      // unlock+home cycle. Tighter iPad letterbox bounds replace this
-      // via setBeliefBounds once known.
-      bounds: { x: 0, y: 0, width: 4096, height: 2160 },
-    });
+    this.belief = belief ?? createDefaultBelief();
   }
 
   /** Phase 192-B: callers (orientation detection, etc.) push the iPad

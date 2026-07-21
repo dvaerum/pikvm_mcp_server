@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { PiKVMClient } from '../client.js';
+import { PiKVMClient, createDefaultBelief } from '../client.js';
 
 function newClient(): PiKVMClient {
   const c = new PiKVMClient({
@@ -115,6 +115,29 @@ describe('PiKVMClient ↔ CursorBelief wiring', () => {
     c.resetBelief({ x: 0, y: 0 });
     await expect(c.mouseMoveRelative(15, 0)).resolves.toBeUndefined();
     expect(c.belief.position.x).toBeGreaterThan(0);
+  });
+
+  // C1 P2 (candidate 5): belief is owned outside the client and injected; the
+  // client delegates to that same instance. Predict must fire on the injected one.
+  it('C1 P2: an injected belief is used as-is (delegation, not a fresh instance)', async () => {
+    const injected = createDefaultBelief();
+    const c = new PiKVMClient(
+      { host: 'mock.local', username: 'admin', password: 'x', verifySsl: false },
+      injected,
+    );
+    (c as unknown as { request: () => Promise<unknown> }).request = async () => undefined;
+    expect(c.belief).toBe(injected);
+    c.resetBelief({ x: 100, y: 100 });
+    await c.mouseMoveRelative(20, 0);
+    // predict fired on the injected belief (same 20 × 1.3 = 26 px advance).
+    expect(injected.position.x).toBeCloseTo(126, 1);
+  });
+
+  it('C1 P2: omitting the belief still yields an equivalent default (backward-compat)', () => {
+    const a = newClient();
+    const b = newClient();
+    expect(a.belief).not.toBe(b.belief); // independent instances
+    expect(a.belief.expectedRegion(0.95).rx).toBeCloseTo(b.belief.expectedRegion(0.95).rx, 5);
   });
 
   // Phase 212/222: pin client.wouldRejectAsStationary delegates to belief
