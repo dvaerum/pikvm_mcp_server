@@ -15,6 +15,16 @@ in
       description = "PiKVM base URL (with scheme). Not a secret — it is an ordinary env var.";
     };
 
+    target = lib.mkOption {
+      type = lib.types.enum [ "ipad" "desktop" ];
+      example = "desktop";
+      description = ''
+        Which control path to use (REQUIRED — no auto-detect). `ipad` =
+        curve-one-shot mover + cascade detector (relative mouse); `desktop` =
+        legacy detect-then-move (absolute mouse). Passed as `--target`.
+      '';
+    };
+
     username = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = "admin";
@@ -99,7 +109,7 @@ in
 
       serviceConfig = {
         # HTTP transport (a long-lived system service can't use stdio).
-        ExecStart = "${lib.getExe cfg.package} --transport http --host ${cfg.address} --port ${toString cfg.port}";
+        ExecStart = "${lib.getExe cfg.package} --transport http --host ${cfg.address} --port ${toString cfg.port} --target ${cfg.target}";
 
         # systemd drops each credential (0400, on tmpfs) into
         # $CREDENTIALS_DIRECTORY; the server reads them by name via

@@ -121,6 +121,7 @@
               environment.etc."pikvm-secrets/username".text = "operator";
               services.pikvm-mcp = {
                 enable = true;
+                target = "ipad";
                 host = "https://pikvm.invalid";
                 passwordFile = "/etc/pikvm-secrets/password";
                 usernameFile = "/etc/pikvm-secrets/username";

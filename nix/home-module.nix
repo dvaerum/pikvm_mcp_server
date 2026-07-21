@@ -37,7 +37,7 @@ let
         else "export PIKVM_USERNAME=${lib.escapeShellArg cfg.username}"}
 
       cd "$DATA_DIR"
-      exec ${lib.getExe cfg.package} "$@"
+      exec ${lib.getExe cfg.package} --target ${cfg.target} "$@"
     '';
   };
 
@@ -52,6 +52,16 @@ in
       type = lib.types.str;
       example = "https://pikvm01.lan";
       description = "PiKVM base URL (with scheme).";
+    };
+
+    target = lib.mkOption {
+      type = lib.types.enum [ "ipad" "desktop" ];
+      example = "ipad";
+      description = ''
+        Which control path to use (REQUIRED — no auto-detect). `ipad` =
+        curve-one-shot mover + cascade detector (relative mouse); `desktop` =
+        legacy detect-then-move (absolute mouse). Passed as `--target`.
+      '';
     };
 
     username = lib.mkOption {

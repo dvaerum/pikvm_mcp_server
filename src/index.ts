@@ -1736,6 +1736,13 @@ async function main() {
     console.log(helpText());
     return;
   }
+  if (!cli.target) {
+    console.error(
+      "--target is required — pass --target ipad or --target desktop (or set PIKVM_TARGET).\n" +
+        "Run 'pikvm-mcp-server --help' for usage.",
+    );
+    process.exit(2);
+  }
 
   // Load configuration (deferred to here for proper error handling)
   const config = loadConfig();
@@ -1779,21 +1786,19 @@ async function main() {
     );
   }
 
-  // --target overrides the HID-detected mouse mode: 'ipad' = relative (curve-one-shot
-  // + cascade), 'desktop' = absolute (legacy detect-then-move), 'auto' = keep the
-  // HID-detected value above.
-  if (cli.target !== 'auto') {
-    const forcedAbsolute = cli.target === 'desktop';
-    if (forcedAbsolute !== mouseAbsoluteMode) {
-      console.error(
-        `⚠ --target ${cli.target} overrides the HID-detected mode ` +
-          `(HID reported ${mouseAbsoluteMode ? 'absolute/desktop' : 'relative/iPad'}).`,
-      );
-    }
-    mouseAbsoluteMode = forcedAbsolute;
+  // --target (required) sets the mouse mode: 'ipad' = relative (curve-one-shot +
+  // cascade), 'desktop' = absolute (legacy detect-then-move). The HID read above is
+  // kept only to warn on a mismatch.
+  const forcedAbsolute = cli.target === 'desktop';
+  if (forcedAbsolute !== mouseAbsoluteMode) {
+    console.error(
+      `⚠ --target ${cli.target} overrides the HID-detected mode ` +
+        `(HID reported ${mouseAbsoluteMode ? 'absolute/desktop' : 'relative/iPad'}).`,
+    );
   }
+  mouseAbsoluteMode = forcedAbsolute;
   console.error(
-    `Control path: ${cli.target === 'auto' ? 'auto → ' : `${cli.target} → `}` +
+    `Control path: ${cli.target} → ` +
       `${mouseAbsoluteMode ? 'desktop (absolute, detect-then-move)' : 'iPad (relative, curve-one-shot + cascade)'}.`,
   );
 

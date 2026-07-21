@@ -238,30 +238,30 @@ node dist/index.js --http --host 0.0.0.0 --port 8080
 | `--http` | — | — | shorthand for `--transport http` |
 | `--host <addr>` | `PIKVM_MCP_HOST` | `127.0.0.1` | HTTP bind address |
 | `--port <n>` | `PIKVM_MCP_PORT` | `3000` | HTTP port |
-| `--target <ipad\|desktop\|auto>` | `PIKVM_TARGET` | `auto` | control path (see below) |
+| `--target <ipad\|desktop>` | `PIKVM_TARGET` | **required** | control path (see below) |
 | `-h`, `--help` | — | — | show help and exit |
 
 In HTTP mode the Streamable HTTP transport is served at `POST/GET/DELETE /mcp` (stateful: each
 session is created by an `initialize` request and identified by the `Mcp-Session-Id` header), plus
 a `GET /health` liveness check. CLI flags take precedence over the environment variables.
 
-### Choosing the control path (`--target`)
+### Choosing the control path (`--target`) — required
 
-The server has two movement/detection paths and picks one at startup:
+The server has two movement/detection paths and **you must pick one at startup** (there is no
+auto-detect):
 
 - **`ipad`** — relative-mouse target: the deterministic **curve-one-shot** mover + the **cascade**
   cursor detector (the iPad path).
 - **`desktop`** — absolute-mouse target: the legacy **detect-then-move** path (the original
   upstream project's auto-calibrate + template/shape detection).
-- **`auto`** (default) — pick from the target's HID mouse mode at startup (relative → `ipad`,
-  absolute → `desktop`).
 
-Pass `--target ipad` or `--target desktop` to force it (or set `PIKVM_TARGET`). A forced choice
-that disagrees with the detected HID mode logs a warning but is honored.
+Pass `--target ipad` or `--target desktop` (or set `PIKVM_TARGET`). Starting without it exits with
+an error. If the choice disagrees with the target's detected HID mouse mode, the server logs a
+warning but honors your choice.
 
 ```bash
-node dist/index.js --target ipad      # force the iPad path
-node dist/index.js --target desktop   # force the desktop path
+node dist/index.js --target ipad      # iPad path
+node dist/index.js --target desktop   # desktop path
 ```
 
 ## Available Tools

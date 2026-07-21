@@ -42,6 +42,7 @@ via `PIKVM_USERNAME_FILE` / `PIKVM_PASSWORD_FILE` (home-manager) or systemd
 
           services.pikvm-mcp = {
             enable = true;
+            target = "ipad";   # required: "ipad" or "desktop"
             host = "https://pikvm01.lan";
             # Anything that produces a path containing the password works:
             # sops-nix, agenix, or just a plain file outside the Nix store.
@@ -76,6 +77,7 @@ See `home-module.nix` for the authoritative list. Highlights:
 | Option | Default | Notes |
 |---|---|---|
 | `services.pikvm-mcp.enable` | `false` | Master switch. |
+| `services.pikvm-mcp.target` | *(required)* | `"ipad"` or `"desktop"` — the control path (passed as `--target`). |
 | `services.pikvm-mcp.host` | *(required)* | E.g. `"https://pikvm01.lan"`. |
 | `services.pikvm-mcp.username` | `"admin"` | Literal; ignored when `usernameFile` is set. |
 | `services.pikvm-mcp.usernameFile` | `null` | Optional path to the username (sops-nix/agenix). Overrides `username`. |
@@ -105,6 +107,7 @@ cmdline. The server reads them by credential name (`pikvm-password`,
 
   services.pikvm-mcp = {
     enable = true;
+    target = "desktop";   # required: "ipad" or "desktop"
     host = "https://pikvm01.lan";
     usernameFile = config.sops.secrets."pikvm/username".path;
     passwordFile = config.sops.secrets."pikvm/password".path;

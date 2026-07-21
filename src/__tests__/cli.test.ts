@@ -69,14 +69,13 @@ describe('parseCliOptions', () => {
     expect(() => parseCliOptions(['--nope'], {})).toThrow();
   });
 
-  it('defaults target to auto', () => {
-    expect(parseCliOptions([], {}).target).toBe('auto');
+  it('target is undefined when neither the flag nor the env is set (main enforces required)', () => {
+    expect(parseCliOptions([], {}).target).toBeUndefined();
   });
 
-  it('--target ipad / desktop / auto are accepted', () => {
+  it('--target ipad / desktop are accepted (auto is gone)', () => {
     expect(parseCliOptions(['--target', 'ipad'], {}).target).toBe('ipad');
     expect(parseCliOptions(['--target', 'desktop'], {}).target).toBe('desktop');
-    expect(parseCliOptions(['--target', 'auto'], {}).target).toBe('auto');
   });
 
   it('target falls back to PIKVM_TARGET env, and the flag wins over env', () => {
@@ -84,7 +83,8 @@ describe('parseCliOptions', () => {
     expect(parseCliOptions(['--target', 'ipad'], { PIKVM_TARGET: 'desktop' }).target).toBe('ipad');
   });
 
-  it('rejects an invalid target', () => {
+  it('rejects an invalid target (including the removed "auto")', () => {
     expect(() => parseCliOptions(['--target', 'tablet'], {})).toThrow(/target/i);
+    expect(() => parseCliOptions(['--target', 'auto'], {})).toThrow(/target/i);
   });
 });

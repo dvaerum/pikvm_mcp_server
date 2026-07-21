@@ -11,18 +11,18 @@ import { parseArgs } from 'node:util';
 export type TransportKind = 'stdio' | 'http';
 
 /**
- * Which control path to use:
+ * Which control path to use (REQUIRED — no auto-detect):
  *  - 'ipad'    — relative-mouse target: curve-one-shot mover + the cascade detector.
  *  - 'desktop' — absolute-mouse target: the legacy detect-then-move path.
- *  - 'auto'    — detect from the target's HID mouse mode at startup (the default).
  */
-export type TargetKind = 'auto' | 'ipad' | 'desktop';
+export type TargetKind = 'ipad' | 'desktop';
 
 export interface CliOptions {
   transport: TransportKind;
   host: string;
   port: number;
-  target: TargetKind;
+  /** undefined when neither --target nor PIKVM_TARGET was given; main() then errors. */
+  target: TargetKind | undefined;
   help: boolean;
 }
 
@@ -61,9 +61,10 @@ export function parseCliOptions(
     throw new Error(`Invalid --port "${portRaw}" (expected an integer 1-65535)`);
   }
 
-  const target = (values.target as string | undefined) ?? env.PIKVM_TARGET ?? 'auto';
-  if (target !== 'auto' && target !== 'ipad' && target !== 'desktop') {
-    throw new Error(`Invalid --target "${target}" (expected "ipad", "desktop", or "auto")`);
+  // Required (enforced in main so --help still works without it); no default.
+  const target = (values.target as string | undefined) ?? env.PIKVM_TARGET;
+  if (target !== undefined && target !== 'ipad' && target !== 'desktop') {
+    throw new Error(`Invalid --target "${target}" (expected "ipad" or "desktop")`);
   }
 
   return { transport, host, port, target, help: Boolean(values.help) };
@@ -81,10 +82,9 @@ export function helpText(binName = 'pikvm-mcp-server'): string {
     '  --http                       Shorthand for --transport http',
     '  --host <addr>                HTTP bind address (default: 127.0.0.1)',
     '  --port <n>                   HTTP port (default: 3000)',
-    '  --target <ipad|desktop|auto> Control path (default: auto):',
+    '  --target <ipad|desktop>      Control path (REQUIRED):',
     '                                 ipad    = curve-one-shot mover + cascade detector',
     '                                 desktop = legacy detect-then-move (absolute mouse)',
-    '                                 auto    = pick from the target\'s HID mouse mode',
     '  -h, --help                   Show this help and exit',
     '',
     'Environment (used when the matching flag is absent):',
