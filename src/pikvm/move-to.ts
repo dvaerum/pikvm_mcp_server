@@ -45,6 +45,7 @@ import {
 import { extractMaskedTemplate } from './seed-template.js';
 import { findCursorByShape } from './cursor-shape-detect.js';
 import { findCursorByML, findCursorByMLMultiHint, buildMLHints, findCursorByV8FullFrame, type MLCursorResult } from './cursor-ml-detect.js';
+import { CursorLocator, type CursorLocatorDeps } from './cursor-locator.js';
 import {
   DEFAULT_TEMPLATE_DIR,
   LEGACY_TEMPLATE_PATH,
@@ -861,6 +862,38 @@ export async function wakeupCursor(
   await sleep(settleMs);
 }
 
+/**
+ * Build CursorLocator deps bound to the client (C1 P3). The origin profile only
+ * touches origin deps; the openLoopShape wiggle-verify closures live inside
+ * moveToPixel and the second-opinion predicates live in click-verify (circular
+ * import), so those are throwing stubs here — never reached by the origin profile.
+ */
+function makeLocatorDeps(client: PiKVMClient): CursorLocatorDeps {
+  const notWired = (name: string) => (): never => {
+    throw new Error(`cursor-locator: '${name}' dep not wired at this call site`);
+  };
+  return {
+    belief: client.belief,
+    screenshot: async () => decodeScreenshot(await takeRawScreenshot(client)),
+    decode: async (frame) => decodeScreenshot(frame),
+    mouseMoveRelative: (dx, dy) => client.mouseMoveRelative(dx, dy),
+    sleep,
+    getCachedTemplates,
+    isMlDisabled: () => loadSettings().ml.disabled,
+    findCursorByV8FullFrame,
+    locateCursor: (opts) => locateCursor(client, opts),
+    findCursorByTemplateSet,
+    findCursorByMLMultiHint,
+    findCursorByShape,
+    buildMLHints,
+    mlWiggleVerify: notWired('mlWiggleVerify'),
+    wiggleVerifyCandidate: notWired('wiggleVerifyCandidate'),
+    shouldFireSecondOpinion: notWired('shouldFireSecondOpinion'),
+    shouldAdoptSecondOpinion: notWired('shouldAdoptSecondOpinion'),
+    tautologyProxThreshold: TAUTOLOGY_PROX_THRESHOLD,
+  };
+}
+
 async function discoverOrigin(
   client: PiKVMClient,
   options: MoveToOptions,
@@ -880,19 +913,6 @@ async function discoverOrigin(
   const requested = options.strategy
     ?? (options.slamFirst === false ? 'assume-at' : 'detect-then-move');
 
-  // Debug capture: when debugDir is set, save every screenshot used in
-  // origin discovery and label it with what was claimed/found. This is
-  // the raw evidence for "did template-match really see the cursor?"
-  // questions — without these frames we're guessing.
-  const debugDir = options.debugDir ?? null;
-  let debugCounter = 0;
-  const saveDebug = async (label: string, buf: Buffer): Promise<void> => {
-    if (!debugDir) return;
-    const fs = await import('fs');
-    await fs.promises.mkdir(debugDir, { recursive: true });
-    const tag = String(debugCounter++).padStart(2, '0');
-    await fs.promises.writeFile(`${debugDir}/${tag}-${label}.jpg`, buf);
-  };
 
   if (requested === 'assume-at') {
     if (!options.assumeCursorAt) {
@@ -916,122 +936,19 @@ async function discoverOrigin(
     // position as origin and skip the locateCursor probe path. No
     // probeMeasurement is returned — downstream falls back to the
     // prior calibrated ratio for emit planning.
-    const mlEnabled = !loadSettings().ml.disabled;
-    if (mlEnabled) {
-      const shot = await decodeScreenshot(await takeRawScreenshot(client));
-      const v8 = await findCursorByV8FullFrame(shot.buffer, shot.width, shot.height);
-      if (v8 !== null) {
-        if (options.verbose) {
-          console.log(
-            `[discoverOrigin] v8 calibration: cursor at (${v8.x}, ${v8.y}), ` +
-            `presence=${v8.presence.toFixed(3)}, heatmapPeak=${v8.heatmapPeak.toFixed(3)}`,
-          );
-        }
-        return { point: { x: v8.x, y: v8.y }, method: 'detect-then-move' };
-      }
-      if (options.verbose) {
-        console.log('[discoverOrigin] v8 calibration returned null; falling back to locateCursor');
-      }
-    }
-
-    // Phase 19: locateCursor (probe-and-diff) is now PRIMARY for origin
-    // discovery. Pre-Phase-13, template-match was preferred because
-    // locateCursor was unreliable (failed ~60% of trials). With the
-    // latency fix in place, locateCursor reliably finds real cursor
-    // pairs — and crucially returns probeMeasurement that Phase 14
-    // uses as live-context calibration. Template-match-as-origin
-    // skipped that path entirely, so plans used profile defaults
-    // (3.04, 5.28) that are 4× off in the current iPad context.
-    //
-    // Live trace 2026-04-26 click(1027,825): template-match origin
-    // → planRatio (3.0, 3.72) → emit (-14, -3) mickeys → cursor
-    // landed 154 px east of target. Same trial with probe-based
-    // origin would have measured ratio ~0.85 and emitted enough
-    // mickeys to actually reach target. Template-match is now a
-    // FALLBACK for when locateCursor fails.
-    const located = await locateCursor(client, {
-      // Phase 69: removed `probeDelta: 20` override. Phase 29 set
-      // locateCursor's default to 60 because small probes get lost in
-      // iPad animation noise; the override here was a legacy from
-      // before that default change and was effectively suppressing the
-      // benefit. Letting locateCursor use its 60-mickey default puts
-      // more displacement signal into motion-diff's pair selection.
-      // settleMs default (300) is derived from PiKVM streamer
-      // latency research (2026-04-26) — must exceed ~235 ms or the
-      // post-probe screenshot will return a pre-emit frame from the
-      // streamer's buffer.
-      maxAttempts: 2,
-      verbose: options.verbose,
-    });
-    if (located) {
-      // located.position is the cursor's CURRENT position (post-probe);
-      // locateCursor no longer attempts a fake restore. Move-to plans
-      // its open-loop emission from this position.
-      // Phase 14: pass through the probe's offset + mickeys so the
-      // caller can compute px/mickey ratio without a redundant
-      // calibration probe. The probe was X-axis only.
+    // C1 P3 origin: the detection cascade (V8 -> motion-diff probe -> template-set
+    // progressive wake) now runs through CursorLocator's 'origin' profile, which
+    // reproduces it call-for-call. Slam/bounds/probe-calibration stay below; the
+    // profile carries probeMeasurement so the emit calibration is unchanged.
+    const originFix = await new CursorLocator(makeLocatorDeps(client)).locate(
+      Buffer.alloc(0), 0, 0, 'origin',
+    );
+    if (originFix) {
       return {
-        point: located.position,
+        point: { x: originFix.position.x, y: originFix.position.y },
         method: 'detect-then-move',
-        probeMeasurement: {
-          offsetPx: located.probeOffsetPx,
-          mickeys: located.probeMickeys,
-        },
+        ...(originFix.probeMeasurement ? { probeMeasurement: originFix.probeMeasurement } : {}),
       };
-    }
-    // Phase 19/68: locateCursor failed — try template-match as fallback.
-    // Without a probe measurement we lose the live-context calibration,
-    // but at least we can plan from the matched origin.
-    //
-    // Phase 68 (2026-04-26): the original implementation tried template-
-    // match ONCE after a small wakeupCursor. If the cursor was in a
-    // transient faded state, this single attempt missed and the entire
-    // detect-then-move flow failed. The bench showed this happening
-    // 20-40% of the time on iPad. Progressive retries with bigger wake
-    // nudges cover the transient-invisibility case at low cost.
-    const tmplSet = await getCachedTemplates();
-    if (tmplSet.length > 0) {
-      const wakeAttempts: { dx: number; settleMs: number; label: string }[] = [
-        { dx: 30, settleMs: 300, label: 'small-wake' },
-        { dx: 60, settleMs: 400, label: 'medium-wake' },
-        { dx: 100, settleMs: 500, label: 'large-wake' },
-      ];
-      for (const attempt of wakeAttempts) {
-        // Round-trip nudge so net displacement is zero; iPadOS sees motion
-        // (cursor wakes) but the cursor ends up where it started.
-        await client.mouseMoveRelative(attempt.dx, 0);
-        await sleep(80);
-        await client.mouseMoveRelative(-attempt.dx, 0);
-        await sleep(attempt.settleMs);
-        const shot = await decodeScreenshot(await takeRawScreenshot(client));
-        await saveDebug(`origin-shot-${attempt.label}`, shot.buffer);
-        // Phase 131 (v0.5.123): tighten minScore from
-        // findCursorByTemplateDecoded's default 0.83 to 0.85, AND
-        // pass it explicitly here. The locateCursor-fallback call
-        // had been accepting globally-best matches WITHOUT any
-        // hint or score floor — on a busy home screen with calendar
-        // widget number-grid features, that returns
-        // (758, 450) score 0.66 instead of the real cursor.
-        // Phase 130's icon-tour caught 7/11 trials taking that
-        // false positive. Real cursor matches against captured
-        // templates score 0.85+; raising the floor rejects the
-        // false-positive band while still accepting real cursors.
-        const found = findCursorByTemplateSet(shot, tmplSet, {
-          verbose: options.verbose,
-          minScore: 0.85,
-        });
-        if (found) {
-          if (options.verbose) {
-            console.error(
-              `[move-to] locateCursor failed; ${attempt.label} template-match found cursor at (${found.position.x},${found.position.y}) score=${found.score.toFixed(3)}`,
-            );
-          }
-          return { point: found.position, method: 'detect-then-move' };
-        }
-        if (options.verbose) {
-          console.error(`[move-to] ${attempt.label} template-match returned no cursor; retrying with bigger nudge`);
-        }
-      }
     }
     if (options.verbose) {
       console.error('[move-to] locateCursor AND template-match both failed');
