@@ -345,20 +345,35 @@ payoff. Left as an explicit future task, not blocking.
 
 ---
 
-## Session outcome (2026-07-21) — why this plan file is NOT git-rm'd yet
+## Session outcome (2026-07-21) — ALL phases implemented; one live-verify deferred
 
-The final step ("`git rm` after ALL phases implemented AND live-verified") is **not met**:
-three C1 P3 phases are intentionally **blocked**, not implemented, each for a cited
-standing-rule/harness reason (curve = do-NOT-touch mover + no bench; openLoopShape = no
-bench can reach it; verify = unpreservable as one profile). This file records those
-decisions and the C2 scope conclusion — deleting it would erase the reasoning the repo
-owner still needs to review. **Keep until reviewed.**
+After the owner's authorizations ("touch the mover if e2e-testable"; then "implement
+openLoopShape offline-only + mark for future live test"), **every C1/C2 phase is now
+implemented and ALL cursor detection flows through the single CursorLocator front door.**
+The two pre-authorization "blocker" tables above (curve FORBIDDEN / openLoopShape
+UNVERIFIABLE) are SUPERSEDED — kept only as the honest record of what was blocked before
+the owner lifted the constraints.
 
-Delivered + live-verified: **C1 P1/P2** (offline), **C1 P3 origin** (982b93e, benched),
-**C2 P1a** micro-correction removal (3cb2095, benched HIT 83.8%→86.2% N=80), **C2 P2**
-dead-code sweep (3542850, offline). Blocked/deferred with rationale above: C1 P3
-verify/openLoopShape/curve, C2 P1 pre-click/edge-unstick (correctly kept), C2 P2 wider
-predicate demotion.
+Final status per phase:
+- **C1 P1/P2** — done (offline).
+- **C1 P3 origin** (982b93e) — done, live-benched byte-identical.
+- **C1 P3 curve** (c26830a, + bench f627c0f) — done, live-benched byte-identical
+  (N=80 p50 4.4→4.4, within35 100%). Built the missing curve-one-shot ground-truth bench.
+- **C1 P3 openLoopShape** (714b64f) — done, **OFFLINE-verified** (owner-authorized);
+  `TODO(live-verify)` in code + journal for when a desktop/force-rig exists. ⬅ the ONE
+  outstanding live-verification.
+- **C1 P3 verify** — resolved structurally (its 3 gated detection sites stay in
+  click-verify; a single fused profile can't reproduce them — see the C1 P3 journal).
+- **C2 P1a** (3cb2095) — done, live-benched (HIT 83.8%→86.2% N=80).
+- **C2 P1 rest** — pre-click approach + edge-unstick correctly KEPT (not mover-duplication).
+- **C2 P2** (3542850) — dead-code removed (offline); wider predicate demotion left as a
+  low-value future task (would trade good unit tests for flakier integration tests).
+
+**Why still NOT `git rm`'d:** the final step requires "implemented AND **live**-verified."
+openLoopShape is implemented + offline-verified but its live A/B is deliberately deferred
+(no rig exists to fire it). This file is the tracker for that single remaining
+`TODO(live-verify)` + the decision rationale. Delete it once openLoopShape gets its
+live bench (or if the owner decides the offline proof + code TODO suffice).
 
 ---
 
