@@ -13,7 +13,7 @@ import sharp from 'sharp';
 import {
   decodeScreenshot,
   diffScreenshotsDecoded,
-  findCursorByTemplate,
+  findCursorByTemplateDecoded,
   extractCursorTemplate,
   DEFAULT_DETECTION_CONFIG,
 } from '../cursor-detect.js';
@@ -259,7 +259,7 @@ describe('diffScreenshotsDecoded saturation filter', () => {
   });
 });
 
-describe('findCursorByTemplate minScore default', () => {
+describe('findCursorByTemplateDecoded minScore default', () => {
   // Live data observed on the iPad's stuck-modal screen:
   //   real cursor template-matches scored 0.85–0.97
   //   false positives over the modal scrim scored 0.74–0.82
@@ -286,7 +286,7 @@ describe('findCursorByTemplate minScore default', () => {
   it('exact match (step=1) scores ≥ 0.95 — sanity baseline', async () => {
     const screenshot = await buildScreenshotWithCursor(200, 150, 50, 50);
     const tmpl = await extractCursorTemplate(screenshot, { x: 50, y: 50 }, 24);
-    const exact = await findCursorByTemplate(screenshot, tmpl, { step: 1, minScore: 0.5 });
+    const exact = await findCursorByTemplateDecoded(await decodeScreenshot(screenshot), tmpl, { step: 1, minScore: 0.5 });
     expect(exact).not.toBeNull();
     expect(exact!.score).toBeGreaterThan(0.95);
   });
@@ -299,7 +299,7 @@ describe('findCursorByTemplate minScore default', () => {
     const uniform = await sharp(Buffer.alloc(200 * 150 * 3, 100), { raw: { width: 200, height: 150, channels: 3 } })
       .png()
       .toBuffer();
-    const result = await findCursorByTemplate(uniform, tmpl);
+    const result = await findCursorByTemplateDecoded(await decodeScreenshot(uniform), tmpl);
     // With the new 0.83 default, no spurious match should be accepted.
     expect(result).toBeNull();
   });
@@ -311,7 +311,7 @@ describe('findCursorByTemplate minScore default', () => {
       .png()
       .toBuffer();
     // Threshold low enough that even noise might pass.
-    const permissive = await findCursorByTemplate(uniform, tmpl, { minScore: -1 });
+    const permissive = await findCursorByTemplateDecoded(await decodeScreenshot(uniform), tmpl, { minScore: -1 });
     // Just verifies the option flows through; the actual returned position
     // is whatever scored best.
     expect(permissive).not.toBeNull();

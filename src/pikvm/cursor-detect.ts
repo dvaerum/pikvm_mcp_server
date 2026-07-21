@@ -1081,18 +1081,6 @@ export function findCursorByTemplateDecoded(
   };
 }
 
-/** Convenience wrapper for callers that only have the JPEG buffer. */
-// LEGACY (NCC template match) — REFUTED: confident-wrong on look-alike icons.
-// NOT an alternative to the cascade; see cursor-ml-detect.ts findCursorByV8FullFrame.
-export async function findCursorByTemplate(
-  screenshot: Buffer,
-  template: CursorTemplate,
-  options: FindCursorOptions = {},
-): Promise<FindCursorResult | null> {
-  const decoded = await decodeScreenshot(screenshot);
-  return findCursorByTemplateDecoded(decoded, template, options);
-}
-
 export interface FindCursorSetResult extends FindCursorResult {
   /** Index in the input templates[] of the template that won. Lets the
    *  caller tell which captured backdrop best matched the current frame

@@ -643,3 +643,35 @@ the result (proven by the quarantine bench: every model but crop-heatmap.onnx re
 Ripping them out means editing the do-NOT-touch mover and would need an N≥80 live re-validation, which
 can't be faked offline — so the code is now clearly LABELLED legacy and physical removal is left to a
 dedicated, benched mover-cleanup pass rather than an unvalidated deletion here.
+
+## 2026-07-21 (cycle 26) — DECISION: keep desktop (pre-fork), minimal cleanup; one dead wrapper removed
+Followed cycle 25's signposting with the physical-deletion question. Mapped move-to.ts:
+`moveToPixel` returns EARLY for `strategy:'curve-one-shot'` (the iPad default) → delegates to
+curve-mover.ts, which uses ONLY the cascade. The legacy detectors (`findCursorByShape`,
+`findCursorByMLMultiHint`→`findCursorByML`→`findCursorPresenceV5`, `findCursorByTemplateSet`→
+`findCursorByTemplateDecoded`) are the `detect-then-move` strategy = the **desktop/absolute-mode**
+movement path, plus dormant NCC-template fallbacks in clickAtWithRetry (dead only because the on-disk
+templates are TTL-stale).
+
+**Provenance:** that path is PRE-FORK — it's the original upstream project
+(KultivatorConsulting/pikvm_mcp_server) headline feature (auto-calibrate + the README's Raspberry Pi
+desktop demo). git: cursor-detect.ts = "Lift cursor detection to its own module"; the cascade
+(curve-mover.ts) is the recent iPad addition. **User decision: KEEP desktop, minimal cleanup.**
+
+**Deleted (the only provably-dead item under keep-desktop):** `findCursorByTemplate` — the single-
+template NCC wrapper, ZERO production callers (test-only). Its one real test (the minScore-default
+block in cursor-detect.test.ts) was REDIRECTED to the kept `findCursorByTemplateDecoded` so desktop
+coverage is preserved; other refs were comments only.
+
+**Kept (now clearly LABELLED legacy, cycle 25):** the whole desktop detect-then-move path + its
+detectors + the dormant clickAtWithRetry template machinery. Removing them = dropping desktop support,
+which we are NOT doing.
+
+**Validation (honoured the N≥80 rule):** baseline (pre-deletion) = 100% (80/80); re-bench
+(post-deletion) = 100% (80/80) — no regression. Build + full suite green (824). The re-bench was
+confirmatory: the removed function had no production caller, so the live curve-one-shot path bytes were
+unchanged.
+
+**Conclusion:** under keep-desktop, the cycle-25 signposting IS the cleanup — only one dead wrapper was
+physically removable without dropping desktop support or its test coverage. The "multiple detectors"
+are the iPad cascade (canonical) + the pre-fork desktop path (kept), now unambiguously labelled.
