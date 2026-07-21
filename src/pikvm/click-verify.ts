@@ -18,7 +18,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import {
-  cursorMovedAsExpected,
   decodeScreenshot,
   diffPixels,
   findCursorByTemplateSet,
@@ -385,21 +384,6 @@ export interface ClickAtWithRetryOptions {
    *  Default 0.4 — well below normal iPadOS variance (1.0-3.0) but above
    *  the rate-limit floor (0.5-0.8 observed). Set 0 to disable. */
   minLivePxPerMickey?: number;
-  /** Phase 45: max iterations of post-move template-driven
-   *  micro-correction. After moveToPixel returns, this loop runs:
-   *    1. Take screenshot
-   *    2. Locate cursor via full-frame template-match (ground truth)
-   *    3. Compute delta to target
-   *    4. If residual < `microConvergePx`, stop
-   *    5. Emit small mickeys toward target (capped per iteration)
-   *    6. Re-verify
-   *  iPadOS pointer-acceleration variance prevented moveToPixel's
-   *  motion-diff/linear approach from converging tighter than ~28-32 px
-   *  in live benches. The template-match-based loop here uses the
-   *  proven-reliable template-match for verification (live: 0.97 NCC
-   *  scores) and small per-iteration emits to keep iPadOS in its
-   *  near-1:1 linear regime. Default 5; set 0 to disable. */
-  microCorrectionIterations?: number;
   /** Phase 145 (v0.5.136): mouse-button hold duration in ms. Default
    *  undefined → uses `client.mouseClick`'s built-in 150 ms (which
    *  empirically registers as a tap on most iPadOS modal dialogs).
@@ -414,10 +398,6 @@ export interface ClickAtWithRetryOptions {
    *  Tuning this hasn't moved the needle in any session bench;
    *  exposed as an escape hatch for future investigation. */
   clickDurationMs?: number;
-  /** Phase 45: residual (px) at which post-move micro-correction
-   *  declares convergence. Default 8 — comfortably inside the iPadOS
-   *  icon hit area (~70 px wide). */
-  microConvergePx?: number;
   /** Phase 72: when an attempt fails because the iPad is on the lock
    *  screen (detect-then-move can't find the cursor), automatically
    *  call ipadGoHome to wake/unlock and retry one more time. Phase 70
@@ -536,8 +516,6 @@ export async function clickAtWithRetry(
   // 2.8 s latency vs 5 iters' 1.75 s — acceptable for click
   // precision since the divergence guard (Phase 133) bails early
   // when convergence stalls.
-  const microCorrectionIterations = options.microCorrectionIterations ?? 8;
-  const microConvergePx = options.microConvergePx ?? 8;
   const minLivePxPerMickey = options.minLivePxPerMickey ?? 0.4;
   // Load cursor templates ONCE outside the retry loop. Empty set →
   // pre-click template check is a no-op (graceful degradation).
@@ -1267,36 +1245,6 @@ function sleepMs(ms: number): Promise<void> {
 }
 
 /**
- * Phase 49 — pure helper: would a predicted cursor position exit the
- * safe-bounds margin? This is the safety predicate that prevents the
- * micro-correction loop from pushing the cursor into iPadOS gesture
- * zones (top-left = lock screen hot corner; bottom-edge = swipe-up =
- * app switcher; top-edge = control centre / notifications).
- *
- * Returns true if the predicted (predX, predY) is OUTSIDE the
- * margin-shrunken inner rectangle. The loop should refuse to emit
- * a delta that would land here.
- *
- * Live-verified failure mode (Phase 45 reverted): without this
- * guard, the micro-correction loop pushed the cursor down to the
- * iPad's bottom edge (Y > bounds.bottom - margin) and triggered
- * the swipe-up-from-bottom system gesture — opening the app
- * switcher. Phase 49 added this predicate; it must stay correct.
- */
-export function wouldExceedSafeBounds(
-  predX: number,
-  predY: number,
-  safeBounds: { x: number; y: number; width: number; height: number },
-  marginPx: number,
-): boolean {
-  const minX = safeBounds.x + marginPx;
-  const maxX = safeBounds.x + safeBounds.width - marginPx;
-  const minY = safeBounds.y + marginPx;
-  const maxY = safeBounds.y + safeBounds.height - marginPx;
-  return predX < minX || predX > maxX || predY < minY || predY > maxY;
-}
-
-/**
  * Phase 50 — pure helper: classify the live-measured px/mickey ratio
  * as rate-limited (true) or normal (false).
  *
@@ -1431,37 +1379,6 @@ export function shouldAdoptSecondOpinion(args: {
 }
 
 /**
- * Phase 149 (v0.5.139) — pure helper: detect divergence in the
- * micro-correction loop. Phase 133 (v0.5.125) added an in-loop guard
- * that breaks the iteration when the residual GROWS by more than
- * `slackPx` between iterations, which means the corrections are
- * pushing the cursor in the wrong direction. Phase 132 bench observed
- * a trial reach residual 200 px while no-micro-mode reached 23 px on
- * the same target — micro was diverging.
- *
- * The 10 px slack is calibrated:
- *  - Too tight (e.g. 0) → JPEG noise + iPadOS acceleration variance
- *    fires false divergences and the loop exits before converging.
- *  - Too loose (e.g. 100) → genuine 30→200 px run-aways bleed
- *    through; the loop dutifully drives the cursor off-screen.
- *
- * The `prevResidual !== null` guard skips the first iteration (no
- * prior residual to compare against). Without it, NaN comparison
- * would unpredictably break or pass.
- *
- * Pure: deterministic, no I/O.
- */
-export function isDivergenceDetected(args: {
-  prevResidual: number | null;
-  currentResidual: number;
-  slackPx?: number;
-}): boolean {
-  if (args.prevResidual === null) return false;
-  const slack = args.slackPx ?? 10;
-  return args.currentResidual > args.prevResidual + slack;
-}
-
-/**
  * Phase 150 (v0.5.140) — pure helper: gate Phase 125's in-motion
  * approach emit. The in-motion click sends one final directional
  * mickey emit toward target and clicks WITHOUT settling.
@@ -1496,69 +1413,6 @@ export function shouldEmitApproach(args: {
   if (!args.cursorKnown) return false;
   const minResidual = args.minResidualPx ?? 3;
   return args.residual >= minResidual;
-}
-
-/**
- * Phase 151 (v0.5.141) — pure helper: gate Phase 120's motion-
- * confirmation check inside the micro-correction loop. Phase 119
- * caught a case where a template-match scored 0.71 against a static
- * wallpaper gradient feature (952, 916) and the loop happily
- * micro-corrected against the phantom, driving the cursor off-target.
- * Phase 120's fix: after the previous iteration's emit, check the
- * "cursor" actually moved by the predicted amount; if not, the match
- * is a wallpaper false-positive and we should stop micro-correcting.
- *
- * The check itself lives in `cursorMovedAsExpected` (cursor-detect.ts,
- * already tested). This helper gates WHETHER to run that check:
- *  - Need a previous found position (first iteration: nothing to
- *    compare against).
- *  - Need a previous emit (likewise).
- *  - The previous emit must have been non-zero in EITHER axis. A
- *    zero-emit (no-op) shouldn't trigger motion confirmation — there's
- *    no expected movement to confirm. The OR-split matters: collapsing
- *    to a single-axis check would break Y-only emits.
- *
- * Pure: deterministic, no I/O.
- */
-export function shouldRunMotionConfirmation(args: {
-  prevFound: { x: number; y: number } | null;
-  prevEmit: { mx: number; my: number } | null;
-}): boolean {
-  if (args.prevFound === null) return false;
-  if (args.prevEmit === null) return false;
-  return args.prevEmit.mx !== 0 || args.prevEmit.my !== 0;
-}
-
-/**
- * Phase 152 (v0.5.142) — pure helper: gate Phase 49's bounds-aware
- * micro-correction loop. Three conditions must hold to enter the
- * loop:
- *  - microCorrectionIterations > 0: feature opt-in. A caller passing
- *    0 explicitly disables the loop (e.g. a desktop target where the
- *    moveToPixel linear region already converges to single-digit
- *    residuals; running the loop just adds latency).
- *  - hasTemplates: templates are required for the per-iteration
- *    template-match step. Without templates, every iteration would
- *    return null on the first findCursorByTemplateSet call and the
- *    loop would no-op a screenshot+settle cycle before exiting.
- *  - hasInitialPosition: a starting cursor position from
- *    moveToPixel's motion-diff is required as the locality hint for
- *    the first template-match. Without it, the template-match
- *    against a busy home screen has no spatial bias and is much more
- *    likely to return a false-positive on a wallpaper feature.
- *
- * Pure: deterministic, no I/O.
- */
-export function shouldRunMicroCorrection(args: {
-  microCorrectionIterations: number;
-  hasTemplates: boolean;
-  hasInitialPosition: boolean;
-}): boolean {
-  return (
-    args.microCorrectionIterations > 0 &&
-    args.hasTemplates &&
-    args.hasInitialPosition
-  );
 }
 
 /**
