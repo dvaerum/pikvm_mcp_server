@@ -1456,6 +1456,44 @@ export async function wiggleVerifyCandidate(
   }
 }
 
+/** Open-loop shape/ML fallback (C1 P3 openLoopShape). Thin wrapper over the single
+ *  CursorLocator front door: ML-multihint -> wiggle -> dark/bright shape -> wiggle
+ *  (that cascade lives in locateOpenLoopShape; unit-tested with mock deps). Deps
+ *  reuse makeLocatorDeps with a `decode` passthrough over the already-decoded shot
+ *  and the module-level mlWiggleVerify/wiggleVerifyCandidate wired real. `prox` is
+ *  reconstructed faithfully (hypot(fix.position - predicted); the wiggle helpers
+ *  return unchanged positions) and fix.rawScore === the original score.
+ *
+ *  Extracted from moveToPixel (was a nested closure over client + observedRatioX/Y)
+ *  so it is callable STANDALONE — which is what makes the openLoopShape path
+ *  live-verifiable: a bench can call this directly on a real frame + real wiggle
+ *  (see bench-openloopshape-groundtruth), closing the earlier "offline-only" TODO. */
+export async function tryOpenLoopShapeDetect(
+  client: PiKVMClient,
+  observedRatioX: number,
+  observedRatioY: number,
+  shot: DecodedScreenshot,
+  predicted: { x: number; y: number },
+): Promise<{ pos: { x: number; y: number }; score: number; prox: number } | null> {
+  try {
+    const deps: CursorLocatorDeps = {
+      ...makeLocatorDeps(client),
+      decode: async () => shot,
+      mlWiggleVerify: (ml) => mlWiggleVerify(client, ml),
+      wiggleVerifyCandidate: (pos, score) =>
+        wiggleVerifyCandidate(client, observedRatioX, observedRatioY, pos, score),
+    };
+    const fix = await new CursorLocator(deps).locate(
+      shot.buffer, shot.width, shot.height, 'openLoopShape', predicted,
+    );
+    if (!fix) return null;
+    const prox = Math.hypot(fix.position.x - predicted.x, fix.position.y - predicted.y);
+    return { pos: fix.position, score: fix.rawScore, prox };
+  } catch {
+    return null;
+  }
+}
+
 // ============================================================================
 // Main entry
 // ============================================================================
@@ -2003,7 +2041,7 @@ export async function moveToPixel(
         // at p0 because motion + template both fail, leaving the entire
         // move blind. Adding shape (with the Phase 293 bright rescue)
         // here gives the open-loop a third detection chance.
-        const shapeResult = await tryOpenLoopShapeDetect(shotB, predictedPostOpen);
+        const shapeResult = await tryOpenLoopShapeDetect(client, observedRatioX, observedRatioY, shotB, predictedPostOpen);
         if (shapeResult) {
           currentPos = shapeResult.pos;
           openLoopMode = 'shape';
@@ -2029,7 +2067,7 @@ export async function moveToPixel(
     } else {
       // Phase 294: shape-detect fallback at p0 even when no templates
       // are cached (motion failed, no template path available).
-      const shapeResult = await tryOpenLoopShapeDetect(shotB, predictedPostOpen);
+      const shapeResult = await tryOpenLoopShapeDetect(client, observedRatioX, observedRatioY, shotB, predictedPostOpen);
       if (shapeResult) {
         currentPos = shapeResult.pos;
         openLoopMode = 'shape';
@@ -2051,51 +2089,6 @@ export async function moveToPixel(
           );
         }
       }
-    }
-  }
-
-  /** Open-loop shape/ML fallback (C1 P3 openLoopShape). Thin wrapper over the
-   *  single CursorLocator front door: the ML-multihint -> wiggle -> dark/bright
-   *  shape -> wiggle cascade now lives in locateOpenLoopShape (reproduced
-   *  call-for-call; unit-tested with mock deps in cursor-locator.test.ts). Deps
-   *  reuse makeLocatorDeps; `decode` is a passthrough over the already-decoded
-   *  `shot`, and the in-scope mlWiggleVerify/wiggleVerifyCandidate closures are
-   *  wired real. Only the verbose console.error tracing differs (seam contract
-   *  permits verbose/debug divergence).
-   *
-   *  `prox` is faithfully reconstructed: locateOpenLoopShape returns the SAME
-   *  position the original computed prox from -- mlWiggleVerify returns its input
-   *  unchanged and wiggleVerifyCandidate returns {pos: initialPos} -- so
-   *  hypot(fix.position - predicted) === the original mlProx / candidate prox, and
-   *  fix.rawScore === the original score.
-   *
-   *  WARNING - OFFLINE-VERIFIED ONLY (owner-authorized 2026-07-21). This is a DEEP
-   *  fallback (fires only when motion-diff AND template-match both fail at p0),
-   *  with no lever to force it, so it could NOT be live-benched. It runs on the
-   *  desktop (detect-then-move) path, not the iPad curve-one-shot default.
-   *  TODO(live-verify): when a desktop/absolute-mouse target or a
-   *  force-motion-diff-fail rig exists, add a ground-truth A/B (cf. bench-5.2) for
-   *  this path. See docs/plans/cursor-locator-and-mover-collapse.md journal. */
-  async function tryOpenLoopShapeDetect(
-    shot: DecodedScreenshot,
-    predicted: { x: number; y: number },
-  ): Promise<{ pos: { x: number; y: number }; score: number; prox: number } | null> {
-    try {
-      const deps: CursorLocatorDeps = {
-        ...makeLocatorDeps(client),
-        decode: async () => shot,
-        mlWiggleVerify: (ml) => mlWiggleVerify(client, ml),
-        wiggleVerifyCandidate: (pos, score) =>
-          wiggleVerifyCandidate(client, observedRatioX, observedRatioY, pos, score),
-      };
-      const fix = await new CursorLocator(deps).locate(
-        shot.buffer, shot.width, shot.height, 'openLoopShape', predicted,
-      );
-      if (!fix) return null;
-      const prox = Math.hypot(fix.position.x - predicted.x, fix.position.y - predicted.y);
-      return { pos: fix.position, score: fix.rawScore, prox };
-    } catch {
-      return null;
     }
   }
 
