@@ -191,6 +191,29 @@ or reuse `origin`'s ML head.
 
 **Revised C1 P3 order:** origin ✅ → curve → openLoopShape → (verify absorbed by C2 P1).
 
+#### C1 P3 curve — DONE (c26830a), e2e byte-identical.
+Unblocked 2026-07-21 by explicit owner authorization ("if you can test e2e, you may
+touch the mover"). Built the missing **`bench-5.2-curve-groundtruth.ts`** (f627c0f) —
+drives `moveToPixel(curve-one-shot)` vs iPadCollector getCursor, the iPad's default
+mover which had NO regression bench. Rerouted `curve-mover.detect()` through
+`CursorLocator.locate('curve', …)` (threaded `minPresence` so it's faithful, not
+hardcoded 0.5). N=80 each: BASELINE p50=4.4 p90=17.2 within35=100% → POST p50=4.4
+p90=17.1 within35=100%; Δ p50 +0.0 Δ p90 −0.1. Byte-identical. All cursor detection
+now goes through the one locator front door — except:
+
+#### C1 P3 openLoopShape — NOT DONE: cannot be e2e-tested (owner condition unmet).
+`tryOpenLoopShapeDetect` is a DEEP fallback: it fires only when motion-diff AND
+template-match BOTH fail at open-loop p0 (move-to.ts:1874/1900). There is **no lever**
+to force motion-diff to fail, so it cannot be made to fire reliably on the real iPad —
+it fires only incidentally on hard surfaces. It's also a nested closure inside
+`moveToPixel` (uses the `mlWiggleVerify`/`wiggleVerifyCandidate` closures), so it can't
+be A/B'd standalone without extracting it from the mover. Options considered + rejected:
+(a) add a "disable motion-diff" hook to the do-NOT-touch mover → would test an artificial
+config, not the real fire path; (b) extract the nested function → non-trivial mover
+refactor for a near-dead (desktop-only) path. Per the owner's "must be e2e-testable"
+condition, LEFT UNTOUCHED. The reroute is offline-provable (the locator's openLoopShape
+profile is already call-order unit-tested) but offline ≠ the e2e bar set for this work.
+
 #### Phase 3 — reachability + bench-coverage audit (2026-07-21, prompted by "do we really use all 4?")
 
 Traced BOTH production paths. iPad: `pikvm_mouse_click_at` (default `maxRetries=3`) →
