@@ -147,11 +147,14 @@
       homeManagerModules.pikvm-mcp = import ./nix/home-module.nix;
 
       nixosModules.default = self.nixosModules.pikvm-mcp;
-      nixosModules.pikvm-mcp = { ... }: {
-        # Bring our overlay so services.pikvm-mcp.package defaults to
-        # pkgs.pikvm-mcp-server without the consumer wiring the overlay.
+      nixosModules.pikvm-mcp = { pkgs, lib, ... }: {
         imports = [ ./nix/nixos-module.nix ];
-        nixpkgs.overlays = [ overlay ];
+        # Default the package to this flake's build for the node's system,
+        # WITHOUT forcing a global `nixpkgs.overlays` (which is non-mergeable
+        # inside nixosTest and errored: "defined multiple times ... unique").
+        # mkDefault (prio 1000) still lets a consumer override the package.
+        services.pikvm-mcp.package =
+          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       };
     };
 }
