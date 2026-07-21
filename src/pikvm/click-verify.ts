@@ -26,6 +26,7 @@ import {
 import type { DecodedScreenshot } from './cursor-detect.js';
 import { moveToPixel, looksLikeCursor } from './move-to.js';
 import type { MoveToOptions, MoveToResult } from './move-to.js';
+import { loadSettings } from '../settings.js';
 import type { PiKVMClient, MouseButton } from './client.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
 import { detectIpadBoundsFromBuffer } from './orientation.js';
@@ -669,7 +670,7 @@ export async function clickAtWithRetry(
       attempt > 1
       && lastMoveResult?.finalDetectedPosition
       && options.maxResidualPx !== undefined
-      && process.env.PIKVM_DISABLE_RETRY_SKIP_PROBE !== '1'
+      && !loadSettings().movement.disableRetrySkipProbe
     ) {
       const prevPos = lastMoveResult.finalDetectedPosition;
       const prevResid = Math.hypot(prevPos.x - target.x, prevPos.y - target.y);
@@ -1285,7 +1286,7 @@ export async function clickAtWithRetry(
     // mouseClick fires. This is the diagnostic for "where was the
     // cursor at click-issue time?" — the algorithm's understanding
     // of cursor position the instant the click event is sent.
-    const predownDir = process.env.PIKVM_PREDOWN_DIR;
+    const predownDir = loadSettings().movement.predownDir;
     if (predownDir) {
       try {
         const predownShot = await client.screenshot();
@@ -1315,7 +1316,7 @@ export async function clickAtWithRetry(
     // future experiments that find a way to add the wake without
     // the latency penalty. Default off so the bench measures the
     // PA21 baseline.
-    if (process.env.PIKVM_FORCE_WAKE === '1') {
+    if (loadSettings().movement.forceWake) {
       await client.mouseMoveRelative(1, 0);
       await sleepMs(30);
       await client.mouseMoveRelative(-1, 0);
@@ -1934,7 +1935,7 @@ export function defaultMaxResidualPxFor(mouseAbsoluteMode: boolean): number | un
   // default without a rebuild:
   //   PIKVM_CLICK_MAX_RESIDUAL_PX=40   → default 40 px
   //   PIKVM_CLICK_MAX_RESIDUAL_PX=off  (or 0) → disable the gate
-  const raw = process.env.PIKVM_CLICK_MAX_RESIDUAL_PX;
+  const raw = loadSettings().movement.clickMaxResidualPxRaw;
   if (raw !== undefined) {
     if (raw === '0' || raw.toLowerCase() === 'off') return undefined;
     const n = Number(raw);

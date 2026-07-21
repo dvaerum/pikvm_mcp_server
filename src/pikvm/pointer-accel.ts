@@ -34,6 +34,7 @@ import * as fsSync from 'fs';
 import * as fs from 'fs/promises';
 import path from 'path';
 import * as ort from 'onnxruntime-node';
+import { loadSettings } from '../settings.js';
 
 /** Horizon over which the trained model predicts displacement (ms).
  *  Must match `HORIZON_MS` in `ml/train-pointer-accel.py`. */
@@ -59,7 +60,7 @@ export const OUTPUT_DIM = 2;
  *  because v2's residual after retries clears the 35 px maxResidualPx
  *  threshold much more often than v1's did. v2-wider promoted to default. */
 export function resolveDefaultModelPath(): string {
-  const envOverride = process.env.PIKVM_POINTER_ACCEL_MODEL;
+  const envOverride = loadSettings().pointerAccelModel;
   if (envOverride) return path.resolve(envOverride);
   return path.resolve(process.cwd(), 'ml', 'pointer-accel-v2-wider.onnx');
 }

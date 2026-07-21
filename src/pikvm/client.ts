@@ -9,6 +9,7 @@ import { Agent, ProxyAgent, fetch, type Dispatcher } from 'undici';
 import sharp from 'sharp';
 import { recordEmit } from './cursor-keepalive.js';
 import { CursorBelief, type Bounds as BeliefBounds } from './cursor-belief.js';
+import { loadSettings } from '../settings.js';
 
 export interface PiKVMConfig {
   host: string;
@@ -692,7 +693,7 @@ export class PiKVMClient {
     // file. Used to correlate emit-by-emit with cursor-trajectory
     // captures so we can see when our emits and the cursor's actual
     // motion diverge.
-    const emitLog = process.env.PIKVM_EMIT_LOG;
+    const emitLog = loadSettings().emitLog;
     if (emitLog) {
       try {
         const fs = await import('fs');

@@ -32,6 +32,11 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import * as ort from 'onnxruntime-node';
 import { detectIpadRegion, NATIVE_MARGIN } from './ipad-region-detect.js';
+import { getSettings } from '../settings.js';
+
+// Snapshot the tuning flags once at import — matches the historical semantics of
+// the consts below (which read process.env directly at import time).
+const settings = getSettings();
 
 /** Crop dimension (must match training: train-cursor-v1.py CROP_SIZE). */
 const CROP_SIZE = 256;
@@ -44,8 +49,8 @@ const STD = [0.229, 0.224, 0.225];
 // 6.45%. See docs/troubleshooting/2026-05-14-cursor-v1-eval.md.
 // Set PIKVM_ML_MODEL env var (absolute path) to A/B against an
 // alternate ONNX file (e.g. cursor-v0.bad-labels.onnx).
-const DEFAULT_MODEL = process.env.PIKVM_ML_MODEL
-  ? path.resolve(process.env.PIKVM_ML_MODEL)
+const DEFAULT_MODEL = settings.ml.model
+  ? path.resolve(settings.ml.model)
   : path.resolve(process.cwd(), 'ml', 'cursor-v1.onnx');
 const DEFAULT_CONFIDENCE_THRESHOLD = 0.5;
 
@@ -55,10 +60,10 @@ const DEFAULT_CONFIDENCE_THRESHOLD = 0.5;
 // (presence < threshold), return null without running v1 — short-
 // circuiting the Phase 310 tautology where v1 false-positives on
 // page-indicator dots and icon glyphs.
-const V5_MODEL = process.env.PIKVM_ML_V5_MODEL
-  ? path.resolve(process.env.PIKVM_ML_V5_MODEL)
+const V5_MODEL = settings.ml.v5Model
+  ? path.resolve(settings.ml.v5Model)
   : path.resolve(process.cwd(), 'ml', 'cursor-v5.onnx');
-const V5_PRESENCE_GATE = process.env.PIKVM_ML_V5_PRESENCE_GATE === '1';
+const V5_PRESENCE_GATE = settings.ml.v5PresenceGate;
 const V5_INPUT_W = 768;
 const V5_INPUT_H = 480;
 const V5_HEATMAP_W = V5_INPUT_W / 4;  // 192
@@ -91,7 +96,7 @@ let v5LoadFailureLogged = false;
 // Full offline eval (p50 8.2→4.7 vs v12 on 34 held-out on-icon frames):
 // docs/roadmap-2026-05-31.md § 4.2'.
 const V8_MODEL = (() => {
-  if (process.env.PIKVM_ML_V8_MODEL) return path.resolve(process.env.PIKVM_ML_V8_MODEL);
+  if (settings.ml.v8Model) return path.resolve(settings.ml.v8Model);
   const candidates = [
     path.resolve(process.cwd(), 'ml', 'cursor-v12.onnx'),
     path.resolve(process.cwd(), 'ml', 'cursor-v11.onnx'),
@@ -118,7 +123,7 @@ let v8LoadFailureLogged = false;
 // cursor arrow here?") confirms which candidate is the real cursor and rejects
 // icons/buttons/map tiles at native resolution. Offline: 6/6 on the held-out home
 // frames. See docs/detector-retrain-plan.md.
-const CASCADE_ENABLED = process.env.PIKVM_ML_CASCADE !== '0';  // DEFAULT ON (opt out with =0)
+const CASCADE_ENABLED = settings.ml.cascadeEnabled;  // DEFAULT ON (opt out with PIKVM_ML_CASCADE=0)
 
 /**
  * Locate the shipped cascade model. The model is BUNDLED with the package
@@ -130,8 +135,8 @@ const CASCADE_ENABLED = process.env.PIKVM_ML_CASCADE !== '0';  // DEFAULT ON (op
  * headless install regardless of the working directory.
  */
 function resolveVerifierModel(): string {
-  if (process.env.PIKVM_ML_VERIFIER_MODEL) {
-    return path.resolve(process.env.PIKVM_ML_VERIFIER_MODEL);
+  if (settings.ml.verifierModel) {
+    return path.resolve(settings.ml.verifierModel);
   }
   const moduleDir = path.dirname(fileURLToPath(import.meta.url)); // dist/pikvm or src/pikvm
   const bundled = path.resolve(moduleDir, '..', '..', 'ml', 'crop-heatmap.onnx');
@@ -141,8 +146,8 @@ function resolveVerifierModel(): string {
 const VERIFIER_MODEL = resolveVerifierModel();
 const HM_OUT = 24;  // dual-head heatmap output resolution (crop 96 / 4)
 const CASCADE_CROP = 96;  // native-px verifier crop (MUST match training)
-const GRID_STRIDE = Number(process.env.PIKVM_ML_GRID_STRIDE ?? '48');  // native-px grid step
-const VERIFY_THRESH = Number(process.env.PIKVM_ML_VERIFY_THRESH ?? '0.5');
+const GRID_STRIDE = settings.ml.gridStride;  // native-px grid step (PIKVM_ML_GRID_STRIDE, default 48)
+const VERIFY_THRESH = settings.ml.verifyThresh;  // PIKVM_ML_VERIFY_THRESH, default 0.5
 let cachedVerifierSession: ort.InferenceSession | null = null;
 let verifierLoadFailureLogged = false;
 let cachedRegion: { x: number; y: number; w: number; h: number } | null = null;
@@ -580,7 +585,7 @@ export async function findCursorByML(
   // worked live without verification).
   // Sidecar mirrors data/cursor-training-v0/ schema so saved
   // frames can be hand-labelled and added to verified.jsonl.
-  const captureDir = process.env.PIKVM_ML_CAPTURE_DIR;
+  const captureDir = settings.ml.captureDir;
   if (captureDir) {
     try {
       const fs = await import('fs');

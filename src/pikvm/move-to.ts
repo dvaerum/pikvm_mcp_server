@@ -64,6 +64,7 @@ import {
   pointerAccelModelExists,
 } from './pointer-accel.js';
 import { sleep } from './util.js';
+import { loadSettings } from '../settings.js';
 
 /** iPad logical resolution assumed by the pointer-accel v1 model.
  *  The trajectory bench collected `iPadHello.logicalW/H = 820 × 1180`
@@ -78,7 +79,9 @@ const POINTER_ACCEL_IPAD_LOGICAL_H = 1180;
 /** Read the learned-ballistics feature flag at call time so tests can
  *  flip env and re-run without module-eval caching. */
 function learnedBallisticsEnabled(): boolean {
-  return process.env.PIKVM_USE_LEARNED_BALLISTICS === '1';
+  // loadSettings() (not the memoised getSettings()) so tests can flip the env
+  // and re-run without module-eval caching, preserving the historical behaviour.
+  return loadSettings().movement.useLearnedBallistics;
 }
 
 /**
@@ -912,7 +915,7 @@ async function discoverOrigin(
     // position as origin and skip the locateCursor probe path. No
     // probeMeasurement is returned — downstream falls back to the
     // prior calibrated ratio for emit planning.
-    const mlEnabled = process.env.PIKVM_ML_DISABLE !== '1';
+    const mlEnabled = !loadSettings().ml.disabled;
     if (mlEnabled) {
       const shot = await decodeScreenshot(await takeRawScreenshot(client));
       const v8 = await findCursorByV8FullFrame(shot.buffer, shot.width, shot.height);
