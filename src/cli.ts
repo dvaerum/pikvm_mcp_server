@@ -10,10 +10,19 @@ import { parseArgs } from 'node:util';
 
 export type TransportKind = 'stdio' | 'http';
 
+/**
+ * Which control path to use:
+ *  - 'ipad'    — relative-mouse target: curve-one-shot mover + the cascade detector.
+ *  - 'desktop' — absolute-mouse target: the legacy detect-then-move path.
+ *  - 'auto'    — detect from the target's HID mouse mode at startup (the default).
+ */
+export type TargetKind = 'auto' | 'ipad' | 'desktop';
+
 export interface CliOptions {
   transport: TransportKind;
   host: string;
   port: number;
+  target: TargetKind;
   help: boolean;
 }
 
@@ -33,6 +42,7 @@ export function parseCliOptions(
       http: { type: 'boolean' }, // shorthand for --transport http
       host: { type: 'string' },
       port: { type: 'string' },
+      target: { type: 'string' }, // ipad | desktop | auto
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -51,7 +61,12 @@ export function parseCliOptions(
     throw new Error(`Invalid --port "${portRaw}" (expected an integer 1-65535)`);
   }
 
-  return { transport, host, port, help: Boolean(values.help) };
+  const target = (values.target as string | undefined) ?? env.PIKVM_TARGET ?? 'auto';
+  if (target !== 'auto' && target !== 'ipad' && target !== 'desktop') {
+    throw new Error(`Invalid --target "${target}" (expected "ipad", "desktop", or "auto")`);
+  }
+
+  return { transport, host, port, target, help: Boolean(values.help) };
 }
 
 export function helpText(binName = 'pikvm-mcp-server'): string {
@@ -62,14 +77,18 @@ export function helpText(binName = 'pikvm-mcp-server'): string {
     `  ${binName} [options]`,
     '',
     'Options:',
-    '  --transport <stdio|http>   Transport to serve on (default: stdio)',
-    '  --http                     Shorthand for --transport http',
-    '  --host <addr>              HTTP bind address (default: 127.0.0.1)',
-    '  --port <n>                 HTTP port (default: 3000)',
-    '  -h, --help                 Show this help and exit',
+    '  --transport <stdio|http>     Transport to serve on (default: stdio)',
+    '  --http                       Shorthand for --transport http',
+    '  --host <addr>                HTTP bind address (default: 127.0.0.1)',
+    '  --port <n>                   HTTP port (default: 3000)',
+    '  --target <ipad|desktop|auto> Control path (default: auto):',
+    '                                 ipad    = curve-one-shot mover + cascade detector',
+    '                                 desktop = legacy detect-then-move (absolute mouse)',
+    '                                 auto    = pick from the target\'s HID mouse mode',
+    '  -h, --help                   Show this help and exit',
     '',
     'Environment (used when the matching flag is absent):',
-    '  PIKVM_MCP_TRANSPORT, PIKVM_MCP_HOST, PIKVM_MCP_PORT',
+    '  PIKVM_MCP_TRANSPORT, PIKVM_MCP_HOST, PIKVM_MCP_PORT, PIKVM_TARGET',
     '  PIKVM_HOST, PIKVM_PASSWORD   (required to reach the PiKVM)',
     '',
     'In http mode the modern Streamable HTTP transport is served at',

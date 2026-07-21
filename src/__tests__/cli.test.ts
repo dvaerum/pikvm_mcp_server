@@ -68,4 +68,23 @@ describe('parseCliOptions', () => {
   it('rejects unknown flags (strict CLI)', () => {
     expect(() => parseCliOptions(['--nope'], {})).toThrow();
   });
+
+  it('defaults target to auto', () => {
+    expect(parseCliOptions([], {}).target).toBe('auto');
+  });
+
+  it('--target ipad / desktop / auto are accepted', () => {
+    expect(parseCliOptions(['--target', 'ipad'], {}).target).toBe('ipad');
+    expect(parseCliOptions(['--target', 'desktop'], {}).target).toBe('desktop');
+    expect(parseCliOptions(['--target', 'auto'], {}).target).toBe('auto');
+  });
+
+  it('target falls back to PIKVM_TARGET env, and the flag wins over env', () => {
+    expect(parseCliOptions([], { PIKVM_TARGET: 'desktop' }).target).toBe('desktop');
+    expect(parseCliOptions(['--target', 'ipad'], { PIKVM_TARGET: 'desktop' }).target).toBe('ipad');
+  });
+
+  it('rejects an invalid target', () => {
+    expect(() => parseCliOptions(['--target', 'tablet'], {})).toThrow(/target/i);
+  });
 });

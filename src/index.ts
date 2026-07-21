@@ -1724,7 +1724,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // Start server
 async function main() {
   // Parse CLI first so --help works without any PiKVM config/credentials.
-  const cli = parseCliOptions(process.argv.slice(2));
+  // A usage error should print a clean message, not a stack trace.
+  let cli;
+  try {
+    cli = parseCliOptions(process.argv.slice(2));
+  } catch (err) {
+    console.error(`${(err as Error).message}\nRun 'pikvm-mcp-server --help' for usage.`);
+    process.exit(2);
+  }
   if (cli.help) {
     console.log(helpText());
     return;
@@ -1771,6 +1778,24 @@ async function main() {
         'Defaulting to absolute mode; relative-mode-only tools may surface confusing errors on this device.',
     );
   }
+
+  // --target overrides the HID-detected mouse mode: 'ipad' = relative (curve-one-shot
+  // + cascade), 'desktop' = absolute (legacy detect-then-move), 'auto' = keep the
+  // HID-detected value above.
+  if (cli.target !== 'auto') {
+    const forcedAbsolute = cli.target === 'desktop';
+    if (forcedAbsolute !== mouseAbsoluteMode) {
+      console.error(
+        `⚠ --target ${cli.target} overrides the HID-detected mode ` +
+          `(HID reported ${mouseAbsoluteMode ? 'absolute/desktop' : 'relative/iPad'}).`,
+      );
+    }
+    mouseAbsoluteMode = forcedAbsolute;
+  }
+  console.error(
+    `Control path: ${cli.target === 'auto' ? 'auto → ' : `${cli.target} → `}` +
+      `${mouseAbsoluteMode ? 'desktop (absolute, detect-then-move)' : 'iPad (relative, curve-one-shot + cascade)'}.`,
+  );
 
   if (cli.transport === 'http') {
     // Streamable HTTP: one Server per session, minted by createMcpServer.
