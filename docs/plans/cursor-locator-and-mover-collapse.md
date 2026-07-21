@@ -147,6 +147,50 @@ or reuse `origin`'s ML head.
   path), then `verify`, then `openLoopShape`, then `curve`. One commit each, each
   after its own live bench. Revert any that regresses.
 
+#### Phase 3 — execution journal
+
+- **origin — DONE (982b93e).** `discoverOrigin`'s inline V8→motion-diff→template
+  cascade routed through `locate('origin')` via `makeLocatorDeps`. Byte-identical.
+  bench-5.1(control): baseline N=57 attempt-1 p50=39.0/p90=51.6 final p50=5.0/p90=6.5
+  within35=98% → post N=36 attempt-1 p50=38.8/p90=39.8 final p50=4.9/p90=5.8
+  within35=100%. p50 identical (−0.2/−0.1px), within noise. Removed dead saveDebug.
+
+- **verify — STOPPED, folded into C2 P1 (not a fixed-profile reroute).** The
+  `verify` profile fuses template-second-opinion→v8 into ONE always-run cascade
+  seeded `cursorVerified=false / initialResidual=Infinity`, no 80px geo-filter. But
+  `click-verify.ts` has **THREE** differently-gated detection/recovery sites, none of
+  which the fused profile reproduces:
+  1. second-opinion (`click-verify.ts:838`): `findCursorByTemplateSet(minScore:0.7,
+     expectedNear:target, radius:200)` after a (1,0)/(−1,0) wake-nudge; gated by
+     `shouldFireSecondOpinion` with the **real** finite `initialResidual` + 25px
+     threshold; on adopt it mutates `finalDetectedPosition` and sets
+     `cursorVerified=true`.
+  2. PA19-e (`:883`): `findCursorByV8FullFrame(minPresence:0.5)`; gated by
+     `requireVerifiedCursor && !cursorVerified`; adopts iff `heatmapPeak≥0.3 &&
+     dist≤80`.
+  3. PA19-g (`:971`): `findCursorByV8FullFrame(minPresence:0.5)`; gated by
+     `cursorVerified && maxResidualPx!==undefined && currentResidual>maxResidualPx`;
+     adopts iff `heatmapPeak≥0.3 && freshDist≤80 && freshDist<currentResidual`.
+  Site-1 adoption sets `cursorVerified=true`, which **skips** site 2 — a control-flow
+  dependency a single fused `locate('verify')` cannot reproduce. Cannot be preserved
+  through the seam ⇒ per §0, STOP not tune. These three sites ARE the "movement/
+  detection logic" C2 P1 already removes ("retry loop keeps ONLY verify/dismiss/
+  residual/click"), so verify-detection is correctly resolved there, not here.
+
+- **curve — reroute-able faithfully, needs a small locator param.** `curve-mover.ts
+  detect()` is one `findCursorByV8FullFrame(minPresence)` call, but `minPresence` is
+  a **parameter** (`opts.minPresence ?? 0.5`, caller-overridable via
+  `moveToPixel`→`moveByCurveOneShot({minPresence: options.minPresence})`), while
+  `locateCurve` hardcodes `CURVE_MIN_PRESENCE=0.5`. Faithful reroute = thread
+  `minPresence` into `locate()`/`locateCurve` (small clean API add), then delegate.
+
+- **openLoopShape — reroute-able, needs the wiggle-verify deps wired.**
+  `mlWiggleVerify`/`wiggleVerifyCandidate` are currently throwing stubs in
+  `makeLocatorDeps`; `tryOpenLoopShapeDetect` (move-to.ts:2022) must pass real
+  closures. To do after curve.
+
+**Revised C1 P3 order:** origin ✅ → curve → openLoopShape → (verify absorbed by C2 P1).
+
 **Phase 4 — (optional, later) merge equivalent profiles** — only after a bench
 shows two land identically. Not required for the refactor to be valuable.
 
