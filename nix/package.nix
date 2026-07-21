@@ -100,6 +100,11 @@ buildNpmPackage {
       install -Dm444 ml/crop-heatmap.onnx "$(dirname "$d")/ml/crop-heatmap.onnx"
     done
 
+    # sharp is built from source against nixpkgs vips, so its musl prebuilts are
+    # dead weight on glibc NixOS — and auto-patchelf chokes trying to patch them
+    # (they need libc.musl-*.so.1, which doesn't exist here). Drop them.
+    rm -rf "$out"/lib/node_modules/*/node_modules/@img/*musl*
+
     # onnxruntime-node ships prebuilt binding + lib for EVERY platform in one
     # tarball. Keep only the host os/arch (slims the package and stops
     # autoPatchelf from choking on foreign-arch ELF), then replace the bundled
