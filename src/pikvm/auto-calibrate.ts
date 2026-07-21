@@ -11,7 +11,7 @@ import {
   DetectionConfig,
   diffScreenshots as detectDiffScreenshots,
 } from './cursor-detect.js';
-import { sleep } from './util.js';
+import { sleep, median } from './util.js';
 
 // ============================================================================
 // Types
@@ -99,13 +99,7 @@ async function diffScreenshots(
 // Helpers
 // ============================================================================
 
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 !== 0
-    ? sorted[mid]
-    : (sorted[mid - 1] + sorted[mid]) / 2;
-}
+// median moved to ./util.js (shared with ballistics).
 
 function magnitude(p: Point): number {
   return Math.sqrt(p.x * p.x + p.y * p.y);

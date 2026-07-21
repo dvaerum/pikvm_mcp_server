@@ -26,7 +26,7 @@ import {
   diffScreenshots,
   locateCursor,
 } from './cursor-detect.js';
-import { sleep } from './util.js';
+import { sleep, median } from './util.js';
 
 // ============================================================================
 // Types
@@ -98,12 +98,7 @@ async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
   return result.buffer;
 }
 
-function median(values: number[]): number {
-  if (values.length === 0) return NaN;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
+// median moved to ./util.js (shared with auto-calibrate).
 
 function cornerVector(corner: Corner): { x: -1 | 1; y: -1 | 1 } {
   switch (corner) {
