@@ -1325,6 +1325,138 @@ export function detectMotion(
 }
 
 // ============================================================================
+// Wiggle-verify helpers — extracted from moveToPixel so they are unit-testable
+// and callable standalone. Behaviour is identical; `client` and the observed
+// px/mickey ratios are explicit params instead of closure captures.
+// ============================================================================
+
+/** Wiggle-verify an ML detection (Phase 319): emit a small diagonal wiggle and
+ *  accept only if the cursor (A) appears at the expected post-wiggle position AND
+ *  (B) vacated the initial position — a static FP satisfies neither. Returns
+ *  `initial` on accept, null on reject; never throws (returns `initial` on error). */
+export async function mlWiggleVerify(
+  client: PiKVMClient,
+  initial: MLCursorResult,
+): Promise<MLCursorResult | null> {
+  const dxMickeys = 25;
+  const dyMickeys = -10;
+  // Use ~1.4 px/mickey as nominal iPad ratio (Phase 192 measurement).
+  const expectedDx = dxMickeys * 1.4;
+  const expectedDy = dyMickeys * 1.4;
+  const expectedPostPos = {
+    x: Math.round(initial.x + expectedDx),
+    y: Math.round(initial.y + expectedDy),
+  };
+  try {
+    await client.mouseMoveRelative(dxMickeys, dyMickeys);
+    await new Promise((r) => setTimeout(r, 80));
+    const wiggleShotRaw = await client.screenshot();
+    // Two checks (v0.5.246): real cursor satisfies both; static FP neither.
+    // A: cursor at EXPECTED post-wiggle position. B: initial position now EMPTY.
+    // PA19-d: both via findCursorByMLMultiHint so wiggle-verify uses the same
+    // v9-bordered model that produced `initial`.
+    const cursorAtExpected = await findCursorByMLMultiHint(
+      wiggleShotRaw.buffer,
+      wiggleShotRaw.screenshotWidth,
+      wiggleShotRaw.screenshotHeight,
+      [expectedPostPos],
+      { minConfidence: 0.5 },
+    );
+    const stillAtInitial = await findCursorByMLMultiHint(
+      wiggleShotRaw.buffer,
+      wiggleShotRaw.screenshotWidth,
+      wiggleShotRaw.screenshotHeight,
+      [{ x: initial.x, y: initial.y }],
+      { minConfidence: 0.5 },
+    );
+    // Always inverse-wiggle to restore cursor near initial pos
+    await client.mouseMoveRelative(-dxMickeys, -dyMickeys);
+    await new Promise((r) => setTimeout(r, 80));
+
+    // Check B: was the initial position vacated?
+    const initialNowEmpty = !stillAtInitial
+      || Math.hypot(stillAtInitial.x - initial.x, stillAtInitial.y - initial.y) > 20;
+    if (!initialNowEmpty) {
+      // Initial still occupied → static FP (icon didn't move).
+      return null;
+    }
+    // Check A: did the cursor appear at the expected post-wiggle position?
+    if (!cursorAtExpected) {
+      return null;
+    }
+    const offsetFromExpected = Math.hypot(
+      cursorAtExpected.x - expectedPostPos.x,
+      cursorAtExpected.y - expectedPostPos.y,
+    );
+    if (offsetFromExpected > 30) {
+      return null;
+    }
+    // Both checks passed — real cursor.
+    return initial;
+  } catch {
+    return initial;
+  }
+}
+
+/** Wiggle-verify a heuristic shape candidate (Phase 297/299): emit a small
+ *  diagonal wiggle; if a cursor-shaped cluster is STILL at initialPos afterward
+ *  it's a static UI-feature FP (label text / dock char) → reject; else the real
+ *  cursor moved with the emit → accept. Always emits the inverse wiggle. */
+export async function wiggleVerifyCandidate(
+  client: PiKVMClient,
+  observedRatioX: number,
+  observedRatioY: number,
+  initialPos: { x: number; y: number },
+  initialScore: number,
+): Promise<{ pos: { x: number; y: number } } | null> {
+  try {
+    const ratioX = observedRatioX > 0 ? observedRatioX : 1.4;
+    const ratioY = observedRatioY > 0 ? observedRatioY : 1.4;
+    const dxMickeys = 25;
+    const dyMickeys = -10;
+    const expectedDx = dxMickeys * ratioX;
+    const expectedDy = dyMickeys * ratioY;
+    const expectedAfter = { x: initialPos.x + expectedDx, y: initialPos.y + expectedDy };
+
+    await client.mouseMoveRelative(dxMickeys, dyMickeys);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const wiggleShotRaw = await client.screenshotKeepingCursorAlive();
+    const wiggleShot = await decodeScreenshot(wiggleShotRaw.buffer);
+
+    // Key discriminator: a cursor-shaped cluster STILL at initialPos after the
+    // wiggle → static UI feature (real cursor would have moved away).
+    let stillThere = findCursorByShape(wiggleShot.rgb, wiggleShot.width, wiggleShot.height, {
+      expectedNear: initialPos,
+      expectedNearRadius: 8,
+    });
+    if (!stillThere || stillThere.shapeScore < 0.05) {
+      const brightStill = findCursorByShape(wiggleShot.rgb, wiggleShot.width, wiggleShot.height, {
+        expectedNear: initialPos,
+        expectedNearRadius: 8,
+        brightThreshold: 120,
+      });
+      if (brightStill && (!stillThere || brightStill.shapeScore > stillThere.shapeScore)) {
+        stillThere = brightStill;
+      }
+    }
+    // Always emit the inverse wiggle before returning to keep the cursor close to
+    // initialPos — avoids polluting the correction loop with the wiggle offset.
+    await client.mouseMoveRelative(-dxMickeys, -dyMickeys);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    if (stillThere) {
+      void initialScore;
+      void expectedAfter;
+      return null;
+    }
+    // No static cluster at initialPos → the candidate moved with the emit → real.
+    return { pos: initialPos };
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
 // Main entry
 // ============================================================================
 
@@ -1952,8 +2084,9 @@ export async function moveToPixel(
       const deps: CursorLocatorDeps = {
         ...makeLocatorDeps(client),
         decode: async () => shot,
-        mlWiggleVerify,
-        wiggleVerifyCandidate,
+        mlWiggleVerify: (ml) => mlWiggleVerify(client, ml),
+        wiggleVerifyCandidate: (pos, score) =>
+          wiggleVerifyCandidate(client, observedRatioX, observedRatioY, pos, score),
       };
       const fix = await new CursorLocator(deps).locate(
         shot.buffer, shot.width, shot.height, 'openLoopShape', predicted,
@@ -1961,162 +2094,6 @@ export async function moveToPixel(
       if (!fix) return null;
       const prox = Math.hypot(fix.position.x - predicted.x, fix.position.y - predicted.y);
       return { pos: fix.position, score: fix.rawScore, prox };
-    } catch {
-      return null;
-    }
-  }
-
-  /** Phase 317: reject Phase 310 tautologies in ML detections.
-   *
-   *  After emit (+25, -10 mickeys), re-detect at the expected post-
-   *  wiggle position. Real cursor moved with the wiggle and is there.
-   *  Static FP (icon) didn't move and isn't at the expected position.
-   *
-   *  Always emits inverse wiggle to restore cursor. */
-  async function mlWiggleVerify(initial: MLCursorResult): Promise<MLCursorResult | null> {
-    const dxMickeys = 25;
-    const dyMickeys = -10;
-    // Use ~1.4 px/mickey as nominal iPad ratio (Phase 192 measurement).
-    const expectedDx = dxMickeys * 1.4;
-    const expectedDy = dyMickeys * 1.4;
-    const expectedPostPos = {
-      x: Math.round(initial.x + expectedDx),
-      y: Math.round(initial.y + expectedDy),
-    };
-    try {
-      await client.mouseMoveRelative(dxMickeys, dyMickeys);
-      await new Promise((r) => setTimeout(r, 80));
-      const wiggleShotRaw = await client.screenshot();
-      // Phase 319 (v0.5.246): TWO checks. Real cursor satisfies both;
-      // static FP satisfies neither (or only one).
-      //
-      // A. Cursor at EXPECTED post-wiggle position (initial + emit·ratio).
-      //    Real cursor moved with the wiggle and is there.
-      // B. Initial position is now EMPTY (real cursor moved away from it).
-      //    Static FP would still be at initial.
-      //
-      // v0.5.243 only checked (A) with a 30-px tolerance. Live bench at
-      // v0.5.245 showed Phase 310 tautology slipping through: in a dense
-      // icon grid, ML often finds *something* high-conf within 30 px of
-      // any test point. Require (A) AND (B) together for accept.
-      // PA19-d: use the v9-bordered full-frame detector via multi-hint
-      // (same single-call cost on multi-hint dedup) so wiggle-verify
-      // operates on the same model that produced `initial`. Previously
-      // both checks called findCursorByML which loads cursor-v1.onnx
-      // — wrong-era model for the orange-bordered cursor — causing
-      // valid v9-bordered detections to be rejected as static FPs.
-      const cursorAtExpected = await findCursorByMLMultiHint(
-        wiggleShotRaw.buffer,
-        wiggleShotRaw.screenshotWidth,
-        wiggleShotRaw.screenshotHeight,
-        [expectedPostPos],
-        { minConfidence: 0.5 },
-      );
-      const stillAtInitial = await findCursorByMLMultiHint(
-        wiggleShotRaw.buffer,
-        wiggleShotRaw.screenshotWidth,
-        wiggleShotRaw.screenshotHeight,
-        [{ x: initial.x, y: initial.y }],
-        { minConfidence: 0.5 },
-      );
-      // Always inverse-wiggle to restore cursor near initial pos
-      await client.mouseMoveRelative(-dxMickeys, -dyMickeys);
-      await new Promise((r) => setTimeout(r, 80));
-
-      // Check B: was the initial position vacated?
-      const initialNowEmpty = !stillAtInitial
-        || Math.hypot(stillAtInitial.x - initial.x, stillAtInitial.y - initial.y) > 20;
-      if (!initialNowEmpty) {
-        // Initial still occupied → static FP (icon didn't move).
-        return null;
-      }
-      // Check A: did the cursor appear at the expected post-wiggle position?
-      if (!cursorAtExpected) {
-        return null;
-      }
-      const offsetFromExpected = Math.hypot(
-        cursorAtExpected.x - expectedPostPos.x,
-        cursorAtExpected.y - expectedPostPos.y,
-      );
-      if (offsetFromExpected > 30) {
-        return null;
-      }
-      // Both checks passed — real cursor.
-      return initial;
-    } catch {
-      return initial;
-    }
-  }
-
-  /** Phase 297: emit a small diagonal wiggle and verify the candidate
-   *  moved with it. Returns the new position if movement >= 10 px,
-   *  null if static FP (didn't move).
-   *
-   *  Phase 300 (v0.5.232) attempt + revert: tried 50/-20 mickey wiggle
-   *  thinking the 25-mickey version was too small to escape pointer-
-   *  effect snap. Live N=20 × 2 showed Settings dropped from 50%
-   *  (Phase 299) to 25% — bigger wiggle pushed cursor too far,
-   *  inverse compensation introduced drift, net worse. Reverted to
-   *  Phase 297/299's 25/-10 amplitude. */
-  async function wiggleVerifyCandidate(
-    initialPos: { x: number; y: number },
-    initialScore: number,
-  ): Promise<{ pos: { x: number; y: number } } | null> {
-    try {
-      const ratioX = observedRatioX > 0 ? observedRatioX : 1.4;
-      const ratioY = observedRatioY > 0 ? observedRatioY : 1.4;
-      const dxMickeys = 25;
-      const dyMickeys = -10;
-      const expectedDx = dxMickeys * ratioX;
-      const expectedDy = dyMickeys * ratioY;
-      const expectedAfter = { x: initialPos.x + expectedDx, y: initialPos.y + expectedDy };
-
-      await client.mouseMoveRelative(dxMickeys, dyMickeys);
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      const wiggleShotRaw = await client.screenshotKeepingCursorAlive();
-      const wiggleShot = await decodeScreenshot(wiggleShotRaw.buffer);
-
-      // Key discriminator: is there STILL a candidate at initialPos
-      // after the wiggle? If yes → the cluster at initialPos didn't
-      // move with the emit → it's a static UI feature (label text,
-      // dock char, widget). The cursor itself would have moved away.
-      // This is the cleanest label-text-FP discriminator: real cursors
-      // disappear from their pre-wiggle position; static UI features
-      // stay.
-      let stillThere = findCursorByShape(wiggleShot.rgb, wiggleShot.width, wiggleShot.height, {
-        expectedNear: initialPos,
-        expectedNearRadius: 8,
-      });
-      if (!stillThere || stillThere.shapeScore < 0.05) {
-        const brightStill = findCursorByShape(wiggleShot.rgb, wiggleShot.width, wiggleShot.height, {
-          expectedNear: initialPos,
-          expectedNearRadius: 8,
-          brightThreshold: 120,
-        });
-        if (brightStill && (!stillThere || brightStill.shapeScore > stillThere.shapeScore)) {
-          stillThere = brightStill;
-        }
-      }
-      // Always emit the inverse wiggle before returning to keep the
-      // cursor close to initialPos (whether or not we accept the
-      // candidate). This avoids polluting the correction loop with the
-      // wiggle offset.
-      await client.mouseMoveRelative(-dxMickeys, -dyMickeys);
-      await new Promise((resolve) => setTimeout(resolve, 80));
-
-      if (stillThere) {
-        // A cursor-shaped cluster is still at the EXACT initial position
-        // after a 35-px emit. Real cursor would have moved away. This
-        // is the label-text / dock-char / widget FP pattern.
-        void initialScore;
-        void expectedAfter;
-        return null;
-      }
-      // No static cluster at initialPos → the pre-wiggle candidate
-      // did move with the emit → real cursor.
-      return {
-        pos: initialPos,
-      };
     } catch {
       return null;
     }
@@ -2435,7 +2412,7 @@ export async function moveToPixel(
               ? Math.hypot(mlCorrectionRaw.x - newPredicted.x, mlCorrectionRaw.y - newPredicted.y)
               : Infinity;
             const mlCorrection = mlCorrectionRaw && correctionProx <= TAUTOLOGY_PROX_THRESHOLD
-              ? await mlWiggleVerify(mlCorrectionRaw)
+              ? await mlWiggleVerify(client, mlCorrectionRaw)
               : mlCorrectionRaw;
             if (mlCorrection) {
               const prox = Math.hypot(mlCorrection.x - newPredicted.x, mlCorrection.y - newPredicted.y);
@@ -2485,7 +2462,7 @@ export async function moveToPixel(
             }
             cands.sort((a, b) => b.score - a.score);
             for (const c of cands) {
-              const verified = await wiggleVerifyCandidate(c.pos, c.score);
+              const verified = await wiggleVerifyCandidate(client, observedRatioX, observedRatioY, c.pos, c.score);
               if (verified) {
                 currentPos = verified.pos;
                 finalDetectedPosition = { ...currentPos };
