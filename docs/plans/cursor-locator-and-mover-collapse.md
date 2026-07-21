@@ -201,18 +201,25 @@ hardcoded 0.5). N=80 each: BASELINE p50=4.4 p90=17.2 within35=100% → POST p50=
 p90=17.1 within35=100%; Δ p50 +0.0 Δ p90 −0.1. Byte-identical. All cursor detection
 now goes through the one locator front door — except:
 
-#### C1 P3 openLoopShape — NOT DONE: cannot be e2e-tested (owner condition unmet).
+#### C1 P3 openLoopShape — DONE offline-verified; MARKED for future live test.
 `tryOpenLoopShapeDetect` is a DEEP fallback: it fires only when motion-diff AND
-template-match BOTH fail at open-loop p0 (move-to.ts:1874/1900). There is **no lever**
-to force motion-diff to fail, so it cannot be made to fire reliably on the real iPad —
-it fires only incidentally on hard surfaces. It's also a nested closure inside
-`moveToPixel` (uses the `mlWiggleVerify`/`wiggleVerifyCandidate` closures), so it can't
-be A/B'd standalone without extracting it from the mover. Options considered + rejected:
-(a) add a "disable motion-diff" hook to the do-NOT-touch mover → would test an artificial
-config, not the real fire path; (b) extract the nested function → non-trivial mover
-refactor for a near-dead (desktop-only) path. Per the owner's "must be e2e-testable"
-condition, LEFT UNTOUCHED. The reroute is offline-provable (the locator's openLoopShape
-profile is already call-order unit-tested) but offline ≠ the e2e bar set for this work.
+template-match BOTH fail at open-loop p0 (move-to.ts:1874/1900), on the desktop
+(detect-then-move) path — never the iPad curve-one-shot default. No lever forces
+motion-diff to fail, and it's a nested closure inside `moveToPixel`, so it can't be
+A/B'd live. On 2026-07-21 the owner authorized **offline-only** implementation
+(simulate / unit / mock) with a future-live-test marker.
+Implemented: `tryOpenLoopShapeDetect` is now a THIN wrapper over
+`CursorLocator.locate('openLoopShape')` — deps reuse `makeLocatorDeps` with a `decode`
+passthrough over the already-decoded `shot` and the in-scope
+`mlWiggleVerify`/`wiggleVerifyCandidate` closures wired real; `{pos, score, prox}` is
+reconstructed faithfully (`prox = hypot(fix.position − predicted)`; the wiggle helpers
+return unchanged positions, so this equals the original mlProx / candidate prox, and
+`fix.rawScore === score`). Only verbose console.error tracing differs (seam permits it).
+Offline gate §0.A: typecheck clean; 73 locator+move-to tests pass — the openLoopShape
+profile's 5 mock tests (cursor-locator.test.ts:201-307) assert the ML→wiggle→shape→wiggle
+order, thresholds (minConfidence 0.5, prox≤30 wiggle gate), and CursorFix mapping.
+**`TODO(live-verify)`** left in the code + here: add a ground-truth A/B (cf. bench-5.2)
+once a desktop/absolute-mouse target or a force-motion-diff-fail rig exists.
 
 #### Phase 3 — reachability + bench-coverage audit (2026-07-21, prompted by "do we really use all 4?")
 

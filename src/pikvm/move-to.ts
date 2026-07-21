@@ -1922,132 +1922,45 @@ export async function moveToPixel(
     }
   }
 
-  /** Phase 294: shape-detect with Phase 293 bright-mask rescue, used
-   *  as a third open-loop fallback. Returns null if no candidate
-   *  passes the same proximity gate used in correction passes
-   *  (score >= 0.05 OR within 30 px of predicted landing).
+  /** Open-loop shape/ML fallback (C1 P3 openLoopShape). Thin wrapper over the
+   *  single CursorLocator front door: the ML-multihint -> wiggle -> dark/bright
+   *  shape -> wiggle cascade now lives in locateOpenLoopShape (reproduced
+   *  call-for-call; unit-tested with mock deps in cursor-locator.test.ts). Deps
+   *  reuse makeLocatorDeps; `decode` is a passthrough over the already-decoded
+   *  `shot`, and the in-scope mlWiggleVerify/wiggleVerifyCandidate closures are
+   *  wired real. Only the verbose console.error tracing differs (seam contract
+   *  permits verbose/debug divergence).
    *
-   *  Phase 297 (v0.5.230): wiggle-verify candidates. After shape-detect
-   *  returns a candidate, emit a small diagonal wiggle (+25 X, −10 Y)
-   *  and re-detect. iPadOS app-icon LABEL TEXT (the systematic FP
-   *  Phase 296 discovered) stays at its exact pixel position under any
-   *  emit; the real cursor moves with the emit. If the candidate
-   *  doesn't move ≥10 px in the expected direction, reject it as a
-   *  static FP. Phase 296 visual verification showed the algorithm was
-   *  consistently picking "Settings"/"Books"/etc label text as the
-   *  cursor — wiggle is the discriminator. */
+   *  `prox` is faithfully reconstructed: locateOpenLoopShape returns the SAME
+   *  position the original computed prox from -- mlWiggleVerify returns its input
+   *  unchanged and wiggleVerifyCandidate returns {pos: initialPos} -- so
+   *  hypot(fix.position - predicted) === the original mlProx / candidate prox, and
+   *  fix.rawScore === the original score.
+   *
+   *  WARNING - OFFLINE-VERIFIED ONLY (owner-authorized 2026-07-21). This is a DEEP
+   *  fallback (fires only when motion-diff AND template-match both fail at p0),
+   *  with no lever to force it, so it could NOT be live-benched. It runs on the
+   *  desktop (detect-then-move) path, not the iPad curve-one-shot default.
+   *  TODO(live-verify): when a desktop/absolute-mouse target or a
+   *  force-motion-diff-fail rig exists, add a ground-truth A/B (cf. bench-5.2) for
+   *  this path. See docs/plans/cursor-locator-and-mover-collapse.md journal. */
   async function tryOpenLoopShapeDetect(
     shot: DecodedScreenshot,
     predicted: { x: number; y: number },
   ): Promise<{ pos: { x: number; y: number }; score: number; prox: number } | null> {
     try {
-      // v0.5.237: ML detector PRIMARY. Trained CenterNet-style heatmap
-      // model (ml/cursor-v0.onnx) on 478 self-supervised wiggle-labeled
-      // frames. Phase 312 saved-frame tests showed 3/4 within 7 px of
-      // ground truth (vs heuristic ~10-30 px). If ML returns null or
-      // model not loaded, falls through to the existing Phase 299
-      // dark+bright shape detector with wiggle-verify.
-      //
-      // v0.5.239: multi-hint via buildMLHints — predicted target +
-      // on-screen belief.position + iPad home-zone fallback. The
-      // v0.5.238 Books bench showed belief drifts off-screen after
-      // unlock/home swipes (predict() doesn't clip when bounds=null),
-      // so the belief hint was useless. Diagnostic confirmed that an
-      // ML crop at home-zone (1050, 787) finds cursor with conf 0.968
-      // when it's parked there post-navigation, while crops at the
-      // predicted target return ~0.14 noise.
-      const hints = buildMLHints(predicted, shot.width, shot.height, client.belief?.position);
-      const ml = await findCursorByMLMultiHint(shot.buffer, shot.width, shot.height, hints, {
-        minConfidence: 0.5,
-      });
-      if (ml) {
-        const mlProx = Math.hypot(ml.x - predicted.x, ml.y - predicted.y);
-        // Phase 317 (v0.5.243): wiggle-verify suspicious ML detections.
-        // See TAUTOLOGY_PROX_THRESHOLD docstring at module top.
-        let verified: MLCursorResult | null = ml;
-        if (mlProx <= TAUTOLOGY_PROX_THRESHOLD) {
-          verified = await mlWiggleVerify(ml);
-        }
-        if (!verified) {
-          if (verbose) {
-            console.error(
-              `[move-to] ML detect REJECTED — wiggle-verify failed (static FP at ${ml.x},${ml.y} prox=${mlProx.toFixed(0)})`,
-            );
-          }
-          // Fall through to heuristic shape-detect
-        } else {
-          if (verbose) {
-            const tag = mlProx <= TAUTOLOGY_PROX_THRESHOLD ? ' (wiggle-verified)' : '';
-            console.error(
-              `[move-to] ML detect ACCEPTED — (${verified.x},${verified.y}) conf=${verified.confidence.toFixed(3)} prox=${mlProx.toFixed(0)}${tag}`,
-            );
-          }
-          return { pos: { x: verified.x, y: verified.y }, score: verified.confidence, prox: mlProx };
-        }
-      }
-      if (verbose) {
-        console.error('[move-to] ML detect returned null (model missing or low confidence); falling back to shape detect');
-      }
-
-      // Phase 299 (v0.5.231): try BOTH dark and bright candidates, in
-      // descending score order. Wiggle-verify each in turn. The first
-      // that passes wins. Previously (Phase 297) only the top candidate
-      // (dark, with bright fallback only if dark was lost) was wiggle-
-      // tested. If the top candidate was a label-text FP, wiggle
-      // correctly rejected it, but the bright path was never tried —
-      // potentially missing a real cursor in pointer-effect mode.
-      const dark = findCursorByShape(shot.rgb, shot.width, shot.height, {
-        expectedNear: predicted,
-        expectedNearRadius: 100,
-      });
-      const bright = findCursorByShape(shot.rgb, shot.width, shot.height, {
-        expectedNear: predicted,
-        expectedNearRadius: 100,
-        brightThreshold: 120,
-      });
-
-      type Candidate = { pos: { x: number; y: number }; score: number; prox: number; source: 'dark' | 'bright' };
-      const candidates: Candidate[] = [];
-      const proxOf = (p: { x: number; y: number }) => Math.hypot(p.x - predicted.x, p.y - predicted.y);
-      if (dark) {
-        const pos = { x: Math.round(dark.centroidX), y: Math.round(dark.centroidY) };
-        const prox = proxOf(pos);
-        if (dark.shapeScore >= 0.05 || prox <= 30) {
-          candidates.push({ pos, score: dark.shapeScore, prox, source: 'dark' });
-        }
-      }
-      if (bright) {
-        const pos = { x: Math.round(bright.centroidX), y: Math.round(bright.centroidY) };
-        const prox = proxOf(pos);
-        // Dedup: if same as dark candidate (within 5 px), skip.
-        const sameAsDark = candidates.some((c) => Math.hypot(c.pos.x - pos.x, c.pos.y - pos.y) <= 5);
-        if (!sameAsDark && (bright.shapeScore >= 0.05 || prox <= 30)) {
-          candidates.push({ pos, score: bright.shapeScore, prox, source: 'bright' });
-        }
-      }
-      // Try candidates in descending score order.
-      candidates.sort((a, b) => b.score - a.score);
-      for (const c of candidates) {
-        const wiggleVerified = await wiggleVerifyCandidate(c.pos, c.score);
-        if (wiggleVerified) {
-          if (verbose) {
-            console.error(
-              `[move-to] Phase 299 shape candidate (${c.source}) ACCEPTED — (${c.pos.x},${c.pos.y}) score=${c.score.toFixed(3)} prox=${c.prox.toFixed(0)} wiggle verified`,
-            );
-          }
-          return {
-            pos: wiggleVerified.pos,
-            score: c.score,
-            prox: c.prox,
-          };
-        }
-        if (verbose) {
-          console.error(
-            `[move-to] Phase 297 shape candidate (${c.source}) REJECTED — (${c.pos.x},${c.pos.y}) score=${c.score.toFixed(3)} didn't move → static FP`,
-          );
-        }
-      }
-      return null;
+      const deps: CursorLocatorDeps = {
+        ...makeLocatorDeps(client),
+        decode: async () => shot,
+        mlWiggleVerify,
+        wiggleVerifyCandidate,
+      };
+      const fix = await new CursorLocator(deps).locate(
+        shot.buffer, shot.width, shot.height, 'openLoopShape', predicted,
+      );
+      if (!fix) return null;
+      const prox = Math.hypot(fix.position.x - predicted.x, fix.position.y - predicted.y);
+      return { pos: fix.position, score: fix.rawScore, prox };
     } catch {
       return null;
     }
