@@ -272,6 +272,43 @@ detection around the `moveToPixel` seam.
 around the seam, do not rewrite the mover. If a behaviour can't be preserved through
 `moveToPixel`, STOP and report rather than change `move-to`'s behaviour.
 
+#### C2 execution journal (2026-07-21)
+
+**Gate discovery:** the directive's named benches (bench-1.13c / bench-5.1) do NOT
+exercise `clickAtWithRetry` — bench-5.1 calls `moveToPixel` directly and only *models*
+the per-attempt strategy choice. The real gate is **`bench-ground-truth-clickflow.ts`**:
+drives the actual `clickAtWithRetry` on a real home screen rendered as an iPadCollector
+image scene, with `onTapEvent` ground truth (HIT = tap within 35px). It exercises the
+micro-correction loop (74 cached templates → `hasTemplates=true`).
+
+**C2 P1a — DONE (3cb2095).** Deleted the hand-rolled post-move micro-correction loop
+(the piece that genuinely DUPLICATED the mover's positioning correction) + its
+`lastKnownCursor` output. move-to.ts untouched.
+  BASELINE HIT 67/80 = 83.8%  per-tap p50=22.2 p90=41.4
+  POST     HIT 69/80 = 86.2%  per-tap p50=20.0 p90=39.9
+  Δ +2.5pp (within ±5pp N=80 noise); per-tap tighter. The loop was dead weight (its own
+  Phase 132 comment records it DIVERGING to 200px where no-micro reached 23px).
+
+**C2 P1 scope conclusion — the rest is NOT mover-duplication, leave it.** After removing
+the micro-correction loop, the remaining `client.mouseMoveRelative` sites in click-verify
+are NOT duplicates of `moveToPixel`'s positioning:
+  - **pre-click approach (Phase 125)** = a CLICK-REGISTRATION tactic (in-motion click).
+    Its comment cites empirical support *FOR* it (stationary cursor didn't register a
+    click, moving one did) — opposite of the micro-correction divergence evidence.
+    `moveToPixel` has no in-motion-click. Removing it deletes click functionality, not
+    duplication → out of C2 P1 scope + regression-risky. KEEP.
+  - **edge-unstick (Phase 192-D)** = a RECOVERY primitive (nudge a belief-pinned cursor
+    off the edge before a retry). `moveToPixel` doesn't do edge-recovery. KEEP.
+So C2 P1's actual target (stop duplicating the mover) is COMPLETE at the micro-correction
+removal. Not deleting legitimately-placed click/recovery logic just to maximise deletion.
+
+**C2 P2 (offline) — pending.** Remaining cleanup: remove the now-dead micro-correction
+symbols orphaned by C2 P1a — predicates `shouldRunMicroCorrection`, `isDivergenceDetected`,
+`shouldRunMotionConfirmation`, `cursorMovedAsExpected`, `wouldExceedSafeBounds` (+ their
+tests), consts `microConvergePx`/`minPreClickTemplateScore`, and the dead
+`microCorrectionIterations` option. `clampPxPerMickeyRatio` STAYS (pre-click approach
+still uses it). The broader "demote ~20 predicates" is a larger decomposition, lower value.
+
 ---
 
 ## Overall order & finish
