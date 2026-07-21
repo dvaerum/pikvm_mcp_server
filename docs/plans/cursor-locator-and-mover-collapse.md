@@ -302,12 +302,33 @@ are NOT duplicates of `moveToPixel`'s positioning:
 So C2 P1's actual target (stop duplicating the mover) is COMPLETE at the micro-correction
 removal. Not deleting legitimately-placed click/recovery logic just to maximise deletion.
 
-**C2 P2 (offline) — pending.** Remaining cleanup: remove the now-dead micro-correction
-symbols orphaned by C2 P1a — predicates `shouldRunMicroCorrection`, `isDivergenceDetected`,
-`shouldRunMotionConfirmation`, `cursorMovedAsExpected`, `wouldExceedSafeBounds` (+ their
-tests), consts `microConvergePx`/`minPreClickTemplateScore`, and the dead
-`microCorrectionIterations` option. `clampPxPerMickeyRatio` STAYS (pre-click approach
-still uses it). The broader "demote ~20 predicates" is a larger decomposition, lower value.
+**C2 P2 (offline) — DONE for the orphaned dead code (3542850).** Removed predicates
+`shouldRunMicroCorrection`, `isDivergenceDetected`, `shouldRunMotionConfirmation`,
+`wouldExceedSafeBounds` (+ 4 test files), consts `microConvergePx` +
+`microCorrectionIterations` (+ docstrings), and the unused `cursorMovedAsExpected` import
+— 545 lines. Kept `clampPxPerMickeyRatio` + `minPreClickTemplateScore` (still used).
+Typecheck + 45 tests pass. The broader "demote the OTHER ~15 exported predicates to
+module-private" is deferred: those predicates are still live (verify/retry logic), and
+un-exporting them requires decomposing the 950-line monolith into named internal
+functions tested through `clickAtWithRetry`'s interface — a large refactor with modest
+payoff. Left as an explicit future task, not blocking.
+
+---
+
+## Session outcome (2026-07-21) — why this plan file is NOT git-rm'd yet
+
+The final step ("`git rm` after ALL phases implemented AND live-verified") is **not met**:
+three C1 P3 phases are intentionally **blocked**, not implemented, each for a cited
+standing-rule/harness reason (curve = do-NOT-touch mover + no bench; openLoopShape = no
+bench can reach it; verify = unpreservable as one profile). This file records those
+decisions and the C2 scope conclusion — deleting it would erase the reasoning the repo
+owner still needs to review. **Keep until reviewed.**
+
+Delivered + live-verified: **C1 P1/P2** (offline), **C1 P3 origin** (982b93e, benched),
+**C2 P1a** micro-correction removal (3cb2095, benched HIT 83.8%→86.2% N=80), **C2 P2**
+dead-code sweep (3542850, offline). Blocked/deferred with rationale above: C1 P3
+verify/openLoopShape/curve, C2 P1 pre-click/edge-unstick (correctly kept), C2 P2 wider
+predicate demotion.
 
 ---
 
