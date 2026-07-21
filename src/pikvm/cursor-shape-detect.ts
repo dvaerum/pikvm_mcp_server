@@ -160,6 +160,8 @@ export function findCursorShapeCandidates(
  * @param width  frame width in pixels
  * @param height  frame height in pixels
  */
+// LEGACY (shape heuristic) — REFUTED as a primary detector; weak fallback only.
+// NOT an alternative to the cascade; see cursor-ml-detect.ts findCursorByV8FullFrame.
 export function findCursorByShape(
   rgb: Buffer,
   width: number,

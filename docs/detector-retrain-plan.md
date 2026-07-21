@@ -609,3 +609,37 @@ RELOCATED the FP (Maps→Books icon); no global gate separates 0.993 no-cursor f
 
 DECISION: no non-refuted, not-already-done work remains in this loop → stopping it. Secondary items
 (6 pre-existing test failures) are out of this loop's detector scope; raise separately if wanted.
+
+## 2026-07-21 (cycle 25) — CONCLUSION: the cursor tracker is SETTLED (dual-head cascade); legacy code signposted
+Trigger: another agent reading the code saw the many `findCursor*` functions and thought we had
+multiple cursor-tracking OPTIONS still open. We do not.
+
+**Conclusion (the tracking question is CLOSED).** The one shipped cursor tracker is the dual-head
+grid CASCADE — `findCursorByV8FullFrame()` → `runCascade()`, model `ml/crop-heatmap.onnx`. We chose
+it because it always works: across everything thrown at it this cycle we could NOT find a situation
+where it fails — 160/160 live (two N=80 benches, incl. the Maps-widget FP surface), production gate
+8/8 margin 0.97, ~2.8px small-button precision vs getCursor, edge-hardened (6/6), exploration-hardened
+(Settings/Maps/Photos/AppStore/Books), and it reproduces bit-functionally from committed seeds. Fresh
+this cycle: live anti-FP test returned NO false cursor on the current Maps widget. No reproducible
+failure case exists; treat detection as solved.
+
+**Everything else is REFUTED history, not alternatives** (each already journaled above):
+- single-stage full-frame ML (cursor-v0..v14: `findCursorByML`, `findCursorPresenceV5`) — FP'd on the
+  Maps widget; retrains only relocated the FP (→ Books). Superseded.
+- NCC template matching (`findCursorByTemplate*`, cursor-detect.ts) — confident-wrong (~0.95) on
+  look-alike icons.
+- shape heuristic (`findCursorByShape`) — weak; motion-diff, colour prior — refuted.
+
+**Action taken:** signposted the code so the history can't be mistaken for live options — a canonical
+header block in cursor-ml-detect.ts naming the cascade as THE tracker, a ★ marker on
+`findCursorByV8FullFrame`, and `// LEGACY … NOT the tracker` markers on every other `findCursor*`
+export (comments only, zero behaviour change; full suite green).
+
+**On deletion (deferred, on purpose — NOT a quick hack):** the legacy detectors are still WIRED as
+vestigial fallback layers inside the SOLVED mover (`move-to.ts`: `findCursorByTemplateSet` ×9,
+`findCursorByShape` ×6, `findCursorByMLMultiHint` ×4) and are cross-referenced (e.g. MultiHint→ML).
+The live curve-one-shot path (`curve-mover.ts`) uses ONLY the cascade, so these fallbacks don't drive
+the result (proven by the quarantine bench: every model but crop-heatmap.onnx removed → still 100%).
+Ripping them out means editing the do-NOT-touch mover and would need an N≥80 live re-validation, which
+can't be faked offline — so the code is now clearly LABELLED legacy and physical removal is left to a
+dedicated, benched mover-cleanup pass rather than an unvalidated deletion here.

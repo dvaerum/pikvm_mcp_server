@@ -1082,6 +1082,8 @@ export function findCursorByTemplateDecoded(
 }
 
 /** Convenience wrapper for callers that only have the JPEG buffer. */
+// LEGACY (NCC template match) — REFUTED: confident-wrong on look-alike icons.
+// NOT an alternative to the cascade; see cursor-ml-detect.ts findCursorByV8FullFrame.
 export async function findCursorByTemplate(
   screenshot: Buffer,
   template: CursorTemplate,
@@ -1111,6 +1113,8 @@ export interface FindCursorSetResult extends FindCursorResult {
  * Returns null when the set is empty or no template's best score reaches
  * `options.minScore`.
  */
+// LEGACY (NCC template-set) — refuted as primary; retained only as a vestigial
+// fallback in move-to.ts. NOT the tracker; see cursor-ml-detect.ts findCursorByV8FullFrame.
 export function findCursorByTemplateSet(
   screenshot: DecodedScreenshot,
   templates: CursorTemplate[],

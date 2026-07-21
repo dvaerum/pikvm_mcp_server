@@ -1,22 +1,29 @@
 /**
- * ML cursor detector — primary cursor detection at v0.5.237+.
+ * Cursor detection.
  *
- * Uses a CenterNet-style heatmap-regression model (MobileNetV3-small
- * backbone + 3-block decoder + 1×1 head, ~2.5M params) loaded from
- * `ml/cursor-v0.onnx` via onnxruntime-node.
+ * ┌─ THE cursor tracker (shipped, default-on, do NOT replace) ────────────────┐
+ * │ `findCursorByV8FullFrame()` → `runCascade()`, model `ml/crop-heatmap.onnx` │
+ * └───────────────────────────────────────────────────────────────────────────┘
+ * The dual-head grid CASCADE: slide a dense grid of 96px crops over the iPad
+ * region; a small dual-head net picks the crop containing the arrow (presence
+ * head, offset-invariant) and soft-argmax gives the sub-pixel tip (heatmap
+ * head). Validated ~100% live (160/160 this cycle), gate 8/8. This is the
+ * SETTLED strategy — the cursor-tracking question is closed.
  *
- * Crops a 256×256 region around the hint (e.g. cursor-belief.position
- * or the predicted post-emit landing), runs inference (~30-50ms on
- * CPU), and returns the heatmap argmax as the cursor pixel.
- *
- * Returns `null` when:
- *   - Model file is missing / failed to load
- *   - Hint is null (no crop center available)
- *   - Max heatmap confidence below threshold
- *
- * On null, callers should fall back to `cursor-shape-detect.ts` or
- * other heuristic detectors. This module is a strict ADDITION — it
- * never breaks existing paths.
+ * Everything ELSE named `findCursor*` here (and in `cursor-detect.ts` /
+ * `cursor-shape-detect.ts`) is LEGACY from the long iteration. These are NOT
+ * competing detectors to evaluate or choose between — they are refuted dead
+ * ends or vestigial fallback layers still wired into `move-to.ts`:
+ *   - `findCursorByML` / `findCursorPresenceV5` — single-stage full-frame ML
+ *     (cursor-v0..v14). REFUTED: false-positived on the Maps widget; retrains
+ *     only relocated the FP (→ Books icon). Superseded by the cascade.
+ *   - `findCursorByTemplate*` (cursor-detect.ts) — NCC template matching.
+ *     REFUTED: confident-wrong (~0.95) on look-alike icons.
+ *   - `findCursorByShape` (cursor-shape-detect.ts) — shape heuristic. Weak
+ *     fallback only.
+ * Quarantining every model except crop-heatmap.onnx still benched 100%, i.e.
+ * these legacy paths do not drive the result. Full history + refuted approaches:
+ * docs/detector-retrain-plan.md.
  */
 import { promises as fs } from 'fs';
 import * as fsSync from 'fs';
@@ -296,6 +303,7 @@ async function getSession(modelPath: string): Promise<ort.InferenceSession | nul
  * median error) so callers either use it as a hint for v1 or treat
  * the presence signal alone.
  */
+// LEGACY (single-stage cursor-v5) — NOT an alternative tracker; see findCursorByV8FullFrame.
 export async function findCursorPresenceV5(
   jpegBuffer: Buffer,
   frameWidth: number,
@@ -381,6 +389,7 @@ export async function findCursorPresenceV5(
  * Returns null when the model fails to load OR presence is below
  * threshold (cursor likely not visible).
  */
+// ★ CANONICAL cursor tracker (dual-head cascade, ml/crop-heatmap.onnx). See the file header.
 export async function findCursorByV8FullFrame(
   jpegBuffer: Buffer,
   frameWidth: number,
@@ -477,6 +486,7 @@ export async function findCursorByV8FullFrame(
  * @param options     Required `hint` (crop center), optional
  *                    `minConfidence` and `modelPath`.
  */
+// LEGACY (single-stage cursor-v1, 256px hint crop) — NOT the tracker; see findCursorByV8FullFrame.
 export async function findCursorByML(
   jpegBuffer: Buffer,
   frameWidth: number,
@@ -619,6 +629,7 @@ export async function findCursorByML(
  * on overlapping crops). Returns null if every hint yielded null
  * (cursor not found in any crop with confidence ≥ minConfidence).
  */
+// LEGACY (vestigial correction-loop fallback in move-to.ts) — NOT the tracker; see findCursorByV8FullFrame.
 export async function findCursorByMLMultiHint(
   jpegBuffer: Buffer,
   frameWidth: number,
