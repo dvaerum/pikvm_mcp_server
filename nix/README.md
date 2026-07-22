@@ -81,7 +81,10 @@ See `home-module.nix` for the authoritative list. Highlights:
 | `services.pikvm-mcp.host` | *(required)* | E.g. `"https://pikvm01.lan"`. |
 | `services.pikvm-mcp.username` | `"admin"` | Literal; ignored when `usernameFile` is set. |
 | `services.pikvm-mcp.usernameFile` | `null` | Optional path to the username (sops-nix/agenix). Overrides `username`. |
-| `services.pikvm-mcp.passwordFile` | *(required)* | Path read at MCP startup. Never enters the Nix store. |
+| `services.pikvm-mcp.passwordFile` | `null` | PiKVM password file. Optional — leave unset to run as an authenticated MCP gateway without device credentials. Never enters the Nix store. |
+| `services.pikvm-mcp.security` | `"yes"` | `"yes"` = require HTTP auth on `/mcp` (needs `authPasswordFile`); `"no"` = serve it open. Passed as `--security`. |
+| `services.pikvm-mcp.authUsername` | `"operator"` | Username for the MCP HTTP Basic auth. |
+| `services.pikvm-mcp.authPasswordFile` | `null` | MCP HTTP auth password file (required when `security = "yes"`). Loaded as the `pikvm-mcp-auth-password` credential; never enters the Nix store. |
 | `services.pikvm-mcp.verifySsl` | `false` | Many PiKVMs ship with self-signed certs. |
 | `services.pikvm-mcp.defaultKeymap` | `"en-us"` | |
 | `services.pikvm-mcp.dataDir` | `${config.xdg.dataHome}/pikvm-mcp` | Holds `ballistics.json`, `cursor-template.jpg`. |

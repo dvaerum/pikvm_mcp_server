@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveSecret } from '../config.js';
+import { resolveSecret, resolveHttpAuth } from '../config.js';
 
 let dir: string;
 beforeEach(() => {
@@ -77,5 +77,47 @@ describe('resolveSecret', () => {
   it('without a credName, does not read from the credentials dir', () => {
     withFile('PIKVM_HOST', 'x');
     expect(resolveSecret({ CREDENTIALS_DIRECTORY: dir }, 'PIKVM_HOST')).toBeUndefined();
+  });
+});
+
+describe('resolveHttpAuth', () => {
+  it('returns undefined when no password is configured anywhere', () => {
+    expect(resolveHttpAuth({}, {})).toBeUndefined();
+  });
+
+  it('resolves the password from the --auth-password flag', () => {
+    expect(resolveHttpAuth({}, { authPassword: 'flagpw' })).toEqual({
+      username: 'operator',
+      password: 'flagpw',
+    });
+  });
+
+  it('resolves the password from --auth-password-file', () => {
+    const p = withFile('mcp-auth', 'filepw\n');
+    expect(resolveHttpAuth({}, { authPasswordFile: p })?.password).toBe('filepw');
+  });
+
+  it('resolves the password from PIKVM_MCP_AUTH_PASSWORD / _FILE / the systemd credential', () => {
+    expect(resolveHttpAuth({ PIKVM_MCP_AUTH_PASSWORD: 'envpw' }, {})?.password).toBe('envpw');
+    const p = withFile('mcp-auth-env', 'envfilepw');
+    expect(resolveHttpAuth({ PIKVM_MCP_AUTH_PASSWORD_FILE: p }, {})?.password).toBe('envfilepw');
+    withFile('pikvm-mcp-auth-password', 'credpw\n');
+    expect(resolveHttpAuth({ CREDENTIALS_DIRECTORY: dir }, {})?.password).toBe('credpw');
+  });
+
+  it('username: flag > env > "operator" default', () => {
+    expect(resolveHttpAuth({}, { authPassword: 'p' }).username).toBe('operator');
+    expect(resolveHttpAuth({ PIKVM_MCP_AUTH_USERNAME: 'bob' }, { authPassword: 'p' }).username).toBe('bob');
+    expect(
+      resolveHttpAuth({ PIKVM_MCP_AUTH_USERNAME: 'bob' }, { authUsername: 'alice', authPassword: 'p' }).username,
+    ).toBe('alice');
+  });
+
+  it('flag password wins over the file flag and env', () => {
+    const p = withFile('mcp-auth-precedence', 'filepw');
+    expect(
+      resolveHttpAuth({ PIKVM_MCP_AUTH_PASSWORD: 'envpw' }, { authPassword: 'flagpw', authPasswordFile: p })
+        ?.password,
+    ).toBe('flagpw');
   });
 });

@@ -12,10 +12,10 @@ import { loadConfig } from '../config.js';
 
 const REQUIRED_VARS = [
   'PIKVM_HOST',
-  'PIKVM_PASSWORD',
 ];
 
 const OPTIONAL_VARS = [
+  'PIKVM_PASSWORD', // optional at startup; empty unless the device is actually driven
   'PIKVM_USERNAME',
   'PIKVM_VERIFY_SSL',
   'PIKVM_DEFAULT_KEYMAP',
@@ -53,9 +53,10 @@ describe('loadConfig', () => {
     expect(() => loadConfig()).toThrow(/PIKVM_HOST/);
   });
 
-  it('throws when PIKVM_PASSWORD is missing', () => {
+  it('does NOT throw when PIKVM_PASSWORD is missing (optional; defaults to empty)', () => {
     process.env.PIKVM_HOST = 'https://example';
-    expect(() => loadConfig()).toThrow(/PIKVM_PASSWORD/);
+    const cfg = loadConfig();
+    expect(cfg.pikvm.password).toBe('');
   });
 
   it('returns minimal valid config with defaults when only required vars are set', () => {

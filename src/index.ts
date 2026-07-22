@@ -17,9 +17,10 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { PiKVMClient, createDefaultBelief } from './pikvm/client.js';
-import { loadConfig } from './config.js';
+import { loadConfig, resolveHttpAuth } from './config.js';
 import { parseCliOptions, helpText } from './cli.js';
 import { startHttpServer } from './http-server.js';
+import type { HttpAuth } from './auth.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
@@ -1625,6 +1626,35 @@ async function main() {
     process.exit(2);
   }
 
+  // In http mode the security posture is an EXPLICIT, required choice (the
+  // endpoint drives real input on a physical machine). Resolve it before doing
+  // any work so a misconfiguration fails fast.
+  let httpAuth: HttpAuth | undefined;
+  if (cli.transport === 'http') {
+    if (cli.security === undefined) {
+      console.error(
+        '--security is required in http mode — pass --security yes (require auth on /mcp) ' +
+          'or --security no (serve it with NO authentication). See --help.',
+      );
+      process.exit(2);
+    }
+    if (cli.security === 'yes') {
+      httpAuth = resolveHttpAuth(process.env, cli);
+      if (!httpAuth) {
+        console.error(
+          '--security yes requires an auth password — set --auth-password, --auth-password-file, ' +
+            'PIKVM_MCP_AUTH_PASSWORD[_FILE], or the "pikvm-mcp-auth-password" systemd credential.',
+        );
+        process.exit(2);
+      }
+      console.error(`HTTP auth: ENABLED (Basic, user "${httpAuth.username}").`);
+    } else {
+      console.error(
+        `⚠ HTTP auth: DISABLED (--security no). Anyone who can reach ${cli.host}:${cli.port} can control the machine.`,
+      );
+    }
+  }
+
   // Load configuration (deferred to here for proper error handling)
   const config = loadConfig();
   // C1 P2 (candidate 5): the CursorBelief is created at startup and injected into
@@ -1690,7 +1720,11 @@ async function main() {
 
   if (cli.transport === 'http') {
     // Streamable HTTP: one Server per session, minted by createMcpServer.
-    const handle = await startHttpServer(createMcpServer, { host: cli.host, port: cli.port });
+    const handle = await startHttpServer(createMcpServer, {
+      host: cli.host,
+      port: cli.port,
+      auth: httpAuth,
+    });
     console.error(`PiKVM MCP Server running (Streamable HTTP) at ${handle.url}`);
   } else {
     const transport = new StdioServerTransport();

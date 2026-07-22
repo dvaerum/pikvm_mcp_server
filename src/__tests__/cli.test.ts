@@ -87,4 +87,30 @@ describe('parseCliOptions', () => {
     expect(() => parseCliOptions(['--target', 'tablet'], {})).toThrow(/target/i);
     expect(() => parseCliOptions(['--target', 'auto'], {})).toThrow(/target/i);
   });
+
+  it('security is undefined by default (main enforces required in http mode)', () => {
+    expect(parseCliOptions([], {}).security).toBeUndefined();
+  });
+
+  it('--security yes|no parse; env fallback; flag wins', () => {
+    expect(parseCliOptions(['--security', 'yes'], {}).security).toBe('yes');
+    expect(parseCliOptions(['--security', 'no'], {}).security).toBe('no');
+    expect(parseCliOptions([], { PIKVM_MCP_SECURITY: 'yes' }).security).toBe('yes');
+    expect(parseCliOptions(['--security', 'no'], { PIKVM_MCP_SECURITY: 'yes' }).security).toBe('no');
+  });
+
+  it('rejects an invalid --security value', () => {
+    expect(() => parseCliOptions(['--security', 'maybe'], {})).toThrow(/security/i);
+  });
+
+  it('parses the http auth options (flag + env for username)', () => {
+    const o = parseCliOptions(
+      ['--auth-username', 'alice', '--auth-password', 'pw', '--auth-password-file', '/run/p'],
+      {},
+    );
+    expect(o.authUsername).toBe('alice');
+    expect(o.authPassword).toBe('pw');
+    expect(o.authPasswordFile).toBe('/run/p');
+    expect(parseCliOptions([], { PIKVM_MCP_AUTH_USERNAME: 'bob' }).authUsername).toBe('bob');
+  });
 });

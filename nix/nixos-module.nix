@@ -47,13 +47,47 @@ in
     };
 
     passwordFile = lib.mkOption {
-      type = lib.types.path;
+      type = lib.types.nullOr lib.types.path;
+      default = null;
       example = "/run/secrets/pikvm-password";
       description = ''
         Path to a file holding the PiKVM password. Loaded via systemd
         `LoadCredential` and read by the server as the `pikvm-password`
         credential. Point this at a sops-nix / agenix secret, e.g.
-        `config.sops.secrets."pikvm/password".path`.
+        `config.sops.secrets."pikvm/password".path`. Optional: leave null to run
+        the server as an authenticated MCP gateway without device credentials
+        (a tool that actually drives the PiKVM then errors until this is set).
+      '';
+    };
+
+    security = lib.mkOption {
+      type = lib.types.enum [ "yes" "no" ];
+      default = "yes";
+      description = ''
+        Whether the MCP HTTP endpoint requires authentication. This endpoint
+        drives real input on a physical machine, so it defaults to `"yes"`.
+        `"yes"` requires {option}`authPasswordFile`; `"no"` serves /mcp with NO
+        auth (anyone who can reach the port controls the machine). Passed as
+        `--security`.
+      '';
+    };
+
+    authUsername = lib.mkOption {
+      type = lib.types.str;
+      default = "operator";
+      description = "Username for the MCP HTTP Basic auth (used when security = \"yes\").";
+    };
+
+    authPasswordFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = "/run/secrets/pikvm-mcp-auth-password";
+      description = ''
+        Path to a file holding the MCP HTTP auth password. Required when
+        {option}`security` = "yes". Loaded via systemd `LoadCredential` as the
+        `pikvm-mcp-auth-password` credential (never enters the Nix store); point
+        it at a sops-nix / agenix secret. Clients then authenticate with HTTP
+        Basic ({option}`authUsername` + this password).
       '';
     };
 
@@ -90,6 +124,15 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.security == "no" || cfg.authPasswordFile != null;
+        message =
+          "services.pikvm-mcp.security = \"yes\" requires services.pikvm-mcp.authPasswordFile "
+          + "to be set (or set security = \"no\" to serve /mcp without authentication).";
+      }
+    ];
+
     systemd.services.pikvm-mcp = {
       description = "PiKVM MCP server (Streamable HTTP)";
       documentation = [ "https://github.com/dvaerum/pikvm_mcp_server" ];
@@ -109,15 +152,22 @@ in
 
       serviceConfig = {
         # HTTP transport (a long-lived system service can't use stdio).
-        ExecStart = "${lib.getExe cfg.package} --transport http --host ${cfg.address} --port ${toString cfg.port} --target ${cfg.target}";
+        ExecStart =
+          "${lib.getExe cfg.package} --transport http --host ${cfg.address} "
+          + "--port ${toString cfg.port} --target ${cfg.target} --security ${cfg.security}"
+          + lib.optionalString (cfg.security == "yes") " --auth-username ${cfg.authUsername}";
 
         # systemd drops each credential (0400, on tmpfs) into
         # $CREDENTIALS_DIRECTORY; the server reads them by name via
-        # resolveSecret (config.ts): pikvm-password / pikvm-username. No secret
-        # ever touches the Nix store, the unit env, or the process cmdline.
+        # resolveSecret (config.ts): pikvm-password / pikvm-username /
+        # pikvm-mcp-auth-password. No secret ever touches the Nix store, the unit
+        # env, or the process cmdline.
         LoadCredential =
-          [ "pikvm-password:${toString cfg.passwordFile}" ]
-          ++ lib.optional (cfg.usernameFile != null) "pikvm-username:${toString cfg.usernameFile}";
+          lib.optional (cfg.passwordFile != null) "pikvm-password:${toString cfg.passwordFile}"
+          ++ lib.optional (cfg.usernameFile != null) "pikvm-username:${toString cfg.usernameFile}"
+          ++ lib.optional (
+            cfg.security == "yes" && cfg.authPasswordFile != null
+          ) "pikvm-mcp-auth-password:${toString cfg.authPasswordFile}";
 
         DynamicUser = true;
         StateDirectory = "pikvm-mcp";

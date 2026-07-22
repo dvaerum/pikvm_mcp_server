@@ -9,6 +9,7 @@ import { config as loadEnv } from 'dotenv';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import type { HttpAuth } from './auth.js';
 
 // Load .env file from project root
 // - quiet: true prevents stdout output that would corrupt MCP protocol
@@ -69,6 +70,32 @@ export function resolveSecret(
   return undefined;
 }
 
+/**
+ * Resolve the MCP HTTP auth credentials (for `--security yes`). Password comes
+ * from, in precedence order: the --auth-password flag, the --auth-password-file
+ * flag, then PIKVM_MCP_AUTH_PASSWORD / _FILE / the `pikvm-mcp-auth-password`
+ * systemd credential (via resolveSecret). Username: --auth-username / env /
+ * "operator". Returns undefined when no password is configured (main() then
+ * refuses to serve `--security yes`).
+ */
+export function resolveHttpAuth(
+  env: NodeJS.ProcessEnv,
+  cli: { authUsername?: string; authPassword?: string; authPasswordFile?: string },
+): HttpAuth | undefined {
+  const username = cli.authUsername || env.PIKVM_MCP_AUTH_USERNAME || 'operator';
+
+  let password: string | undefined = cli.authPassword;
+  if ((password === undefined || password === '') && cli.authPasswordFile) {
+    password = readSecretFile(cli.authPasswordFile);
+  }
+  if (password === undefined || password === '') {
+    password = resolveSecret(env, 'PIKVM_MCP_AUTH_PASSWORD', 'pikvm-mcp-auth-password');
+  }
+  if (password === undefined || password === '') return undefined;
+
+  return { username, password };
+}
+
 export function loadConfig(): Config {
   const host = resolveSecret(process.env, 'PIKVM_HOST', 'pikvm-host');
   if (!host) {
@@ -78,13 +105,11 @@ export function loadConfig(): Config {
     );
   }
 
-  const password = resolveSecret(process.env, 'PIKVM_PASSWORD', 'pikvm-password');
-  if (!password) {
-    throw new Error(
-      'PiKVM password is required — set PIKVM_PASSWORD, PIKVM_PASSWORD_FILE, or ' +
-        'provide a systemd credential named "pikvm-password" (LoadCredential).',
-    );
-  }
+  // The PiKVM password is OPTIONAL at startup: when the server runs on the
+  // PiKVM itself (or acts purely as an authenticated MCP gateway) the operator
+  // may not want to embed device credentials. It defaults to empty; kvmd then
+  // returns a clear auth error only if/when a tool actually drives the device.
+  const password = resolveSecret(process.env, 'PIKVM_PASSWORD', 'pikvm-password') ?? '';
 
   return {
     pikvm: {

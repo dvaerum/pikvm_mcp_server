@@ -5,6 +5,10 @@
  * then the PIKVM_MCP_TRANSPORT env var, then the stdio default. Host/port fall
  * back the same way (flag > env > default) and only matter in http mode.
  * Kept as a pure function of (argv, env) so it is fully unit-testable.
+ *
+ * The HTTP endpoint drives real input on a physical machine, so http mode
+ * REQUIRES an explicit --security yes|no choice (there is deliberately no
+ * default): `yes` enforces authentication (see auth.ts), `no` serves it open.
  */
 import { parseArgs } from 'node:util';
 
@@ -17,12 +21,25 @@ export type TransportKind = 'stdio' | 'http';
  */
 export type TargetKind = 'ipad' | 'desktop';
 
+export type SecurityChoice = 'yes' | 'no';
+
 export interface CliOptions {
   transport: TransportKind;
   host: string;
   port: number;
   /** undefined when neither --target nor PIKVM_TARGET was given; main() then errors. */
   target: TargetKind | undefined;
+  /**
+   * http-mode auth switch (flag > PIKVM_MCP_SECURITY). REQUIRED in http mode —
+   * undefined here makes main() error rather than silently pick a default.
+   */
+  security: SecurityChoice | undefined;
+  /** Username for the MCP HTTP Basic auth (default resolved in config). */
+  authUsername: string | undefined;
+  /** Literal auth password from the flag (prefer --auth-password-file / env for secrets). */
+  authPassword: string | undefined;
+  /** Path to a file holding the auth password. */
+  authPasswordFile: string | undefined;
   help: boolean;
 }
 
@@ -43,6 +60,10 @@ export function parseCliOptions(
       host: { type: 'string' },
       port: { type: 'string' },
       target: { type: 'string' }, // ipad | desktop | auto
+      security: { type: 'string' }, // yes | no (required in http mode)
+      'auth-username': { type: 'string' },
+      'auth-password': { type: 'string' },
+      'auth-password-file': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -67,7 +88,22 @@ export function parseCliOptions(
     throw new Error(`Invalid --target "${target}" (expected "ipad" or "desktop")`);
   }
 
-  return { transport, host, port, target, help: Boolean(values.help) };
+  const securityRaw = (values.security as string | undefined) ?? env.PIKVM_MCP_SECURITY;
+  if (securityRaw !== undefined && securityRaw !== 'yes' && securityRaw !== 'no') {
+    throw new Error(`Invalid --security "${securityRaw}" (expected "yes" or "no")`);
+  }
+
+  return {
+    transport,
+    host,
+    port,
+    target,
+    security: securityRaw as SecurityChoice | undefined,
+    authUsername: (values['auth-username'] as string | undefined) ?? env.PIKVM_MCP_AUTH_USERNAME,
+    authPassword: values['auth-password'] as string | undefined,
+    authPasswordFile: values['auth-password-file'] as string | undefined,
+    help: Boolean(values.help),
+  };
 }
 
 export function helpText(binName = 'pikvm-mcp-server'): string {
@@ -85,13 +121,25 @@ export function helpText(binName = 'pikvm-mcp-server'): string {
     '  --target <ipad|desktop>      Control path (REQUIRED):',
     '                                 ipad    = curve-one-shot mover + cascade detector',
     '                                 desktop = legacy detect-then-move (absolute mouse)',
+    '  --security <yes|no>          REQUIRED in http mode. yes = require auth on /mcp;',
+    '                                 no = serve /mcp with NO auth (anyone who can reach',
+    '                                 the port controls the machine).',
+    '  --auth-username <name>       Username for http auth (default: operator).',
+    '  --auth-password <pw>         Password for http auth (prefer the file/env forms).',
+    '  --auth-password-file <path>  Read the http auth password from a file.',
     '  -h, --help                   Show this help and exit',
     '',
     'Environment (used when the matching flag is absent):',
     '  PIKVM_MCP_TRANSPORT, PIKVM_MCP_HOST, PIKVM_MCP_PORT, PIKVM_TARGET',
-    '  PIKVM_HOST, PIKVM_PASSWORD   (required to reach the PiKVM)',
+    '  PIKVM_MCP_SECURITY           yes|no',
+    '  PIKVM_MCP_AUTH_USERNAME, PIKVM_MCP_AUTH_PASSWORD[_FILE]   http auth credentials',
+    '  PIKVM_HOST                   required to reach the PiKVM',
+    '  PIKVM_PASSWORD[_FILE]        needed only to actually drive the PiKVM device',
     '',
     'In http mode the modern Streamable HTTP transport is served at',
     'POST/GET/DELETE /mcp, with a health check at GET /health.',
+    'With --security yes, /mcp requires HTTP Basic auth (Authorization header) on',
+    'every request; a validated initialize also authorizes its session. /health is',
+    'always open.',
   ].join('\n');
 }

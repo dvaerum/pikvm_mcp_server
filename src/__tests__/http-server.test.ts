@@ -91,3 +91,59 @@ describe('startHttpServer (Streamable HTTP transport)', () => {
     await r3.text();
   });
 });
+
+describe('startHttpServer auth (--security yes)', () => {
+  const AUTH = { username: 'operator', password: 'hunter2' };
+  const basic = (u: string, p: string) =>
+    'Basic ' + Buffer.from(`${u}:${p}`, 'utf8').toString('base64');
+
+  it('leaves /health open even when auth is enabled', async () => {
+    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, auth: AUTH });
+    const res = await fetch(`http://127.0.0.1:${handle.port}/health`);
+    expect(res.status).toBe(200);
+    expect((await res.json()).secured).toBe(true);
+  });
+
+  it('rejects initialize without credentials (401 + WWW-Authenticate)', async () => {
+    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, auth: AUTH });
+    const r = await fetch(handle.url, { method: 'POST', headers: HEADERS, body: JSON.stringify(INIT) });
+    expect(r.status).toBe(401);
+    expect(r.headers.get('www-authenticate')).toMatch(/Basic/);
+    await r.text();
+  });
+
+  it('rejects wrong credentials', async () => {
+    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, auth: AUTH });
+    const r = await fetch(handle.url, {
+      method: 'POST',
+      headers: { ...HEADERS, authorization: basic('operator', 'wrong') },
+      body: JSON.stringify(INIT),
+    });
+    expect(r.status).toBe(401);
+    await r.text();
+  });
+
+  it('a validated initialize authorizes the session for later requests without a header', async () => {
+    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, auth: AUTH });
+
+    // initialize WITH a valid header -> 200 + session id
+    const r1 = await fetch(handle.url, {
+      method: 'POST',
+      headers: { ...HEADERS, authorization: basic('operator', 'hunter2') },
+      body: JSON.stringify(INIT),
+    });
+    expect(r1.status).toBe(200);
+    const sid = r1.headers.get('mcp-session-id');
+    expect(sid).toBeTruthy();
+    await readRpc(r1);
+
+    // subsequent request on the session, NO header -> allowed (session is authorized)
+    const r2 = await fetch(handle.url, {
+      method: 'POST',
+      headers: { ...HEADERS, 'mcp-session-id': sid! },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    });
+    expect(r2.status).toBe(202);
+    await r2.text();
+  });
+});

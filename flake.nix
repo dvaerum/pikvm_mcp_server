@@ -119,23 +119,51 @@
               imports = [ self.nixosModules.pikvm-mcp ];
               environment.etc."pikvm-secrets/password".text = "testpassword";
               environment.etc."pikvm-secrets/username".text = "operator";
+              environment.etc."pikvm-secrets/auth-password".text = "mcptoken";
               services.pikvm-mcp = {
                 enable = true;
                 target = "ipad";
                 host = "https://pikvm.invalid";
                 passwordFile = "/etc/pikvm-secrets/password";
                 usernameFile = "/etc/pikvm-secrets/username";
+                # HTTP auth (security defaults to "yes").
+                authUsername = "operator";
+                authPasswordFile = "/etc/pikvm-secrets/auth-password";
                 openFirewall = true;
               };
             };
             testScript = ''
+              import json
+
               machine.wait_for_unit("pikvm-mcp.service")
               machine.wait_for_open_port(3000)
-              machine.succeed("curl -sf http://127.0.0.1:3000/health | grep -q streamable-http")
+
+              # /health is unauthenticated and reports the endpoint is secured.
+              health = json.loads(machine.succeed("curl -sf http://127.0.0.1:3000/health"))
+              assert health["transport"] == "streamable-http", health
+              assert health["secured"] is True, health
+
+              init = (
+                "-H 'content-type: application/json' "
+                "-H 'accept: application/json, text/event-stream' "
+                "-d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                "\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},"
+                "\"clientInfo\":{\"name\":\"t\",\"version\":\"0\"}}}'"
+              )
+              code = lambda cmd: machine.succeed(
+                f"curl -s -o /dev/null -w '%{{http_code}}' -X POST http://127.0.0.1:3000/mcp {cmd}"
+              ).strip()
+
+              # No credentials -> 401; wrong password -> 401; valid Basic -> accepted.
+              assert code(init) == "401", "initialize without credentials must be 401"
+              assert code(f"-u operator:wrong {init}") == "401", "wrong password must be 401"
+              assert code(f"-u operator:mcptoken {init}") == "200", "valid credentials must be accepted"
+
               pid = machine.succeed("systemctl show -p MainPID --value pikvm-mcp.service").strip()
-              # The password must NOT be in the service's environment (it comes
-              # from a systemd credential file instead).
+              # Neither secret may appear in the service's environment (both come
+              # from systemd credential files instead).
               machine.fail(f"tr '\\0' '\\n' < /proc/{pid}/environ | grep -q testpassword")
+              machine.fail(f"tr '\\0' '\\n' < /proc/{pid}/environ | grep -q mcptoken")
             '';
           };
         };
