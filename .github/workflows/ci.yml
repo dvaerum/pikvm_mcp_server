@@ -1,0 +1,57 @@
+name: CI
+
+# The MCP repo had no CI. These jobs are the gate (there is no other).
+# `test` guards the TypeScript; `nix-runtime-smoke` is the RUNTIME guard added
+# after a green build masked a run-broken package: nix/package.nix mislinked the
+# onnxruntime .so and the service crash-looped with onnxruntime-node
+# ERR_DLOPEN_FAILED — invisible to `nix build` (build-only) and to the macOS
+# npm-bundled path. Actually running the nix-built binary catches it, because
+# onnxruntime-node is a static import (src/pikvm/cursor-ml-detect.ts) so the
+# dlopen happens at module load — even `--help` triggers it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: typecheck
+        run: npm run typecheck
+      - name: unit tests
+        # CI is set by GitHub Actions → vitest.config.ts serializes test files
+        # (fileParallelism:false) for a deterministic signal under runner load.
+        run: npx vitest run
+
+  nix-runtime-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: build the nix package
+        run: nix build .#pikvm-mcp-server --print-build-logs
+      - name: runtime dlopen smoke (onnxruntime-node loads?)
+        # Running the nix-built binary forces the onnxruntime-node dlopen at
+        # module import; --help exits 0 iff the .so links. A regression of the
+        # 1.24.x ORT lib linkage surfaces here as ERR_DLOPEN_FAILED / non-zero.
+        run: |
+          set -euo pipefail
+          out="$(./result/bin/pikvm-mcp-server --help 2>&1)" || {
+            echo "$out"
+            echo "::error::pikvm-mcp-server failed to start — onnxruntime dlopen regression?"
+            exit 1
+          }
+          if grep -qiE "ERR_DLOPEN_FAILED|onnxruntime.*(dlopen|symbol version)" <<<"$out"; then
+            echo "$out"
+            echo "::error::onnxruntime-node dlopen error at startup"
+            exit 1
+          fi
+          echo "runtime smoke OK — onnxruntime-node loaded, --help returned cleanly"
