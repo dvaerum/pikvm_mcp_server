@@ -37,6 +37,19 @@ profiles).
 - A fix's final sign-off must be routed to the iPad-equipped node for a ground-truth bench
   (`benches/bench-openloopshape-groundtruth.ts`).
 
+**PINPOINT (2026-07-22, REAL pixels).** Ran the detection stages individually on 12 real
+grey-0.55 captures (`data/openloopshape-real/`, 6 upper-right; `benches/analyze-openloopshape-real.ts`):
+- cascade (`findCursorByV8FullFrame`) + ml-multihint locate the real cursor **100% at every
+  target incl upper-right (6/6), residual 2–4 px**. Detection is NOT the failure.
+- `findCursorByShape` (dark AND bright) returns **null on all 12** — it is not a working
+  fallback on real grey; the path is cascade-only in practice.
+- Therefore the live "~48% / 0% upper-right" is DOWNSTREAM of detection — the device-only
+  **wiggle-verify gate** (`mlWiggleVerify` / `wiggleVerifyCandidate`, gated by
+  `tautologyProxThreshold`) rejecting valid detections. Candidate fix: the full-frame cascade
+  is hint-INDEPENDENT, so its detection can't be a hint-tautology — SKIP the wiggle-verify
+  tautology guard for cascade-sourced fixes (let the accurate 2–4 px detection through).
+  Wiggle-verify is device-only → the fix + sign-off must be validated live by the iPad node.
+
 ## Git history reclaim (167MB)  [DEFERRED]
 The old cursor-v0..v12 model binaries are untracked now but still in .git history (~167MB).
 Reclaiming needs a history rewrite (git filter-repo) — invasive (rewrites shared commits).
