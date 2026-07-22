@@ -4,7 +4,6 @@
   autoPatchelfHook,
   buildNpmPackage,
   fetchpatch,
-  onnxruntime,
   pkg-config,
   python3,
   vips,
@@ -14,19 +13,19 @@
 let
   package = lib.importJSON ../package.json;
 
-  # onnxruntime-node downloads the ONNX Runtime shared lib from a Nuget feed in
-  # its install script — impossible in a pure sandbox (no network) and on a
-  # device rebuild. Instead we skip that download (ONNXRUNTIME_NODE_INSTALL=skip)
-  # and symlink the nixpkgs onnxruntime lib into the binding dir (postInstall).
-  # onnxruntime-node is pinned to 1.24.x to match nixpkgs's onnxruntime minor:
-  # the prebuilt binding must not request a newer ORT C API than the lib provides.
+  # onnxruntime-node's install script fetches the ORT shared lib from a Nuget
+  # feed — impossible in a pure sandbox (no network). We skip that download
+  # (ONNXRUNTIME_NODE_INSTALL=skip) and KEEP the ABI-matched lib that
+  # onnxruntime-node already bundles in its npm tarball for the host os/arch;
+  # autoPatchelfHook fixes only its interpreter + RUNPATH. We deliberately do NOT
+  # substitute the nixpkgs onnxruntime lib: its versioned ELF symbols are
+  # exact-match (VERS_1.24.x) and nixpkgs's minor (1.24.4) drifted ahead of the
+  # binding (1.24.3), so dlopen failed at runtime (ERR_DLOPEN_FAILED) even though
+  # the build was green — only a booted VM caught it. Keeping the bundled lib
+  # removes the version coupling entirely.
   ortPlat = if stdenv.hostPlatform.isDarwin then "darwin" else "linux";
   ortArch = if stdenv.hostPlatform.isAarch64 then "arm64" else "x64";
   ortLibName = if stdenv.hostPlatform.isDarwin then "libonnxruntime.1.dylib" else "libonnxruntime.so.1";
-  ortLibSrc =
-    if stdenv.hostPlatform.isDarwin
-    then "${onnxruntime}/lib/libonnxruntime.dylib"
-    else "${onnxruntime}/lib/libonnxruntime.so.1";
 in
 buildNpmPackage {
   pname = package.name;
@@ -81,11 +80,12 @@ buildNpmPackage {
   nativeBuildInputs = [ pkg-config python3 ]
     ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
   buildInputs = [ vips ]
-    ++ lib.optionals stdenv.hostPlatform.isLinux [ onnxruntime stdenv.cc.cc.lib ];
+    ++ lib.optionals stdenv.hostPlatform.isLinux [ stdenv.cc.cc.lib ];
   env = {
     npm_config_sharp_install_force_build = "true";
     npm_config_build_from_source = "true";
-    # Don't fetch the ONNX Runtime lib from the network; we provide it below.
+    # Don't fetch the ORT lib from the network; onnxruntime-node bundles an
+    # ABI-matched one in its tarball, which we keep (see postInstall).
     ONNXRUNTIME_NODE_INSTALL = "skip";
   };
 
@@ -105,22 +105,22 @@ buildNpmPackage {
     # (they need libc.musl-*.so.1, which doesn't exist here). Drop them.
     rm -rf "$out"/lib/node_modules/*/node_modules/@img/*musl*
 
-    # onnxruntime-node ships prebuilt binding + lib for EVERY platform in one
-    # tarball. Keep only the host os/arch (slims the package and stops
-    # autoPatchelf from choking on foreign-arch ELF), then replace the bundled
-    # (Microsoft-prebuilt) ORT lib with the nixpkgs one — NixOS-compatible and
-    # ABI-matched to the pinned onnxruntime-node minor — next to the binding so
-    # its $ORIGIN/@loader_path rpath finds it.
-    linked=0
+    # onnxruntime-node ships prebuilt binding + ABI-matched ORT lib for EVERY
+    # platform in one tarball. Keep only the host os/arch (slims the package and
+    # stops autoPatchelf from choking on foreign-arch ELF) and KEEP the bundled
+    # lib as-is — autoPatchelfHook fixes its interpreter/RUNPATH and its
+    # $ORIGIN/@loader_path rpath already finds it next to the binding. We do NOT
+    # substitute the nixpkgs lib (see the ORT note above — it broke dlopen).
+    found=0
     for ortpkg in "$out"/lib/node_modules/*/node_modules/onnxruntime-node; do
       napi="$ortpkg/bin/napi-v6"
       [ -d "$napi" ] || continue
       find "$napi" -mindepth 1 -maxdepth 1 -type d ! -name "${ortPlat}" -exec rm -rf {} +
       find "$napi/${ortPlat}" -mindepth 1 -maxdepth 1 -type d ! -name "${ortArch}" -exec rm -rf {} +
-      ln -sf ${ortLibSrc} "$napi/${ortPlat}/${ortArch}/${ortLibName}"
-      linked=1
+      test -e "$napi/${ortPlat}/${ortArch}/${ortLibName}" || { echo "ERROR: bundled ${ortLibName} missing" >&2; exit 1; }
+      found=1
     done
-    [ "$linked" = 1 ] || { echo "ERROR: onnxruntime-node binding dir not found — ORT lib not linked" >&2; exit 1; }
+    [ "$found" = 1 ] || { echo "ERROR: onnxruntime-node binding dir not found" >&2; exit 1; }
   '';
 
   meta = {
