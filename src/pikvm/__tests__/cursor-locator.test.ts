@@ -229,20 +229,21 @@ describe('locate(profile: openLoopShape)', () => {
     expect(mlCall[4]).toMatchObject({ minConfidence: 0.5 });
   });
 
-  it('wiggle-verifies a suspiciously-close ML detection and accepts it', async () => {
+  it('wiggle-verifies a suspiciously-close CROP-BASED ML detection (crop != 0,0) and accepts it', async () => {
     const deps = makeDeps({
-      // prox 0 (<= threshold 30) → mlWiggleVerify must run.
+      // prox 0 (<= threshold 30) AND crop-based (non-zero crop = the hint-crop
+      // fallback, which CAN be a hint echo) → mlWiggleVerify must run.
       findCursorByMLMultiHint: vi.fn(async () => ({
         x: HINT.x,
         y: HINT.y,
         confidence: 0.8,
-        crop: { left: 0, top: 0 },
+        crop: { left: 120, top: 80 },
       })),
       mlWiggleVerify: vi.fn(async () => ({
         x: HINT.x,
         y: HINT.y,
         confidence: 0.8,
-        crop: { left: 0, top: 0 },
+        crop: { left: 120, top: 80 },
       })),
     });
     const loc = new CursorLocator(deps);
@@ -254,14 +255,33 @@ describe('locate(profile: openLoopShape)', () => {
     expect(deps.findCursorByShape).not.toHaveBeenCalled();
   });
 
+  it('SKIPS wiggle-verify for a full-frame-cascade (crop 0,0) detection near the hint (the fix)', async () => {
+    // findCursorByMLMultiHint returns crop {0,0} when its hint-INDEPENDENT full-frame
+    // cascade fired, so a near-hint landing is genuine, not a tautology — accept it
+    // directly WITHOUT the wiggle-verify that was false-rejecting it live (upper-right 0%).
+    const deps = makeDeps({
+      findCursorByMLMultiHint: vi.fn(async () => ({
+        x: HINT.x, y: HINT.y, confidence: 0.8, crop: { left: 0, top: 0 },
+      })),
+      mlWiggleVerify: vi.fn(async () => null), // would REJECT if called — must NOT be called
+    });
+    const loc = new CursorLocator(deps);
+
+    const fix = await loc.locate(FRAME, 200, 100, 'openLoopShape', HINT);
+
+    expect(deps.mlWiggleVerify).not.toHaveBeenCalled();
+    expect(fix).toEqual({ position: { x: HINT.x, y: HINT.y }, source: 'ml', rawScore: 0.8, confidence: 0.8 });
+    expect(deps.findCursorByShape).not.toHaveBeenCalled();
+  });
+
   it('falls through to a wiggle-verified shape candidate when ML is rejected', async () => {
     const deps = makeDeps({
-      // ML detected near hint but wiggle rejects it → shape fallback.
+      // Crop-based ML near hint (crop != 0,0) but wiggle rejects it → shape fallback.
       findCursorByMLMultiHint: vi.fn(async () => ({
         x: HINT.x,
         y: HINT.y,
         confidence: 0.7,
-        crop: { left: 0, top: 0 },
+        crop: { left: 120, top: 80 },
       })),
       mlWiggleVerify: vi.fn(async () => null),
       findCursorByShape: vi

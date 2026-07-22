@@ -297,8 +297,19 @@ export class CursorLocator {
       });
       if (ml) {
         const mlProx = Math.hypot(ml.x - predicted.x, ml.y - predicted.y);
+        // findCursorByMLMultiHint returns crop {0,0} when its FULL-FRAME
+        // v9-bordered cascade fired (hint-INDEPENDENT); a non-zero crop means the
+        // crop-near-hint fallback fired. The tautology wiggle-verify exists to
+        // reject hint-echo FPs — but a full-frame-cascade landing near the hint is
+        // a GENUINE near-target hit, not an echo, so wiggle-verifying it only risks
+        // false-rejecting a correct detection. Real-frame diagnosis (grey scene,
+        // @nixos-developer-system) showed the cascade locating the cursor 100% at
+        // 2-4px yet the guard rejecting it at upper-right (0% live locate). So skip
+        // the guard for full-frame-cascade detections; keep it for crop-based ones,
+        // which genuinely can be tautologies.
+        const fromFullFrameCascade = ml.crop.left === 0 && ml.crop.top === 0;
         let verified: MLCursorResult | null = ml;
-        if (mlProx <= d.tautologyProxThreshold) {
+        if (mlProx <= d.tautologyProxThreshold && !fromFullFrameCascade) {
           verified = await d.mlWiggleVerify(ml);
         }
         if (verified) {
