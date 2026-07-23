@@ -23,7 +23,7 @@ import { startHttpServer } from './http-server.js';
 import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './auth.js';
 import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
-import { recoverHid, makeHttpRecoveryTrigger, type RecoveryTrigger } from './pikvm/hid-recovery.js';
+import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, type RecoveryTrigger } from './pikvm/hid-recovery.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
@@ -362,24 +362,27 @@ const tools: Tool[] = [
   {
     name: 'pikvm_hid_recover',
     description:
-      'Escalating recovery for a broken HID (mouse/keyboard offline while video is fine). Detects the ' +
-      'failure, then climbs a ladder, verifying mouse+keyboard come back online after each rung. ' +
-      'HONESTLY: rung 1 (soft reset, the same as pikvm_hid_reset) is a CHEAP FIRST TRY that often does ' +
-      'NOT fix a controller-level drop (it cannot force host re-enumeration and set_connected is a no-op ' +
-      'on some units). Rung 2 (UDC rebind, host-provided) is the UNTESTED no-reboot candidate. Rung 3 ' +
-      '(reboot the PiKVM, host-provided) is the currently-known-RELIABLE fix but takes the appliance down ' +
-      '~30-90s, so it requires allowReboot:true. Rungs 2-3 need the pikvm-nixos host recovery trigger to ' +
-      'be configured; when it is not, they are reported as unavailable (rung 1 still runs).',
+      'Escalating recovery for a broken HID (mouse/keyboard not driving the target while video is fine). ' +
+      'R0 first checks the target is present (a screenshot returns an image) — NOTHING recovers an asleep/' +
+      'absent target, so wake it first. Then it climbs the ladder, verifying BEHAVIORALLY after each rung ' +
+      '(emits a mouse move + checks the screen changed — the online flags have lied). HONESTLY: R1 (soft ' +
+      'reset, = pikvm_hid_reset) is a cheap first try that often does NOT fix a controller-level drop. R2 ' +
+      '(soft_connect USB pull-up toggle) and R3a (UDC rebind) are host-provided and UNTESTED as recoveries. ' +
+      'R3b (reboot the PiKVM, host-provided) is the most reliable remote option (worked once) but is ' +
+      'DESTRUCTIVE (~30-90s), so it needs allowReboot:true. If every remote rung fails, the tool escalates ' +
+      'to R4: a HUMAN must physically re-plug the target USB or power it on — remote recovery cannot always ' +
+      'fix this. Host rungs (R2/R3a/R3b) need the pikvm-nixos recovery trigger configured; otherwise they ' +
+      'report unavailable and R1 still runs.',
     inputSchema: {
       type: 'object',
       properties: {
         maxRung: {
           type: 'number',
-          description: 'Highest rung to attempt: 1 = soft reset only, 2 = + UDC rebind, 3 = + reboot. Default 2.',
+          description: 'Highest rung to attempt: 1 = soft reset only, 2 = + soft_connect toggle, 3 = + UDC rebind, 4 = + reboot. Default 3 (all non-destructive remote rungs).',
         },
         allowReboot: {
           type: 'boolean',
-          description: 'Permit rung 3 (reboot the PiKVM device) — destructive: the whole appliance (including this server) goes down ~30-90s. Only used when maxRung is 3. Default false.',
+          description: 'Permit rung 4 (reboot the PiKVM device) — destructive: the whole appliance (including this server) goes down ~30-90s. Only used when maxRung is 4. Default false.',
         },
       },
     },
@@ -1096,18 +1099,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'pikvm_hid_recover': {
-        const maxRung = (validateNumber(args.maxRung, 1, 3) ?? 2) as 1 | 2 | 3;
+        const maxRung = (validateNumber(args.maxRung, 1, 4) ?? 3) as 1 | 2 | 3 | 4;
         const allowReboot = validateBoolean(args.allowReboot) ?? false;
-        const result = await recoverHid(pikvm, getRecoveryTrigger(), { maxRung, allowReboot });
+        const verifier = makeBehavioralVerifier(pikvm);
+        const result = await recoverHid(pikvm, getRecoveryTrigger(), verifier, { maxRung, allowReboot });
         const lines = [
-          result.initiallyBroken
-            ? `HID was BROKEN (mouse/keyboard offline). Escalated up to rung ${maxRung}${allowReboot ? ' (reboot permitted)' : ''}:`
-            : 'HID was already online — nothing to recover.',
-          ...result.attempts.map((a) => `  rung ${a.rung} (${a.action}): ${a.recovered ? 'RECOVERED' : a.performed ? 'no change' : 'skipped/unavailable'} — ${a.detail}`),
-          `Final HID: mouse=${result.finalHid.mouseOnline ? 'online' : 'offline'}, keyboard=${result.finalHid.keyboardOnline ? 'online' : 'offline'} → ${result.recovered ? 'RECOVERED' : 'STILL BROKEN'}.`,
+          !result.targetPresent
+            ? 'R0 target NOT present (no screenshot / HDMI) — no HID rung can run.'
+            : result.initiallyBroken
+              ? `HID flags reported broken. Escalated up to rung ${maxRung}${allowReboot ? ' (reboot permitted)' : ''}, verifying behaviorally after each:`
+              : 'HID flags reported OK; behavioral check confirmed it — nothing to recover.',
+          ...result.attempts.map((a) => `  ${a.rung} (${a.action}): ${a.recovered ? 'RECOVERED' : a.performed ? 'no change' : 'skipped/unavailable'} — ${a.detail}`),
+          `→ ${result.recovered ? 'RECOVERED (behavioral verify healthy)' : 'STILL BROKEN'}.`,
         ];
-        if (!result.recovered && maxRung < 3) {
-          lines.push('Not recovered. Rung 3 (reboot) is the currently-known-reliable fix: re-run with maxRung:3, allowReboot:true (needs the host recovery trigger configured).');
+        if (result.humanActionRequired) {
+          lines.push(`R4 — HUMAN ACTION REQUIRED: ${result.humanActionRequired}`);
+        }
+        if (!result.recovered && result.targetPresent && maxRung < 4) {
+          lines.push('Not recovered by the allowed rungs. Reboot (R3b) worked once and is the most reliable remote option: re-run with maxRung:4, allowReboot:true (needs the host recovery trigger configured).');
         }
         return { content: [{ type: 'text', text: lines.join('\n') }], isError: !result.recovered };
       }
