@@ -25,7 +25,6 @@ let
   # removes the version coupling entirely.
   ortPlat = if stdenv.hostPlatform.isDarwin then "darwin" else "linux";
   ortArch = if stdenv.hostPlatform.isAarch64 then "arm64" else "x64";
-  ortLibName = if stdenv.hostPlatform.isDarwin then "libonnxruntime.1.dylib" else "libonnxruntime.so.1";
 in
 buildNpmPackage {
   pname = package.name;
@@ -117,7 +116,13 @@ buildNpmPackage {
       [ -d "$napi" ] || continue
       find "$napi" -mindepth 1 -maxdepth 1 -type d ! -name "${ortPlat}" -exec rm -rf {} +
       find "$napi/${ortPlat}" -mindepth 1 -maxdepth 1 -type d ! -name "${ortArch}" -exec rm -rf {} +
-      test -e "$napi/${ortPlat}/${ortArch}/${ortLibName}" || { echo "ERROR: bundled ${ortLibName} missing" >&2; exit 1; }
+      # The bundled lib's filename is platform-specific and version-carrying on
+      # darwin (libonnxruntime.1.24.3.dylib) vs an soname on linux
+      # (libonnxruntime.so.1), and the prebuilt binding's load command references
+      # it by that EXACT name — so keep whatever the tarball ships and just assert
+      # some libonnxruntime lib survived the prune (glob, no version coupling).
+      test -n "$(find "$napi/${ortPlat}/${ortArch}" -maxdepth 1 -name 'libonnxruntime*' -print -quit)" \
+        || { echo "ERROR: bundled onnxruntime lib missing in ${ortPlat}/${ortArch}" >&2; exit 1; }
       found=1
     done
     [ "$found" = 1 ] || { echo "ERROR: onnxruntime-node binding dir not found" >&2; exit 1; }
