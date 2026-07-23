@@ -92,10 +92,12 @@ describe('parseCliOptions', () => {
     expect(parseCliOptions([], {}).security).toBeUndefined();
   });
 
-  it('--security yes|no parse; env fallback; flag wins', () => {
+  it('--security yes|no|kvmd parse; env fallback; flag wins', () => {
     expect(parseCliOptions(['--security', 'yes'], {}).security).toBe('yes');
     expect(parseCliOptions(['--security', 'no'], {}).security).toBe('no');
+    expect(parseCliOptions(['--security', 'kvmd'], {}).security).toBe('kvmd');
     expect(parseCliOptions([], { PIKVM_MCP_SECURITY: 'yes' }).security).toBe('yes');
+    expect(parseCliOptions([], { PIKVM_MCP_SECURITY: 'kvmd' }).security).toBe('kvmd');
     expect(parseCliOptions(['--security', 'no'], { PIKVM_MCP_SECURITY: 'yes' }).security).toBe('no');
   });
 

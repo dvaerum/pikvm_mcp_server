@@ -20,7 +20,8 @@ import { PiKVMClient, createDefaultBelief } from './pikvm/client.js';
 import { loadConfig, resolveHttpAuth } from './config.js';
 import { parseCliOptions, helpText } from './cli.js';
 import { startHttpServer } from './http-server.js';
-import type { HttpAuth } from './auth.js';
+import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './auth.js';
+import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
@@ -1633,8 +1634,9 @@ async function main() {
   if (cli.transport === 'http') {
     if (cli.security === undefined) {
       console.error(
-        '--security is required in http mode — pass --security yes (require auth on /mcp) ' +
-          'or --security no (serve it with NO authentication). See --help.',
+        '--security is required in http mode — pass --security yes (static credential), ' +
+          '--security kvmd (validate clients against PiKVM/kvmd users), or --security no ' +
+          '(serve it with NO authentication). See --help.',
       );
       process.exit(2);
     }
@@ -1647,7 +1649,11 @@ async function main() {
         );
         process.exit(2);
       }
-      console.error(`HTTP auth: ENABLED (Basic, user "${httpAuth.username}").`);
+      console.error(`HTTP auth: ENABLED (static Basic, user "${httpAuth.username}").`);
+    } else if (cli.security === 'kvmd') {
+      console.error(
+        'HTTP auth: ENABLED (kvmd-backed — clients log in with their PiKVM username/password).',
+      );
     } else {
       console.error(
         `⚠ HTTP auth: DISABLED (--security no). Anyone who can reach ${cli.host}:${cli.port} can control the machine.`,
@@ -1657,6 +1663,24 @@ async function main() {
 
   // Load configuration (deferred to here for proper error handling)
   const config = loadConfig();
+
+  // Build the /mcp header authorizer now that config (the PiKVM host/TLS/proxy the
+  // kvmd backend validates against) is available. undefined = open (--security no).
+  let httpAuthorize: HeaderAuthorizer | undefined;
+  if (cli.transport === 'http') {
+    if (cli.security === 'yes') {
+      httpAuthorize = makeStaticAuthorizer(httpAuth!);
+    } else if (cli.security === 'kvmd') {
+      // Validate the CLIENT's Basic creds against kvmd (GET /api/auth/check) —
+      // a SEPARATE check from the service creds the PiKVMClient uses. Reuses the
+      // same host + TLS-verify + optional loopback proxy.
+      httpAuthorize = makeKvmdAuthorizer({
+        host: config.pikvm.host,
+        verifySsl: config.pikvm.verifySsl,
+        proxyUrl: config.pikvm.proxyUrl || undefined,
+      });
+    }
+  }
   // C1 P2 (candidate 5): the CursorBelief is created at startup and injected into
   // the client, so it is no longer owned by PiKVMClient. Phase 3 wraps this same
   // instance in the CursorLocator (which becomes its front door); client.belief +
@@ -1723,7 +1747,7 @@ async function main() {
     const handle = await startHttpServer(createMcpServer, {
       host: cli.host,
       port: cli.port,
-      auth: httpAuth,
+      authorize: httpAuthorize,
     });
     console.error(`PiKVM MCP Server running (Streamable HTTP) at ${handle.url}`);
   } else {

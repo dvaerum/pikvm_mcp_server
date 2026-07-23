@@ -61,14 +61,20 @@ in
     };
 
     security = lib.mkOption {
-      type = lib.types.enum [ "yes" "no" ];
+      type = lib.types.enum [ "yes" "no" "kvmd" ];
       default = "yes";
       description = ''
-        Whether the MCP HTTP endpoint requires authentication. This endpoint
-        drives real input on a physical machine, so it defaults to `"yes"`.
-        `"yes"` requires {option}`authPasswordFile`; `"no"` serves /mcp with NO
-        auth (anyone who can reach the port controls the machine). Passed as
-        `--security`.
+        Whether/how the MCP HTTP endpoint authenticates. This endpoint drives
+        real input on a physical machine, so it defaults to `"yes"`.
+        - `"yes"`: HTTP Basic against a static credential; requires
+          {option}`authPasswordFile`.
+        - `"kvmd"`: HTTP Basic validated against PiKVM's own users
+          (`/etc/kvmd/htpasswd`, via kvmd `GET /api/auth/check`) — clients log in
+          with their PiKVM username/password. Uses {option}`host` +
+          {option}`verifySsl`; needs NO {option}`authPasswordFile`.
+        - `"no"`: serves /mcp with NO auth (anyone who can reach the port controls
+          the machine).
+        Passed as `--security`.
       '';
     };
 
@@ -126,10 +132,11 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = cfg.security == "no" || cfg.authPasswordFile != null;
+        assertion = cfg.security != "yes" || cfg.authPasswordFile != null;
         message =
           "services.pikvm-mcp.security = \"yes\" requires services.pikvm-mcp.authPasswordFile "
-          + "to be set (or set security = \"no\" to serve /mcp without authentication).";
+          + "to be set (use security = \"kvmd\" to validate clients against PiKVM's own users, "
+          + "or security = \"no\" to serve /mcp without authentication).";
       }
     ];
 

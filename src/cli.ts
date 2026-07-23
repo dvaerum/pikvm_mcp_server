@@ -21,7 +21,7 @@ export type TransportKind = 'stdio' | 'http';
  */
 export type TargetKind = 'ipad' | 'desktop';
 
-export type SecurityChoice = 'yes' | 'no';
+export type SecurityChoice = 'yes' | 'no' | 'kvmd';
 
 export interface CliOptions {
   transport: TransportKind;
@@ -89,8 +89,13 @@ export function parseCliOptions(
   }
 
   const securityRaw = (values.security as string | undefined) ?? env.PIKVM_MCP_SECURITY;
-  if (securityRaw !== undefined && securityRaw !== 'yes' && securityRaw !== 'no') {
-    throw new Error(`Invalid --security "${securityRaw}" (expected "yes" or "no")`);
+  if (
+    securityRaw !== undefined &&
+    securityRaw !== 'yes' &&
+    securityRaw !== 'no' &&
+    securityRaw !== 'kvmd'
+  ) {
+    throw new Error(`Invalid --security "${securityRaw}" (expected "yes", "no", or "kvmd")`);
   }
 
   return {
@@ -121,7 +126,9 @@ export function helpText(binName = 'pikvm-mcp-server'): string {
     '  --target <ipad|desktop>      Control path (REQUIRED):',
     '                                 ipad    = curve-one-shot mover + cascade detector',
     '                                 desktop = legacy detect-then-move (absolute mouse)',
-    '  --security <yes|no>          REQUIRED in http mode. yes = require auth on /mcp;',
+    '  --security <yes|no|kvmd>     REQUIRED in http mode. yes = require auth on /mcp',
+    '                               against a static credential; kvmd = clients log in with',
+    '                               their PiKVM (kvmd) username/password;',
     '                                 no = serve /mcp with NO auth (anyone who can reach',
     '                                 the port controls the machine).',
     '  --auth-username <name>       Username for http auth (default: operator).',
@@ -131,7 +138,7 @@ export function helpText(binName = 'pikvm-mcp-server'): string {
     '',
     'Environment (used when the matching flag is absent):',
     '  PIKVM_MCP_TRANSPORT, PIKVM_MCP_HOST, PIKVM_MCP_PORT, PIKVM_TARGET',
-    '  PIKVM_MCP_SECURITY           yes|no',
+    '  PIKVM_MCP_SECURITY           yes|no|kvmd',
     '  PIKVM_MCP_AUTH_USERNAME, PIKVM_MCP_AUTH_PASSWORD[_FILE]   http auth credentials',
     '  PIKVM_HOST                   required to reach the PiKVM',
     '  PIKVM_PASSWORD[_FILE]        needed only to actually drive the PiKVM device',

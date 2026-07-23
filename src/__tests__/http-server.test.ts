@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { startHttpServer, type HttpServerHandle } from '../http-server.js';
+import { makeStaticAuthorizer } from '../auth.js';
+import { makeKvmdAuthorizer } from '../kvmd-auth.js';
 
 function fakeCreateServer(): Server {
   const s = new Server({ name: 'test', version: '0.0.0' }, { capabilities: { tools: {} } });
@@ -94,18 +96,19 @@ describe('startHttpServer (Streamable HTTP transport)', () => {
 
 describe('startHttpServer auth (--security yes)', () => {
   const AUTH = { username: 'operator', password: 'hunter2' };
+  const authorize = makeStaticAuthorizer(AUTH);
   const basic = (u: string, p: string) =>
     'Basic ' + Buffer.from(`${u}:${p}`, 'utf8').toString('base64');
 
   it('leaves /health open even when auth is enabled', async () => {
-    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, auth: AUTH });
+    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, authorize });
     const res = await fetch(`http://127.0.0.1:${handle.port}/health`);
     expect(res.status).toBe(200);
     expect((await res.json()).secured).toBe(true);
   });
 
   it('rejects initialize without credentials (401 + WWW-Authenticate)', async () => {
-    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, auth: AUTH });
+    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, authorize });
     const r = await fetch(handle.url, { method: 'POST', headers: HEADERS, body: JSON.stringify(INIT) });
     expect(r.status).toBe(401);
     expect(r.headers.get('www-authenticate')).toMatch(/Basic/);
@@ -113,7 +116,7 @@ describe('startHttpServer auth (--security yes)', () => {
   });
 
   it('rejects wrong credentials', async () => {
-    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, auth: AUTH });
+    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, authorize });
     const r = await fetch(handle.url, {
       method: 'POST',
       headers: { ...HEADERS, authorization: basic('operator', 'wrong') },
@@ -124,7 +127,7 @@ describe('startHttpServer auth (--security yes)', () => {
   });
 
   it('a validated initialize authorizes the session for later requests without a header', async () => {
-    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, auth: AUTH });
+    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, authorize });
 
     // initialize WITH a valid header -> 200 + session id
     const r1 = await fetch(handle.url, {
@@ -145,5 +148,51 @@ describe('startHttpServer auth (--security yes)', () => {
     });
     expect(r2.status).toBe(202);
     await r2.text();
+  });
+});
+
+describe('startHttpServer auth (--security kvmd)', () => {
+  const basic = (u: string, p: string) =>
+    'Basic ' + Buffer.from(`${u}:${p}`, 'utf8').toString('base64');
+
+  // Stub kvmd's GET /api/auth/check: only pikvm-admin/pikvm-pass is valid.
+  const calls: Array<{ username: string; password: string }> = [];
+  const check = async (username: string, password: string): Promise<boolean> => {
+    calls.push({ username, password });
+    return username === 'pikvm-admin' && password === 'pikvm-pass';
+  };
+
+  it('authorizes /mcp using PiKVM (kvmd) credentials and caches the positive result', async () => {
+    calls.length = 0;
+    const authorize = makeKvmdAuthorizer(
+      { host: 'https://pikvm.invalid', verifySsl: false },
+      { check },
+    );
+    handle = await startHttpServer(fakeCreateServer, { host: '127.0.0.1', port: 0, authorize });
+
+    // wrong PiKVM creds -> 401, kvmd consulted
+    const bad = await fetch(handle.url, {
+      method: 'POST',
+      headers: { ...HEADERS, authorization: basic('pikvm-admin', 'nope') },
+      body: JSON.stringify(INIT),
+    });
+    expect(bad.status).toBe(401);
+    await bad.text();
+
+    // correct PiKVM creds -> 200 + session id
+    const ok = await fetch(handle.url, {
+      method: 'POST',
+      headers: { ...HEADERS, authorization: basic('pikvm-admin', 'pikvm-pass') },
+      body: JSON.stringify(INIT),
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('mcp-session-id')).toBeTruthy();
+    await readRpc(ok);
+
+    // kvmd was consulted for each header-bearing initialize (no session reuse across them).
+    expect(calls).toEqual([
+      { username: 'pikvm-admin', password: 'nope' },
+      { username: 'pikvm-admin', password: 'pikvm-pass' },
+    ]);
   });
 });

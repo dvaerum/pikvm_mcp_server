@@ -20,6 +20,18 @@ export interface HttpAuth {
   password: string;
 }
 
+/**
+ * Decides whether a request's `Authorization` header is acceptable. Async so a
+ * backend (e.g. `--security kvmd`, which asks kvmd) can be plugged in; the static
+ * `--security yes` path resolves synchronously. Returns true to authorize.
+ */
+export type HeaderAuthorizer = (authHeader: string | undefined) => Promise<boolean>;
+
+/** `--security yes`: authorize against fixed credentials (constant-time compare). */
+export function makeStaticAuthorizer(auth: HttpAuth): HeaderAuthorizer {
+  return async (header) => headerMatches(auth, header);
+}
+
 /** Constant-time string compare that doesn't leak length via early return. */
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a, 'utf8');
