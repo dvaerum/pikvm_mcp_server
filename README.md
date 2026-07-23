@@ -359,6 +359,7 @@ The server exposes structured guidance for agents via skills. Each skill is avai
 | `fill-form-workflow` | `skill_fill_form_workflow` | `form_description` (optional) | Fill in a form on screen |
 | `ipad-keyboard-first-workflow` | `skill_ipad_keyboard_first_workflow` | `goal` (required) | Reliable keyboard-first iPad workflow (live-validated; bypasses cursor) |
 | `navigate-desktop-workflow` | `skill_navigate_desktop_workflow` | `goal` (required) | Navigate a desktop environment |
+| `desktop-workflow` | `skill_desktop_workflow` | none | Set up a desktop for reliable mouse control (absolute path) |
 | `auto-calibrate-mouse-workflow` | `skill_auto_calibrate_mouse_workflow` | — | Automatic mouse calibration |
 
 See [`docs/skills/`](docs/skills/) for detailed human-readable guides.
