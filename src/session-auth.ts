@@ -1,5 +1,5 @@
 /**
- * Per-session authentication state + the in-band `login` tool gate for the
+ * Per-session authentication state + the in-band `pikvm_login` tool gate for the
  * Streamable HTTP transport (opt-in via `--allow-tool-login`).
  *
  * The transport mints one MCP Server per session, so auth state is naturally
@@ -9,7 +9,7 @@
  *     `Authorization` header on the `initialize` request marks the session
  *     authenticated at creation; a session cannot even be opened without it
  *     (unless tool-login is enabled).
- *   - the `login` tool (opt-in): an agent authenticates a pre-auth session
+ *   - the `pikvm_login` tool (opt-in): an agent authenticates a pre-auth session
  *     in-band, WITHOUT setting a custom header — same credentials, validated by
  *     the SAME authorizer (kvmd round-trip in kvmd mode, constant-time static
  *     compare in `yes` mode).
@@ -20,11 +20,11 @@
 import { type HeaderAuthorizer } from './auth.js';
 
 export interface SessionAuthState {
-  /** True once this session presented valid creds (header at connect, or `login`). */
+  /** True once this session presented valid creds (header at connect, or `pikvm_login`). */
   authenticated: boolean;
 }
 
-/** What createMcpServer needs to expose + enforce the `login` tool for one session. */
+/** What createMcpServer needs to expose + enforce the `pikvm_login` tool for one session. */
 export interface LoginGate {
   /** The mutable per-session auth flag this gate guards. */
   session: SessionAuthState;

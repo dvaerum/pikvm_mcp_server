@@ -82,11 +82,12 @@ in
       type = lib.types.bool;
       default = false;
       description = ''
-        Also expose an in-band `login` MCP tool so a client can authenticate its
-        session by calling a tool, without setting an `Authorization` header.
+        Also expose an in-band `pikvm_login` MCP tool so a client can authenticate
+        its session by calling a tool, without setting an `Authorization` header.
         Opt-in; only meaningful with {option}`security` = "yes" or "kvmd". A
-        pre-auth session may connect without a header but can call ONLY `login`
-        until it authenticates (with the same credentials the header would carry).
+        pre-auth session may connect without a header but can call ONLY
+        `pikvm_login` until it authenticates (with the same credentials the header
+        would carry).
         The header-at-connect path stays the default and recommended posture.
         Passed as `--allow-tool-login`.
       '';

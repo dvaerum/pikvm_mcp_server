@@ -77,8 +77,8 @@ describe('E2E — Streamable HTTP via the real MCP client + real server', () => 
     const client = new Client({ name: 'e2e-login', version: '0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(handle.url)));
 
-    // Pre-auth: only `login` is visible, and other tools are refused.
-    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['login']);
+    // Pre-auth: only `pikvm_login` is visible, and other tools are refused.
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['pikvm_login']);
     const gated = (await client.callTool({ name: 'pikvm_version', arguments: {} })) as {
       isError?: boolean;
       content: Array<{ type: string; text: string }>;
@@ -87,7 +87,7 @@ describe('E2E — Streamable HTTP via the real MCP client + real server', () => 
 
     // Authenticate in-band with the same credentials the header would carry.
     const login = (await client.callTool({
-      name: 'login',
+      name: 'pikvm_login',
       arguments: { username: 'admin', password: 'pw' },
     })) as { isError?: boolean; content: Array<{ type: string; text: string }> };
     expect(login.isError).toBeFalsy();

@@ -1,10 +1,10 @@
 /**
- * The in-band `login` tool + pre-auth tool-gating (--allow-tool-login), driven
+ * The in-band `pikvm_login` tool + pre-auth tool-gating (--allow-tool-login), driven
  * by the REAL MCP client against the REAL server (createMcpServer) over a linked
  * in-memory transport. A static authorizer stands in for the shared validator
  * (kvmd/static are the same HeaderAuthorizer contract).
  *
- * Proves: a pre-auth session sees ONLY `login`; every other tool is refused;
+ * Proves: a pre-auth session sees ONLY `pikvm_login`; every other tool is refused;
  * a bad login stays gated; a valid login flips the session and unlocks the full
  * tool set; and with NO gate the surface is the ungated stdio surface (no login).
  */
@@ -32,7 +32,7 @@ describe('in-band login tool (--allow-tool-login)', () => {
     const session: SessionAuthState = { authenticated: false };
     const client = await connectClient(makeLoginGate(authorizer, session));
 
-    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['login']);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['pikvm_login']);
 
     const res = (await client.callTool({ name: 'pikvm_version', arguments: {} })) as ToolResult;
     expect(res.isError).toBe(true);
@@ -46,7 +46,7 @@ describe('in-band login tool (--allow-tool-login)', () => {
     const client = await connectClient(makeLoginGate(authorizer, session));
 
     const bad = (await client.callTool({
-      name: 'login',
+      name: 'pikvm_login',
       arguments: { username: 'admin', password: 'nope' },
     })) as ToolResult;
     expect(bad.isError).toBe(true);
@@ -54,7 +54,7 @@ describe('in-band login tool (--allow-tool-login)', () => {
     expect(session.authenticated).toBe(false);
 
     // Still only login is exposed and other tools stay blocked.
-    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['login']);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['pikvm_login']);
     const still = (await client.callTool({ name: 'pikvm_version', arguments: {} })) as ToolResult;
     expect(still.isError).toBe(true);
 
@@ -66,7 +66,7 @@ describe('in-band login tool (--allow-tool-login)', () => {
     const client = await connectClient(makeLoginGate(authorizer, session));
 
     const ok = (await client.callTool({
-      name: 'login',
+      name: 'pikvm_login',
       arguments: { username: 'admin', password: 'pw' },
     })) as ToolResult;
     expect(ok.isError).toBeFalsy();
@@ -75,7 +75,7 @@ describe('in-band login tool (--allow-tool-login)', () => {
 
     const names = (await client.listTools()).tools.map((t) => t.name);
     expect(names).toContain('pikvm_version');
-    expect(names).not.toContain('login'); // login no longer advertised once authed
+    expect(names).not.toContain('pikvm_login'); // login no longer advertised once authed
 
     const ver = (await client.callTool({ name: 'pikvm_version', arguments: {} })) as ToolResult;
     expect(ver.isError).toBeFalsy();
@@ -89,7 +89,7 @@ describe('in-band login tool (--allow-tool-login)', () => {
     const client = await connectClient(makeLoginGate(authorizer, session));
 
     const again = (await client.callTool({
-      name: 'login',
+      name: 'pikvm_login',
       arguments: { username: 'admin', password: 'pw' },
     })) as ToolResult;
     expect(again.isError).toBeFalsy();
@@ -108,7 +108,7 @@ describe('in-band login tool (--allow-tool-login)', () => {
     const client = await connectClient(gate);
 
     const res = (await client.callTool({
-      name: 'login',
+      name: 'pikvm_login',
       arguments: { username: 'admin' },
     })) as ToolResult;
     expect(res.isError).toBe(true);
@@ -123,7 +123,7 @@ describe('in-band login tool (--allow-tool-login)', () => {
     const client = await connectClient(undefined);
     const names = (await client.listTools()).tools.map((t) => t.name);
     expect(names).toContain('pikvm_version');
-    expect(names).not.toContain('login');
+    expect(names).not.toContain('pikvm_login');
     await client.close();
   });
 });

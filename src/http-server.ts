@@ -17,7 +17,7 @@
  *
  * In-band login (opts.allowToolLogin, from `--allow-tool-login`; opt-in): also
  * admits a header-less `initialize`, opening a PRE-AUTH session that can call
- * only the `login` tool (tool-gating enforced in createMcpServer) until it
+ * only the `pikvm_login` tool (tool-gating enforced in createMcpServer) until it
  * authenticates with the same credentials the header would carry. The strict
  * header-at-connect path stays the default and recommended posture.
  *
@@ -71,7 +71,7 @@ export function startHttpServer(
   // second authorizer round-trip.
   //
   // With --allow-tool-login, a header-less `initialize` is ALSO admitted, opening
-  // a PRE-AUTH session that can reach only the `login` tool (enforced at the tool
+  // a PRE-AUTH session that can reach only the `pikvm_login` tool (enforced at the tool
   // layer, in createMcpServer). This is the deliberately-looser opt-in path; the
   // strict default still rejects a session with no valid header.
   const requireAuth = (req: Request, res: Response, next: NextFunction): void => {
@@ -135,7 +135,7 @@ export function startHttpServer(
         }
         // Per-session auth state. A validated header authorizes the session at
         // creation (the strict "Both" model); a tool-login pre-auth session
-        // starts unauthenticated and is unlocked in-band by the `login` tool.
+        // starts unauthenticated and is unlocked in-band by the `pikvm_login` tool.
         const session: SessionAuthState = { authenticated: res.locals.headerAuthed !== false };
         const gate = allowToolLogin ? makeLoginGate(authorize!, session) : undefined;
         transport = new StreamableHTTPServerTransport({

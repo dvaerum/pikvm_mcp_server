@@ -715,10 +715,11 @@ const tools: Tool[] = [
 
 // The in-band auth tool (opt-in, --allow-tool-login). Exposed ONLY when a login
 // gate is present AND the session is not yet authenticated; on success the full
-// tool set above unlocks for the session. Not a `pikvm_` device op — it's a
-// session/transport concern — so it is deliberately unprefixed.
+// tool set above unlocks for the session. Named `pikvm_login` to match this
+// server's pikvm_* tool namespace (discoverability in an agent's flat list),
+// even though it authenticates the MCP session rather than driving the device.
 const LOGIN_TOOL: Tool = {
-  name: 'login',
+  name: 'pikvm_login',
   description:
     'Authenticate THIS MCP session with your username and password (your PiKVM/kvmd ' +
     'credentials when the server runs in kvmd mode). Required before any other tool when ' +
@@ -745,7 +746,7 @@ const LOGIN_TOOL: Tool = {
 // cheap wrappers over the same device connection.
 //
 // `gate` (Streamable HTTP + --allow-tool-login only): when present, this session
-// exposes the `login` tool and gates every other tool until authenticated. The
+// exposes the `pikvm_login` tool and gates every other tool until authenticated. The
 // stdio path and header-only auth pass no gate → identical, ungated behavior.
 export function createMcpServer(gate?: LoginGate): Server {
   const server = new Server(
@@ -803,10 +804,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
 
-  // Login gate (--allow-tool-login). The `login` tool is the ONLY tool callable
+  // Login gate (--allow-tool-login). The `pikvm_login` tool is the ONLY tool callable
   // on a pre-auth session; everything else is refused until it authenticates.
   if (gate) {
-    if (name === 'login') {
+    if (name === 'pikvm_login') {
       const { username, password } = args as { username?: unknown; password?: unknown };
       if (typeof username !== 'string' || typeof password !== 'string') {
         return {
@@ -839,7 +840,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content: [
           {
             type: 'text',
-            text: "Error: authentication required — call the 'login' tool with your username and password first.",
+            text: "Error: authentication required — call the 'pikvm_login' tool with your username and password first.",
           },
         ],
         isError: true,
@@ -1737,8 +1738,8 @@ async function main() {
     }
     if (cli.allowToolLogin && cli.security !== 'no') {
       console.error(
-        "HTTP auth: in-band `login` tool ENABLED (--allow-tool-login). A pre-auth session may " +
-          'connect without a header but can call ONLY `login` until it authenticates.',
+        'HTTP auth: in-band `pikvm_login` tool ENABLED (--allow-tool-login). A pre-auth session may ' +
+          'connect without a header but can call ONLY `pikvm_login` until it authenticates.',
       );
     } else if (cli.allowToolLogin) {
       console.error('Note: --allow-tool-login has no effect with --security no (nothing to authenticate).');
