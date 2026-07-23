@@ -119,6 +119,41 @@ describe('moveToPixel forbidSlamOnIpad', () => {
     expect(client.slamCalls).toBe(0);
   }, 30000);
 
+  // Desktop full-frame degrade path: `pikvm_mouse_click_at` passes
+  // forbidSlamOnIpad=false in absolute/desktop mode. This must let a blank/
+  // uniform frame (bounds detection fails → null) slam anyway instead of the
+  // Phase-32 false-abort — the guard only exists to dodge the iPadOS hot-corner
+  // re-lock, which cannot happen on a desktop. Complements the default-true
+  // "refuses when bounds fail" case above.
+  it('allows slam-then-move when bounds detection fails but caller opted out (desktop mode)', async () => {
+    clearOrientationCache();
+    class BlackFrameClient {
+      resolution: ScreenResolution = { width: 1920, height: 1080 };
+      slamCalls = 0;
+      async getResolution() { return this.resolution; }
+      async screenshot() {
+        const buf = await sharp(
+          Buffer.alloc(1920 * 1080 * 3, 0),
+          { raw: { width: 1920, height: 1080, channels: 3 } },
+        ).jpeg().toBuffer();
+        return { buffer: buf, screenshotWidth: 1920, screenshotHeight: 1080 };
+      }
+      async mouseMoveRelative(dx: number, _dy: number) {
+        if (dx <= -100) this.slamCalls++;
+      }
+    }
+    const client = new BlackFrameClient();
+    const result = await moveToPixel(client as unknown as PiKVMClient, { x: 1000, y: 800 }, {
+      strategy: 'slam-then-move',
+      forbidSlamOnIpad: false, // what click_at passes when mouseAbsoluteMode===true
+      warmupMickeys: 0,
+      calibrationProbeMickeys: 0,
+      postMoveSettleMs: 0,
+    });
+    expect(result.strategy).toBe('slam-then-move');
+    expect(client.slamCalls).toBeGreaterThan(0);
+  }, 30000);
+
   // Phase 32a: when caller explicitly passes slamOriginPx, the guard yields
   // — the caller has decided where to slam to and is taking responsibility.
   it('allows slam-then-move when caller explicitly passes slamOriginPx', async () => {

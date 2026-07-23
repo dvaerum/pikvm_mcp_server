@@ -1414,6 +1414,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           assumeCursorAt,
           profile: cachedProfile,
           forbidSlamFallback: !mouseAbsoluteMode,
+          // Desktop full-frame degrade: the Phase-32 slam guard exists ONLY to
+          // avoid the iPadOS hot-corner re-lock, so it must be disarmed in
+          // absolute/desktop mode. Otherwise a blank/uniform desktop frame
+          // (cursor-locate miss + bounds-detect null) FALSE-ABORTS with "target
+          // type undetermined" — the guard presumes an undetermined target is an
+          // iPad. `--target desktop` declares it is not, so opt out (safe: no
+          // iPad hot-corners exist on a desktop). Mirrors forbidSlamFallback above.
+          forbidSlamOnIpad: !mouseAbsoluteMode,
           ...(chunkPace !== undefined ? { chunkPaceMs: chunkPace } : {}),
         };
         const verifyOpts = {
