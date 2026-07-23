@@ -166,6 +166,78 @@
               machine.fail(f"tr '\\0' '\\n' < /proc/{pid}/environ | grep -q mcptoken")
             '';
           };
+
+          # `--security kvmd`: the /mcp client logs in with their PiKVM (kvmd)
+          # credentials, validated live against kvmd's GET /api/auth/check. A stub
+          # kvmd stands in for the appliance (200 iff the X-KVMD-* headers match),
+          # proving the module wires --security kvmd end-to-end AND that no
+          # authPasswordFile is needed on this path (the assertion only fires for
+          # "yes").
+          nixos-service-kvmd =
+            let
+              # Minimal kvmd stand-in: GET /api/auth/check -> 200 for admin/kvmdpass,
+              # else 403 (matching kvmd's real success/failure codes).
+              fakeKvmd = pkgs.writeText "fake-kvmd.py" ''
+                from http.server import BaseHTTPRequestHandler, HTTPServer
+                class H(BaseHTTPRequestHandler):
+                    def do_GET(self):
+                        ok = (self.path.startswith("/api/auth/check")
+                              and self.headers.get("X-KVMD-User") == "admin"
+                              and self.headers.get("X-KVMD-Passwd") == "kvmdpass")
+                        self.send_response(200 if ok else 403)
+                        self.end_headers()
+                    def log_message(self, *a):
+                        pass
+                HTTPServer(("127.0.0.1", 8081), H).serve_forever()
+              '';
+            in
+            pkgs.testers.runNixOSTest {
+              name = "pikvm-mcp-service-kvmd";
+              nodes.machine = { ... }: {
+                imports = [ self.nixosModules.pikvm-mcp ];
+                systemd.services.fake-kvmd = {
+                  wantedBy = [ "multi-user.target" ];
+                  before = [ "pikvm-mcp.service" ];
+                  serviceConfig.ExecStart = "${pkgs.python3}/bin/python3 ${fakeKvmd}";
+                };
+                services.pikvm-mcp = {
+                  enable = true;
+                  target = "ipad";
+                  host = "http://127.0.0.1:8081";
+                  # kvmd-backed auth — no authPasswordFile required.
+                  security = "kvmd";
+                  openFirewall = true;
+                };
+              };
+              testScript = ''
+                import json
+
+                machine.wait_for_unit("fake-kvmd.service")
+                machine.wait_for_open_port(8081)
+                machine.wait_for_unit("pikvm-mcp.service")
+                machine.wait_for_open_port(3000)
+
+                # /health is open and reports the endpoint is secured (an authorizer is set).
+                health = json.loads(machine.succeed("curl -sf http://127.0.0.1:3000/health"))
+                assert health["secured"] is True, health
+
+                init = (
+                  "-H 'content-type: application/json' "
+                  "-H 'accept: application/json, text/event-stream' "
+                  "-d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                  "\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},"
+                  "\"clientInfo\":{\"name\":\"t\",\"version\":\"0\"}}}'"
+                )
+                code = lambda cmd: machine.succeed(
+                  f"curl -s -o /dev/null -w '%{{http_code}}' -X POST http://127.0.0.1:3000/mcp {cmd}"
+                ).strip()
+
+                # No creds -> 401; wrong PiKVM password -> 401; valid PiKVM creds -> accepted.
+                assert code(init) == "401", "initialize without credentials must be 401"
+                assert code(f"-u admin:wrong {init}") == "401", "wrong kvmd password must be 401"
+                assert code(f"-u admin:kvmdpass {init}") == "200", "valid kvmd credentials must be accepted"
+              '';
+            };
         };
       }))
     // {

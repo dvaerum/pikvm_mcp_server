@@ -2,7 +2,7 @@
  * Unit tests for the HTTP Basic auth helpers (src/auth.ts).
  */
 import { describe, expect, it } from 'vitest';
-import { parseBasicAuthHeader, headerMatches, type HttpAuth } from '../auth.js';
+import { parseBasicAuthHeader, headerMatches, makeStaticAuthorizer, type HttpAuth } from '../auth.js';
 
 function basic(user: string, pass: string): string {
   return 'Basic ' + Buffer.from(`${user}:${pass}`, 'utf8').toString('base64');
@@ -58,5 +58,18 @@ describe('headerMatches', () => {
   it('rejects a missing / malformed header', () => {
     expect(headerMatches(auth, undefined)).toBe(false);
     expect(headerMatches(auth, 'Bearer x')).toBe(false);
+  });
+});
+
+describe('makeStaticAuthorizer', () => {
+  const authorize = makeStaticAuthorizer({ username: 'operator', password: 'hunter2' });
+
+  it('authorizes the exact credentials', async () => {
+    expect(await authorize(basic('operator', 'hunter2'))).toBe(true);
+  });
+
+  it('rejects wrong credentials and a missing header', async () => {
+    expect(await authorize(basic('operator', 'wrong'))).toBe(false);
+    expect(await authorize(undefined)).toBe(false);
   });
 });
