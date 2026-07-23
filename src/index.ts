@@ -23,6 +23,7 @@ import { startHttpServer } from './http-server.js';
 import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './auth.js';
 import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
+import { recoverHid, makeHttpRecoveryTrigger, type RecoveryTrigger } from './pikvm/hid-recovery.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
@@ -72,6 +73,23 @@ let cachedProfile: BallisticsProfile | null = null;
 // detection fails, the safe-for-iPad default stands.
 let mouseAbsoluteMode: boolean = false;
 const lock = new BusyLock();
+
+// Host recovery trigger for the HID-recovery ladder's rungs 2-3 (UDC rebind /
+// reboot). These are privileged HOST operations this unprivileged service can't
+// do itself, so it POSTs to a pikvm-nixos-provided helper. Configured via
+// PIKVM_HID_RECOVERY_URL (+ optional bearer token); unset ⇒ rungs 2-3 report
+// unavailable. See docs/runbooks/hid-recovery.md ("Trigger interface").
+let recoveryTrigger: RecoveryTrigger | undefined;
+function getRecoveryTrigger(): RecoveryTrigger {
+  if (!recoveryTrigger) {
+    recoveryTrigger = makeHttpRecoveryTrigger({
+      url: process.env.PIKVM_HID_RECOVERY_URL,
+      token: process.env.PIKVM_HID_RECOVERY_TOKEN,
+      verifySsl: process.env.PIKVM_HID_RECOVERY_VERIFY_SSL === 'true',
+    });
+  }
+  return recoveryTrigger;
+}
 
 async function refreshProfile(path?: string): Promise<void> {
   cachedProfile = await loadProfile(path ?? './data/ballistics.json').catch(() => null);
@@ -337,6 +355,31 @@ const tools: Tool[] = [
         settleMs: {
           type: 'number',
           description: 'Milliseconds to wait after the reset before re-reading HID online state. Default 2000.',
+        },
+      },
+    },
+  },
+  {
+    name: 'pikvm_hid_recover',
+    description:
+      'Escalating recovery for a broken HID (mouse/keyboard offline while video is fine). Detects the ' +
+      'failure, then climbs a ladder, verifying mouse+keyboard come back online after each rung. ' +
+      'HONESTLY: rung 1 (soft reset, the same as pikvm_hid_reset) is a CHEAP FIRST TRY that often does ' +
+      'NOT fix a controller-level drop (it cannot force host re-enumeration and set_connected is a no-op ' +
+      'on some units). Rung 2 (UDC rebind, host-provided) is the UNTESTED no-reboot candidate. Rung 3 ' +
+      '(reboot the PiKVM, host-provided) is the currently-known-RELIABLE fix but takes the appliance down ' +
+      '~30-90s, so it requires allowReboot:true. Rungs 2-3 need the pikvm-nixos host recovery trigger to ' +
+      'be configured; when it is not, they are reported as unavailable (rung 1 still runs).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxRung: {
+          type: 'number',
+          description: 'Highest rung to attempt: 1 = soft reset only, 2 = + UDC rebind, 3 = + reboot. Default 2.',
+        },
+        allowReboot: {
+          type: 'boolean',
+          description: 'Permit rung 3 (reboot the PiKVM device) — destructive: the whole appliance (including this server) goes down ~30-90s. Only used when maxRung is 3. Default false.',
         },
       },
     },
@@ -1050,6 +1093,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Keep the in-process absolute-mode flag consistent with what we just read.
         mouseAbsoluteMode = after.mouseAbsolute;
         return { content: [{ type: 'text', text: lines.join('\n') }] };
+      }
+
+      case 'pikvm_hid_recover': {
+        const maxRung = (validateNumber(args.maxRung, 1, 3) ?? 2) as 1 | 2 | 3;
+        const allowReboot = validateBoolean(args.allowReboot) ?? false;
+        const result = await recoverHid(pikvm, getRecoveryTrigger(), { maxRung, allowReboot });
+        const lines = [
+          result.initiallyBroken
+            ? `HID was BROKEN (mouse/keyboard offline). Escalated up to rung ${maxRung}${allowReboot ? ' (reboot permitted)' : ''}:`
+            : 'HID was already online — nothing to recover.',
+          ...result.attempts.map((a) => `  rung ${a.rung} (${a.action}): ${a.recovered ? 'RECOVERED' : a.performed ? 'no change' : 'skipped/unavailable'} — ${a.detail}`),
+          `Final HID: mouse=${result.finalHid.mouseOnline ? 'online' : 'offline'}, keyboard=${result.finalHid.keyboardOnline ? 'online' : 'offline'} → ${result.recovered ? 'RECOVERED' : 'STILL BROKEN'}.`,
+        ];
+        if (!result.recovered && maxRung < 3) {
+          lines.push('Not recovered. Rung 3 (reboot) is the currently-known-reliable fix: re-run with maxRung:3, allowReboot:true (needs the host recovery trigger configured).');
+        }
+        return { content: [{ type: 'text', text: lines.join('\n') }], isError: !result.recovered };
       }
 
       case 'pikvm_ipad_unlock_with_code': {

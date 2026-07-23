@@ -82,6 +82,8 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 
 0c. **`pikvm_hid_reset`** - Reset the USB HID gadget when `mouse/keyboard online: false` and input has no effect. Soft `POST /api/hid/reset` cannot force the host to re-enumerate — if the target isn't bringing the HID link up (charge-only cable, cold-boot USB stack), only a physical re-plug, a target restart, **or a full PiKVM reboot** recovers it (live-verified 2026-07-19). Optional `reconnectUsb` toggles the OTG connection (no-op where `connected` is unwired).
 
+0d. **`pikvm_hid_recover`** - Escalating HID recovery ladder (detect → rung 1 soft reset → rung 2 UDC rebind → rung 3 reboot), verifying mouse+keyboard come back online after each rung. Honest reliability: rung 1 is a cheap first try that often does NOT fix a controller-level drop; rung 3 (reboot, `allowReboot:true`) is the known-reliable fix; rung 2 (UDC rebind) is the untested no-reboot candidate. Rungs 2-3 are privileged HOST ops via the pikvm-nixos recovery trigger (`PIKVM_HID_RECOVERY_URL`); unavailable until wired. Canonical runbook: `docs/runbooks/hid-recovery.md`.
+
 ### Display
 1. **`pikvm_screenshot`** - Capture current screen as JPEG
 2. **`pikvm_get_resolution`** - Get current screen resolution (useful for mouse coordinates)
@@ -161,7 +163,7 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 51** (29 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow).
+**Total tools: 52** (30 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
