@@ -342,6 +342,11 @@ When the server runs with **`--allow-tool-login`**, a client may connect **witho
 **recommended default** (especially for headless clients); the login tool is a fallback for MCP
 clients that can't attach a custom header.
 
+> The login-tool path is entered by **omitting** the header — **not** by sending a wrong one. A
+> **present-but-invalid** `Authorization` header is always rejected with **401**, even under
+> `--allow-tool-login`; the pre-auth (login-gated) session opens only when **no** header is sent. So
+> a bad password says so, rather than silently downgrading to a pre-auth session.
+
 On such a pre-auth session the tool surface is **gated**: `tools/list` returns **only** `login`, and
 every other tool returns *"authentication required — call the 'login' tool first"*. Call:
 
