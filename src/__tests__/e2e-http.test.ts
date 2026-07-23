@@ -16,6 +16,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../index.js';
 import { startHttpServer, type HttpServerHandle } from '../http-server.js';
+import { makeStaticAuthorizer } from '../auth.js';
 
 let handle: HttpServerHandle | undefined;
 afterEach(async () => {
@@ -60,6 +61,44 @@ describe('E2E — Streamable HTTP via the real MCP client + real server', () => 
     expect(res.content[0].text).toMatch(/pikvm-mcp-server v/);
 
     // Clean session teardown (sends DELETE /mcp).
+    await client.close();
+  });
+
+  it('tool-login: header-less connect → only login → authenticate → full toolset (real HTTP)', async () => {
+    const authorize = makeStaticAuthorizer({ username: 'admin', password: 'pw' });
+    handle = await startHttpServer(createMcpServer, {
+      host: '127.0.0.1',
+      port: 0,
+      authorize,
+      allowToolLogin: true,
+    });
+
+    // Connect with NO Authorization header — admitted as a pre-auth session.
+    const client = new Client({ name: 'e2e-login', version: '0' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(handle.url)));
+
+    // Pre-auth: only `login` is visible, and other tools are refused.
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['login']);
+    const gated = (await client.callTool({ name: 'pikvm_version', arguments: {} })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text: string }>;
+    };
+    expect(gated.isError).toBe(true);
+
+    // Authenticate in-band with the same credentials the header would carry.
+    const login = (await client.callTool({
+      name: 'login',
+      arguments: { username: 'admin', password: 'pw' },
+    })) as { isError?: boolean; content: Array<{ type: string; text: string }> };
+    expect(login.isError).toBeFalsy();
+
+    // Full toolset unlocks and a real tool call round-trips over HTTP.
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain('pikvm_version');
+    const ver = (await client.callTool({ name: 'pikvm_version', arguments: {} })) as {
+      content: Array<{ type: string; text: string }>;
+    };
+    expect(ver.content[0].text).toMatch(/pikvm-mcp-server v/);
+
     await client.close();
   });
 });

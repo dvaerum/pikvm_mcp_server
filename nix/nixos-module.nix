@@ -78,6 +78,20 @@ in
       '';
     };
 
+    allowToolLogin = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Also expose an in-band `login` MCP tool so a client can authenticate its
+        session by calling a tool, without setting an `Authorization` header.
+        Opt-in; only meaningful with {option}`security` = "yes" or "kvmd". A
+        pre-auth session may connect without a header but can call ONLY `login`
+        until it authenticates (with the same credentials the header would carry).
+        The header-at-connect path stays the default and recommended posture.
+        Passed as `--allow-tool-login`.
+      '';
+    };
+
     authUsername = lib.mkOption {
       type = lib.types.str;
       default = "operator";
@@ -162,7 +176,8 @@ in
         ExecStart =
           "${lib.getExe cfg.package} --transport http --host ${cfg.address} "
           + "--port ${toString cfg.port} --target ${cfg.target} --security ${cfg.security}"
-          + lib.optionalString (cfg.security == "yes") " --auth-username ${cfg.authUsername}";
+          + lib.optionalString (cfg.security == "yes") " --auth-username ${cfg.authUsername}"
+          + lib.optionalString cfg.allowToolLogin " --allow-tool-login";
 
         # systemd drops each credential (0400, on tmpfs) into
         # $CREDENTIALS_DIRECTORY; the server reads them by name via

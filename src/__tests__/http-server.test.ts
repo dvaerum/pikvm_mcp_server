@@ -151,6 +151,71 @@ describe('startHttpServer auth (--security yes)', () => {
   });
 });
 
+describe('startHttpServer in-band login (--allow-tool-login)', () => {
+  const AUTH = { username: 'operator', password: 'hunter2' };
+  const authorize = makeStaticAuthorizer(AUTH);
+  const basic = (u: string, p: string) =>
+    'Basic ' + Buffer.from(`${u}:${p}`, 'utf8').toString('base64');
+
+  it('admits a header-less initialize (opens a pre-auth session) when tool-login is on', async () => {
+    handle = await startHttpServer(fakeCreateServer, {
+      host: '127.0.0.1',
+      port: 0,
+      authorize,
+      allowToolLogin: true,
+    });
+
+    const r = await fetch(handle.url, { method: 'POST', headers: HEADERS, body: JSON.stringify(INIT) });
+    expect(r.status).toBe(200); // header-less initialize allowed under tool-login
+    expect(r.headers.get('mcp-session-id')).toBeTruthy();
+    await readRpc(r);
+  });
+
+  it('still rejects a header-less NON-initialize POST (only login-gated initialize is admitted)', async () => {
+    handle = await startHttpServer(fakeCreateServer, {
+      host: '127.0.0.1',
+      port: 0,
+      authorize,
+      allowToolLogin: true,
+    });
+
+    const r = await fetch(handle.url, {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/list', params: {} }),
+    });
+    expect(r.status).toBe(401);
+    await r.text();
+  });
+
+  it('a valid header still authorizes at connect even with tool-login on', async () => {
+    handle = await startHttpServer(fakeCreateServer, {
+      host: '127.0.0.1',
+      port: 0,
+      authorize,
+      allowToolLogin: true,
+    });
+
+    const r = await fetch(handle.url, {
+      method: 'POST',
+      headers: { ...HEADERS, authorization: basic('operator', 'hunter2') },
+      body: JSON.stringify(INIT),
+    });
+    expect(r.status).toBe(200);
+    await readRpc(r);
+  });
+
+  it('is inert without an authorizer (--security no): header-less non-initialize still open, no gating', async () => {
+    handle = await startHttpServer(fakeCreateServer, {
+      host: '127.0.0.1',
+      port: 0,
+      allowToolLogin: true, // no authorize -> tool-login is a no-op
+    });
+    const res = await fetch(`http://127.0.0.1:${handle.port}/health`);
+    expect((await res.json()).secured).toBe(false);
+  });
+});
+
 describe('startHttpServer auth (--security kvmd)', () => {
   const basic = (u: string, p: string) =>
     'Basic ' + Buffer.from(`${u}:${p}`, 'utf8').toString('base64');
