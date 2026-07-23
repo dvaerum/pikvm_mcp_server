@@ -49,6 +49,25 @@ grey-0.55 captures (`data/openloopshape-real/`, 6 upper-right; `benches/analyze-
   is hint-INDEPENDENT, so its detection can't be a hint-tautology — SKIP the wiggle-verify
   tautology guard for cascade-sourced fixes (let the accurate 2–4 px detection through).
   Wiggle-verify is device-only → the fix + sign-off must be validated live by the iPad node.
+  UPDATE 2026-07-23: the wiggle-verify fix shipped (e3669a1, live 46%→100%).
+
+**SHAPE FALLBACK IS DEAD + HARMFUL → RETIRE (2026-07-23).** Cross-background
+characterization (`benches/bench-shape-vs-cascade-backgrounds.ts`: the real cursor sprite
+composited at a grid over 16 backgrounds = solid grey + all 15 `data/bg-real` home screens,
+192 frames; cascade vs `findCursorByShape` dark/bright per frame):
+- cascade (`findCursorByV8FullFrame`) locates **100% on EVERY background** incl every busy
+  home screen (192/192, zero misses).
+- `findCursorByShape` **shape-ANY = 1%** (0% on 14/16 backgrounds); **RESCUE (cascade miss &
+  shape hit) = 0/192** — it never once found the cursor where the cascade didn't; **MISFIRE
+  (candidate >35 px from truth) = 27%** (up to 50% on books.jpg) — on busy backgrounds it
+  emits FALSE candidates the wiggle-verify gate then has to reject (the same FP surface the
+  tautology guard existed for).
+- RECOMMENDATION: retire the shape fallback from the openLoopShape detection path
+  (`cursor-locator.ts` `locateOpenLoopShape`, the dark/bright branch). It contributes nothing
+  the cascade doesn't and only manufactures false candidates. Device-gated: needs @georgs live
+  N≥80 (`bench-openloopshape-groundtruth.ts` — cascade-only should EQUAL cascade+shape) before
+  merge. NOTE: `findCursorByShape`'s SEPARATE use in `move-to.ts wiggleVerifyCandidate` (post-
+  wiggle motion check) is a different mechanism, NOT covered by this — do not remove that.
 
 ## Git history reclaim (167MB)  [DEFERRED]
 The old cursor-v0..v12 model binaries are untracked now but still in .git history (~167MB).
