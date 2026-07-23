@@ -12,17 +12,20 @@
  *       first try; LOW reliability (can't force host re-enumeration; set_connected
  *       is a no-op on our unit). MCP-native (also the pikvm_hid_reset tool).
  *   R2  SOFT_CONNECT — toggle the UDC's D+ pull-up: `echo disconnect >
- *       /sys/class/udc/<udc>/soft_connect; sleep; echo connect > …`. Cheap
- *       intermediate, preferred over a kvmd-otg restart (no FileExistsError).
- *       UNTESTED as a recovery. Privileged HOST op via the trigger.
+ *       /sys/class/udc/<udc>/soft_connect; sleep; echo connect > …`. **VALIDATED
+ *       2026-07-23**: recovered a real ~4h-idle HID drop in ~6s (UDC state
+ *       not-attached→configured; mouse+keyboard back) after R1 failed — the
+ *       primary no-reboot fix. A distinct kernel mechanism from R1's
+ *       kvmd set_connected (which is a no-op here); bypasses the FileExistsError
+ *       trap (doesn't touch the gadget tree). Privileged HOST op via the trigger.
  *   R3a UDC REBIND — configfs UDC unbind→bind / `systemctl restart kvmd-otg`.
- *       UNTESTED as a recovery; must be idempotent (FileExistsError trap).
- *       Privileged HOST op via the trigger.
- *   R3b REBOOT — reboot the PiKVM host. Worked once (target awake); DESTRUCTIVE
- *       (whole appliance ~30-90s), so opt-in. Privileged HOST op via the trigger.
- *   R4  HUMAN — escalate to a physical re-plug / power-on of the target. The
- *       remote rungs can ALL fail (they did 07-22 — only a physical re-plug
- *       recovered it); this is the honest terminal state, not a remote action.
+ *       Still UNTESTED (soft_connect recovered first, didn't need to escalate);
+ *       must be idempotent (FileExistsError trap). Privileged HOST op.
+ *   R3b REBOOT — reboot the PiKVM host. DESTRUCTIVE (whole appliance ~30-90s),
+ *       opt-in; now RARELY NEEDED given R2. Privileged HOST op via the trigger.
+ *   R4  HUMAN — physical re-plug / power-on of the target. Now the last resort:
+ *       the 07-22 "needed a physical re-plug" was because only R1 existed then,
+ *       before soft_connect. Honest terminal state, not a remote action.
  *
  * VERIFY BEHAVIORALLY: the mouseOnline/keyboardOnline flags have lied, so after
  * each rung recovery is confirmed by emitting a mouse move and checking the
