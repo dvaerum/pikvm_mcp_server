@@ -4,11 +4,13 @@ Canonical procedure for recovering the PiKVM's emulated USB HID gadget when
 mouse/keyboard stop working. Backed by `src/pikvm/hid-recovery.ts` and the
 `pikvm_hid_recover` tool. Ladder firsthand-confirmed 2026-07-22/23.
 
-> **Honesty up front.** The remote rungs can **all fail** — on 2026-07-22 only a
-> physical re-plug recovered it. R1 (soft reset) is a cheap first try that
-> usually does **not** fix a controller-level drop. R2 (soft_connect) and R3a
-> (UDC rebind) are **untested** as recoveries. R3b (reboot) is the most reliable
-> remote option (worked once, target awake) but destructive. R4 is a human.
+> **Status.** **R2 `soft_connect` is VALIDATED** (2026-07-23): it recovered a real
+> ~4h-idle HID drop in ~6s after R1 failed — the primary no-reboot fix. R1 (soft
+> reset) is a cheap first try that usually does **not** fix a controller-level
+> drop. R3a (UDC rebind) is still untested (R2 recovered first). R3b (reboot) is
+> the destructive last-resort remote option; **rarely needed** now. R4 (human
+> re-plug) is the final fallback — the 2026-07-22 "needed a physical re-plug" was
+> because only R1 existed then, before soft_connect.
 
 ## R0 — presence gate (do this first)
 
@@ -34,11 +36,11 @@ escalation when everything remote fails.
 
 | Rung | Action | Backing | Reliability | Owner |
 |------|--------|---------|-------------|-------|
-| **R1** | Soft reset | `resetHid()` → `POST /hid/reset` [+ `set_connected 0→1`] (also `pikvm_hid_reset`) | **LOW** — can't force host re-enumeration; `set_connected` is a **no-op on our unit** (live 2026-07-19); did not recover the incident | **MCP** (built) |
-| **R2** | `soft_connect` toggle | host: `echo disconnect > /sys/class/udc/<udc>/soft_connect; sleep 2; echo connect > …` (toggles USB D+ pull-up; udc on the Pi = `fe980000.usb`; healthy reads `configured`) | **UNTESTED** — cheap intermediate; preferred over a kvmd-otg restart (avoids the FileExistsError trap) | **pikvm-nixos** + MCP invoke/verify |
-| **R3a** | UDC rebind | host: configfs UDC unbind→bind, or `systemctl restart kvmd-otg` | **UNTESTED**; must be **idempotent** (FileExistsError trap) | **pikvm-nixos** + MCP |
-| **R3b** | Reboot the PiKVM | host reboot | Most reliable remote option (worked once, target awake). **DESTRUCTIVE** (~30-90s incl. this server); opt-in `allowReboot` | **pikvm-nixos** + MCP trigger/wait/verify |
-| **R4** | Human physical action | re-plug the target USB (not charge-only) / power it on | The known-always fix; remote rungs can all fail | **Human** |
+| **R1** | Soft reset | `resetHid()` → `POST /hid/reset` [+ kvmd `set_connected 0→1`] (also `pikvm_hid_reset`) | **LOW** — can't force host re-enumeration; kvmd `set_connected` is a **no-op on our unit** (its `connected` is unwired; live 2026-07-19/23); did not recover the incident | **MCP** (built) |
+| **R2** | `soft_connect` toggle | host: `echo disconnect > /sys/class/udc/<udc>/soft_connect; sleep 2; echo connect > …` (kernel USB D+ pull-up; udc on the Pi = `fe980000.usb`; healthy reads `configured`) | **VALIDATED 2026-07-23** — recovered a real ~4h-idle drop in ~6s (state `not attached`→`configured`; mouse+kbd back) after R1 failed. The primary no-reboot fix. A **distinct kernel mechanism** from R1's kvmd toggle (bypasses kvmd); no FileExistsError | **pikvm-nixos** + MCP invoke/verify |
+| **R3a** | UDC rebind | host: configfs UDC unbind→bind, or `systemctl restart kvmd-otg` | Still **UNTESTED** (R2 recovered first, didn't need to escalate); must be **idempotent** (FileExistsError trap) | **pikvm-nixos** + MCP |
+| **R3b** | Reboot the PiKVM | host reboot | Destructive last-resort remote option (~30-90s incl. this server); opt-in `allowReboot`. **Rarely needed** now R2 works | **pikvm-nixos** + MCP trigger/wait/verify |
+| **R4** | Human physical action | re-plug the target USB (not charge-only) / power it on | Final fallback. The 07-22 re-plug was pre-`soft_connect` (only R1 existed then) | **Human** |
 
 Notes:
 - **R3b is not the kvmd ATX API** — that reboots the *target* PiKVM drives, not
@@ -83,6 +85,7 @@ pikvm-nixos provides. MCP end: `makeHttpRecoveryTrigger()`.
 - **Pending (pikvm-nixos, after the U2 kvmd-ordering fix):** the privileged host
   helper implementing the trigger contract's THREE actions — `soft_connect`,
   idempotent `udc-rebind`, `reboot`.
-- **Pending (live-rig sign-off):** which rung actually recovers HID on this unit
-  (R2 soft_connect? R3a UDC rebind? or only R3b reboot / R4 physical)? That
-  decides the preferred fix.
+- **Live-rig sign-off — RESOLVED (2026-07-23):** R2 `soft_connect` recovered a
+  real idle HID drop in ~6s after R1 failed. So `soft_connect` is the preferred
+  fix and the host helper's first/cheapest action; UDC rebind + reboot remain as
+  untested escalations, rarely reached.

@@ -367,12 +367,12 @@ const tools: Tool[] = [
       'absent target, so wake it first. Then it climbs the ladder, verifying BEHAVIORALLY after each rung ' +
       '(emits a mouse move + checks the screen changed — the online flags have lied). HONESTLY: R1 (soft ' +
       'reset, = pikvm_hid_reset) is a cheap first try that often does NOT fix a controller-level drop. R2 ' +
-      '(soft_connect USB pull-up toggle) and R3a (UDC rebind) are host-provided and UNTESTED as recoveries. ' +
-      'R3b (reboot the PiKVM, host-provided) is the most reliable remote option (worked once) but is ' +
-      'DESTRUCTIVE (~30-90s), so it needs allowReboot:true. If every remote rung fails, the tool escalates ' +
-      'to R4: a HUMAN must physically re-plug the target USB or power it on — remote recovery cannot always ' +
-      'fix this. Host rungs (R2/R3a/R3b) need the pikvm-nixos recovery trigger configured; otherwise they ' +
-      'report unavailable and R1 still runs.',
+      '(soft_connect USB pull-up toggle, host-provided) is VALIDATED — it recovered a real idle HID drop in ' +
+      '~6s and is the primary no-reboot fix. R3a (UDC rebind, host) is a still-untested escalation. R3b ' +
+      '(reboot the PiKVM, host) is the destructive last-resort remote option (~30-90s, needs ' +
+      'allowReboot:true) — rarely needed now that R2 works. If every remote rung fails, the tool escalates ' +
+      'to R4: a HUMAN must physically re-plug the target USB or power it on. Host rungs (R2/R3a/R3b) need ' +
+      'the pikvm-nixos recovery trigger configured; otherwise they report unavailable and R1 still runs.',
     inputSchema: {
       type: 'object',
       properties: {
