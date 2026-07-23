@@ -1,37 +1,42 @@
 /**
  * HID-recovery ladder — detection + escalation for when the emulated USB HID
- * gadget drops offline (mouse/keyboard stop working while video is fine).
+ * gadget stops driving the target (mouse/keyboard dead while video is fine).
  *
  * Canonical runbook: docs/runbooks/hid-recovery.md.
  *
- * Failure signature (observed live this project): after idle, `/hid` reports
- * `online:true` but `mouseOnline:false` AND `keyboardOnline:false`; screenshots
- * still work. That's a broken HID gadget.
+ * The ladder (firsthand-confirmed 2026-07-22/23), honestly ranked:
+ *   R0  PRESENCE GATE — the target must be awake/present or NOTHING recovers
+ *       (an asleep iPad won't enumerate USB). Behavioral: a screenshot returns
+ *       an image. If it fails, wake/power the target first — no rung will work.
+ *   R1  SOFT RESET — resetHid() (POST /hid/reset [+ set_connected toggle]). Cheap
+ *       first try; LOW reliability (can't force host re-enumeration; set_connected
+ *       is a no-op on our unit). MCP-native (also the pikvm_hid_reset tool).
+ *   R2  SOFT_CONNECT — toggle the UDC's D+ pull-up: `echo disconnect >
+ *       /sys/class/udc/<udc>/soft_connect; sleep; echo connect > …`. Cheap
+ *       intermediate, preferred over a kvmd-otg restart (no FileExistsError).
+ *       UNTESTED as a recovery. Privileged HOST op via the trigger.
+ *   R3a UDC REBIND — configfs UDC unbind→bind / `systemctl restart kvmd-otg`.
+ *       UNTESTED as a recovery; must be idempotent (FileExistsError trap).
+ *       Privileged HOST op via the trigger.
+ *   R3b REBOOT — reboot the PiKVM host. Worked once (target awake); DESTRUCTIVE
+ *       (whole appliance ~30-90s), so opt-in. Privileged HOST op via the trigger.
+ *   R4  HUMAN — escalate to a physical re-plug / power-on of the target. The
+ *       remote rungs can ALL fail (they did 07-22 — only a physical re-plug
+ *       recovered it); this is the honest terminal state, not a remote action.
  *
- * The ladder, honestly ranked by what actually recovers this failure:
- *   - RUNG 1 — soft reset (`resetHid`, POST /hid/reset [+ set_connected toggle]).
- *     Cheap FIRST TRY, but known NOT to reliably recover a controller-level drop:
- *     a soft reset can't force the host to re-enumerate, and the OTG
- *     `set_connected` control is a no-op on our unit (client.ts:796-803). This is
- *     entirely MCP-side and already exists as `pikvm_hid_reset`.
- *   - RUNG 2 — UDC rebind / `kvmd-otg` restart. Tears down + recreates the gadget
- *     at the controller level (configfs UDC unbind→bind, or `systemctl restart
- *     kvmd-otg`). UNTESTED on this unit — the candidate for a no-reboot fix. This
- *     is a PRIVILEGED HOST operation the unprivileged MCP service cannot do
- *     itself; it goes through the {@link RecoveryTrigger} the nixos side provides.
- *   - RUNG 3 — reboot the PiKVM device. The currently-known-reliable fix. Also a
- *     privileged host op via the trigger; gated behind an explicit opt-in because
- *     it takes the whole appliance (including this server) down ~30-90s.
+ * VERIFY BEHAVIORALLY: the mouseOnline/keyboardOnline flags have lied, so after
+ * each rung recovery is confirmed by emitting a mouse move and checking the
+ * screen actually changed — not by the flags. `isHidBroken` on the flags stays
+ * only as the CHEAP TRIGGER for whether to start the ladder at all.
  *
- * This module is the MCP-side scaffolding: detection, a client-side
- * poll-until-online wait, the escalation orchestrator, and the HTTP client for
- * the host trigger. The rung-2/3 HOST mechanisms are provided by pikvm-nixos
- * against the {@link RecoveryTrigger} contract (see the runbook's "Trigger
- * interface" section); until they are wired, rungs 2/3 report unavailable.
+ * MCP-side scaffolding; the R2/R3a/R3b HOST mechanisms are provided by
+ * pikvm-nixos against the {@link RecoveryTrigger} contract (see runbook). Until
+ * wired, host rungs report unavailable.
  */
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
+import { decodeScreenshot, diffScreenshotsDecoded } from './cursor-detect.js';
 
-/** The subset of HID state the ladder reasons about. */
+/** The subset of HID flag-state the cheap trigger reasons about. */
 export interface HidOnlineState {
   online: boolean;
   mouseOnline: boolean;
@@ -39,34 +44,43 @@ export interface HidOnlineState {
 }
 
 /**
- * The HID gadget is "broken" when it is NOT fully usable — i.e. mouse and
- * keyboard are not both online. Recovery targets `mouseOnline && keyboardOnline`.
+ * Cheap TRIGGER only: the flags say the HID isn't fully usable. NB the flags are
+ * known to lie both ways — use {@link HidVerifier} for authoritative "recovered".
  */
 export function isHidBroken(s: HidOnlineState): boolean {
   return !(s.mouseOnline && s.keyboardOnline);
 }
 
-/** The privileged host recovery actions (rung 2/3), performed via the trigger. */
-export type HostRecoveryAction = 'udc-rebind' | 'reboot';
-export type RecoveryAction = 'soft-reset' | HostRecoveryAction;
-export type Rung = 1 | 2 | 3;
+/** Privileged HOST recovery actions (R2/R3a/R3b), performed via the trigger. */
+export type HostRecoveryAction = 'soft-connect' | 'udc-rebind' | 'reboot';
+/** Every ladder step that performs an action (R1 is MCP-native, the rest host). */
+export type LadderAction = 'soft-reset' | HostRecoveryAction;
+
+/** Ordered escalation. maxRung 1..4 slices this (1=soft-reset … 4=reboot). */
+const LADDER: LadderAction[] = ['soft-reset', 'soft-connect', 'udc-rebind', 'reboot'];
 
 /**
- * The MCP↔nixos trigger contract. The unprivileged MCP service (DynamicUser)
- * cannot rebind a UDC or reboot the host, so it delegates those to a privileged
- * host helper that pikvm-nixos provides (see runbook). `configured` is false when
- * no helper is wired, so the orchestrator can report rungs 2/3 as unavailable
- * instead of failing opaquely.
+ * The MCP↔nixos trigger contract. The unprivileged MCP service can't toggle a
+ * UDC or reboot the host, so it delegates to a privileged host helper
+ * pikvm-nixos provides. `configured:false` ⇒ the orchestrator reports host rungs
+ * unavailable instead of failing opaquely.
  */
 export interface RecoveryTrigger {
   readonly configured: boolean;
   escalate(action: HostRecoveryAction): Promise<{ ok: boolean; message: string }>;
 }
 
-/** The client surface the ladder needs (satisfied by PiKVMClient). */
+/** Client surface the ladder needs (satisfied by PiKVMClient). */
 export interface HidRecoveryClient {
   getHidProfile(): Promise<HidOnlineState>;
   resetHid(opts: { reconnectUsb?: boolean; settleMs?: number }): Promise<HidOnlineState>;
+  screenshot(): Promise<{ buffer: Buffer }>;
+  mouseMoveRelative(dx: number, dy: number): Promise<void>;
+}
+
+/** Authoritative recovery check — behavioral, because the flags lie. */
+export interface HidVerifier {
+  verify(): Promise<{ healthy: boolean; detail: string }>;
 }
 
 export interface WaitDeps {
@@ -75,160 +89,208 @@ export interface WaitDeps {
 }
 
 /**
- * Poll `probe` until the HID is fully online or the timeout elapses. `probe`
- * returns null when the endpoint is not answering yet (e.g. mid-reboot) — that
- * counts as "not recovered, keep waiting", so this doubles as the reboot
- * wait-for-online. Injectable clock/sleep keep it unit-testable.
+ * R0 — target presence. Behavioral: a screenshot must return a non-empty image.
+ * A dead/asleep target (no HDMI) fails here, and NO rung can recover it.
  */
-export async function waitForHidOnline(
-  probe: () => Promise<HidOnlineState | null>,
+export async function checkTargetPresent(client: Pick<HidRecoveryClient, 'screenshot'>): Promise<boolean> {
+  try {
+    const shot = await client.screenshot();
+    return Boolean(shot?.buffer && shot.buffer.length > 0);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Default behavioral verifier: emit a mouse move and check the screen actually
+ * changed (a working HID moves the cursor → pixels change). Injectable so the
+ * orchestrator is unit-testable with a fake. NB this is a starting heuristic;
+ * ambient screen motion can false-positive — live tuning expected (mirrors the
+ * desktop-e2e residuals). Returns healthy when the post-emit frame differs from
+ * the pre-emit frame.
+ */
+export function makeBehavioralVerifier(
+  client: Pick<HidRecoveryClient, 'screenshot' | 'mouseMoveRelative'>,
+  opts: { emitDx?: number; settleMs?: number } = {},
+  deps: WaitDeps = {},
+): HidVerifier {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const emitDx = opts.emitDx ?? 40;
+  const settleMs = opts.settleMs ?? 300;
+  return {
+    async verify() {
+      try {
+        const before = await decodeScreenshot((await client.screenshot()).buffer);
+        // Emit a there-and-back move so a working HID visibly nudges the cursor
+        // without permanently displacing it.
+        await client.mouseMoveRelative(emitDx, 0);
+        await sleep(settleMs);
+        const after = await decodeScreenshot((await client.screenshot()).buffer);
+        await client.mouseMoveRelative(-emitDx, 0);
+        const changed = diffScreenshotsDecoded(before, after).length > 0;
+        return changed
+          ? { healthy: true, detail: 'mouse emit moved the cursor (screen changed) — HID working' }
+          : { healthy: false, detail: 'mouse emit produced no screen change — HID not driving input' };
+      } catch (err) {
+        return { healthy: false, detail: `behavioral verify failed: ${(err as Error).message}` };
+      }
+    },
+  };
+}
+
+/**
+ * Poll a behavioral verifier until healthy or timeout (used for the reboot
+ * wait-for-online, where the endpoint is down for a while). A thrown/failed
+ * verify counts as "keep waiting". Injectable clock keeps it testable.
+ */
+export async function waitForRecovery(
+  verifier: HidVerifier,
   opts: { timeoutMs?: number; intervalMs?: number } = {},
   deps: WaitDeps = {},
-): Promise<{ recovered: boolean; elapsedMs: number; polls: number; last: HidOnlineState | null }> {
+): Promise<{ recovered: boolean; elapsedMs: number; polls: number }> {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const timeoutMs = opts.timeoutMs ?? 120_000;
   const intervalMs = opts.intervalMs ?? 3_000;
   const start = now();
   let polls = 0;
-  let last: HidOnlineState | null = null;
   for (;;) {
-    let state: HidOnlineState | null = null;
-    try {
-      state = await probe();
-    } catch {
-      state = null; // endpoint down (e.g. mid-reboot) — treat as "keep waiting"
-    }
     polls += 1;
-    last = state;
-    if (state && !isHidBroken(state)) {
-      return { recovered: true, elapsedMs: now() - start, polls, last };
+    let healthy = false;
+    try {
+      healthy = (await verifier.verify()).healthy;
+    } catch {
+      healthy = false;
     }
-    if (now() - start >= timeoutMs) {
-      return { recovered: false, elapsedMs: now() - start, polls, last };
-    }
+    if (healthy) return { recovered: true, elapsedMs: now() - start, polls };
+    if (now() - start >= timeoutMs) return { recovered: false, elapsedMs: now() - start, polls };
     await sleep(intervalMs);
   }
 }
 
+export type RungLabel = 'R0' | 'R1' | 'R2' | 'R3a' | 'R3b';
 export interface RungAttempt {
-  rung: Rung;
-  action: RecoveryAction;
-  /** Whether the backing action was performed (rung 2/3: trigger available + accepted). */
+  rung: RungLabel;
+  action: LadderAction;
   performed: boolean;
-  /** Whether the HID was fully online after this rung. */
   recovered: boolean;
   detail: string;
 }
 
 export interface RecoverResult {
+  /** R0: was the target present at all? When false, no rung is attempted. */
+  targetPresent: boolean;
+  /** Cheap-trigger read of the flags at entry. */
   initiallyBroken: boolean;
   recovered: boolean;
   attempts: RungAttempt[];
-  finalHid: HidOnlineState;
+  /** Set when unrecovered: the R4 human escalation (physical re-plug / power). */
+  humanActionRequired?: string;
 }
 
+const RUNG_OF: Record<LadderAction, RungLabel> = {
+  'soft-reset': 'R1',
+  'soft-connect': 'R2',
+  'udc-rebind': 'R3a',
+  reboot: 'R3b',
+};
+
 export interface RecoverOpts {
-  /** Highest rung to attempt (1=soft only, 2=+UDC rebind, 3=+reboot). Default 2. */
-  maxRung?: Rung;
-  /** Rung 3 (reboot) is destructive (whole appliance ~30-90s) — must be opted in. */
+  /** How far to escalate: 1=soft-reset, 2=+soft-connect, 3=+udc-rebind, 4=+reboot. Default 3. */
+  maxRung?: 1 | 2 | 3 | 4;
+  /** R3b reboot is destructive (whole appliance ~30-90s) — must be opted in. */
   allowReboot?: boolean;
-  /** Settle after the soft reset before re-checking (ms). Default 2000. */
   softSettleMs?: number;
-  /** Wait budget for the post-rung-2 online check (ms). Default 15000. */
-  rebindWaitMs?: number;
-  /** Wait budget for the post-reboot online check (ms). Default 120000. */
+  /** Post-host-action recovery wait (ms). Default 15000 for R2/R3a. */
+  hostWaitMs?: number;
+  /** Post-reboot recovery wait (ms). Default 120000. */
   rebootWaitMs?: number;
 }
 
 /**
- * Detect a broken HID and escalate up the ladder until it recovers or the
- * allowed rungs are exhausted. Verifies `mouseOnline && keyboardOnline` after
- * each rung. Pure orchestration over the injected client + trigger, so it is
- * unit-testable with fakes.
+ * Detect (cheap flag trigger) → escalate the ladder → verify BEHAVIORALLY after
+ * each rung. R0 presence-gates the whole thing; R4 (human re-plug) is the honest
+ * terminal state when every allowed remote rung fails. Pure orchestration over
+ * the injected client/trigger/verifier, so it is unit-testable with fakes.
  */
 export async function recoverHid(
   client: HidRecoveryClient,
   trigger: RecoveryTrigger,
+  verifier: HidVerifier,
   opts: RecoverOpts = {},
   deps: WaitDeps = {},
 ): Promise<RecoverResult> {
-  const maxRung = opts.maxRung ?? 2;
+  const maxRung = opts.maxRung ?? 3;
   const attempts: RungAttempt[] = [];
 
-  const initial = await client.getHidProfile();
-  if (!isHidBroken(initial)) {
-    return { initiallyBroken: false, recovered: true, attempts, finalHid: initial };
+  // R0 — presence gate. No rung recovers a target that isn't there.
+  if (!(await checkTargetPresent(client))) {
+    return {
+      targetPresent: false,
+      initiallyBroken: true,
+      recovered: false,
+      attempts,
+      humanActionRequired: 'Target is not present (no screenshot / HDMI). Wake or power on the target first — no HID rung can recover an absent/asleep target.',
+    };
   }
 
-  // RUNG 1 — soft reset (cheap first try; often does NOT fix a controller drop).
-  const afterSoft = await client.resetHid({ reconnectUsb: true, settleMs: opts.softSettleMs ?? 2000 });
-  const softOk = !isHidBroken(afterSoft);
-  attempts.push({
-    rung: 1,
-    action: 'soft-reset',
-    performed: true,
-    recovered: softOk,
-    detail: softOk
-      ? 'soft reset recovered the HID'
-      : 'soft reset did not recover (expected for a controller-level drop — set_connected is a no-op on this unit and cannot force host re-enumeration)',
-  });
-  if (softOk) return { initiallyBroken: true, recovered: true, attempts, finalHid: afterSoft };
-
-  // RUNG 2 — UDC rebind (host, via trigger). Untested no-reboot candidate.
-  if (maxRung >= 2) {
-    if (!trigger.configured) {
-      attempts.push({
-        rung: 2,
-        action: 'udc-rebind',
-        performed: false,
-        recovered: false,
-        detail: 'UDC rebind unavailable: the host recovery trigger is not configured (pikvm-nixos must provide it — see docs/runbooks/hid-recovery.md)',
-      });
-    } else {
-      const res = await trigger.escalate('udc-rebind');
-      const wait = await waitForHidOnline(() => client.getHidProfile(), { timeoutMs: opts.rebindWaitMs ?? 15_000 }, deps);
-      attempts.push({
-        rung: 2,
-        action: 'udc-rebind',
-        performed: res.ok,
-        recovered: wait.recovered,
-        detail: `${res.message}${wait.recovered ? ' — HID online' : ' — HID still offline after rebind (UNVERIFIED on this unit; may need rung 3)'}`,
-      });
-      if (wait.recovered && wait.last) return { initiallyBroken: true, recovered: true, attempts, finalHid: wait.last };
+  const initiallyBroken = isHidBroken(await client.getHidProfile());
+  // Cheap trigger says fine → confirm behaviorally (flags lie); if truly healthy, done.
+  if (!initiallyBroken) {
+    const v = await verifier.verify();
+    if (v.healthy) {
+      return { targetPresent: true, initiallyBroken: false, recovered: true, attempts };
     }
   }
 
-  // RUNG 3 — reboot (host, via trigger). Known-reliable, but destructive → opt-in.
-  if (maxRung >= 3) {
-    if (!opts.allowReboot) {
-      attempts.push({ rung: 3, action: 'reboot', performed: false, recovered: false, detail: 'reboot skipped (allowReboot=false) — the known-reliable fix, but it takes the appliance down ~30-90s; re-run with allowReboot to use it' });
-    } else if (!trigger.configured) {
-      attempts.push({ rung: 3, action: 'reboot', performed: false, recovered: false, detail: 'reboot unavailable: the host recovery trigger is not configured (pikvm-nixos must provide it)' });
+  const steps = LADDER.slice(0, maxRung);
+  for (const action of steps) {
+    const rung = RUNG_OF[action];
+
+    if (action === 'soft-reset') {
+      await client.resetHid({ reconnectUsb: true, settleMs: opts.softSettleMs ?? 2000 });
     } else {
-      const res = await trigger.escalate('reboot');
-      const wait = await waitForHidOnline(() => client.getHidProfile(), { timeoutMs: opts.rebootWaitMs ?? 120_000 }, deps);
-      attempts.push({
-        rung: 3,
-        action: 'reboot',
-        performed: res.ok,
-        recovered: wait.recovered,
-        detail: `${res.message}${wait.recovered ? ' — HID online after reboot' : ' — HID still offline after reboot window elapsed'}`,
-      });
-      if (wait.recovered && wait.last) return { initiallyBroken: true, recovered: true, attempts, finalHid: wait.last };
+      // Host rungs (R2/R3a/R3b) go through the trigger.
+      if (action === 'reboot' && !opts.allowReboot) {
+        attempts.push({ rung, action, performed: false, recovered: false, detail: 'reboot skipped (allowReboot=false) — worked once but is destructive (~30-90s); re-run with allowReboot to use it' });
+        continue;
+      }
+      if (!trigger.configured) {
+        attempts.push({ rung, action, performed: false, recovered: false, detail: `${action} unavailable: the host recovery trigger is not configured (pikvm-nixos must provide it — see docs/runbooks/hid-recovery.md)` });
+        continue;
+      }
+      const res = await trigger.escalate(action);
+      if (!res.ok && action !== 'reboot') {
+        attempts.push({ rung, action, performed: false, recovered: false, detail: res.message });
+        continue;
+      }
+      // For reboot, the endpoint drops — wait a long window; else a short one.
+      const wait = await waitForRecovery(verifier, { timeoutMs: action === 'reboot' ? (opts.rebootWaitMs ?? 120_000) : (opts.hostWaitMs ?? 15_000) }, deps);
+      attempts.push({ rung, action, performed: res.ok, recovered: wait.recovered, detail: `${res.message} — ${wait.recovered ? 'behavioral verify healthy' : 'still not driving input (UNTESTED rung / may need next rung)'}` });
+      if (wait.recovered) return { targetPresent: true, initiallyBroken, recovered: true, attempts };
+      continue;
     }
+
+    // Behavioral verify after the MCP-native soft reset.
+    const v = await verifier.verify();
+    attempts.push({ rung, action, performed: true, recovered: v.healthy, detail: v.healthy ? v.detail : `${v.detail} (soft reset rarely fixes a controller-level drop)` });
+    if (v.healthy) return { targetPresent: true, initiallyBroken, recovered: true, attempts };
   }
 
-  const finalHid = await client.getHidProfile().catch(() => attempts.length ? initial : initial);
-  return { initiallyBroken: true, recovered: !isHidBroken(finalHid), attempts, finalHid };
+  // R4 — every allowed remote rung failed. Honest terminal state.
+  return {
+    targetPresent: true,
+    initiallyBroken,
+    recovered: false,
+    attempts,
+    humanActionRequired: 'All allowed remote rungs failed. Physical intervention required: re-plug the target USB data cable (not charge-only) or power-cycle the target. Remote recovery cannot always fix a controller-level HID teardown (confirmed 2026-07-22).',
+  };
 }
 
 /**
- * HTTP client for the host recovery trigger (rung 2/3). POSTs
- * `{ action }` to the nixos-provided privileged helper at `url` with a bearer
- * token. This is the MCP end of the {@link RecoveryTrigger} contract; the helper
- * itself is provided by pikvm-nixos. When `url` is unset the trigger is
- * `configured:false` and the orchestrator reports rungs 2/3 as unavailable.
+ * HTTP client for the host recovery trigger (R2/R3a/R3b). POSTs `{ action }` to
+ * the pikvm-nixos localhost helper with a bearer token. MCP end of the
+ * {@link RecoveryTrigger} contract; unset `url` ⇒ `configured:false`.
  */
 export function makeHttpRecoveryTrigger(cfg: {
   url?: string;
@@ -256,20 +318,17 @@ export function makeHttpRecoveryTrigger(cfg: {
           body: JSON.stringify({ action }),
           dispatcher: getDispatcher(),
         });
-        // Reboot legitimately drops the connection mid-response; a 2xx OR a
-        // connection reset after sending both count as "initiated".
         const ok = res.status >= 200 && res.status < 300;
         let message = `host trigger ${action}: HTTP ${res.status}`;
         try {
           const body = (await res.json()) as { message?: string };
           if (body?.message) message = body.message;
         } catch {
-          /* no/again-drained body */
+          /* drained / empty */
         }
         return { ok, message };
       } catch (err) {
         if (action === 'reboot') {
-          // Connection dropped because the host is going down — that's success.
           return { ok: true, message: `reboot initiated (host connection dropped: ${(err as Error).message})` };
         }
         return { ok: false, message: `host trigger ${action} failed: ${(err as Error).message}` };
