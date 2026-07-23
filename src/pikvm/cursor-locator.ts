@@ -320,54 +320,18 @@ export class CursorLocator {
             confidence: verified.confidence,
           };
         }
-        // wiggle rejected the ML detection → fall through to shape detect.
+        // wiggle rejected the ML detection → no fix.
       }
 
-      // Heuristic shape fallback: dark AND bright, competed by score desc.
-      const dark = d.findCursorByShape(shot.rgb, shot.width, shot.height, {
-        expectedNear: predicted,
-        expectedNearRadius: 100,
-      });
-      const bright = d.findCursorByShape(shot.rgb, shot.width, shot.height, {
-        expectedNear: predicted,
-        expectedNearRadius: 100,
-        brightThreshold: 120,
-      });
-
-      type Candidate = { pos: { x: number; y: number }; score: number };
-      const candidates: Candidate[] = [];
-      const proxOf = (p: { x: number; y: number }): number =>
-        Math.hypot(p.x - predicted.x, p.y - predicted.y);
-      if (dark) {
-        const pos = { x: Math.round(dark.centroidX), y: Math.round(dark.centroidY) };
-        const prox = proxOf(pos);
-        if (dark.shapeScore >= 0.05 || prox <= 30) {
-          candidates.push({ pos, score: dark.shapeScore });
-        }
-      }
-      if (bright) {
-        const pos = { x: Math.round(bright.centroidX), y: Math.round(bright.centroidY) };
-        const prox = proxOf(pos);
-        const sameAsDark = candidates.some(
-          (c) => Math.hypot(c.pos.x - pos.x, c.pos.y - pos.y) <= 5,
-        );
-        if (!sameAsDark && (bright.shapeScore >= 0.05 || prox <= 30)) {
-          candidates.push({ pos, score: bright.shapeScore });
-        }
-      }
-
-      candidates.sort((a, b) => b.score - a.score);
-      for (const c of candidates) {
-        const wiggleVerified = await d.wiggleVerifyCandidate(c.pos, c.score);
-        if (wiggleVerified) {
-          return {
-            position: { x: wiggleVerified.pos.x, y: wiggleVerified.pos.y },
-            source: 'shape',
-            rawScore: c.score,
-            confidence: null,
-          };
-        }
-      }
+      // Shape fallback RETIRED (2026-07-23). bench-shape-vs-cascade-backgrounds
+      // proved findCursorByShape is a DEAD + HARMFUL fallback on this path: over
+      // 192 frames × 16 backgrounds it rescued 0 cascade misses (cascade was
+      // 100% everywhere), hit only 1%, and MIS-fired 27% (up to 50% on busy home
+      // screens) — the exact false-candidate surface the tautology wiggle-guard
+      // existed to reject. The cascade carries this profile; shape only added a
+      // detector to maintain and FPs to filter. See docs/FUTURE-WORK.md.
+      // (findCursorByShape's SEPARATE use in move-to.ts wiggleVerifyCandidate is
+      // a different mechanism and is intentionally left untouched.)
       return null;
     } catch {
       return null;
