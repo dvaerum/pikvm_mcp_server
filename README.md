@@ -372,8 +372,10 @@ Basic credentials to a man-in-the-middle. Only do it on a **trusted, LAN-only** 
 
 **The clean alternative — trust a real cert.** Prefer supplying/trusting a proper certificate over
 skipping verification: point the PiKVM front-door at your own cert (pikvm-nixos
-`services.pikvm.mcpProxy.tls.*`) or add the appliance's CA to the client's trust store. Then drop
-`-k` / `verify=False` and the connection is authenticated end-to-end.
+`services.pikvm.mcpProxy.tls.certificate` + `.certificateKey` — set both, PEM paths, with the key
+pointed at a sops/agenix runtime secret; if unset, nginx self-signs at first boot, which is why
+clients skip verification by default) or add the appliance's CA to the client's trust store. Then
+drop `-k` / `verify=False` and the connection is authenticated end-to-end.
 
 ## Available Tools
 
