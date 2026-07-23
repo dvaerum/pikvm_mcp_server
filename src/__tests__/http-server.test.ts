@@ -188,6 +188,25 @@ describe('startHttpServer in-band login (--allow-tool-login)', () => {
     await r.text();
   });
 
+  it('rejects a PRESENT-but-invalid header with 401 even under tool-login (no silent downgrade)', async () => {
+    handle = await startHttpServer(fakeCreateServer, {
+      host: '127.0.0.1',
+      port: 0,
+      authorize,
+      allowToolLogin: true,
+    });
+
+    // Wrong creds on an initialize: the client attempted auth and failed → 401,
+    // NOT a pre-auth session. Pre-auth 200 is reserved for the no-header case.
+    const r = await fetch(handle.url, {
+      method: 'POST',
+      headers: { ...HEADERS, authorization: basic('operator', 'wrongpw') },
+      body: JSON.stringify(INIT),
+    });
+    expect(r.status).toBe(401);
+    await r.text();
+  });
+
   it('a valid header still authorizes at connect even with tool-login on', async () => {
     handle = await startHttpServer(fakeCreateServer, {
       host: '127.0.0.1',

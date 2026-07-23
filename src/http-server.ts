@@ -93,6 +93,13 @@ export function startHttpServer(
         id: null,
       });
     };
+    // A present-but-invalid credential is an authentication FAILURE → 401, even
+    // with tool-login on. The pre-auth (login-gated) fallback is reserved for the
+    // NO-header case: a client that sent no credentials opts into authenticating
+    // in-band via the login tool; a client that sent WRONG credentials gets a
+    // clear 401 rather than a silent downgrade. (No header at all ⇒ empty string.)
+    const headerPresent =
+      typeof req.headers.authorization === 'string' && req.headers.authorization.length > 0;
     authorize(req.headers.authorization).then(
       (ok) => {
         if (ok) {
@@ -100,9 +107,9 @@ export function startHttpServer(
           next();
           return;
         }
-        // No valid header: admit only a header-less initialize under tool-login,
-        // as an unauthenticated (login-gated) session. Everything else is 401.
-        if (allowToolLogin && isInitializeRequest(req.body)) {
+        // Only a header-LESS initialize is admitted under tool-login (login-gated
+        // session). A present-but-wrong header, or a non-initialize, is 401.
+        if (!headerPresent && allowToolLogin && isInitializeRequest(req.body)) {
           res.locals.headerAuthed = false;
           next();
           return;
