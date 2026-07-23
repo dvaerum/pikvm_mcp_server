@@ -22,6 +22,7 @@ import { parseCliOptions, helpText } from './cli.js';
 import { startHttpServer } from './http-server.js';
 import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './auth.js';
 import { makeKvmdAuthorizer } from './kvmd-auth.js';
+import { type LoginGate } from './session-auth.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
@@ -712,6 +713,28 @@ const tools: Tool[] = [
   ...skillTools,
 ];
 
+// The in-band auth tool (opt-in, --allow-tool-login). Exposed ONLY when a login
+// gate is present AND the session is not yet authenticated; on success the full
+// tool set above unlocks for the session. Not a `pikvm_` device op — it's a
+// session/transport concern — so it is deliberately unprefixed.
+const LOGIN_TOOL: Tool = {
+  name: 'login',
+  description:
+    'Authenticate THIS MCP session with your username and password (your PiKVM/kvmd ' +
+    'credentials when the server runs in kvmd mode). Required before any other tool when ' +
+    'the server enforces authentication and you did not present an Authorization header at ' +
+    'connect. On success the full tool set unlocks for this session. The password is not ' +
+    'logged or echoed.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      username: { type: 'string', description: 'Username (your PiKVM/kvmd user in kvmd mode).' },
+      password: { type: 'string', description: 'Password. Not logged or echoed.' },
+    },
+    required: ['username', 'password'],
+  },
+};
+
 // Create MCP server.
 //
 // This is a factory (not a module-global singleton) so the Streamable HTTP
@@ -720,7 +743,11 @@ const tools: Tool[] = [
 // calls it exactly once. All heavy shared state (the PiKVMClient, the busy
 // lock, mouseAbsoluteMode) stays in module globals, so per-session Servers are
 // cheap wrappers over the same device connection.
-export function createMcpServer(): Server {
+//
+// `gate` (Streamable HTTP + --allow-tool-login only): when present, this session
+// exposes the `login` tool and gates every other tool until authenticated. The
+// stdio path and header-only auth pass no gate → identical, ungated behavior.
+export function createMcpServer(gate?: LoginGate): Server {
   const server = new Server(
     {
       name: 'pikvm-mcp-server',
@@ -764,12 +791,61 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+  // Pre-auth (login gate present, session not yet authenticated): expose ONLY
+  // the login tool — don't leak the full tool surface before authentication.
+  if (gate && !gate.session.authenticated) {
+    return { tools: [LOGIN_TOOL] };
+  }
   return { tools };
 });
 
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
+
+  // Login gate (--allow-tool-login). The `login` tool is the ONLY tool callable
+  // on a pre-auth session; everything else is refused until it authenticates.
+  if (gate) {
+    if (name === 'login') {
+      const { username, password } = args as { username?: unknown; password?: unknown };
+      if (typeof username !== 'string' || typeof password !== 'string') {
+        return {
+          content: [{ type: 'text', text: 'Error: login requires string "username" and "password".' }],
+          isError: true,
+        };
+      }
+      if (gate.session.authenticated) {
+        return { content: [{ type: 'text', text: 'Already authenticated for this session.' }] };
+      }
+      // makeLoginGate validates via the same authorizer as the header path and
+      // flips session.authenticated on success. The password is never logged.
+      const ok = await gate.login(username, password);
+      return ok
+        ? {
+            content: [
+              {
+                type: 'text',
+                text: 'Authentication successful — session authorized. All tools are now available.',
+              },
+            ],
+          }
+        : {
+            content: [{ type: 'text', text: 'Error: authentication failed — invalid username or password.' }],
+            isError: true,
+          };
+    }
+    if (!gate.session.authenticated) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: "Error: authentication required — call the 'login' tool with your username and password first.",
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
 
   // Block other tools while a long-running op (auto-calibration or
   // ballistics measurement) is in progress. The excluded tools are allowed
@@ -1659,6 +1735,14 @@ async function main() {
         `⚠ HTTP auth: DISABLED (--security no). Anyone who can reach ${cli.host}:${cli.port} can control the machine.`,
       );
     }
+    if (cli.allowToolLogin && cli.security !== 'no') {
+      console.error(
+        "HTTP auth: in-band `login` tool ENABLED (--allow-tool-login). A pre-auth session may " +
+          'connect without a header but can call ONLY `login` until it authenticates.',
+      );
+    } else if (cli.allowToolLogin) {
+      console.error('Note: --allow-tool-login has no effect with --security no (nothing to authenticate).');
+    }
   }
 
   // Load configuration (deferred to here for proper error handling)
@@ -1748,6 +1832,7 @@ async function main() {
       host: cli.host,
       port: cli.port,
       authorize: httpAuthorize,
+      allowToolLogin: cli.allowToolLogin,
     });
     console.error(`PiKVM MCP Server running (Streamable HTTP) at ${handle.url}`);
   } else {

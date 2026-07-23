@@ -105,6 +105,18 @@ describe('parseCliOptions', () => {
     expect(() => parseCliOptions(['--security', 'maybe'], {})).toThrow(/security/i);
   });
 
+  it('allowToolLogin defaults false; --allow-tool-login and env enable it; flag wins', () => {
+    expect(parseCliOptions([], {}).allowToolLogin).toBe(false);
+    expect(parseCliOptions(['--allow-tool-login'], {}).allowToolLogin).toBe(true);
+    expect(parseCliOptions([], { PIKVM_MCP_ALLOW_TOOL_LOGIN: 'true' }).allowToolLogin).toBe(true);
+    expect(parseCliOptions([], { PIKVM_MCP_ALLOW_TOOL_LOGIN: '1' }).allowToolLogin).toBe(true);
+    expect(parseCliOptions([], { PIKVM_MCP_ALLOW_TOOL_LOGIN: 'no' }).allowToolLogin).toBe(false);
+    // Flag present overrides a falsey env.
+    expect(
+      parseCliOptions(['--allow-tool-login'], { PIKVM_MCP_ALLOW_TOOL_LOGIN: 'no' }).allowToolLogin,
+    ).toBe(true);
+  });
+
   it('parses the http auth options (flag + env for username)', () => {
     const o = parseCliOptions(
       ['--auth-username', 'alice', '--auth-password', 'pw', '--auth-password-file', '/run/p'],

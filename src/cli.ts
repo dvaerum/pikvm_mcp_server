@@ -40,6 +40,12 @@ export interface CliOptions {
   authPassword: string | undefined;
   /** Path to a file holding the auth password. */
   authPasswordFile: string | undefined;
+  /**
+   * Opt-in (default false): also expose an in-band `login` MCP tool so a client
+   * can authenticate its session without an Authorization header. Only meaningful
+   * with --security yes|kvmd. Flag > PIKVM_MCP_ALLOW_TOOL_LOGIN.
+   */
+  allowToolLogin: boolean;
   help: boolean;
 }
 
@@ -60,10 +66,11 @@ export function parseCliOptions(
       host: { type: 'string' },
       port: { type: 'string' },
       target: { type: 'string' }, // ipad | desktop | auto
-      security: { type: 'string' }, // yes | no (required in http mode)
+      security: { type: 'string' }, // yes | no | kvmd (required in http mode)
       'auth-username': { type: 'string' },
       'auth-password': { type: 'string' },
       'auth-password-file': { type: 'string' },
+      'allow-tool-login': { type: 'boolean' }, // opt-in in-band login tool
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -98,6 +105,12 @@ export function parseCliOptions(
     throw new Error(`Invalid --security "${securityRaw}" (expected "yes", "no", or "kvmd")`);
   }
 
+  // Opt-in in-band login tool (flag > env). Env is truthy on "true"/"1".
+  const allowToolLoginEnv =
+    env.PIKVM_MCP_ALLOW_TOOL_LOGIN === 'true' || env.PIKVM_MCP_ALLOW_TOOL_LOGIN === '1';
+  const allowToolLogin =
+    values['allow-tool-login'] !== undefined ? Boolean(values['allow-tool-login']) : allowToolLoginEnv;
+
   return {
     transport,
     host,
@@ -107,6 +120,7 @@ export function parseCliOptions(
     authUsername: (values['auth-username'] as string | undefined) ?? env.PIKVM_MCP_AUTH_USERNAME,
     authPassword: values['auth-password'] as string | undefined,
     authPasswordFile: values['auth-password-file'] as string | undefined,
+    allowToolLogin,
     help: Boolean(values.help),
   };
 }
@@ -134,11 +148,17 @@ export function helpText(binName = 'pikvm-mcp-server'): string {
     '  --auth-username <name>       Username for http auth (default: operator).',
     '  --auth-password <pw>         Password for http auth (prefer the file/env forms).',
     '  --auth-password-file <path>  Read the http auth password from a file.',
+    '  --allow-tool-login           Also expose an in-band `login` MCP tool so a client can',
+    '                               authenticate its session without an Authorization header.',
+    '                               Opt-in (default off); only meaningful with --security yes|kvmd.',
+    '                               A pre-auth session may connect but can call ONLY `login`',
+    '                               until it authenticates. The header path stays recommended.',
     '  -h, --help                   Show this help and exit',
     '',
     'Environment (used when the matching flag is absent):',
     '  PIKVM_MCP_TRANSPORT, PIKVM_MCP_HOST, PIKVM_MCP_PORT, PIKVM_TARGET',
     '  PIKVM_MCP_SECURITY           yes|no|kvmd',
+    '  PIKVM_MCP_ALLOW_TOOL_LOGIN   true|1 to enable the in-band login tool',
     '  PIKVM_MCP_AUTH_USERNAME, PIKVM_MCP_AUTH_PASSWORD[_FILE]   http auth credentials',
     '  PIKVM_HOST                   required to reach the PiKVM',
     '  PIKVM_PASSWORD[_FILE]        needed only to actually drive the PiKVM device',

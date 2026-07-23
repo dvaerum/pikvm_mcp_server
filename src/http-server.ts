@@ -15,6 +15,12 @@
  * header (a validated `initialize` authorizes its session). Without an authorizer
  * (`--security no`) the endpoint is open. /health is always unauthenticated.
  *
+ * In-band login (opts.allowToolLogin, from `--allow-tool-login`; opt-in): also
+ * admits a header-less `initialize`, opening a PRE-AUTH session that can call
+ * only the `login` tool (tool-gating enforced in createMcpServer) until it
+ * authenticates with the same credentials the header would carry. The strict
+ * header-at-connect path stays the default and recommended posture.
+ *
  * Endpoints:
  *   POST   /mcp   client->server messages (initialize starts a session)
  *   GET    /mcp   server->client SSE stream for an existing session
@@ -27,6 +33,7 @@ import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { type HeaderAuthorizer } from './auth.js';
+import { makeLoginGate, type LoginGate, type SessionAuthState } from './session-auth.js';
 
 export interface HttpServerHandle {
   /** The actual bound port (resolves the real port when started on port 0). */
@@ -43,22 +50,33 @@ export interface HttpServerHandle {
  * `opts.authorize` is set, /mcp requires authentication.
  */
 export function startHttpServer(
-  createServer: () => Server,
-  opts: { host: string; port: number; authorize?: HeaderAuthorizer },
+  createServer: (gate?: LoginGate) => Server,
+  opts: { host: string; port: number; authorize?: HeaderAuthorizer; allowToolLogin?: boolean },
 ): Promise<HttpServerHandle> {
   const app = express();
   app.use(express.json());
 
   const transports = new Map<string, StreamableHTTPServerTransport>();
   const authorize = opts.authorize;
+  // The in-band login tool only makes sense when auth is enforced; with no
+  // authorizer there is nothing to authenticate against, so it stays off.
+  const allowToolLogin = Boolean(opts.allowToolLogin) && Boolean(authorize);
 
   // Gate every /mcp request when auth is enabled. A request passes if it has a
   // valid Basic header (per the configured authorizer — static creds or kvmd),
-  // OR an Mcp-Session-Id for an already-authorized session (a session only exists
-  // because its initialize carried a valid header). The header check is async so
-  // the kvmd backend can round-trip; it's awaited only when there's no session.
+  // OR an Mcp-Session-Id for an already-authorized session. The header check is
+  // async so the kvmd backend can round-trip; it's awaited only when there's no
+  // session. `res.locals.headerAuthed` carries the header result to the POST
+  // handler so a session is created with the right initial auth state without a
+  // second authorizer round-trip.
+  //
+  // With --allow-tool-login, a header-less `initialize` is ALSO admitted, opening
+  // a PRE-AUTH session that can reach only the `login` tool (enforced at the tool
+  // layer, in createMcpServer). This is the deliberately-looser opt-in path; the
+  // strict default still rejects a session with no valid header.
   const requireAuth = (req: Request, res: Response, next: NextFunction): void => {
     if (!authorize) {
+      res.locals.headerAuthed = true;
       next();
       return;
     }
@@ -76,7 +94,21 @@ export function startHttpServer(
       });
     };
     authorize(req.headers.authorization).then(
-      (ok) => (ok ? next() : reject()),
+      (ok) => {
+        if (ok) {
+          res.locals.headerAuthed = true;
+          next();
+          return;
+        }
+        // No valid header: admit only a header-less initialize under tool-login,
+        // as an unauthenticated (login-gated) session. Everything else is 401.
+        if (allowToolLogin && isInitializeRequest(req.body)) {
+          res.locals.headerAuthed = false;
+          next();
+          return;
+        }
+        reject();
+      },
       () => reject(), // an authorizer error is a failed auth, never a crash
     );
   };
@@ -101,6 +133,11 @@ export function startHttpServer(
           });
           return;
         }
+        // Per-session auth state. A validated header authorizes the session at
+        // creation (the strict "Both" model); a tool-login pre-auth session
+        // starts unauthenticated and is unlocked in-band by the `login` tool.
+        const session: SessionAuthState = { authenticated: res.locals.headerAuthed !== false };
+        const gate = allowToolLogin ? makeLoginGate(authorize!, session) : undefined;
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
@@ -111,7 +148,7 @@ export function startHttpServer(
           const sid = transport!.sessionId;
           if (sid) transports.delete(sid);
         };
-        await createServer().connect(transport);
+        await createServer(gate).connect(transport);
       }
 
       await transport.handleRequest(req, res, req.body);
