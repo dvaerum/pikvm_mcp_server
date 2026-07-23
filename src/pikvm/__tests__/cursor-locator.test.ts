@@ -274,9 +274,9 @@ describe('locate(profile: openLoopShape)', () => {
     expect(deps.findCursorByShape).not.toHaveBeenCalled();
   });
 
-  it('falls through to a wiggle-verified shape candidate when ML is rejected', async () => {
+  it('returns null when a crop-based ML detection is wiggle-rejected (shape fallback RETIRED)', async () => {
     const deps = makeDeps({
-      // Crop-based ML near hint (crop != 0,0) but wiggle rejects it → shape fallback.
+      // Crop-based ML near hint (crop != 0,0) → wiggle-verify runs and rejects it.
       findCursorByMLMultiHint: vi.fn(async () => ({
         x: HINT.x,
         y: HINT.y,
@@ -284,41 +284,35 @@ describe('locate(profile: openLoopShape)', () => {
         crop: { left: 120, top: 80 },
       })),
       mlWiggleVerify: vi.fn(async () => null),
-      findCursorByShape: vi
-        .fn()
-        // dark pass returns a strong candidate; bright pass returns null.
-        .mockReturnValueOnce({ centroidX: 510.4, centroidY: 402.6, pixels: 40, shapeScore: 0.6 })
-        .mockReturnValueOnce(null),
+      // Provide shape mocks that WOULD have produced a candidate pre-retirement —
+      // the retired path must NOT consult them.
+      findCursorByShape: vi.fn(() => ({ centroidX: 510, centroidY: 402, pixels: 40, shapeScore: 0.6 })),
       wiggleVerifyCandidate: vi.fn(async (pos) => ({ pos })),
     });
     const loc = new CursorLocator(deps);
 
     const fix = await loc.locate(FRAME, 200, 100, 'openLoopShape', HINT);
 
-    expect(fix).toEqual({
-      position: { x: 510, y: 403 },
-      source: 'shape',
-      rawScore: 0.6,
-      confidence: null, // shape is NOT calibrated → null
-    });
-    expect(deps.findCursorByShape).toHaveBeenCalledTimes(2); // dark + bright
-    expect(deps.wiggleVerifyCandidate).toHaveBeenCalledTimes(1);
+    // Shape fallback retired — a rejected ML detection yields no fix, and shape
+    // is never consulted.
+    expect(fix).toBeNull();
+    expect(deps.findCursorByShape).not.toHaveBeenCalled();
+    expect(deps.wiggleVerifyCandidate).not.toHaveBeenCalled();
   });
 
-  it('returns null when ML and every shape candidate fail wiggle-verify', async () => {
+  it('returns null when ML finds nothing (no shape fallback)', async () => {
+    // findCursorByMLMultiHint defaults to null in makeDeps.
     const deps = makeDeps({
-      findCursorByShape: vi
-        .fn()
-        .mockReturnValueOnce({ centroidX: 510, centroidY: 402, pixels: 40, shapeScore: 0.6 })
-        .mockReturnValueOnce({ centroidX: 460, centroidY: 350, pixels: 30, shapeScore: 0.3 }),
-      wiggleVerifyCandidate: vi.fn(async () => null),
+      findCursorByShape: vi.fn(() => ({ centroidX: 510, centroidY: 402, pixels: 40, shapeScore: 0.6 })),
+      wiggleVerifyCandidate: vi.fn(async (pos) => ({ pos })),
     });
     const loc = new CursorLocator(deps);
 
     const fix = await loc.locate(FRAME, 200, 100, 'openLoopShape', HINT);
 
     expect(fix).toBeNull();
-    expect(deps.wiggleVerifyCandidate).toHaveBeenCalledTimes(2);
+    expect(deps.findCursorByShape).not.toHaveBeenCalled();
+    expect(deps.wiggleVerifyCandidate).not.toHaveBeenCalled();
   });
 
   it('requires a hint', async () => {
