@@ -239,6 +239,8 @@ node dist/index.js --http --host 0.0.0.0 --port 8080
 | `--host <addr>` | `PIKVM_MCP_HOST` | `127.0.0.1` | HTTP bind address |
 | `--port <n>` | `PIKVM_MCP_PORT` | `3000` | HTTP port |
 | `--target <ipad\|desktop>` | `PIKVM_TARGET` | **required** | control path (see below) |
+| `--security <yes\|no\|kvmd>` | `PIKVM_MCP_SECURITY` | **required in http mode** | how `/mcp` authenticates (see [Authenticating to `/mcp`](#authenticating-to-the-mcp-endpoint)) |
+| `--allow-tool-login` | `PIKVM_MCP_ALLOW_TOOL_LOGIN` | off | also expose the in-band `login` tool |
 | `-h`, `--help` | — | — | show help and exit |
 
 In HTTP mode the Streamable HTTP transport is served at `POST/GET/DELETE /mcp` (stateful: each
@@ -263,6 +265,115 @@ warning but honors your choice.
 node dist/index.js --target ipad      # iPad path
 node dist/index.js --target desktop   # desktop path
 ```
+
+## Authenticating to the `/mcp` endpoint
+
+The `/mcp` endpoint drives real keyboard/mouse/screen input on a physical machine, so in HTTP
+mode you must choose `--security`:
+
+- **`--security yes`** — HTTP Basic against a **static** credential (`--auth-username` +
+  `--auth-password[-file]` / `PIKVM_MCP_AUTH_PASSWORD[_FILE]`).
+- **`--security kvmd`** — HTTP Basic validated against **PiKVM's own users**: the client logs in
+  with **the same username/password as the PiKVM web UI** (kvmd's `/etc/kvmd/htpasswd`, checked via
+  kvmd `GET /api/auth/check`). One shared login for the appliance and `/mcp`.
+- **`--security no`** — no authentication (anyone who can reach the port controls the machine). Only
+  for a trusted, isolated network.
+
+Authorization uses the **"Both"** model: a request is authorized if it carries a valid credential,
+**or** it carries the `Mcp-Session-Id` of a session whose `initialize` was authorized — so you
+authenticate once per session. There are two ways to present credentials.
+
+### 1. HTTP Basic header (recommended)
+
+Send `Authorization: Basic <base64(username:password)>` on requests (at minimum on `initialize`,
+which authorizes the session). Build the value with base64:
+
+```bash
+printf 'admin:mypassword' | base64        # -> YWRtaW46bXlwYXNzd29yZA==
+# => Authorization: Basic YWRtaW46bXlwYXNzd29yZA==
+```
+
+Under **`--security kvmd`** those are your **PiKVM credentials** (same as the PiKVM UI login); under
+**`--security yes`** they are the configured static `--auth-username` / password.
+
+**curl** (initialize handshake):
+
+```bash
+curl -sk https://pikvm.example.lan/mcp \
+  -H "Authorization: Basic $(printf 'admin:mypassword' | base64)" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+```
+
+**Node** (official MCP SDK):
+
+```js
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+const auth = 'Basic ' + Buffer.from('admin:mypassword').toString('base64');
+const transport = new StreamableHTTPClientTransport(new URL('https://pikvm.example.lan/mcp'), {
+  requestInit: { headers: { Authorization: auth } },
+});
+const client = new Client({ name: 'my-client', version: '1.0.0' });
+await client.connect(transport); // the initialize handshake carries the header
+```
+
+**Python** (official MCP SDK):
+
+```python
+import base64
+from mcp.client.streamable_http import streamablehttp_client
+from mcp import ClientSession
+
+auth = 'Basic ' + base64.b64encode(b'admin:mypassword').decode()
+async with streamablehttp_client(
+    'https://pikvm.example.lan/mcp', headers={'Authorization': auth}
+) as (read, write, _):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+```
+
+### 2. In-band `login` tool (opt-in, for clients that can't set a header)
+
+When the server runs with **`--allow-tool-login`**, a client may connect **without** an
+`Authorization` header and authenticate by calling a tool. The header path above stays the
+**recommended default** (especially for headless clients); the login tool is a fallback for MCP
+clients that can't attach a custom header.
+
+On such a pre-auth session the tool surface is **gated**: `tools/list` returns **only** `login`, and
+every other tool returns *"authentication required — call the 'login' tool first"*. Call:
+
+```jsonc
+// tools/call
+{ "name": "login", "arguments": { "username": "admin", "password": "mypassword" } }
+```
+
+On success the session is authorized and the **full tool set unlocks** (same credentials as the
+header — your PiKVM login under `--security kvmd`). Credentials are validated by the same authorizer
+as the header and are never logged.
+
+### TLS / self-signed certificates
+
+In a PiKVM deployment `/mcp` is served over **HTTPS** by the PiKVM front-door (nginx), and PiKVM
+almost always ships a **self-signed** certificate, so a client must either trust that cert or skip
+verification. (Running the server standalone without the nginx front-door serves plain `http://` on
+its bind address — no TLS.)
+
+Skipping verification is **insecure** — it disables authentication of the server and exposes the
+Basic credentials to a man-in-the-middle. Only do it on a **trusted, LAN-only** path:
+
+| Client | Skip verification (insecure) |
+|--------|------------------------------|
+| curl | `curl -k …` |
+| Node | `NODE_TLS_REJECT_UNAUTHORIZED=0` (global), or pass an undici `Agent({ connect: { rejectUnauthorized: false } })` dispatcher |
+| Python `httpx` | `httpx.AsyncClient(verify=False)` |
+
+**The clean alternative — trust a real cert.** Prefer supplying/trusting a proper certificate over
+skipping verification: point the PiKVM front-door at your own cert (pikvm-nixos
+`services.pikvm.mcpProxy.tls.*`) or add the appliance's CA to the client's trust store. Then drop
+`-k` / `verify=False` and the connection is authenticated end-to-end.
 
 ## Available Tools
 
