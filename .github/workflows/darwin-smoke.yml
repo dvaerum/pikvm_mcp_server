@@ -1,0 +1,48 @@
+name: darwin-smoke
+
+# aarch64-darwin nix build + onnxruntime-node dlopen smoke.
+#
+# The main CI (ci.yml) runs the runtime dlopen smoke on ubuntu ONLY, so a
+# darwin-specific packaging regression can slip through — it did: onnxruntime-node
+# bundles the macOS lib under its FULL version (libonnxruntime.1.24.3.dylib) and
+# the prebuilt binding loads that exact @rpath name, so an exact-name postInstall
+# assertion aborted only on darwin (fixed in f7e820a), caught by a DOWNSTREAM
+# aarch64-darwin consumer rather than CI. This guards that class upstream.
+#
+# Cost note: macOS runners are billed (10x on a private repo), so this is
+# PATH-FILTERED to packaging files (where this class of bug is introduced) + main
+# + manual dispatch — it does NOT run on every PR.
+
+on:
+  push:
+    branches: [main]
+    paths: ['nix/**', 'flake.nix', 'flake.lock', 'package.json', 'package-lock.json']
+  pull_request:
+    paths: ['nix/**', 'flake.nix', 'flake.lock', 'package.json', 'package-lock.json']
+  workflow_dispatch:
+
+jobs:
+  darwin-runtime-smoke:
+    runs-on: macos-14 # arm64 (M-series) => aarch64-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: build the nix package (aarch64-darwin)
+        run: nix build .#pikvm-mcp-server --print-build-logs
+      - name: runtime dlopen smoke (onnxruntime-node loads on darwin?)
+        # Same guard as ci.yml's Linux smoke: --help forces the onnxruntime-node
+        # dlopen at module import; it exits 0 iff the dylib links. A darwin ORT
+        # linkage regression surfaces here as ERR_DLOPEN_FAILED / a bad dylib name.
+        run: |
+          set -euo pipefail
+          out="$(./result/bin/pikvm-mcp-server --help 2>&1)" || {
+            echo "$out"
+            echo "::error::pikvm-mcp-server failed to start on darwin — onnxruntime dlopen regression?"
+            exit 1
+          }
+          if grep -qiE "ERR_DLOPEN_FAILED|onnxruntime.*(dlopen|symbol version|dylib)" <<<"$out"; then
+            echo "$out"
+            echo "::error::onnxruntime-node dlopen error at startup on darwin"
+            exit 1
+          fi
+          echo "darwin runtime smoke OK — onnxruntime-node loaded, --help returned cleanly"
