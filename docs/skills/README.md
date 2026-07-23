@@ -37,4 +37,5 @@ Multi-step workflow recipes:
 | `fill-form-workflow` | [fill-form-workflow.md](fill-form-workflow.md) | `form_description` (optional) | Fill in a form on screen |
 | `ipad-keyboard-first-workflow` | [ipad-keyboard-first-workflow.md](ipad-keyboard-first-workflow.md) | `goal` (required) | Reliable keyboard-first iPad workflow that bypasses cursor positioning |
 | `navigate-desktop-workflow` | [navigate-desktop-workflow.md](navigate-desktop-workflow.md) | `goal` (required) | Navigate a desktop environment |
+| `desktop-workflow` | [desktop-workflow.md](desktop-workflow.md) | none | Set up a desktop for reliable mouse control (absolute path) |
 | `auto-calibrate-mouse-workflow` | [auto-calibrate-mouse-workflow.md](auto-calibrate-mouse-workflow.md) | None | Automatic mouse calibration |

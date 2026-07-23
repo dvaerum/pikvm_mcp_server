@@ -29,7 +29,7 @@ pikvm_mcp_server/
 │   └── prompts/        # MCP prompt definitions
 │       ├── types.ts    # PromptDefinition interface
 │       ├── tool-guides.ts  # 14 individual tool guide prompts
-│       ├── workflows.ts    # 7 multi-step workflow prompts
+│       ├── workflows.ts    # 8 multi-step workflow prompts
 │       ├── skill-tools.ts  # Auto-generated skill_* tools from prompts
 │       └── index.ts    # Barrel export + lookup function
 ├── docs/skills/        # Human-readable skill guides (mirrors prompts)
@@ -161,7 +161,7 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 50** (29 `pikvm_*` hardware/diagnostic tools + 21 `skill_*` guidance tools = 14 tool-guide + 7 workflow).
+**Total tools: 51** (29 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
@@ -191,6 +191,7 @@ The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) a
 | `fill-form-workflow` | `skill_fill_form_workflow` | form_description (optional) | Fill in form fields |
 | `ipad-keyboard-first-workflow` | `skill_ipad_keyboard_first_workflow` | goal (required) | Reliable keyboard-first iPad workflow that bypasses cursor positioning |
 | `navigate-desktop-workflow` | `skill_navigate_desktop_workflow` | goal (required) | Navigate desktop with Observe-Plan-Act-Verify loop |
+| `desktop-workflow` | `skill_desktop_workflow` | none | Set up a desktop for reliable mouse control (--target desktop, auto-calibrate, absolute positioning) |
 
 Implementation: `src/prompts/` (types.ts, tool-guides.ts, workflows.ts, skill-tools.ts, index.ts). Human-readable guides: `docs/skills/`.
 

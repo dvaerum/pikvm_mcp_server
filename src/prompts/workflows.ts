@@ -454,4 +454,86 @@ Continue the Observe-Plan-Act-Verify loop until the goal **${goal}** is achieved
       ];
     },
   },
+  {
+    name: 'desktop-workflow',
+    description:
+      'Set up a generic desktop for reliable mouse control: --target desktop, auto-calibrate, ' +
+      'absolute positioning (vs the iPad path)',
+    arguments: [],
+    getMessages() {
+      return [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: 'How do I reliably drive a normal desktop (not an iPad) through this PiKVM MCP server?',
+          },
+        },
+        {
+          role: 'assistant',
+          content: {
+            type: 'text',
+            text: `# Desktop Workflow — reliable mouse control on a generic desktop
+
+This is the SETUP + POSITIONING guide for driving an ordinary desktop (Windows /
+macOS / Linux) behind a PiKVM. It is the desktop counterpart to the iPad path.
+For app navigation once the mouse is reliable, use \`navigate-desktop-workflow\`.
+
+## 1. The server must run in desktop (absolute) mode
+
+A desktop uses **absolute** mouse positioning; the iPad path uses relative
+deltas. These are picked by the server's \`--target\` flag (there is no
+auto-detect): the operator must start the server with **\`--target desktop\`**
+(NixOS: \`services.pikvm-mcp.target = "desktop"\`). Confirm it with
+\`pikvm_health_check\` — it reports the mouse mode; you want absolute mode.
+
+## 2. Calibrate once (cursor-agnostic)
+
+Call \`pikvm_auto_calibrate\` (details: \`auto-calibrate-mouse-workflow\`). It finds
+the cursor by diffing screenshots — **what moved**, not colour/shape — so it works
+with a black desktop arrow. It computes and applies absolute calibration factors.
+Recalibrate if the screen resolution changes.
+
+## 3. Position with ABSOLUTE moves (the reliable default)
+
+After calibration, positioning is exact and needs no cursor detection:
+- \`pikvm_mouse_move(x, y)\` — moves to screenshot pixel (x, y) exactly.
+- \`pikvm_mouse_click(...)\` — clicks at the current position.
+
+Prefer this absolute flow for desktop clicking: read the target pixel from a
+\`pikvm_screenshot\`, \`pikvm_mouse_move\` there, then \`pikvm_mouse_click\`, then
+screenshot to verify.
+
+### When to use \`pikvm_mouse_click_at\`
+\`pikvm_mouse_click_at\` is the high-accuracy mover that detect-then-moves and
+verifies the cursor landed. On desktop it degrades cleanly to an absolute move
+(+ slam fallback), but its detect-then-move step uses iPad-tuned motion-diff
+probe constants, so on a linear absolute-mouse desktop it can miss and fall back.
+**For desktop, plain absolute \`pikvm_mouse_move\` + \`pikvm_mouse_click\` is the
+dependable default;** reach for \`click_at\` only when you specifically want a
+cursor-verified landing.
+
+## 4. Keyboard is fully general
+
+\`pikvm_type\`, \`pikvm_key\`, and \`pikvm_shortcut\` are plain USB-HID — identical on
+desktop and iPad. Keyboard-first navigation (launchers, Alt+Tab, terminal) is
+often more robust than mouse.
+
+## 5. Do NOT reach for the iPad tools
+
+\`pikvm_ipad_unlock\` / \`pikvm_ipad_home\` / app-switcher / launch-app are
+iPad-only and irrelevant on a desktop. The iPad relative mover and orange-cursor
+ML detector are also not used in absolute mode.
+
+## 6. Then navigate, and measure
+
+- App navigation (open apps, find files): switch to \`navigate-desktop-workflow\`.
+- Reliability measurement: \`benches/desktop-e2e.ts\` runs auto-calibrate → absolute
+  moves at a grid → verifies where the cursor landed (residual p50/p90). Run it on
+  the desktop-behind-PiKVM rig to measure this machine's click accuracy.`,
+          },
+        },
+      ];
+    },
+  },
 ];
