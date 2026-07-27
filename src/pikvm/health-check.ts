@@ -10,7 +10,7 @@
  * yields a useful partial report.
  */
 import { PiKVMClient } from './client.js';
-import { detectIpadBoundsFromBuffer } from './orientation.js';
+import { detectIpadBoundsFromBuffer, boundsToRegion } from './orientation.js';
 import { analyzeBrightness, formatBrightnessReport } from './brightness.js';
 import { type UdcState } from './hid-recovery.js';
 import { VERSION } from '../version.js';
@@ -195,9 +195,7 @@ export async function runHealthCheck(
     // verified live 2026-04-26: bright home screen reported mean=41/255
     // because ~67% of the HDMI frame was black letterbox).
     try {
-      const region = detectedBounds
-        ? { x: detectedBounds.x, y: detectedBounds.y, width: detectedBounds.width, height: detectedBounds.height }
-        : undefined;
+      const region = detectedBounds ? boundsToRegion(detectedBounds) : undefined;
       const report = await analyzeBrightness(healthShot.buffer, { region });
       lines.push(formatBrightnessReport(report));
       if (region) {

@@ -28,7 +28,7 @@ import type { MoveToOptions, MoveToResult } from './move-to.js';
 import { loadSettings } from '../settings.js';
 import type { PiKVMClient, MouseButton } from './client.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './brightness.js';
-import { detectIpadBoundsFromBuffer } from './orientation.js';
+import { ipadContentRegionFromBuffer } from './orientation.js';
 import { loadTemplateSet, DEFAULT_TEMPLATE_DIR } from './template-set.js';
 import { findCursorByV8FullFrame } from './cursor-ml-detect.js';
 import { ipadGoHome } from './ipad-unlock.js';
@@ -578,13 +578,9 @@ export async function clickAtWithRetry(
   if (minBrightness > 0) {
     try {
       const shot = await client.screenshot();
-      let region: { x: number; y: number; width: number; height: number } | undefined;
-      try {
-        const bounds = await detectIpadBoundsFromBuffer(shot.buffer, { verbose: false });
-        region = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
-      } catch {
-        // No bounds → analyse full frame (non-iPad target or dark screen).
-      }
+      // Scope to iPad content (letterbox bars would drag the mean down);
+      // undefined → full frame on a non-iPad/dark target.
+      const region = await ipadContentRegionFromBuffer(shot.buffer, { verbose: false });
       const brightness = await analyzeBrightness(shot.buffer, { region });
       // Phase 48: only fail-fast on uniform dark frames. Dark-mode UI has
       // low mean but high stddev (text/icon contrast against dark bg) and

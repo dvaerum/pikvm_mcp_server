@@ -62,7 +62,7 @@ import {
   ipadGoHome,
   ipadOpenAppSwitcher,
 } from './pikvm/ipad-unlock.js';
-import { detectIpadBounds, detectIpadBoundsFromBuffer } from './pikvm/orientation.js';
+import { detectIpadBounds, ipadContentRegionFromBuffer } from './pikvm/orientation.js';
 import { analyzeBrightness, VERY_DIM_THRESHOLD } from './pikvm/brightness.js';
 import { runHealthCheck } from './pikvm/health-check.js';
 
@@ -1822,15 +1822,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (minBrightness > 0 && maxRetries === 0) {
           try {
             const shot0 = await pikvm.screenshot();
-            let region: { x: number; y: number; width: number; height: number } | undefined;
-            try {
-              const bounds = await detectIpadBoundsFromBuffer(shot0.buffer, { verbose: false });
-              region = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
-            } catch {
-              // No bounds detected — analyse full frame. On a non-iPad target
-              // there's no letterbox to confuse, so the full-frame mean is
-              // accurate.
-            }
+            // Scope brightness to iPad content so letterbox bars don't trigger
+            // a false-positive dim verdict; undefined → full frame on a
+            // non-iPad target (no letterbox to confuse the mean).
+            const region = await ipadContentRegionFromBuffer(shot0.buffer, { verbose: false });
             const brightness = await analyzeBrightness(shot0.buffer, { region });
             if (brightness.mean < minBrightness) {
               return {

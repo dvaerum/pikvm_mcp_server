@@ -243,6 +243,51 @@ export async function detectBoundsOrNull(
 }
 
 /**
+ * Buffer analog of {@link detectBoundsOrNull}: best-effort detection from an
+ * already-captured frame. Returns null on failure (all-black capture, non-iPad
+ * target) instead of throwing. Callers that have a screenshot in hand (e.g. a
+ * brightness precheck reusing its own frame) use this so they don't re-capture.
+ */
+export async function detectBoundsFromBufferOrNull(
+  buffer: Buffer,
+  options: DetectOptions & { logPrefix?: string } = {},
+): Promise<IpadBounds | null> {
+  try {
+    return await detectIpadBoundsFromBuffer(buffer, options);
+  } catch (e) {
+    if (options.verbose) {
+      const prefix = options.logPrefix ?? 'orientation';
+      console.error(`[${prefix}] bounds detection failed: ${(e as Error).message}`);
+    }
+    return null;
+  }
+}
+
+/** The iPad content rectangle as a crop region `{x,y,width,height}` — the
+ *  shape `analyzeBrightness`/`saveSnapshot` accept. The one place bounds are
+ *  narrowed to a region, so the conversion isn't re-spelled at every call. */
+export function boundsToRegion(
+  bounds: IpadBounds,
+): { x: number; y: number; width: number; height: number } {
+  return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+}
+
+/**
+ * Best-effort iPad-content region from a frame, or `undefined` when bounds
+ * can't be detected (non-iPad target or dark/uniform screen) — callers then
+ * analyse the full frame. Consolidates the "detect bounds → narrow to a
+ * brightness region, full-frame on failure" pipeline that the click-at and
+ * click-verify brightness prechecks each open-coded.
+ */
+export async function ipadContentRegionFromBuffer(
+  buffer: Buffer,
+  options: DetectOptions = {},
+): Promise<{ x: number; y: number; width: number; height: number } | undefined> {
+  const bounds = await detectBoundsFromBufferOrNull(buffer, options);
+  return bounds ? boundsToRegion(bounds) : undefined;
+}
+
+/**
  * Compute the slam-anchor origin in HDMI coordinates. After slamToCorner
  * with the 'top-left' corner, the cursor lands inside the iPad content
  * just past the dead-zone, near (bounds.x + dz, bounds.y + dz) where dz is
