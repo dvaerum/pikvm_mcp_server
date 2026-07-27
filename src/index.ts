@@ -49,6 +49,7 @@ import {
   verifyClickByDiff,
   defaultMaxResidualPxFor,
   residualForSkip,
+  isScreenTooDimForCursorDetection,
   defaultChunkPaceMsFor,
   runDismissRecipe,
   formatDismissResult,
@@ -1732,7 +1733,19 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
             // non-iPad target (no letterbox to confuse the mean).
             const region = await ipadContentRegionFromBuffer(shot0.buffer, { verbose: false });
             const brightness = await analyzeBrightness(shot0.buffer, { region });
-            if (brightness.mean < minBrightness) {
+            // Phase 48 severity gate (restored 2026-07-28): abort ONLY on a
+            // UNIFORMLY dim frame (low mean AND low stddev → 'very-dim'), not on
+            // any low-mean frame. A dark-but-CONTRASTY modal (a dimmed PIN sheet:
+            // mean ~27 but high stddev from the keypad digits → severity 'dim')
+            // is perfectly clickable and must pass. The removed retry path used
+            // this same predicate; the single-shot gate was mean-only, so
+            // removing retry made the strict mean-only gate the default and
+            // false-aborted contrasty-dim keypads (georgs rig-caught 2026-07-28).
+            if (isScreenTooDimForCursorDetection({
+              mean: brightness.mean,
+              severity: brightness.severity,
+              minBrightness,
+            })) {
               return {
                 content: [{
                   type: 'text',
