@@ -165,6 +165,22 @@ describe('MCP tool schema and handler exposure', () => {
       expect(tool).toMatch(/verifyClick:\s*\{[^}]*type:\s*'boolean'/);
     });
 
+    it('M6 singleTap is in the schema (keypad mode)', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/singleTap:\s*\{[^}]*type:\s*'boolean'/);
+    });
+
+    it('M6 handler forces maxRetries=0 and defaults minBrightness=0 under singleTap', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      expect(handler).toMatch(/validateBoolean\(args\.singleTap\)/);
+      // singleTap forces the single-shot (no-retry) path...
+      expect(handler).toMatch(/singleTap[\s\S]{0,40}\?\s*0/);
+      // ...and defaults the brightness gate off so a dimmed PIN modal doesn't false-abort.
+      expect(handler).toMatch(/singleTap \|\| mouseAbsoluteMode \? 0/);
+    });
+
   });
 
   describe('pikvm_mouse_scroll — M1 pane targeting (optional x,y)', () => {
