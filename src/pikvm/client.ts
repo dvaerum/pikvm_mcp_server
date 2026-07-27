@@ -112,6 +112,42 @@ export interface CalibrationResult {
   message: string;
 }
 
+/**
+ * Max per-event wheel magnitude. The USB-HID wheel is a SIGNED BYTE, and kvmd's
+ * send_mouse_wheel silently wraps a large value (georgs on-device 2026-07-27:
+ * a single delta_y=500 wrapped to a ~no-op and did NOT scroll; iPadOS never
+ * moved). The validated way to scroll a large amount is repeated MODERATE
+ * events (25× delta_y=20 scrolled correctly). We cap each emitted event at ±20
+ * — safely inside the byte range and inside the on-device-validated band.
+ */
+export const WHEEL_STEP_MAX = 20;
+
+/**
+ * Split a (deltaX, deltaY) scroll into a sequence of wheel events, each with
+ * per-axis magnitude ≤ `step`, sign preserved, summing back to the rounded
+ * input. Pure + exported so the chunking is unit-tested without a live PiKVM.
+ * A small scroll (|delta| ≤ step on both axes) yields a single unchanged event,
+ * so the common case is untouched; a (0,0) scroll yields no events.
+ */
+export function chunkWheelDeltas(
+  deltaX: number,
+  deltaY: number,
+  step: number = WHEEL_STEP_MAX,
+): Array<{ deltaX: number; deltaY: number }> {
+  const clampMag = (v: number): number => Math.sign(v) * Math.min(Math.abs(v), step);
+  let rx = Math.round(deltaX);
+  let ry = Math.round(deltaY);
+  const events: Array<{ deltaX: number; deltaY: number }> = [];
+  while (rx !== 0 || ry !== 0) {
+    const ex = clampMag(rx);
+    const ey = clampMag(ry);
+    events.push({ deltaX: ex, deltaY: ey });
+    rx -= ex;
+    ry -= ey;
+  }
+  return events;
+}
+
 export class PiKVMClient {
   private config: Required<PiKVMConfig>;
   private dispatcher: Dispatcher;
@@ -774,11 +810,16 @@ export class PiKVMClient {
    * Scroll mouse wheel (via REST API)
    */
   async mouseScroll(deltaX: number, deltaY: number): Promise<void> {
-    const params = new URLSearchParams();
-    params.set('delta_x', Math.round(deltaX).toString());
-    params.set('delta_y', Math.round(deltaY).toString());
-
-    await this.request('POST', `/hid/events/send_mouse_wheel?${params}`);
+    // Chunk large deltas into repeated ±WHEEL_STEP_MAX events. A single large
+    // delta_y wraps the signed-byte HID wheel to a ~no-op on iPad (see
+    // WHEEL_STEP_MAX); repeated moderate events are the validated way to scroll
+    // a large amount. Small scrolls emit exactly one unchanged event.
+    for (const ev of chunkWheelDeltas(deltaX, deltaY)) {
+      const params = new URLSearchParams();
+      params.set('delta_x', ev.deltaX.toString());
+      params.set('delta_y', ev.deltaY.toString());
+      await this.request('POST', `/hid/events/send_mouse_wheel?${params}`);
+    }
   }
 
   /**
