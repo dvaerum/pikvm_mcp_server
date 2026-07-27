@@ -62,4 +62,52 @@ describe('runHealthCheck', () => {
     expect(r.lines.join('\n')).toMatch(/Screenshot: FAILED \(no frame\)/);
     expect(r.mouseAbsoluteMode).toBe(true); // unchanged on failure
   });
+
+  describe('M4 — ground-truth UDC state', () => {
+    it('falls back gracefully (no hard fail) when the UDC-state endpoint is unavailable', async () => {
+      const r = await runHealthCheck(stubClient(), { mouseAbsoluteMode: false, udcState: null });
+      expect(r.lines.join('\n')).toMatch(/USB HID gadget: unavailable/);
+      expect(r.lines.join('\n')).toMatch(/PIKVM_HID_RECOVERY_URL/);
+    });
+
+    it('shows the ground-truth line + UP verdict when configured, no FLAG-LIE when flags agree', async () => {
+      const r = await runHealthCheck(stubClient(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: 'fe980000.usb', state: 'configured', online: true },
+      });
+      const out = r.lines.join('\n');
+      expect(out).toMatch(/USB HID gadget \(ground truth\): configured \[fe980000\.usb\]/);
+      expect(out).toMatch(/HID verdict: UP/);
+      expect(out).not.toMatch(/FLAG-LIE/);
+    });
+
+    it('flags the DOWN lie: kvmd online but UDC not attached → run pikvm_usb_reconnect', async () => {
+      // default stub: mouse=on, keyboard=on (flags say online)
+      const r = await runHealthCheck(stubClient(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: 'fe980000.usb', state: 'not attached', online: false },
+      });
+      const out = r.lines.join('\n');
+      expect(out).toMatch(/FLAG-LIE: kvmd says online but UDC not attached/);
+      expect(out).toMatch(/HID verdict: DOWN \(UDC not attached\) → run pikvm_usb_reconnect/);
+    });
+
+    it('flags the UP lie: kvmd offline but UDC configured → confirm behaviorally', async () => {
+      const r = await runHealthCheck(
+        stubClient({ hid: async () => ({ mouseOnline: false, mouseAbsolute: false, keyboardOnline: false }) }),
+        { mouseAbsoluteMode: false, udcState: { udc: 'fe980000.usb', state: 'configured', online: true } },
+      );
+      const out = r.lines.join('\n');
+      expect(out).toMatch(/FLAG-LIE: kvmd says HID offline but UDC is configured/);
+      expect(out).toMatch(/HID verdict: UP/);
+    });
+
+    it('drives a DOWN verdict off "absent" (no gadget bound)', async () => {
+      const r = await runHealthCheck(stubClient(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: null, state: 'absent', online: false },
+      });
+      expect(r.lines.join('\n')).toMatch(/HID verdict: DOWN \(UDC absent\) → run pikvm_usb_reconnect/);
+    });
+  });
 });

@@ -12,6 +12,7 @@
 import { PiKVMClient } from './client.js';
 import { detectIpadBoundsFromBuffer } from './orientation.js';
 import { analyzeBrightness, formatBrightnessReport } from './brightness.js';
+import { type UdcState } from './hid-recovery.js';
 import { VERSION } from '../version.js';
 
 /** The subset of PiKVMClient the health check drives — a structural type so
@@ -29,7 +30,15 @@ export interface HealthCheckResult {
 
 export async function runHealthCheck(
   pikvm: HealthCheckClient,
-  opts: { mouseAbsoluteMode: boolean },
+  opts: {
+    mouseAbsoluteMode: boolean;
+    /**
+     * M4: ground-truth UDC state (from GET {PIKVM_HID_RECOVERY_URL}/udc-state),
+     * already resolved by the caller. `null` = endpoint unconfigured/unreachable
+     * → the report falls back to the (lying) kvmd flags with a note.
+     */
+    udcState?: UdcState | null;
+  },
 ): Promise<HealthCheckResult> {
   let mouseAbsoluteMode = opts.mouseAbsoluteMode;
   const lines: string[] = [];
@@ -71,8 +80,10 @@ export async function runHealthCheck(
 
   // Live HID profile — re-read so a transient startup-detection failure
   // doesn't permanently mislead the operator.
+  let hidFlags: { mouseOnline: boolean; keyboardOnline: boolean } | null = null;
   try {
     const hid = await pikvm.getHidProfile();
+    hidFlags = { mouseOnline: hid.mouseOnline, keyboardOnline: hid.keyboardOnline };
     lines.push(
       `Live HID profile: mouse=${hid.mouseOnline ? 'online' : 'offline'}/` +
       `${hid.mouseAbsolute ? 'absolute' : 'relative'}, ` +
@@ -92,6 +103,49 @@ export async function runHealthCheck(
       `  → Cannot verify mouse mode from PiKVM. The in-process flag stands ` +
       `(currently ${mouseAbsoluteMode}). If your target is iPad, the safe default ` +
       `(false) protects against slam-on-startup-failure.`,
+    );
+  }
+
+  // M4: GROUND-TRUTH USB HID gadget state. The kvmd HID online flags above LIE
+  // (they've reported online:false with a working gadget and vice versa); the
+  // kernel /sys/class/udc/<udc>/state is authoritative. Surface it, reframe the
+  // flags as advisory, flag mismatches both directions, and drive the verdict off
+  // the UDC state — not the flags. Falls back gracefully when the endpoint is
+  // unconfigured/unreachable (never hard-fails the report).
+  const udc = opts.udcState;
+  if (udc == null) {
+    lines.push(
+      `USB HID gadget: unavailable (UDC-state endpoint not configured or unreachable; ` +
+      `falling back to the kvmd HID flags above, which may lie). Set PIKVM_HID_RECOVERY_URL to enable.`,
+    );
+  } else {
+    lines.push(
+      `USB HID gadget (ground truth): ${udc.state}${udc.udc ? ` [${udc.udc}]` : ''} — ` +
+      `this is THE HID up/down signal.`,
+    );
+    if (hidFlags) {
+      lines.push(
+        `  kvmd HID flags: mouse=${hidFlags.mouseOnline ? 'on' : 'off'} ` +
+        `keyboard=${hidFlags.keyboardOnline ? 'on' : 'off'} (advisory — these have lied; UDC state above is ground truth).`,
+      );
+      const flagsSayOffline = !hidFlags.mouseOnline || !hidFlags.keyboardOnline;
+      const flagsSayOnline = hidFlags.mouseOnline || hidFlags.keyboardOnline;
+      if (udc.online && flagsSayOffline) {
+        lines.push(
+          `  ⚠ FLAG-LIE: kvmd says HID offline but UDC is configured → HID likely UP; ` +
+          `confirm behaviorally (move the mouse / send ⌘-H).`,
+        );
+      } else if (!udc.online && flagsSayOnline) {
+        lines.push(
+          `  ⚠ FLAG-LIE: kvmd says online but UDC not attached → HID likely DOWN; run pikvm_usb_reconnect.`,
+        );
+      }
+    }
+    // Overall HID verdict is driven by the UDC state, NOT the flags.
+    lines.push(
+      udc.online
+        ? `  → HID verdict: UP (UDC configured).`
+        : `  → HID verdict: DOWN (UDC ${udc.state}) → run pikvm_usb_reconnect.`,
     );
   }
 
