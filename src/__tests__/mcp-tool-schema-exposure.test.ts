@@ -219,11 +219,16 @@ describe('MCP tool schema and handler exposure', () => {
       const handler = extractHandlerBlock(src, 'pikvm_mouse_scroll');
       expect(handler).toMatch(/validateNumber\(args\.x\)/);
       expect(handler).toMatch(/validateNumber\(args\.y\)/);
-      // Reuses the absolute move (independent of the click/verify path), then scrolls.
-      expect(handler).toMatch(/pikvm\.mouseMove\(/);
+      // M1 fix: pane targeting routes through the platform-aware moveToPixel
+      // (curve-one-shot relative emits on iPad), NOT raw pikvm.mouseMove —
+      // iPadOS ignores absolute positioning so the raw move was a no-op.
+      expect(handler).toMatch(/moveToPixel\(pikvm,/);
+      expect(handler).toMatch(/!mouseAbsoluteMode \? 'curve-one-shot' : 'detect-then-move'/);
+      // The raw absolute mouseMove must NOT be used for pane targeting.
+      expect(handler).not.toMatch(/pikvm\.mouseMove\(/);
       expect(handler).toMatch(/pikvm\.mouseScroll\(/);
-      // The move must be issued BEFORE the scroll for pane targeting to work.
-      expect(handler.indexOf('pikvm.mouseMove(')).toBeLessThan(handler.indexOf('pikvm.mouseScroll('));
+      // The positioning move must be issued BEFORE the scroll.
+      expect(handler.indexOf('moveToPixel(pikvm,')).toBeLessThan(handler.indexOf('pikvm.mouseScroll('));
     });
 
     it('handler rejects x-without-y (and vice versa)', async () => {

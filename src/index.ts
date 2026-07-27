@@ -1409,9 +1409,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const deltaY = requireNumber(args.deltaY, 'deltaY');
         const deltaX = validateNumber(args.deltaX) ?? 0;
         // Optional pane targeting (M1): position the pointer at (x,y) before
-        // scrolling so the wheel event lands on the intended pane. Reuses the
-        // same absolute move as pikvm_mouse_move (independent of the click/verify
-        // path). x and y must be given together.
+        // scrolling so the wheel event lands on the intended pane. x and y must
+        // be given together.
         const tx = validateNumber(args.x);
         const ty = validateNumber(args.y);
         if ((tx === undefined) !== (ty === undefined)) {
@@ -1424,7 +1423,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (tx !== undefined && ty !== undefined) {
           const cx = Math.max(0, Math.round(tx));
           const cy = Math.max(0, Math.round(ty));
-          await pikvm.mouseMove(cx, cy);
+          // M1 fix (live-verified broken 2026-07-27): the original raw
+          // absolute-positioning move sent to /hid/events/send_mouse_move is
+          // IGNORED by iPadOS — it treats the USB-OTG HID as a relative
+          // trackpad, so the move was a NO-OP and the wheel fired wherever the
+          // cursor already was (exactly the pane-targeting bug M1 set out to
+          // fix). Route
+          // through the SAME platform-aware positioning path click_at/move_to
+          // use: curve-one-shot (relative emits) on iPad, detect-then-move
+          // (absolute honored) on desktop. The mover itself is untouched — we
+          // just call it from here instead of raw mouseMove.
+          const chunkPace = defaultChunkPaceMsFor(mouseAbsoluteMode);
+          await moveToPixel(pikvm, { x: cx, y: cy }, {
+            strategy: !mouseAbsoluteMode ? 'curve-one-shot' : 'detect-then-move',
+            forbidSlamFallback: !mouseAbsoluteMode,
+            forbidSlamOnIpad: !mouseAbsoluteMode,
+            profile: cachedProfile,
+            ...(chunkPace !== undefined ? { chunkPaceMs: chunkPace } : {}),
+          });
           movedNote = ` at (${cx}, ${cy})`;
         }
         await pikvm.mouseScroll(deltaX, deltaY);
