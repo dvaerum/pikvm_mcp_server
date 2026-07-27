@@ -2,15 +2,20 @@
 
 Canonical procedure for recovering the PiKVM's emulated USB HID gadget when
 mouse/keyboard stop working. Backed by `src/pikvm/hid-recovery.ts` and the
-`pikvm_hid_recover` tool. Ladder firsthand-confirmed 2026-07-22/23.
+`pikvm_hid_recover` tool. Ladder firsthand-confirmed 2026-07-22/23/26.
 
-> **Status.** **R2 `soft_connect` is VALIDATED** (2026-07-23): it recovered a real
-> ~4h-idle HID drop in ~6s after R1 failed — the primary no-reboot fix. R1 (soft
-> reset) is a cheap first try that usually does **not** fix a controller-level
-> drop. R3a (UDC rebind) is still untested (R2 recovered first). R3b (reboot) is
-> the destructive last-resort remote option; **rarely needed** now. R4 (human
-> re-plug) is the final fallback — the 2026-07-22 "needed a physical re-plug" was
-> because only R1 existed then, before soft_connect.
+> **Status — TWO failure modes (updated 2026-07-27, WB field report P1).** Which
+> rung fixes it depends on the mode; the ladder must ESCALATE R2→R3a, not stop at R2:
+> - **Mode A — idle-drop** (mouse offline after inactivity): **R2 `soft_connect`**
+>   recovers it in ~6s (validated 2026-07-23, after R1 failed).
+> - **Mode B — full HID dead after a PiKVM reboot / gadget re-present** (mouse AND
+>   keyboard dead, UDC `not attached`): **R2 `soft_connect` is INSUFFICIENT** (state
+>   stays `not attached`); **R3a UDC unbind/rebind is what revives it** (validated
+>   2026-07-26). A PiKVM reboot alone did NOT restore HID here — the UDC rebind was
+>   still needed after it.
+> R1 (soft reset) is a cheap first try that fixed neither. R3b (reboot) is the
+> destructive last resort. R4 (human re-plug) is the final fallback — the 2026-07-22
+> "needed a physical re-plug" was pre-`soft_connect`/pre-UDC-rebind (only R1 existed).
 
 ## R0 — presence gate (do this first)
 
@@ -37,8 +42,8 @@ escalation when everything remote fails.
 | Rung | Action | Backing | Reliability | Owner |
 |------|--------|---------|-------------|-------|
 | **R1** | Soft reset | `resetHid()` → `POST /hid/reset` [+ kvmd `set_connected 0→1`] (also `pikvm_hid_reset`) | **LOW** — can't force host re-enumeration; kvmd `set_connected` is a **no-op on our unit** (its `connected` is unwired; live 2026-07-19/23); did not recover the incident | **MCP** (built) |
-| **R2** | `soft_connect` toggle | host: `echo disconnect > /sys/class/udc/<udc>/soft_connect; sleep 2; echo connect > …` (kernel USB D+ pull-up; udc on the Pi = `fe980000.usb`; healthy reads `configured`) | **VALIDATED 2026-07-23** — recovered a real ~4h-idle drop in ~6s (state `not attached`→`configured`; mouse+kbd back) after R1 failed. The primary no-reboot fix. A **distinct kernel mechanism** from R1's kvmd toggle (bypasses kvmd); no FileExistsError | **pikvm-nixos** + MCP invoke/verify |
-| **R3a** | UDC rebind | host: configfs UDC unbind→bind, or `systemctl restart kvmd-otg` | Still **UNTESTED** (R2 recovered first, didn't need to escalate); must be **idempotent** (FileExistsError trap) | **pikvm-nixos** + MCP |
+| **R2** | `soft_connect` toggle | host: `echo disconnect > /sys/class/udc/<udc>/soft_connect; sleep 2; echo connect > …` (kernel USB D+ pull-up; udc on the Pi = `fe980000.usb`; healthy reads `configured`) | **Mode A: VALIDATED 2026-07-23** — recovered a ~4h-idle drop in ~6s (state `not attached`→`configured`) after R1 failed. **Mode B: INSUFFICIENT** — WB report 2026-07-26, after a reboot the state stayed `not attached`; had to escalate to R3a. A distinct kernel mechanism from R1's kvmd toggle (bypasses kvmd); no FileExistsError. Always try first (cheap), but don't stop here if `state` stays `not attached` | **pikvm-nixos** + MCP invoke/verify |
+| **R3a** | UDC rebind | host: configfs UDC unbind→bind (`echo "" > $G/UDC; sleep 3; echo fe980000.usb > $G/UDC`, `G=/sys/kernel/config/usb_gadget/kvmd`). **Do NOT `systemctl restart kvmd-otg`** (FileExistsError trap: its stop leaves the gadget dir) | **VALIDATED 2026-07-26 (WB report P1)** — after a reboot left HID fully dead (Mode B) and R2 was insufficient, the unbind/rebind flipped state `not attached`→`configured` and ⌘-H reached Home (no physical replug). The reliable rung for Mode B; must be **idempotent** | **pikvm-nixos** + MCP |
 | **R3b** | Reboot the PiKVM | host reboot | Destructive last-resort remote option (~30-90s incl. this server); opt-in `allowReboot`. **Rarely needed** now R2 works | **pikvm-nixos** + MCP trigger/wait/verify |
 | **R4** | Human physical action | re-plug the target USB (not charge-only) / power it on | Final fallback. The 07-22 re-plug was pre-`soft_connect` (only R1 existed then) | **Human** |
 
@@ -85,7 +90,10 @@ pikvm-nixos provides. MCP end: `makeHttpRecoveryTrigger()`.
 - **Pending (pikvm-nixos, after the U2 kvmd-ordering fix):** the privileged host
   helper implementing the trigger contract's THREE actions — `soft_connect`,
   idempotent `udc-rebind`, `reboot`.
-- **Live-rig sign-off — RESOLVED (2026-07-23):** R2 `soft_connect` recovered a
-  real idle HID drop in ~6s after R1 failed. So `soft_connect` is the preferred
-  fix and the host helper's first/cheapest action; UDC rebind + reboot remain as
-  untested escalations, rarely reached.
+- **Live-rig sign-off — TWO modes confirmed:** (2026-07-23) R2 `soft_connect`
+  recovered a Mode-A idle drop in ~6s after R1 failed; (2026-07-26, WB report P1)
+  a Mode-B full-dead-after-reboot needed R3a UDC rebind — R2 was insufficient and
+  a reboot alone didn't restore HID. So the host helper must try `soft_connect`
+  first (cheap; fixes Mode A) then **escalate to `udc-rebind`** (fixes Mode B) —
+  both now validated actions; `reboot` is the rarely-reached last resort. Full
+  field data: `docs/troubleshooting/wb-field-report/README.md`.
