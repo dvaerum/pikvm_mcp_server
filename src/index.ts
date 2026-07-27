@@ -720,6 +720,17 @@ const tools: Tool[] = [
         verifyClick: { type: 'boolean', description: 'When true (default), capture pre and post screenshots and report whether the click visibly changed the screen. Set false to skip the extra screenshot round-trip.' },
         verifySettleMs: { type: 'number', description: 'Milliseconds to wait between click and post-click screenshot for the UI to render. Default 300.' },
         verifyRegionHalfPx: { type: 'number', description: 'When set, the verification diff is restricted to a square window of ±N HDMI px around the click target. Useful when the expected effect is a small/local UI change (button highlight, focus indicator) and a full-frame diff would be diluted by background animations. Default: full-frame.' },
+        expectRegion: {
+          type: 'object',
+          description: 'M6: an explicit rectangular box in HDMI-screenshot px { x, y, width, height } where the click\'s effect is expected to appear (e.g. the PIN-dots field of a keypad). The verification diff is scoped to ONLY this box, so a small legit change (one PIN dot ≈ <0.5% of the full frame) registers instead of being diluted to a false "no change". TAKES PRECEDENCE over verifyRegionHalfPx (the internal target-centered square). Advisory only — like verifyRegionHalfPx it shapes the reported screenChanged/diff; pair with singleTap:true so the readout never drives a re-tap. Unset = current global/target-centered behavior.',
+          properties: {
+            x: { type: 'number' },
+            y: { type: 'number' },
+            width: { type: 'number' },
+            height: { type: 'number' },
+          },
+          required: ['x', 'y', 'width', 'height'],
+        },
         verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
         maxRetries: { type: 'number', description: 'When >0, retry the click up to N times if click verification reports no screen change. Each retry runs a fresh detect-then-move probe (NOT compound corrections — independent trials). Default: 3 on iPad (relative-mouse) targets where per-attempt hit rate is ~50% — four attempts give ~88% cumulative hit rate plus headroom for the hidden-popup auto-dismiss recipe to fire on each retry; 0 on desktop (absolute-mouse) targets where single-shot is reliable. Pass 0 explicitly to opt out (single-shot). Requires verifyClick=true.' },
         singleTap: { type: 'boolean', description: 'KEYPAD MODE (M6): tap the target EXACTLY ONCE and NEVER re-fire based on verification. For keypads / PIN pads / any target whose tap effect is sub-threshold or unobservable — a legit tap there makes a tiny (or invisible) screen change, so the normal retry-on-no-change would re-tap the SAME key and corrupt input (one "1" → "11"). With singleTap:true, verification is ADVISORY only (the screenChanged/diff is still reported so you can judge whether it likely registered, but it never triggers a re-tap). Forces maxRetries=0 and defaults minBrightness=0 (so a dimmed PIN-sheet modal does not false-abort). Default false.' },
@@ -1655,6 +1666,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const verifySettleMs = validateNumber(args.verifySettleMs, 0, 5000) ?? 300;
         const verifyRegionHalfPx = validateNumber(args.verifyRegionHalfPx, 1, 1920);
         const verifyMinChangeFraction = validateNumber(args.verifyMinChangeFraction, 0.0001, 1);
+        // M6 expectRegion: caller-supplied rectangular verify box (HDMI px). Takes
+        // precedence over verifyRegionHalfPx at the verify layer — see verifyOpts.
+        let expectRegion: { x: number; y: number; width: number; height: number } | undefined;
+        if (args.expectRegion !== undefined && args.expectRegion !== null) {
+          const er = args.expectRegion as Record<string, unknown>;
+          expectRegion = {
+            x: requireNumber(er.x, 'expectRegion.x'),
+            y: requireNumber(er.y, 'expectRegion.y'),
+            width: requireNumber(er.width, 'expectRegion.width'),
+            height: requireNumber(er.height, 'expectRegion.height'),
+          };
+        }
         // Phase 94: default to 2 retries on iPad (relative-mouse), 0 on
         // desktop (absolute-mouse). Single-shot click_at is ~50% reliable
         // on tiny iPad targets (verified Phase 70 bench), ~88% with
@@ -1702,6 +1725,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ...(verifyRegionHalfPx !== undefined
             ? { region: { x: tx, y: ty, halfWidth: verifyRegionHalfPx, halfHeight: verifyRegionHalfPx } }
             : {}),
+          // expectRegion takes precedence over the target-centered `region` — the
+          // verify layer (verifyClickByDecodedFrames) honours regionRect first.
+          ...(expectRegion !== undefined ? { regionRect: expectRegion } : {}),
           ...(verifyMinChangeFraction !== undefined
             ? { minChangedFraction: verifyMinChangeFraction }
             : {}),

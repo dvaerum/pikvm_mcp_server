@@ -158,6 +158,76 @@ describe('verifyClickByDecodedFrames', () => {
     expect(result.changedPixels).toBeGreaterThan(0);
   });
 
+  // M6 expectRegion: a rectangular ROI the caller pinpoints (the PIN-dots field
+  // box). One PIN dot is a large fraction of the small box but negligible
+  // globally — scoping the diff there makes the legit change register, which is
+  // what kills the spurious keypad retry.
+  it('regionRect: a small dot INSIDE the expected box registers as changed', () => {
+    const pre = makeFrame(100, 100, [0, 0, 0]);
+    const post = makeFrame(100, 100, [0, 0, 0]);
+    // 3×3 = 9 px = 0.09% of the full frame (below the 0.5% default → global
+    // verify would say "no change"), but 9/100 = 9% of the 10×10 box.
+    paintRect(post, 42, 42, 3, 3, [255, 255, 255]);
+    const global = verifyClickByDecodedFrames(pre, post);
+    const scoped = verifyClickByDecodedFrames(pre, post, {
+      regionRect: { x: 40, y: 40, width: 10, height: 10 },
+    });
+    expect(global.screenChanged).toBe(false);
+    expect(scoped.totalPixels).toBe(100);
+    expect(scoped.changedPixels).toBe(9);
+    expect(scoped.screenChanged).toBe(true);
+  });
+
+  it('regionRect: the SAME dot OUTSIDE the expected box does not register', () => {
+    const pre = makeFrame(100, 100, [0, 0, 0]);
+    const post = makeFrame(100, 100, [0, 0, 0]);
+    // Dot far from the box → zero changed pixels inside it.
+    paintRect(post, 5, 5, 3, 3, [255, 255, 255]);
+    const scoped = verifyClickByDecodedFrames(pre, post, {
+      regionRect: { x: 40, y: 40, width: 10, height: 10 },
+    });
+    expect(scoped.changedPixels).toBe(0);
+    expect(scoped.screenChanged).toBe(false);
+  });
+
+  it('regionRect TAKES PRECEDENCE over the target-centered region', () => {
+    const pre = makeFrame(100, 100, [0, 0, 0]);
+    const post = makeFrame(100, 100, [0, 0, 0]);
+    // Change lands inside regionRect but far from the `region` center (90,90).
+    paintRect(post, 42, 42, 3, 3, [255, 255, 255]);
+    const result = verifyClickByDecodedFrames(pre, post, {
+      region: { x: 90, y: 90, halfWidth: 5, halfHeight: 5 },
+      regionRect: { x: 40, y: 40, width: 10, height: 10 },
+    });
+    // If `region` had won, the change would be invisible (0 px near 90,90).
+    // regionRect precedence means we see the 9-px change in its box.
+    expect(result.totalPixels).toBe(100);
+    expect(result.changedPixels).toBe(9);
+    expect(result.screenChanged).toBe(true);
+  });
+
+  it('regionRect clamps to frame bounds when the box overruns the edge', () => {
+    const pre = makeFrame(100, 100, [0, 0, 0]);
+    const post = makeFrame(100, 100, [0, 0, 0]);
+    paintRect(post, 95, 95, 5, 5, [255, 255, 255]);
+    const result = verifyClickByDecodedFrames(pre, post, {
+      regionRect: { x: 90, y: 90, width: 50, height: 50 },
+    });
+    // Box would extend to 140×140 — clamp to the 100×100 frame (10×10 = 100 px).
+    expect(result.totalPixels).toBe(100);
+    expect(result.changedPixels).toBe(25);
+  });
+
+  it('regionRect message reports the ROI scope, not the full screen', () => {
+    const pre = makeFrame(100, 100, [0, 0, 0]);
+    const post = makeFrame(100, 100, [0, 0, 0]);
+    paintRect(post, 42, 42, 3, 3, [255, 255, 255]);
+    const result = verifyClickByDecodedFrames(pre, post, {
+      regionRect: { x: 40, y: 40, width: 10, height: 10 },
+    });
+    expect(result.message).toMatch(/ROI/);
+  });
+
   it('throws when pre and post screenshots have mismatched dimensions', () => {
     const pre = makeFrame(100, 100, [0, 0, 0]);
     const post = makeFrame(200, 100, [0, 0, 0]);

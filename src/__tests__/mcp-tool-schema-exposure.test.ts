@@ -181,6 +181,27 @@ describe('MCP tool schema and handler exposure', () => {
       expect(handler).toMatch(/singleTap \|\| mouseAbsoluteMode \? 0/);
     });
 
+    it('M6 expectRegion object is in the schema (x,y,width,height)', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/expectRegion:\s*\{[\s\S]*?type:\s*'object'/);
+      const expectRegionBlock = tool.slice(tool.indexOf('expectRegion:'));
+      for (const key of ['x', 'y', 'width', 'height']) {
+        expect(expectRegionBlock).toMatch(new RegExp(`${key}:\\s*\\{[^}]*type:\\s*'number'`));
+      }
+    });
+
+    it('M6 handler parses expectRegion and forwards it as regionRect (precedence)', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      // Parsed from args into a rectangular box...
+      expect(handler).toMatch(/args\.expectRegion/);
+      expect(handler).toMatch(/requireNumber\(er\.width, 'expectRegion\.width'\)/);
+      // ...and fed to the verify layer as regionRect, which takes precedence
+      // over the target-centered `region` inside verifyClickByDecodedFrames.
+      expect(handler).toMatch(/regionRect:\s*expectRegion/);
+    });
+
   });
 
   describe('pikvm_mouse_scroll — M1 pane targeting (optional x,y)', () => {
