@@ -24,6 +24,7 @@ import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './au
 import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
 import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, type RecoveryTrigger } from './pikvm/hid-recovery.js';
+import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
@@ -258,7 +259,43 @@ const tools: Tool[] = [
           type: 'boolean',
           description: 'Phase 202 v0.5.197: emit a ±1 px mouse nudge immediately before the snapshot so the iPad cursor stays visible (iPadOS auto-fades stationary cursors after a few seconds). Net displacement is zero. Default false. Set true when you need a screenshot for cursor verification or to visually confirm where the cursor landed after a click_at.',
         },
+        savePath: {
+          type: 'string',
+          description: 'Optional: ALSO write the JPEG to this file path (in addition to returning it inline). Parent dirs are created. Use pikvm_snapshot if you want file-only (no inline image).',
+        },
       },
+    },
+  },
+  {
+    name: 'pikvm_snapshot',
+    description:
+      'Save a JPEG video frame to a FILE (no inline image) — the file-only counterpart to ' +
+      'pikvm_screenshot. Captures /streamer/snapshot, optionally crops to a region, writes it to ' +
+      'savePath (parent dirs created), and returns the path + byte size. Use this to persist frames ' +
+      'without piping base64 through the conversation (previously only possible via curl over SSH).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        savePath: {
+          type: 'string',
+          description: 'File path to write the JPEG to (required). Parent directories are created if missing.',
+        },
+        region: {
+          type: 'object',
+          description: 'Optional crop rectangle in screenshot pixels: { x, y, width, height }.',
+          properties: {
+            x: { type: 'number' },
+            y: { type: 'number' },
+            width: { type: 'number' },
+            height: { type: 'number' },
+          },
+          required: ['x', 'y', 'width', 'height'],
+        },
+        maxWidth: { type: 'number', description: 'Optional preview cap (px) applied before writing.' },
+        maxHeight: { type: 'number', description: 'Optional preview cap (px) applied before writing.' },
+        quality: { type: 'number', description: 'JPEG quality 1-100 (optional).' },
+      },
+      required: ['savePath'],
     },
   },
   {
@@ -473,10 +510,21 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_scroll',
-    description: 'Scroll the mouse wheel on the remote machine.',
+    description:
+      'Scroll the mouse wheel on the remote machine. Optionally target a pane first: pass x,y ' +
+      '(screenshot pixels) to move the pointer there before scrolling, so the scroll lands on the ' +
+      'intended pane instead of wherever the pointer happened to be. Omit x,y to scroll in place.',
     inputSchema: {
       type: 'object',
       properties: {
+        x: {
+          type: 'number',
+          description: 'Optional target X (screenshot pixels). Requires y. Moves the pointer here (absolute) before scrolling.',
+        },
+        y: {
+          type: 'number',
+          description: 'Optional target Y (screenshot pixels). Requires x.',
+        },
         deltaX: {
           type: 'number',
           description: 'Horizontal scroll amount (negative = left, positive = right)',
@@ -966,6 +1014,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         infoText += '). Mouse coordinates from this image will be auto-scaled.';
 
+        // M5: optionally ALSO persist to a file (in addition to the inline image).
+        const screenshotSavePath = validateString(args.savePath);
+        if (screenshotSavePath) {
+          const saved = await saveSnapshot(result.buffer, screenshotSavePath);
+          infoText += `\nSaved to ${saved.path} (${saved.bytes} bytes).`;
+        }
+
         return {
           content: [
             {
@@ -976,6 +1031,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'image',
               data: result.buffer.toString('base64'),
               mimeType: 'image/jpeg',
+            },
+          ],
+        };
+      }
+
+      case 'pikvm_snapshot': {
+        // M5: file-only capture. No inline image — persists the frame and returns
+        // just the path, so large frames don't flow through the conversation.
+        const savePath = requireString(args.savePath, 'savePath');
+        let region: SnapshotRegion | undefined;
+        if (args.region !== undefined && args.region !== null) {
+          const r = args.region as Record<string, unknown>;
+          region = {
+            x: requireNumber(r.x, 'region.x'),
+            y: requireNumber(r.y, 'region.y'),
+            width: requireNumber(r.width, 'region.width'),
+            height: requireNumber(r.height, 'region.height'),
+          };
+        }
+        const result = await pikvm.screenshot({
+          maxWidth: validateNumber(args.maxWidth, 1, 10000),
+          maxHeight: validateNumber(args.maxHeight, 1, 10000),
+          quality: validateNumber(args.quality, 1, 100),
+        });
+        const saved = await saveSnapshot(result.buffer, savePath, region);
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                `Saved snapshot to ${saved.path} (${saved.bytes} bytes` +
+                (region ? `, cropped to ${region.width}x${region.height} at ${region.x},${region.y}` : `, ${result.screenshotWidth}x${result.screenshotHeight}`) +
+                ').',
             },
           ],
         };
@@ -1218,12 +1306,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'pikvm_mouse_scroll': {
         const deltaY = requireNumber(args.deltaY, 'deltaY');
         const deltaX = validateNumber(args.deltaX) ?? 0;
+        // Optional pane targeting (M1): position the pointer at (x,y) before
+        // scrolling so the wheel event lands on the intended pane. Reuses the
+        // same absolute move as pikvm_mouse_move (independent of the click/verify
+        // path). x and y must be given together.
+        const tx = validateNumber(args.x);
+        const ty = validateNumber(args.y);
+        if ((tx === undefined) !== (ty === undefined)) {
+          return {
+            content: [{ type: 'text', text: 'Error: pass both x and y to target a pane, or neither to scroll in place.' }],
+            isError: true,
+          };
+        }
+        let movedNote = '';
+        if (tx !== undefined && ty !== undefined) {
+          const cx = Math.max(0, Math.round(tx));
+          const cy = Math.max(0, Math.round(ty));
+          await pikvm.mouseMove(cx, cy);
+          movedNote = ` at (${cx}, ${cy})`;
+        }
         await pikvm.mouseScroll(deltaX, deltaY);
         return {
           content: [
             {
               type: 'text',
-              text: `Scrolled (${deltaX}, ${deltaY})`,
+              text: `Scrolled (${deltaX}, ${deltaY})${movedNote}`,
             },
           ],
         };

@@ -166,4 +166,57 @@ describe('MCP tool schema and handler exposure', () => {
     });
 
   });
+
+  describe('pikvm_mouse_scroll — M1 pane targeting (optional x,y)', () => {
+    it('schema declares x and y (numbers)', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_scroll');
+      expect(tool).toMatch(/x:\s*\{[^}]*type:\s*'number'/);
+      expect(tool).toMatch(/y:\s*\{[^}]*type:\s*'number'/);
+      // deltaX/deltaY are preserved.
+      expect(tool).toMatch(/deltaY:\s*\{[^}]*type:\s*'number'/);
+    });
+
+    it('handler reads x/y via validateNumber and positions before scrolling', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_scroll');
+      expect(handler).toMatch(/validateNumber\(args\.x\)/);
+      expect(handler).toMatch(/validateNumber\(args\.y\)/);
+      // Reuses the absolute move (independent of the click/verify path), then scrolls.
+      expect(handler).toMatch(/pikvm\.mouseMove\(/);
+      expect(handler).toMatch(/pikvm\.mouseScroll\(/);
+      // The move must be issued BEFORE the scroll for pane targeting to work.
+      expect(handler.indexOf('pikvm.mouseMove(')).toBeLessThan(handler.indexOf('pikvm.mouseScroll('));
+    });
+
+    it('handler rejects x-without-y (and vice versa)', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_scroll');
+      expect(handler).toMatch(/\(tx === undefined\) !== \(ty === undefined\)/);
+    });
+  });
+
+  describe('pikvm_snapshot — M5 save-to-file', () => {
+    it('schema declares required savePath and optional region', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_snapshot');
+      expect(tool).toMatch(/savePath:\s*\{[^}]*type:\s*'string'/);
+      expect(tool).toMatch(/region:\s*\{[^]*?type:\s*'object'/);
+      expect(tool).toMatch(/required:\s*\['savePath'\]/);
+    });
+
+    it('handler requires savePath and delegates to saveSnapshot', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_snapshot');
+      expect(handler).toMatch(/requireString\(args\.savePath/);
+      expect(handler).toMatch(/saveSnapshot\(/);
+    });
+
+    it('pikvm_screenshot handler honors an optional savePath (M5 inline case)', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_screenshot');
+      expect(handler).toMatch(/validateString\(args\.savePath\)/);
+      expect(handler).toMatch(/saveSnapshot\(/);
+    });
+  });
 });
