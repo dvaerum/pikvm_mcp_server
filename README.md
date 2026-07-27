@@ -392,7 +392,8 @@ drop `-k` / `verify=False` and the connection is authenticated end-to-end.
 - **`pikvm_screen_state`** - Cheap "is the screen on?" check (one `GET /streamer`). Returns `{ on, resolution }`. When `on: false` the HDMI source is dark (iPad locked/asleep/Touch-ID gate most often); `pikvm_screenshot` will 503 until the screen wakes. Cheaper than `pikvm_health_check` when you only need the on/off signal.
 
 ### Display
-- **`pikvm_screenshot`** - Capture current screen as JPEG (optional: maxWidth, maxHeight, quality)
+- **`pikvm_screenshot`** - Capture current screen as JPEG (optional: maxWidth, maxHeight, quality; `savePath` to also write it to a file)
+- **`pikvm_snapshot`** - Save a JPEG frame to a **file** (file-only, no inline image): captures `/streamer/snapshot`, optional `region` crop `{x,y,width,height}`, writes to `savePath` (parent dirs created), returns the path + byte size. For persisting frames without piping base64 through the conversation.
 - **`pikvm_get_resolution`** - Get screen resolution and valid coordinate ranges
 
 ### Keyboard
@@ -404,7 +405,7 @@ drop `-k` / `verify=False` and the connection is authenticated end-to-end.
 ### Mouse
 - **`pikvm_mouse_move`** - Move cursor to absolute pixel position or relative delta (required: x, y; optional: relative)
 - **`pikvm_mouse_click`** - Click a mouse button, optionally at a position (optional: button, x, y, state)
-- **`pikvm_mouse_scroll`** - Scroll the mouse wheel (required: deltaY; optional: deltaX)
+- **`pikvm_mouse_scroll`** - Scroll the mouse wheel (required: deltaY; optional: deltaX, and `x,y` to target a pane — moves the pointer there first, then scrolls)
 
 ### Relative-Mouse Targets (iPad, etc. — `mouse.absolute=false`)
 

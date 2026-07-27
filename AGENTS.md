@@ -85,7 +85,8 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 0d. **`pikvm_hid_recover`** - Escalating HID recovery ladder: **R0** presence-gate (screenshot returns an image — nothing recovers an asleep/absent target) → **R1** soft reset → **R2** `soft_connect` toggle → **R3a** UDC rebind → **R3b** reboot (`allowReboot`), verifying **behaviorally** after each (emit move + screen-changed; the online flags lie). Reliability: R1 rarely fixes a controller drop; **R2 `soft_connect` is VALIDATED (~6s, 2026-07-23) — the primary no-reboot fix**; R3a UDC rebind untested; R3b reboot is the destructive last resort (rarely needed now); if all remote rungs fail it escalates to **R4** — a human must physically re-plug/power the target. R2/R3a/R3b are privileged HOST ops via the pikvm-nixos trigger (`PIKVM_HID_RECOVERY_URL`, actions `{soft_connect,udc-rebind,reboot}`); unavailable until wired. Runbook: `docs/runbooks/hid-recovery.md`.
 
 ### Display
-1. **`pikvm_screenshot`** - Capture current screen as JPEG
+1. **`pikvm_screenshot`** - Capture current screen as JPEG (optional `savePath` also writes it to a file)
+1a. **`pikvm_snapshot`** - Save a JPEG frame to a FILE (file-only; optional `region` crop) — persist frames without piping base64 through the conversation
 2. **`pikvm_get_resolution`** - Get current screen resolution (useful for mouse coordinates)
 
 ### Keyboard
@@ -97,7 +98,7 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 ### Mouse
 6. **`pikvm_mouse_move`** - Move mouse cursor (absolute or relative)
 7. **`pikvm_mouse_click`** - Click mouse button
-8. **`pikvm_mouse_scroll`** - Scroll wheel
+8. **`pikvm_mouse_scroll`** - Scroll wheel; optional `x,y` targets a pane (moves the pointer there first, then scrolls)
 
 ### Calibration (absolute-mouse targets)
 9. **`pikvm_calibrate`** - Start mouse coordinate calibration (moves cursor to screen center)
@@ -163,7 +164,7 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 52** (30 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow).
+**Total tools: 53** (31 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
