@@ -55,12 +55,12 @@ export function isHidBroken(s: HidOnlineState): boolean {
 }
 
 /** Privileged HOST recovery actions (R2/R3a/R3b), performed via the trigger. */
-export type HostRecoveryAction = 'soft-connect' | 'udc-rebind' | 'reboot';
+export type HostRecoveryAction = 'soft_connect' | 'udc-rebind' | 'reboot';
 /** Every ladder step that performs an action (R1 is MCP-native, the rest host). */
 export type LadderAction = 'soft-reset' | HostRecoveryAction;
 
 /** Ordered escalation. maxRung 1..4 slices this (1=soft-reset … 4=reboot). */
-const LADDER: LadderAction[] = ['soft-reset', 'soft-connect', 'udc-rebind', 'reboot'];
+const LADDER: LadderAction[] = ['soft-reset', 'soft_connect', 'udc-rebind', 'reboot'];
 
 /**
  * The MCP↔nixos trigger contract. The unprivileged MCP service can't toggle a
@@ -193,13 +193,13 @@ export interface RecoverResult {
 
 const RUNG_OF: Record<LadderAction, RungLabel> = {
   'soft-reset': 'R1',
-  'soft-connect': 'R2',
+  'soft_connect': 'R2',
   'udc-rebind': 'R3a',
   reboot: 'R3b',
 };
 
 export interface RecoverOpts {
-  /** How far to escalate: 1=soft-reset, 2=+soft-connect, 3=+udc-rebind, 4=+reboot. Default 3. */
+  /** How far to escalate: 1=soft-reset, 2=+soft_connect, 3=+udc-rebind, 4=+reboot. Default 3. */
   maxRung?: 1 | 2 | 3 | 4;
   /** R3b reboot is destructive (whole appliance ~30-90s) — must be opted in. */
   allowReboot?: boolean;

@@ -1,7 +1,7 @@
 /**
  * Unit tests for the HID-recovery ladder (src/pikvm/hid-recovery.ts):
  * presence gate (R0), the cheap flag trigger, behavioral verification,
- * the soft-connect/udc-rebind/reboot escalation, the R4 human-terminal,
+ * the soft_connect/udc-rebind/reboot escalation, the R4 human-terminal,
  * and the HTTP trigger's unconfigured behaviour. Pure/injected — no PiKVM.
  */
 import { describe, expect, it } from 'vitest';
@@ -133,18 +133,18 @@ describe('recoverHid orchestrator', () => {
     expect(r.attempts).toEqual([expect.objectContaining({ rung: 'R1', action: 'soft-reset', recovered: true })]);
   });
 
-  it('recovers at R2 soft-connect via the host trigger', async () => {
+  it('recovers at R2 soft_connect via the host trigger', async () => {
     const { ref, client, verifier, trigger } = makeRig();
     const r = await recoverHid(
       client(),
-      trigger(true, (a) => { if (a === 'soft-connect') ref.healthy = true; }),
+      trigger(true, (a) => { if (a === 'soft_connect') ref.healthy = true; }),
       verifier,
       { maxRung: 2, hostWaitMs: 0 },
       NO_WAIT,
     );
     expect(r.recovered).toBe(true);
     expect(r.attempts.map((a) => a.rung)).toEqual(['R1', 'R2']);
-    expect(r.attempts[1]).toMatchObject({ rung: 'R2', action: 'soft-connect', performed: true, recovered: true });
+    expect(r.attempts[1]).toMatchObject({ rung: 'R2', action: 'soft_connect', performed: true, recovered: true });
   });
 
   it('reports host rungs UNAVAILABLE and escalates to R4 when the trigger is not configured', async () => {
@@ -180,7 +180,7 @@ describe('makeHttpRecoveryTrigger', () => {
   it('is unconfigured (and reports so) when no url is given', async () => {
     const t = makeHttpRecoveryTrigger({});
     expect(t.configured).toBe(false);
-    expect((await t.escalate('soft-connect')).ok).toBe(false);
+    expect((await t.escalate('soft_connect')).ok).toBe(false);
   });
   it('is configured when a url is given', () => {
     expect(makeHttpRecoveryTrigger({ url: 'http://127.0.0.1:9999/recover' }).configured).toBe(true);
