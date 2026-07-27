@@ -208,6 +208,13 @@ export interface RecoverOpts {
   hostWaitMs?: number;
   /** Post-reboot recovery wait (ms). Default 120000. */
   rebootWaitMs?: number;
+  /**
+   * Skip R1 (the kvmd soft-reset, a no-op on our unit) and start at R2
+   * soft_connect. Used by pikvm_usb_reconnect — the validated field ladder is
+   * soft_connect→udc-rebind, so the everyday tool doesn't waste a rung on the
+   * kvmd reset. pikvm_hid_recover leaves this unset (keeps R1 for completeness).
+   */
+  skipSoftReset?: boolean;
 }
 
 /**
@@ -246,7 +253,8 @@ export async function recoverHid(
     }
   }
 
-  const steps = LADDER.slice(0, maxRung);
+  let steps = LADDER.slice(0, maxRung);
+  if (opts.skipSoftReset) steps = steps.filter((a) => a !== 'soft-reset');
   for (const action of steps) {
     const rung = RUNG_OF[action];
 
@@ -337,5 +345,68 @@ export function makeHttpRecoveryTrigger(cfg: {
         return { ok: false, message: `host trigger ${action} failed: ${(err as Error).message}` };
       }
     },
+  };
+}
+
+/**
+ * GROUND-TRUTH UDC state from the host recovery endpoint (M4). The kvmd HID
+ * online flags lie; the kernel `/sys/class/udc/<udc>/state` node is the truth,
+ * exposed read-only over the same authenticated loopback as the trigger.
+ */
+export interface UdcState {
+  /** The bound gadget's UDC name (e.g. "fe980000.usb"), or null when none is bound. */
+  udc: string | null;
+  /** Raw kernel state: "configured" | "not attached" | "addressed" | … | "absent" (synthetic: no UDC). */
+  state: string;
+  /** Clean HID-live signal: state === "configured". */
+  online: boolean;
+}
+
+/** The udc-state GET URL is the recovery base URL + "/udc-state". */
+export function udcStateUrl(base: string): string {
+  return `${base.replace(/\/+$/, '')}/udc-state`;
+}
+
+export interface UdcStateDeps {
+  /** Injectable HTTP GET (tests). Returns the status + parsed JSON body. */
+  get?: (url: string, headers: Record<string, string>) => Promise<{ status: number; body: unknown }>;
+}
+
+/**
+ * Build a reader for `GET {PIKVM_HID_RECOVERY_URL}/udc-state`. Returns the parsed
+ * {@link UdcState} on HTTP 200, or **null** when the route is unconfigured /
+ * unreachable / non-200 (so callers degrade: unknown ≠ down). Reuses the same
+ * bearer token + TLS-verify as the recovery trigger.
+ */
+export function makeUdcStateReader(
+  cfg: { url?: string; token?: string; verifySsl?: boolean },
+  deps: UdcStateDeps = {},
+): () => Promise<UdcState | null> {
+  const base = cfg.url?.trim();
+  if (!base) return async () => null; // endpoint not configured
+  const url = udcStateUrl(base);
+  const get =
+    deps.get ??
+    (async (u: string, headers: Record<string, string>) => {
+      const dispatcher = new Agent({ connect: { rejectUnauthorized: cfg.verifySsl ?? false } });
+      const res = await undiciFetch(u, { method: 'GET', headers, dispatcher });
+      let body: unknown = undefined;
+      try {
+        body = await res.json();
+      } catch {
+        /* non-JSON / empty */
+      }
+      return { status: res.status, body };
+    });
+  return async () => {
+    try {
+      const { status, body } = await get(url, cfg.token ? { authorization: `Bearer ${cfg.token}` } : {});
+      if (status !== 200) return null;
+      const b = body as { udc?: string | null; state?: unknown; online?: unknown };
+      if (typeof b?.state !== 'string') return null;
+      return { udc: b.udc ?? null, state: b.state, online: b.online === true };
+    } catch {
+      return null;
+    }
   };
 }

@@ -219,4 +219,27 @@ describe('MCP tool schema and handler exposure', () => {
       expect(handler).toMatch(/saveSnapshot\(/);
     });
   });
+
+  describe('pikvm_usb_reconnect — M0 (capped-rung usb reconnect)', () => {
+    it('schema declares optional settleMs (no required destructive args)', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_usb_reconnect');
+      expect(tool).toMatch(/settleMs:\s*\{[^}]*type:\s*'number'/);
+      // Dead-simple: must NOT expose allowReboot/maxRung (those belong to pikvm_hid_recover).
+      expect(tool).not.toMatch(/allowReboot:/);
+      expect(tool).not.toMatch(/maxRung:/);
+    });
+
+    it('handler runs recoverHid capped at udc-rebind, skipping the no-op R1', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_usb_reconnect');
+      expect(handler).toMatch(/skipSoftReset:\s*true/);
+      expect(handler).toMatch(/maxRung:\s*3/);
+      expect(handler).toMatch(/allowReboot:\s*false/);
+      // Verifies via the ground-truth UDC-state reader AND behavioral, and reports rungUsed.
+      expect(handler).toMatch(/getUdcStateReader\(\)/);
+      expect(handler).toMatch(/makeBehavioralVerifier\(/);
+      expect(handler).toMatch(/rungUsed/);
+    });
+  });
 });
