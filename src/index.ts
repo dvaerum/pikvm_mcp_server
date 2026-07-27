@@ -720,8 +720,20 @@ const tools: Tool[] = [
         verifyClick: { type: 'boolean', description: 'When true (default), capture pre and post screenshots and report whether the click visibly changed the screen. Set false to skip the extra screenshot round-trip.' },
         verifySettleMs: { type: 'number', description: 'Milliseconds to wait between click and post-click screenshot for the UI to render. Default 300.' },
         verifyRegionHalfPx: { type: 'number', description: 'When set, the verification diff is restricted to a square window of ±N HDMI px around the click target. Useful when the expected effect is a small/local UI change (button highlight, focus indicator) and a full-frame diff would be diluted by background animations. Default: full-frame.' },
+        expectRegion: {
+          type: 'object',
+          description: 'M6: an explicit rectangular box in HDMI-screenshot px { x, y, width, height } where the click\'s effect is expected to appear (e.g. the PIN-dots field of a keypad). The verification diff is scoped to ONLY this box, so a small legit change (one PIN dot ≈ <0.5% of the full frame) registers instead of being diluted to a false "no change". TAKES PRECEDENCE over verifyRegionHalfPx (the internal target-centered square). Advisory only — like verifyRegionHalfPx it shapes the reported screenChanged/diff; pair with singleTap:true so the readout never drives a re-tap. Unset = current global/target-centered behavior.',
+          properties: {
+            x: { type: 'number' },
+            y: { type: 'number' },
+            width: { type: 'number' },
+            height: { type: 'number' },
+          },
+          required: ['x', 'y', 'width', 'height'],
+        },
         verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
         maxRetries: { type: 'number', description: 'When >0, retry the click up to N times if click verification reports no screen change. Each retry runs a fresh detect-then-move probe (NOT compound corrections — independent trials). Default: 3 on iPad (relative-mouse) targets where per-attempt hit rate is ~50% — four attempts give ~88% cumulative hit rate plus headroom for the hidden-popup auto-dismiss recipe to fire on each retry; 0 on desktop (absolute-mouse) targets where single-shot is reliable. Pass 0 explicitly to opt out (single-shot). Requires verifyClick=true.' },
+        singleTap: { type: 'boolean', description: 'KEYPAD MODE (M6): tap the target EXACTLY ONCE and NEVER re-fire based on verification. For keypads / PIN pads / any target whose tap effect is sub-threshold or unobservable — a legit tap there makes a tiny (or invisible) screen change, so the normal retry-on-no-change would re-tap the SAME key and corrupt input (one "1" → "11"). With singleTap:true, verification is ADVISORY only (the screenChanged/diff is still reported so you can judge whether it likely registered, but it never triggers a re-tap). Forces maxRetries=0 and defaults minBrightness=0 (so a dimmed PIN-sheet modal does not false-abort). Default false.' },
         minBrightness: { type: 'number', description: 'Brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness AND stddev (Phase 48). The gate aborts with a "wake the iPad" error ONLY when the frame is uniformly dim (mean < threshold AND stddev < 3) — dark-mode UI passes the gate because the high stddev from text/icon contrast indicates cursor will still be detectable. Default 35 on iPad targets (Phase 39 calibrated against live data: 29 = popup overlay, 41 = bright iPad with dark wallpaper); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
         autoUnlockOnDetectFail: { type: 'boolean', description: 'Phase 72: when an attempt fails because the iPad is on the lock screen (Phase 70 found this is the dominant detect-then-move failure mode), automatically call ipadGoHome to unlock and retry once before giving up on this attempt. SIDE EFFECT: if the iPad is INSIDE AN APP and detect-then-move fails for some other reason, this will exit the app to home — not what you want for in-app clicks. Default false (preserve manual control). Set true for fire-and-forget click_at on a fresh iPad target where you don\'t care about app state.' },
         maxResidualPx: { type: 'number', description: 'Phase 88: skip the click if the verified cursor is more than this many pixels from the target. Useful when callers care about CORRECT element hit, not just "screen changed". Live-verified failure mode (2026-04-27): residual 78 px caused a click targeting Settings → Software Update to instead activate the Apple Account sidebar row. Pass a positive integer to set the tolerance (e.g. 25 for strict icon-tolerance clicks, 50 for "near-enough is fine"). Default 25 on iPad (relative-mouse) targets — the gate is ON so an off-target move skips instead of launching the wrong app; 0/undefined on desktop. Override the default without redeploy via PIKVM_CLICK_MAX_RESIDUAL_PX (a number, or "off"/0 to disable).' },
@@ -1654,22 +1666,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const verifySettleMs = validateNumber(args.verifySettleMs, 0, 5000) ?? 300;
         const verifyRegionHalfPx = validateNumber(args.verifyRegionHalfPx, 1, 1920);
         const verifyMinChangeFraction = validateNumber(args.verifyMinChangeFraction, 0.0001, 1);
+        // M6 expectRegion: caller-supplied rectangular verify box (HDMI px). Takes
+        // precedence over verifyRegionHalfPx at the verify layer — see verifyOpts.
+        let expectRegion: { x: number; y: number; width: number; height: number } | undefined;
+        if (args.expectRegion !== undefined && args.expectRegion !== null) {
+          const er = args.expectRegion as Record<string, unknown>;
+          expectRegion = {
+            x: requireNumber(er.x, 'expectRegion.x'),
+            y: requireNumber(er.y, 'expectRegion.y'),
+            width: requireNumber(er.width, 'expectRegion.width'),
+            height: requireNumber(er.height, 'expectRegion.height'),
+          };
+        }
         // Phase 94: default to 2 retries on iPad (relative-mouse), 0 on
         // desktop (absolute-mouse). Single-shot click_at is ~50% reliable
         // on tiny iPad targets (verified Phase 70 bench), ~88% with
         // retries=2. Phase 95 extracted defaultMaxRetriesFor so the
         // mapping is unit-tested.
+        // M6 keypad mode: tap once, never re-fire on verification. Forces the
+        // single-shot path (maxRetries=0), where verify is already advisory-only.
+        const singleTap = validateBoolean(args.singleTap) ?? false;
         const maxRetriesArg = validateNumber(args.maxRetries, 0, 10);
-        const maxRetries = maxRetriesArg !== undefined
-          ? maxRetriesArg
-          : defaultMaxRetriesFor(mouseAbsoluteMode);
+        const maxRetries = singleTap
+          ? 0
+          : maxRetriesArg !== undefined
+            ? maxRetriesArg
+            : defaultMaxRetriesFor(mouseAbsoluteMode);
         // Phase 38 / v0.5.26: explicit MCP parameter for the brightness gate.
         // Default mirrors the auto-policy: VERY_DIM_THRESHOLD on iPad
         // targets (relative-mouse), 0 elsewhere. Pass 0 explicitly to disable.
+        // M6: singleTap defaults to 0 too — a dimmed PIN-sheet modal must not
+        // false-abort a deliberate keypad tap (still overridable explicitly).
         const minBrightnessArg = validateNumber(args.minBrightness, 0, 255);
         const minBrightness = minBrightnessArg !== undefined
           ? minBrightnessArg
-          : (mouseAbsoluteMode ? 0 : VERY_DIM_THRESHOLD);
+          : (singleTap || mouseAbsoluteMode ? 0 : VERY_DIM_THRESHOLD);
 
         // Phase 136 / Phase 156: iPad targets get chunkPaceMs=100ms
         // open-loop default; desktop uses caller's default. Helper is
@@ -1694,6 +1725,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ...(verifyRegionHalfPx !== undefined
             ? { region: { x: tx, y: ty, halfWidth: verifyRegionHalfPx, halfHeight: verifyRegionHalfPx } }
             : {}),
+          // expectRegion takes precedence over the target-centered `region` — the
+          // verify layer (verifyClickByDecodedFrames) honours regionRect first.
+          ...(expectRegion !== undefined ? { regionRect: expectRegion } : {}),
           ...(verifyMinChangeFraction !== undefined
             ? { minChangedFraction: verifyMinChangeFraction }
             : {}),
@@ -1805,6 +1839,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
+        const singleTapNote = singleTap
+          ? `\n(singleTap: tapped ONCE, no retry — the verification below is ADVISORY only; the tap fired regardless of the reported screen change. Use this for keypads/PIN pads so a sub-threshold effect never re-taps the key.)`
+          : '';
         return {
           content: [
             {
@@ -1812,6 +1849,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text:
                 result.message +
                 `\nClicked ${button} at approximate position. Post-click screenshot attached.` +
+                singleTapNote +
                 verificationText,
             },
             { type: 'image', data: shot.buffer.toString('base64'), mimeType: 'image/jpeg' },

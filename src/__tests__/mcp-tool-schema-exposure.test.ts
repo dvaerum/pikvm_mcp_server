@@ -165,6 +165,43 @@ describe('MCP tool schema and handler exposure', () => {
       expect(tool).toMatch(/verifyClick:\s*\{[^}]*type:\s*'boolean'/);
     });
 
+    it('M6 singleTap is in the schema (keypad mode)', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/singleTap:\s*\{[^}]*type:\s*'boolean'/);
+    });
+
+    it('M6 handler forces maxRetries=0 and defaults minBrightness=0 under singleTap', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      expect(handler).toMatch(/validateBoolean\(args\.singleTap\)/);
+      // singleTap forces the single-shot (no-retry) path...
+      expect(handler).toMatch(/singleTap[\s\S]{0,40}\?\s*0/);
+      // ...and defaults the brightness gate off so a dimmed PIN modal doesn't false-abort.
+      expect(handler).toMatch(/singleTap \|\| mouseAbsoluteMode \? 0/);
+    });
+
+    it('M6 expectRegion object is in the schema (x,y,width,height)', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/expectRegion:\s*\{[\s\S]*?type:\s*'object'/);
+      const expectRegionBlock = tool.slice(tool.indexOf('expectRegion:'));
+      for (const key of ['x', 'y', 'width', 'height']) {
+        expect(expectRegionBlock).toMatch(new RegExp(`${key}:\\s*\\{[^}]*type:\\s*'number'`));
+      }
+    });
+
+    it('M6 handler parses expectRegion and forwards it as regionRect (precedence)', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      // Parsed from args into a rectangular box...
+      expect(handler).toMatch(/args\.expectRegion/);
+      expect(handler).toMatch(/requireNumber\(er\.width, 'expectRegion\.width'\)/);
+      // ...and fed to the verify layer as regionRect, which takes precedence
+      // over the target-centered `region` inside verifyClickByDecodedFrames.
+      expect(handler).toMatch(/regionRect:\s*expectRegion/);
+    });
+
   });
 
   describe('pikvm_mouse_scroll — M1 pane targeting (optional x,y)', () => {

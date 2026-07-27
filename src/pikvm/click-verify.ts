@@ -173,6 +173,14 @@ export interface ClickVerifyOptions {
    *  is small/local (e.g. a button highlight) and a full-frame diff
    *  would be diluted. */
   region?: { x: number; y: number; halfWidth: number; halfHeight: number };
+  /** M6: an explicit rectangular ROI in screenshot px, top-left origin.
+   *  When set it TAKES PRECEDENCE over `region` (the internal
+   *  target-centered square): the caller knows the exact box where the
+   *  tap's effect appears (e.g. a PIN-dots field) and scopes the diff
+   *  there, so a small legit change registers instead of being diluted
+   *  by the full frame. Surfaced as the `expectRegion` arg on
+   *  pikvm_mouse_click_at. Clamped to frame bounds. */
+  regionRect?: { x: number; y: number; width: number; height: number };
 }
 
 /**
@@ -199,7 +207,23 @@ export function verifyClickByDecodedFrames(
   let changedPixels = 0;
   let totalPixels = 0;
 
-  if (options.region) {
+  if (options.regionRect) {
+    // M6 expectRegion: an explicit rectangular ROI. Takes precedence over the
+    // target-centered `region` — the caller pinpoints the effect box (e.g. the
+    // PIN-dots field), so scope the diff there. Half-open [x0,x1)×[y0,y1),
+    // clamped to frame bounds.
+    const r = options.regionRect;
+    const x0 = Math.max(0, Math.round(r.x));
+    const x1 = Math.min(pre.width, Math.round(r.x + r.width));
+    const y0 = Math.max(0, Math.round(r.y));
+    const y1 = Math.min(pre.height, Math.round(r.y + r.height));
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        totalPixels++;
+        if (mask[y * pre.width + x]) changedPixels++;
+      }
+    }
+  } else if (options.region) {
     const r = options.region;
     const x0 = Math.max(0, r.x - r.halfWidth);
     const x1 = Math.min(pre.width, r.x + r.halfWidth + 1);
@@ -221,7 +245,7 @@ export function verifyClickByDecodedFrames(
   const changedFraction = totalPixels > 0 ? changedPixels / totalPixels : 0;
   const screenChanged = changedFraction >= minChangedFraction;
   const pct = (changedFraction * 100).toFixed(2);
-  const scope = options.region ? 'ROI' : 'screen';
+  const scope = options.regionRect || options.region ? 'ROI' : 'screen';
   const message = screenChanged
     ? `Click triggered visible screen change (${pct}% of ${scope} pixels changed).`
     : `Click did not trigger a visible screen change (${pct}% of ${scope} pixels changed, below ${(minChangedFraction * 100).toFixed(2)}% threshold). The click may have missed its target.`;
