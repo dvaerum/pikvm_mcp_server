@@ -386,4 +386,24 @@ describe('MCP tool schema and handler exposure', () => {
       expect(src).not.toContain('switch (name) {');
     });
   });
+
+  // False-success safety fix: pikvm_mouse_click_at must never report a click it
+  // did not send. Both paths gate on a verified cursor.
+  describe('false-success safety — click_at reports not-landed, never blind-fires', () => {
+    it('single-shot path skips + isError when the cursor is unverified on iPad', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      // iPad-only gate: null finalDetectedPosition → NOT-LANDED before any click.
+      expect(handler).toMatch(/!mouseAbsoluteMode && result\.finalDetectedPosition === null/);
+      expect(handler).toMatch(/Click NOT performed/);
+    });
+
+    it('retry path does not report "Clicked" when every attempt skipped', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      // anyClickFired guard → not-landed isError branch when no button-down was sent.
+      expect(handler).toMatch(/anyClickFired = r\.attemptHistory\.some\(\(a\) => !a\.skippedClickReason\)/);
+      expect(handler).toMatch(/if \(!anyClickFired\)/);
+    });
+  });
 });

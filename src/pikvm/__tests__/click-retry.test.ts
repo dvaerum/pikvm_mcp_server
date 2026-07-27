@@ -586,6 +586,39 @@ describe('clickAtWithRetry', () => {
     }, 30000);
   });
 
+  // False-success safety fix (2026-07-27): with requireVerifiedCursor at its
+  // default (true), a run where the primary detection never verifies the cursor
+  // (synthetic frames give moveToPixel no cursor pair → finalDetectedPosition
+  // null) must SKIP every attempt and fire NO click — the phantom recovery that
+  // used to resurrect cursorVerified from a low-confidence detection is gone, so
+  // a faded/cursorless click can never be a blind fire reported as "clicked".
+  describe('false-success safety: unverified cursor never blind-fires', () => {
+    it('requireVerifiedCursor default: null detection skips ALL attempts, sends NO click', async () => {
+      const grey = await uniformPng(100, 100, 128);
+      const client = new ScriptedClient();
+      client.beforeClickFrame = grey;
+      client.postClickFrames = [grey];
+
+      const result = await clickAtWithRetry(client as unknown as PiKVMClient, { x: 50, y: 50 }, {
+        maxRetries: 2,
+        moveToOptions: FAST_MOVE_OPTS,
+        preClickSettleMs: 0,
+        postClickSettleMs: 0,
+        minBrightness: 0,
+        // requireVerifiedCursor intentionally NOT set → defaults to true.
+      });
+
+      expect(result.success).toBe(false);
+      // No button-down was ever sent — nothing landed, so nothing is reported
+      // as a click.
+      expect(client.mouseClickCount).toBe(0);
+      // Every attempt is a truthful skip with a reason, never a silent success.
+      expect(result.attemptHistory.length).toBeGreaterThan(0);
+      expect(result.attemptHistory.every((a) => !!a.skippedClickReason)).toBe(true);
+      expect(result.attemptHistory.every((a) => a.cursorVerified === false)).toBe(true);
+    }, 30000);
+  });
+
   // M8: the orchestrator writes the "during" (pre-button-down cursor-alive)
   // frame when options.capture requests it, and returns it as duringCapture.
   describe('M8 capture:["during"]', () => {

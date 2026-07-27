@@ -795,7 +795,15 @@ export async function clickAtWithRetry(
     // Phase 35: if cursor position couldn't be verified post-move,
     // skip the click — clicking blind when residual is unknown
     // risks hitting the wrong adjacent target (verified 2026-04-26).
-    let cursorVerified = lastMoveResult.finalDetectedPosition !== null;
+    // Whether the PRIMARY detection (moveToPixel's own chain) verified the
+    // cursor. Safety-critical (false-success fix): recovery paths below may
+    // REFINE an already-verified position, but must NEVER resurrect a FAILED
+    // primary detection into cursorVerified=true from a low-confidence phantom
+    // — on a faded/cursorless frame the V8 detector hallucinates (its own
+    // 76-89% cursor-absent false-positive rate; see REJECTED_CLAIMS.md), which
+    // let a BLIND click fire and report "Clicked" when nothing landed.
+    const primaryDetected = lastMoveResult.finalDetectedPosition !== null;
+    let cursorVerified = primaryDetected;
 
     // Phase 137 (v0.5.129): wake-nudge fallback when motion-diff +
     // template-match both failed (finalDetectedPosition=null).
@@ -864,6 +872,11 @@ export async function clickAtWithRetry(
             woken.position.y - target.y,
           );
           if (
+            // Refine-only: never resurrect a failed primary detection. When
+            // the primary chain found nothing, a template "match" on a
+            // cursorless frame is a phantom — decline it so the click skips
+            // truthfully rather than firing blind.
+            primaryDetected &&
             shouldAdoptSecondOpinion({
               cursorVerified,
               wokenResidual,
@@ -880,45 +893,17 @@ export async function clickAtWithRetry(
       }
     }
 
-    if (requireVerifiedCursor && !cursorVerified) {
-      // PA19-e (2026-05-28): last-chance v9-bordered full-frame check
-      // before declaring "cursor not verified". moveToPixel's internal
-      // chain can fail (motion-diff null + template null + wiggle-
-      // verify rejected) even when v9-bordered would find the cursor
-      // cleanly on a fresh frame. Saved-SKIP analysis showed 2 of 6
-      // AppStore SKIPs had the cursor visibly 7-9 px from target —
-      // they were false SKIPs caused by transient detection
-      // disagreement, not real positioning failure.
-      //
-      // Fresh frame + same v9-bordered model that drives everything
-      // else. If it finds a confident cursor within reasonable range
-      // of target, accept it and let the click proceed.
-      try {
-        const shot = await client.screenshot();
-        const v8 = await findCursorByV8FullFrame(
-          shot.buffer, shot.screenshotWidth, shot.screenshotHeight,
-          { minPresence: 0.5 },
-        );
-        // Accept moderate-confidence (heatmap ≥ 0.3) detections within
-        // 80 px of target. PA19-f Books inspection showed iPadOS pointer-
-        // effect morphs the cursor onto icons, dropping v9-bordered's
-        // heatmapPeak to 0.33-0.48 (vs 0.95+ for free-floating cursors).
-        // The 80 px geographic filter is the safety net — it covers the
-        // pointer-effect cursor-on-icon case without admitting far-away
-        // FP-class detections (the recurring 100-130 px static FPs in
-        // dock/widget areas).
-        if (v8 !== null && v8.heatmapPeak >= 0.3) {
-          const recoverDist = Math.hypot(v8.x - target.x, v8.y - target.y);
-          if (recoverDist <= 80) {
-            (lastMoveResult as { finalDetectedPosition: { x: number; y: number } | null })
-              .finalDetectedPosition = { x: v8.x, y: v8.y };
-            cursorVerified = true;
-          }
-        }
-      } catch {
-        // Recovery best-effort; fall through to the SKIP path below.
-      }
-    }
+    // False-success safety fix (2026-07-27): the former PA19-e null-detection
+    // recovery ran a fresh-frame V8 check here and accepted heatmapPeak≥0.3
+    // within 80px as a verified cursor. On a fully-faded/cursorless frame that
+    // is a PHANTOM (the detector's own 76-89% cursor-absent FP rate), and it
+    // resurrected cursorVerified=true → a BLIND click fired at the stale faded
+    // position and was reported "Clicked" though nothing landed (ground-truth
+    // 3/3, PIN pad never opened). A low-confidence detection cannot distinguish
+    // a real faint cursor from a phantom, so it must NOT gate a click. Removed:
+    // a failed primary detection now falls straight to the truthful skip below.
+    // The landing rate for genuinely-faded cursors is restored by the M2
+    // wake-before-detect fix (relative emits to un-fade), not by guessing.
 
     if (requireVerifiedCursor && !cursorVerified) {
       // Phase 305 (v0.5.232): save the frame for future ML training
