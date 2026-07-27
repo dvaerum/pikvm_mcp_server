@@ -13,6 +13,8 @@ import {
   waitForRecovery,
   recoverHid,
   makeHttpRecoveryTrigger,
+  makeUdcStateReader,
+  udcStateUrl,
   type HidOnlineState,
   type HidRecoveryClient,
   type HidVerifier,
@@ -184,5 +186,70 @@ describe('makeHttpRecoveryTrigger', () => {
   });
   it('is configured when a url is given', () => {
     expect(makeHttpRecoveryTrigger({ url: 'http://127.0.0.1:9999/recover' }).configured).toBe(true);
+  });
+});
+
+describe('recoverHid skipSoftReset (M0 usb_reconnect)', () => {
+  it('starts at soft_connect (skips the no-op R1) when skipSoftReset is set', async () => {
+    const { ref, client, verifier, trigger } = makeRig();
+    const r = await recoverHid(
+      client(),
+      trigger(true, (a) => { if (a === 'soft_connect') ref.healthy = true; }),
+      verifier,
+      { maxRung: 3, allowReboot: false, skipSoftReset: true, hostWaitMs: 0 },
+      NO_WAIT,
+    );
+    expect(r.recovered).toBe(true);
+    // No R1 soft-reset attempt — the first rung is R2 soft_connect.
+    expect(r.attempts.map((a) => a.rung)).toEqual(['R2']);
+    expect(r.attempts[0]).toMatchObject({ rung: 'R2', action: 'soft_connect' });
+  });
+});
+
+describe('udcStateUrl', () => {
+  it('appends /udc-state to the base (trimming trailing slashes)', () => {
+    expect(udcStateUrl('http://127.0.0.1:8082/hid-recovery')).toBe('http://127.0.0.1:8082/hid-recovery/udc-state');
+    expect(udcStateUrl('http://127.0.0.1:8082/hid-recovery/')).toBe('http://127.0.0.1:8082/hid-recovery/udc-state');
+  });
+});
+
+describe('makeUdcStateReader', () => {
+  const base = 'http://127.0.0.1:8082/hid-recovery';
+
+  it('returns null when no url is configured', async () => {
+    expect(await makeUdcStateReader({})()).toBeNull();
+  });
+
+  it('parses a 200 body into {udc,state,online}', async () => {
+    let seenUrl = '';
+    let seenAuth = '';
+    const reader = makeUdcStateReader(
+      { url: base, token: 'tok' },
+      {
+        get: async (url, headers) => {
+          seenUrl = url;
+          seenAuth = headers.authorization ?? '';
+          return { status: 200, body: { udc: 'fe980000.usb', state: 'configured', online: true } };
+        },
+      },
+    );
+    expect(await reader()).toEqual({ udc: 'fe980000.usb', state: 'configured', online: true });
+    expect(seenUrl).toBe(`${base}/udc-state`);
+    expect(seenAuth).toBe('Bearer tok');
+  });
+
+  it('carries the raw state string (no gadget → absent/false)', async () => {
+    const reader = makeUdcStateReader(
+      { url: base },
+      { get: async () => ({ status: 200, body: { udc: null, state: 'absent', online: false } }) },
+    );
+    expect(await reader()).toEqual({ udc: null, state: 'absent', online: false });
+  });
+
+  it('returns null on non-200 (401/500), a bad body, or a thrown request', async () => {
+    expect(await makeUdcStateReader({ url: base }, { get: async () => ({ status: 401, body: { ok: false } }) })()).toBeNull();
+    expect(await makeUdcStateReader({ url: base }, { get: async () => ({ status: 500, body: {} }) })()).toBeNull();
+    expect(await makeUdcStateReader({ url: base }, { get: async () => ({ status: 200, body: { udc: 'x' } }) })()).toBeNull(); // no state
+    expect(await makeUdcStateReader({ url: base }, { get: async () => { throw new Error('conn refused'); } })()).toBeNull();
   });
 });

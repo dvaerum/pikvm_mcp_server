@@ -23,7 +23,7 @@ import { startHttpServer } from './http-server.js';
 import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './auth.js';
 import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
-import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, type RecoveryTrigger } from './pikvm/hid-recovery.js';
+import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
@@ -81,15 +81,23 @@ const lock = new BusyLock();
 // PIKVM_HID_RECOVERY_URL (+ optional bearer token); unset ⇒ rungs 2-3 report
 // unavailable. See docs/runbooks/hid-recovery.md ("Trigger interface").
 let recoveryTrigger: RecoveryTrigger | undefined;
+function recoveryEndpointConfig(): { url?: string; token?: string; verifySsl?: boolean } {
+  return {
+    url: process.env.PIKVM_HID_RECOVERY_URL,
+    token: process.env.PIKVM_HID_RECOVERY_TOKEN,
+    verifySsl: process.env.PIKVM_HID_RECOVERY_VERIFY_SSL === 'true',
+  };
+}
 function getRecoveryTrigger(): RecoveryTrigger {
-  if (!recoveryTrigger) {
-    recoveryTrigger = makeHttpRecoveryTrigger({
-      url: process.env.PIKVM_HID_RECOVERY_URL,
-      token: process.env.PIKVM_HID_RECOVERY_TOKEN,
-      verifySsl: process.env.PIKVM_HID_RECOVERY_VERIFY_SSL === 'true',
-    });
-  }
+  if (!recoveryTrigger) recoveryTrigger = makeHttpRecoveryTrigger(recoveryEndpointConfig());
   return recoveryTrigger;
+}
+// Ground-truth UDC-state reader (M4/M0): GET {recovery-url}/udc-state. Same
+// endpoint/token as the trigger; returns null when unconfigured/unreachable.
+let udcStateReader: (() => Promise<UdcState | null>) | undefined;
+function getUdcStateReader(): () => Promise<UdcState | null> {
+  if (!udcStateReader) udcStateReader = makeUdcStateReader(recoveryEndpointConfig());
+  return udcStateReader;
 }
 
 async function refreshProfile(path?: string): Promise<void> {
@@ -409,7 +417,9 @@ const tools: Tool[] = [
       '(reboot the PiKVM, host) is the destructive last-resort remote option (~30-90s, needs ' +
       'allowReboot:true) — rarely needed now that R2 works. If every remote rung fails, the tool escalates ' +
       'to R4: a HUMAN must physically re-plug the target USB or power it on. Host rungs (R2/R3a/R3b) need ' +
-      'the pikvm-nixos recovery trigger configured; otherwise they report unavailable and R1 still runs.',
+      'the pikvm-nixos recovery trigger configured; otherwise they report unavailable and R1 still runs. ' +
+      'For the everyday case prefer **pikvm_usb_reconnect** (soft_connect→udc-rebind, no reboot) — use this ' +
+      'full ladder only when that has already failed and you accept the destructive reboot.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -420,6 +430,27 @@ const tools: Tool[] = [
         allowReboot: {
           type: 'boolean',
           description: 'Permit rung 4 (reboot the PiKVM device) — destructive: the whole appliance (including this server) goes down ~30-90s. Only used when maxRung is 4. Default false.',
+        },
+      },
+    },
+  },
+  {
+    name: 'pikvm_usb_reconnect',
+    description:
+      'The standard "my mouse/keyboard died — reconnect the USB" recovery. Verifies the target is present, ' +
+      'then runs the two VALIDATED host rungs — soft_connect (fixes an idle-drop, ~6s) then, if that ' +
+      "doesn't restore input, udc-rebind (fixes a full-dead HID after a PiKVM reboot) — NO destructive " +
+      'reboot. Each rung is verified by BOTH re-reading the ground-truth UDC state (/sys/class/udc state via ' +
+      'the host endpoint) AND a behavioral check (emit a move + confirm the screen changed), because the ' +
+      'kvmd HID online flags lie. This is what to reach for 99% of the time. If it still fails, escalate ' +
+      'with pikvm_hid_recover (adds the reboot rung + human step). Needs the pikvm-nixos recovery endpoint ' +
+      'configured (PIKVM_HID_RECOVERY_URL); without it the host rungs report unavailable.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        settleMs: {
+          type: 'number',
+          description: 'Optional per-rung recovery wait budget (ms) before re-checking. Default 15000.',
         },
       },
     },
@@ -1207,6 +1238,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           lines.push('Not recovered by the allowed rungs. Reboot (R3b) worked once and is the most reliable remote option: re-run with maxRung:4, allowReboot:true (needs the host recovery trigger configured).');
         }
         return { content: [{ type: 'text', text: lines.join('\n') }], isError: !result.recovered };
+      }
+
+      case 'pikvm_usb_reconnect': {
+        // M0: the everyday "reconnect the USB" fix — recoverHid capped at
+        // udc-rebind (no destructive reboot), skipping the no-op kvmd soft-reset
+        // (R1). Verify each rung by BOTH the ground-truth UDC state AND behavior,
+        // since the kvmd online flags lie. Degrades to behavioral-only when the
+        // UDC-state route is unavailable.
+        const settleMs = validateNumber(args.settleMs, 0, 120000);
+        const reader = getUdcStateReader();
+        const behavioral = makeBehavioralVerifier(pikvm);
+        const verifier: HidVerifier = {
+          verify: async () => {
+            const beh = await behavioral.verify();
+            const udc = await reader();
+            const healthy = beh.healthy && (udc === null || udc.online);
+            return { healthy, detail: `${beh.detail}; UDC=${udc ? udc.state : 'unknown'}` };
+          },
+        };
+        const result = await recoverHid(pikvm, getRecoveryTrigger(), verifier, {
+          maxRung: 3,
+          allowReboot: false,
+          skipSoftReset: true,
+          ...(settleMs !== undefined ? { hostWaitMs: settleMs } : {}),
+        });
+        const recoveredAttempt = result.attempts.find((a) => a.recovered);
+        const rungUsed = recoveredAttempt ? recoveredAttempt.action : null; // 'soft_connect' | 'udc-rebind' | null
+        const finalUdc = await reader();
+        const report = {
+          recovered: result.recovered,
+          rungUsed,
+          udcState: finalUdc?.state ?? null,
+          online: finalUdc?.online ?? null,
+          behavioralVerify: result.recovered ? 'pass' : 'fail',
+          attempts: result.attempts.map((a) => ({
+            rung: a.rung,
+            action: a.action,
+            recovered: a.recovered,
+            performed: a.performed,
+            detail: a.detail,
+          })),
+          message: !result.targetPresent
+            ? 'Target not present (no screenshot/HDMI) — wake or power it on first; no rung can recover an absent target.'
+            : result.recovered
+              ? `HID recovered via ${rungUsed}.`
+              : (result.humanActionRequired ??
+                  'soft_connect→udc-rebind did not recover the HID. Escalate with pikvm_hid_recover (adds the reboot rung), or physically re-plug the target USB cable.'),
+        };
+        const summary = !result.targetPresent
+          ? 'R0: target NOT present — nothing to reconnect.'
+          : result.recovered
+            ? `RECONNECTED via ${rungUsed} (UDC=${finalUdc?.state ?? 'unknown'}).`
+            : 'NOT recovered by soft_connect→udc-rebind — see message.';
+        return {
+          content: [{ type: 'text', text: `${summary}\n${JSON.stringify(report, null, 2)}` }],
+          isError: !result.recovered,
+        };
       }
 
       case 'pikvm_ipad_unlock_with_code': {
