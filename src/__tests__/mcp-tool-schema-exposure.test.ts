@@ -49,16 +49,17 @@ function extractToolBlock(src: string, toolName: string): string {
   return after.slice(0, stopAt === -1 ? undefined : stopAt);
 }
 
-/** Find a handler's case block by `case '<toolName>':`. Returns the body
- *  until the matching `}` of the inner block. Approximation: stops at
- *  next `case '` keyword. */
+/** Find a tool's handler body. Cand-6 replaced the CallTool `switch` with a
+ *  per-tool registry: each tool's handler is a module-level
+ *  `async function handle_<toolName>(args)`. Returns that function's source up
+ *  to the next handler declaration. */
 function extractHandlerBlock(src: string, toolName: string): string {
-  const startMarker = `case '${toolName}':`;
+  const startMarker = `async function handle_${toolName}(`;
   const startIdx = src.indexOf(startMarker);
   if (startIdx === -1) throw new Error(`Handler for ${toolName} not found`);
   const after = src.slice(startIdx);
-  const nextCaseIdx = after.indexOf("\n      case '", 1);
-  return after.slice(0, nextCaseIdx === -1 ? undefined : nextCaseIdx);
+  const nextIdx = after.indexOf('\nasync function handle_', 1);
+  return after.slice(0, nextIdx === -1 ? undefined : nextIdx);
 }
 
 describe('MCP tool schema and handler exposure', () => {
@@ -317,6 +318,72 @@ describe('MCP tool schema and handler exposure', () => {
       // ...and its during frame is read back, with "after" reusing postClickScreenshot.
       expect(handler).toMatch(/r\.duringCapture/);
       expect(handler).toMatch(/capturePhaseAdvisory\(pikvm, capture, 'after', r\.postClickScreenshot\)/);
+    });
+  });
+
+  // Cand-6: the CallTool `switch(name)` became a per-tool registry — each tool's
+  // descriptor is bound to a module-level `handle_<tool>` handler. These are the
+  // "nothing lost" proofs: descriptor↔handler colocation for EVERY tool + the
+  // registry name set is EXACTLY the old switch's 32 cases (a dropped/renamed
+  // case fails here).
+  describe('Cand-6 — tool-descriptor registry (switch → toolsByName dispatch)', () => {
+    // The exact set of tool cases that lived in the former CallTool switch.
+    // Pinned so a lost/renamed/spurious handler trips this test.
+    const EXPECTED_TOOLS = [
+      'pikvm_version', 'pikvm_health_check', 'pikvm_screenshot', 'pikvm_snapshot',
+      'pikvm_get_resolution', 'pikvm_type', 'pikvm_key', 'pikvm_shortcut',
+      'pikvm_screen_state', 'pikvm_hid_reset', 'pikvm_hid_recover', 'pikvm_usb_reconnect',
+      'pikvm_ipad_unlock_with_code', 'pikvm_ipad_lock', 'pikvm_dismiss_popup',
+      'pikvm_mouse_move', 'pikvm_mouse_click', 'pikvm_mouse_scroll', 'pikvm_calibrate',
+      'pikvm_set_calibration', 'pikvm_get_calibration', 'pikvm_clear_calibration',
+      'pikvm_ipad_unlock', 'pikvm_ipad_launch_app', 'pikvm_detect_orientation',
+      'pikvm_ipad_home', 'pikvm_ipad_app_switcher', 'pikvm_mouse_move_to',
+      'pikvm_mouse_click_at', 'pikvm_measure_ballistics', 'pikvm_seed_cursor_template',
+      'pikvm_auto_calibrate',
+    ];
+
+    function registryBlock(src: string): string {
+      const start = src.indexOf('const toolRegistry: ToolEntry[] = [');
+      if (start === -1) throw new Error('toolRegistry not found');
+      const end = src.indexOf('\n];', start);
+      return src.slice(start, end);
+    }
+
+    it('registry entries appear in binding order name → handler: handle_<name> (colocation)', async () => {
+      const src = await readIndexTs();
+      const block = registryBlock(src);
+      const names = [...block.matchAll(/name: '(pikvm_\w+)',/g)].map((m) => m[1]);
+      const handlers = [...block.matchAll(/handler: handle_(pikvm_\w+),/g)].map((m) => m[1]);
+      // Every descriptor is immediately bound to its correctly-named handler,
+      // in the same order → exact 1:1 colocation.
+      expect(handlers).toEqual(names);
+    });
+
+    it('registry name set is EXACTLY the former switch case set (nothing dropped/renamed/added)', async () => {
+      const src = await readIndexTs();
+      const names = [...registryBlock(src).matchAll(/name: '(pikvm_\w+)',/g)].map((m) => m[1]);
+      expect([...names].sort()).toEqual([...EXPECTED_TOOLS].sort());
+      expect(names).toHaveLength(EXPECTED_TOOLS.length);
+    });
+
+    it('every bound handler is a defined module-level function', async () => {
+      const src = await readIndexTs();
+      for (const name of EXPECTED_TOOLS) {
+        expect(src).toContain(`handler: handle_${name},`);
+        expect(src).toContain(`async function handle_${name}(args: Record<string, unknown>): Promise<CallToolResult>`);
+      }
+    });
+
+    it('dispatch routes via toolsByName and preserves the unknown-tool throw; no switch remains', async () => {
+      const src = await readIndexTs();
+      // Skill tools still short-circuit BEFORE the registry lookup (preamble intact).
+      expect(src).toMatch(/if \(isSkillTool\(name\)\) \{\s*\n\s*return handleSkillToolCall\(name, args\);/);
+      // Registry dispatch + unknown-tool parity with the old `default:`.
+      expect(src).toMatch(/const entry = toolsByName\.get\(name\);/);
+      expect(src).toMatch(/if \(!entry\) \{\s*\n\s*throw new Error\(`Unknown tool: \$\{name\}`\);/);
+      expect(src).toMatch(/return await entry\.handler\(args as Record<string, unknown>\);/);
+      // The switch is gone.
+      expect(src).not.toContain('switch (name) {');
     });
   });
 });

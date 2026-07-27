@@ -11,6 +11,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
+  CallToolResult,
   ListToolsRequestSchema,
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
@@ -260,9 +261,15 @@ const CAPTURE_SCHEMA_PROPS = {
 } as const;
 
 // Define available tools
-const tools: Tool[] = [
+type ToolHandler = (args: Record<string, unknown>) => Promise<CallToolResult>;
+interface ToolEntry extends Tool {
+  handler: ToolHandler;
+}
+
+const toolRegistry: ToolEntry[] = [
   {
     name: 'pikvm_version',
+    handler: handle_pikvm_version,
     description: `Return the running pikvm-mcp-server version. Useful for detecting whether a deployed server is current with main — if the version doesn't match the latest commit's version, the server needs a redeploy. Currently embedded version: ${VERSION}.`,
     inputSchema: {
       type: 'object',
@@ -271,6 +278,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_health_check',
+    handler: handle_pikvm_health_check,
     description: 'One-call diagnostic: server version, HID mouse/keyboard online + absolute/relative mode, streamer HDMI-source online, and detected iPad bounds/orientation. Run first after deploy or when click_at misbehaves.',
     inputSchema: {
       type: 'object',
@@ -279,6 +287,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_screenshot',
+    handler: handle_pikvm_screenshot,
     description: 'Capture a JPEG from the PiKVM video stream. On iPad pass keepCursorAlive:true to emit a net-zero ±1px nudge just before the snapshot so the auto-fading cursor stays visible for verification.',
     inputSchema: {
       type: 'object',
@@ -308,6 +317,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_snapshot',
+    handler: handle_pikvm_snapshot,
     description:
       'Save a JPEG video frame to a FILE (no inline image) — the file-only counterpart to ' +
       'pikvm_screenshot. Captures /streamer/snapshot, optionally crops to a region, writes it to ' +
@@ -340,6 +350,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_get_resolution',
+    handler: handle_pikvm_get_resolution,
     description: 'Get the current screen resolution of the remote machine. Useful for knowing valid coordinate ranges for mouse operations.',
     inputSchema: {
       type: 'object',
@@ -348,6 +359,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_type',
+    handler: handle_pikvm_type,
     description: 'Type text on the remote machine using PiKVM. Handles special characters correctly via keymap conversion.',
     inputSchema: {
       type: 'object',
@@ -374,6 +386,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_key',
+    handler: handle_pikvm_key,
     description: 'Send a key or key combination to the remote machine. Use JavaScript key codes (e.g., KeyA, Enter, ControlLeft).',
     inputSchema: {
       type: 'object',
@@ -398,6 +411,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_shortcut',
+    handler: handle_pikvm_shortcut,
     description: 'Send a keyboard shortcut (multiple keys pressed simultaneously). Example: Ctrl+Alt+Delete',
     inputSchema: {
       type: 'object',
@@ -413,6 +427,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_screen_state',
+    handler: handle_pikvm_screen_state,
     description: 'Fast "is the screen on?" check via the streamer API; returns { on, resolution }. on:false means no HDMI signal (iPad locked/asleep/off) and pikvm_screenshot 503s. Cheaper than pikvm_health_check — one API call.',
     inputSchema: {
       type: 'object',
@@ -421,6 +436,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_hid_reset',
+    handler: handle_pikvm_hid_reset,
     description: 'Recovery when HID mouse/keyboard shows online:false: soft-reinits the emulated HID and returns online state after settleMs. A soft reset cannot force host re-enumeration — the target may need a physical cable replug.',
     inputSchema: {
       type: 'object',
@@ -438,6 +454,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_hid_recover',
+    handler: handle_pikvm_hid_recover,
     description:
       'Escalating recovery for a broken HID (mouse/keyboard not driving the target while video is fine). ' +
       'R0 first checks the target is present (a screenshot returns an image) — NOTHING recovers an asleep/' +
@@ -468,6 +485,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_usb_reconnect',
+    handler: handle_pikvm_usb_reconnect,
     description:
       'The standard "my mouse/keyboard died — reconnect the USB" recovery. Verifies the target is present, ' +
       'then runs the two VALIDATED host rungs — soft_connect (fixes an idle-drop, ~6s) then, if that ' +
@@ -489,6 +507,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_unlock_with_code',
+    handler: handle_pikvm_ipad_unlock_with_code,
     description: 'Keyboard-only unlock for a passcode-protected iPad: wakes the screen, types the digits, presses Enter. Code is sent to HID but never logged, stored, or echoed. Use instead of pikvm_ipad_unlock when a passcode is set.',
     inputSchema: {
       type: 'object',
@@ -503,6 +522,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_lock',
+    handler: handle_pikvm_ipad_lock,
     description: 'Lock the iPad via Ctrl+Cmd+Q. DESTRUCTIVE: turns the screen off, so HDMI goes offline and pikvm_screenshot 503s until wake. Verify with pikvm_screen_state (on:false). Unlock a passcode-free iPad with sendKey Enter.',
     inputSchema: {
       type: 'object',
@@ -511,6 +531,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_dismiss_popup',
+    handler: handle_pikvm_dismiss_popup,
     description: 'Runs the hidden-popup dismiss recipe (Escape then Enter) when a click lands right but nothing happens (an iOS security popup ate it). Best-effort. force:true also sends Cmd+H — DESTRUCTIVE: exits the foreground app.',
     inputSchema: {
       type: 'object',
@@ -524,6 +545,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_move',
+    handler: handle_pikvm_mouse_move,
     description: 'Move the mouse cursor to a position on the remote machine. For absolute moves, coordinates are in screen pixels (0,0 = top-left). For relative moves, deltas are clamped to -127 to 127.',
     inputSchema: {
       type: 'object',
@@ -547,6 +569,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_click',
+    handler: handle_pikvm_mouse_click,
     description: 'Click a mouse button on the remote machine. Optionally move to a pixel position first.',
     inputSchema: {
       type: 'object',
@@ -574,6 +597,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_scroll',
+    handler: handle_pikvm_mouse_scroll,
     description:
       'Scroll the mouse wheel on the remote machine. Optionally target a pane first: pass x,y ' +
       '(screenshot pixels) to move the pointer there before scrolling, so the scroll lands on the ' +
@@ -606,6 +630,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_calibrate',
+    handler: handle_pikvm_calibrate,
     description: 'Start mouse coordinate calibration. Moves cursor to screen center and returns expected position. Take a screenshot after calling this to visually verify actual cursor position, then call pikvm_set_calibration with calculated factors.',
     inputSchema: {
       type: 'object',
@@ -614,6 +639,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_set_calibration',
+    handler: handle_pikvm_set_calibration,
     description: 'Set mouse coordinate calibration factors. Calculate factors as: factorX = expected_x / actual_x, factorY = expected_y / actual_y. For example, if calibration moved cursor to expected (960, 540) but it landed at (720, 405), factors would be 960/720=1.33 and 540/405=1.33.',
     inputSchema: {
       type: 'object',
@@ -632,6 +658,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_get_calibration',
+    handler: handle_pikvm_get_calibration,
     description: 'Get current mouse calibration state. Returns null if not calibrated.',
     inputSchema: {
       type: 'object',
@@ -640,6 +667,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_clear_calibration',
+    handler: handle_pikvm_clear_calibration,
     description: 'Clear mouse calibration, reverting to uncalibrated mode.',
     inputSchema: {
       type: 'object',
@@ -648,6 +676,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_unlock',
+    handler: handle_pikvm_ipad_unlock,
     description: 'Unlock an iPad from the lock screen: tries Escape/Enter/Space keys first (Enter unlocks iPadOS), then falls back to a USB-HID swipe-up. Idempotent on an already-unlocked iPad. Returns a post-unlock screenshot.',
     inputSchema: {
       type: 'object',
@@ -664,6 +693,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_detect_orientation',
+    handler: handle_pikvm_detect_orientation,
     description: 'Detect the iPad content bounds in the HDMI frame: returns rect (x/y/w/h), centre, orientation (portrait/landscape), and HDMI resolution. Rarely needed directly — unlock and move_to invoke it automatically.',
     inputSchema: {
       type: 'object',
@@ -674,6 +704,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_home',
+    handler: handle_pikvm_ipad_home,
     description: 'Return the iPad to the home screen via Cmd+H; idempotent there. Cmd+H does NOT dismiss the App Switcher — pass forceHomeViaSwipe:true for that. Does NOT unlock the lock screen — use pikvm_ipad_unlock.',
     inputSchema: {
       type: 'object',
@@ -686,6 +717,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_app_switcher',
+    handler: handle_pikvm_ipad_app_switcher,
     description: 'Open the iPad App Switcher (Cmd+Tab) and capture a screenshot of available apps. Cmd is held while screenshotting (so the switcher stays visible) then released, which selects the currently-focused app in the switcher. For multi-step switching, drive Cmd manually via pikvm_key.',
     inputSchema: {
       type: 'object',
@@ -696,6 +728,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_ipad_launch_app',
+    handler: handle_pikvm_ipad_launch_app,
     description: 'Launch an iPad app keyboard-first: unlock (optional) then Spotlight (Cmd+Space), type appName, Enter. More reliable than clicking an icon. If the app is not found the iPad returns home. Returns a post-launch screenshot.',
     inputSchema: {
       type: 'object',
@@ -711,6 +744,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_move_to',
+    handler: handle_pikvm_mouse_move_to,
     description: 'Move the pointer to a target HDMI pixel on a relative-mouse target (iPad). Default strategy on iPad is curve-one-shot: one detect + one deterministic curve emit (~11px). Use pikvm_mouse_click_at to move+click.',
     inputSchema: {
       type: 'object',
@@ -740,6 +774,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_mouse_click_at',
+    handler: handle_pikvm_mouse_click_at,
     description: 'Move to a target HDMI pixel via pikvm_mouse_move_to then click. verifyClick (default) reports whether the click changed the screen; maxRetries re-probes on no-change; a brightness gate aborts on a dim iPad.',
     inputSchema: {
       type: 'object',
@@ -781,6 +816,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_measure_ballistics',
+    handler: handle_pikvm_measure_ballistics,
     description: 'Characterise a relative-mouse target acceleration curve: slams to top-left, sweeps axis x magnitude x pace, and writes a ballistics profile used by move_to/click_at. One-off per device; takes minutes; blocks other tools.',
     inputSchema: {
       type: 'object',
@@ -829,6 +865,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_auto_calibrate',
+    handler: handle_pikvm_auto_calibrate,
     description: 'Auto-calibrate mouse coordinates by moving the cursor and diffing screenshots to locate it, then computing calibration factors. More accurate than manual pikvm_calibrate. Blocks other tools while running.',
     inputSchema: {
       type: 'object',
@@ -866,6 +903,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pikvm_seed_cursor_template',
+    handler: handle_pikvm_seed_cursor_template,
     description: 'Bootstrap cursor detection: emit a small relative move, diff before/after to find the cursor, save a 24×24 template to data/cursor-templates/. Run once after a fresh deploy or when that dir is cleared. Safe on iPad.',
     inputSchema: {
       type: 'object',
@@ -885,8 +923,19 @@ const tools: Tool[] = [
       },
     },
   },
+];
+
+// Descriptors for ListTools = the registry's descriptors (handler stripped) +
+// the skill tools (which route via isSkillTool/handleSkillToolCall in the
+// CallTool preamble, not through toolsByName). Dispatch map covers the 32
+// registry tools only; skill tools are handled before the lookup.
+const tools: Tool[] = [
+  ...toolRegistry.map(({ handler: _h, ...descriptor }) => descriptor),
   ...skillTools,
 ];
+const toolsByName = new Map<string, ToolEntry>(
+  toolRegistry.map((entry) => [entry.name, entry]),
+);
 
 // The in-band auth tool (opt-in, --allow-tool-login). Exposed ONLY when a login
 // gate is present AND the session is not yet authenticated; on success the full
@@ -922,140 +971,10 @@ const LOGIN_TOOL: Tool = {
 // `gate` (Streamable HTTP + --allow-tool-login only): when present, this session
 // exposes the `login` tool and gates every other tool until authenticated. The
 // stdio path and header-only auth pass no gate → identical, ungated behavior.
-export function createMcpServer(gate?: LoginGate): Server {
-  const server = new Server(
-    {
-      name: 'pikvm-mcp-server',
-      version: VERSION,
-    },
-    {
-      capabilities: {
-        tools: {},
-        prompts: {},
-      },
-    }
-  );
-
-  // Handle list prompts request
-server.setRequestHandler(ListPromptsRequestSchema, async () => {
-  return {
-    prompts: allPrompts.map((p) => ({
-      name: p.name,
-      description: p.description,
-      arguments: p.arguments?.map((a) => ({
-        name: a.name,
-        description: a.description,
-        required: a.required,
-      })),
-    })),
-  };
-});
-
-// Handle get prompt request
-server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-  const result = getPromptByName(name, args);
-  if (!result) {
-    throw new Error(`Unknown prompt: ${name}`);
-  }
-  return {
-    description: result.definition.description,
-    messages: result.messages,
-  };
-});
-
-// Handle list tools request
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  // Pre-auth (login gate present, session not yet authenticated): expose ONLY
-  // the login tool — don't leak the full tool surface before authentication.
-  if (gate && !gate.session.authenticated) {
-    return { tools: [LOGIN_TOOL] };
-  }
-  return { tools };
-});
-
-// Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args = {} } = request.params;
-
-  // Login gate (--allow-tool-login). The `login` tool is the ONLY tool callable
-  // on a pre-auth session; everything else is refused until it authenticates.
-  if (gate) {
-    if (name === 'login') {
-      const { username, password } = args as { username?: unknown; password?: unknown };
-      if (typeof username !== 'string' || typeof password !== 'string') {
-        return {
-          content: [{ type: 'text', text: 'Error: login requires string "username" and "password".' }],
-          isError: true,
-        };
-      }
-      if (gate.session.authenticated) {
-        return { content: [{ type: 'text', text: 'Already authenticated for this session.' }] };
-      }
-      // makeLoginGate validates via the same authorizer as the header path and
-      // flips session.authenticated on success. The password is never logged.
-      const ok = await gate.login(username, password);
-      return ok
-        ? {
-            content: [
-              {
-                type: 'text',
-                text: 'Authentication successful — session authorized. All tools are now available.',
-              },
-            ],
-          }
-        : {
-            content: [{ type: 'text', text: 'Error: authentication failed — invalid username or password.' }],
-            isError: true,
-          };
-    }
-    if (!gate.session.authenticated) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: "Error: authentication required — call the 'login' tool with your username and password first.",
-          },
-        ],
-        isError: true,
-      };
-    }
-  }
-
-  // Block other tools while a long-running op (auto-calibration or
-  // ballistics measurement) is in progress. The excluded tools are allowed
-  // through so their own handlers can return a more specific error.
-  if (lock.isBusy && name !== 'pikvm_auto_calibrate' && name !== 'pikvm_measure_ballistics') {
-    return {
-      content: [{ type: 'text', text: `Error: ${lock.holder} in progress, please wait.` }],
-      isError: true,
-    };
-  }
-
-  // Gate absolute-mouse-only tools when the target reports mouse.absolute=false.
-  // The relative-mode tools (pikvm_mouse_move with relative:true,
-  // pikvm_mouse_click_at, etc.) remain available.
-  if (!mouseAbsoluteMode) {
-    if (requiresAbsoluteMouse(name, args as Record<string, unknown>)) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error: tool '${name}' requires absolute-mode mouse. ${ABSOLUTE_MOUSE_NOTE}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-  }
-
-  try {
-    if (isSkillTool(name)) {
-      return handleSkillToolCall(name, args);
-    }
-
-    switch (name) {
-      case 'pikvm_version': {
+// --- Cand-6: per-tool handlers (verbatim from the former CallTool switch).
+//     Each is bound to its descriptor in `toolRegistry` below; dispatch is
+//     toolsByName.get(name).handler. Bodies are unchanged.
+async function handle_pikvm_version(args: Record<string, unknown>): Promise<CallToolResult> {
         return {
           content: [
             {
@@ -1064,9 +983,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_health_check': {
+async function handle_pikvm_health_check(args: Record<string, unknown>): Promise<CallToolResult> {
         // Orchestration lives in pikvm/health-check.ts so it is unit-testable
         // with a stub client. It reconciles the in-process mouseAbsoluteMode
         // flag against the live HID profile and returns the refreshed value.
@@ -1077,9 +996,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text', text: health.lines.join('\n') }],
         };
-      }
+}
 
-      case 'pikvm_screenshot': {
+async function handle_pikvm_screenshot(args: Record<string, unknown>): Promise<CallToolResult> {
         const opts = {
           maxWidth: validateNumber(args.maxWidth, 1, 10000),
           maxHeight: validateNumber(args.maxHeight, 1, 10000),
@@ -1117,9 +1036,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_snapshot': {
+async function handle_pikvm_snapshot(args: Record<string, unknown>): Promise<CallToolResult> {
         // M5: file-only capture. No inline image — persists the frame and returns
         // just the path, so large frames don't flow through the conversation.
         const savePath = requireString(args.savePath, 'savePath');
@@ -1150,9 +1069,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_get_resolution': {
+async function handle_pikvm_get_resolution(args: Record<string, unknown>): Promise<CallToolResult> {
         const resolution = await pikvm.getResolution(true); // force refresh
         return {
           content: [
@@ -1162,9 +1081,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_type': {
+async function handle_pikvm_type(args: Record<string, unknown>): Promise<CallToolResult> {
         const text = requireString(args.text, 'text');
         await pikvm.type(text, {
           keymap: validateString(args.keymap),
@@ -1176,9 +1095,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text', text: `Typed ${text.length} character(s): "${displayText}"` }],
         };
-      }
+}
 
-      case 'pikvm_key': {
+async function handle_pikvm_key(args: Record<string, unknown>): Promise<CallToolResult> {
         const key = requireString(args.key, 'key');
         const modifiers = validateStringArray(args.modifiers);
         const state = validateEnum(args.state, VALID_KEY_STATES, 'click');
@@ -1212,9 +1131,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_shortcut': {
+async function handle_pikvm_shortcut(args: Record<string, unknown>): Promise<CallToolResult> {
         const keys = requireStringArray(args.keys, 'keys', 1);
         if (keys.length > 10) {
           throw new Error('keys array must have at most 10 elements');
@@ -1223,9 +1142,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text', text: `Sent shortcut: ${keys.join('+')}` }],
         };
-      }
+}
 
-      case 'pikvm_screen_state': {
+async function handle_pikvm_screen_state(args: Record<string, unknown>): Promise<CallToolResult> {
         // Phase 189 introduced getStreamerStatus(); this case exposes
         // it as its own MCP tool. Cheaper than pikvm_health_check (a
         // single GET /streamer) and returns a clear { on: boolean }
@@ -1244,9 +1163,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [{ type: 'text', text: `Screen state: FAILED to read (${(err as Error).message}). PiKVM itself may be unreachable.` }],
           };
         }
-      }
+}
 
-      case 'pikvm_hid_reset': {
+async function handle_pikvm_hid_reset(args: Record<string, unknown>): Promise<CallToolResult> {
         const reconnectUsb = validateBoolean(args.reconnectUsb) ?? false;
         const settleMs = validateNumber(args.settleMs, 0, 30000);
         const after = await pikvm.resetHid({ reconnectUsb, settleMs });
@@ -1267,9 +1186,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Keep the in-process absolute-mode flag consistent with what we just read.
         mouseAbsoluteMode = after.mouseAbsolute;
         return { content: [{ type: 'text', text: lines.join('\n') }] };
-      }
+}
 
-      case 'pikvm_hid_recover': {
+async function handle_pikvm_hid_recover(args: Record<string, unknown>): Promise<CallToolResult> {
         const maxRung = (validateNumber(args.maxRung, 1, 4) ?? 3) as 1 | 2 | 3 | 4;
         const allowReboot = validateBoolean(args.allowReboot) ?? false;
         const verifier = makeBehavioralVerifier(pikvm);
@@ -1290,9 +1209,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           lines.push('Not recovered by the allowed rungs. Reboot (R3b) worked once and is the most reliable remote option: re-run with maxRung:4, allowReboot:true (needs the host recovery trigger configured).');
         }
         return { content: [{ type: 'text', text: lines.join('\n') }], isError: !result.recovered };
-      }
+}
 
-      case 'pikvm_usb_reconnect': {
+async function handle_pikvm_usb_reconnect(args: Record<string, unknown>): Promise<CallToolResult> {
         // M0: the everyday "reconnect the USB" fix — recoverHid capped at
         // udc-rebind (no destructive reboot), skipping the no-op kvmd soft-reset
         // (R1). Verify each rung by BOTH the ground-truth UDC state AND behavior,
@@ -1347,9 +1266,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{ type: 'text', text: `${summary}\n${JSON.stringify(report, null, 2)}` }],
           isError: !result.recovered,
         };
-      }
+}
 
-      case 'pikvm_ipad_unlock_with_code': {
+async function handle_pikvm_ipad_unlock_with_code(args: Record<string, unknown>): Promise<CallToolResult> {
         // 2026-06-03 user-provided keyboard-only unlock recipe.
         // unlockIpadWithCode validates code shape BEFORE any HID
         // activity so a malformed code doesn't half-type and trip
@@ -1362,9 +1281,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: `Unlock recipe fired (Space → wait → Space → wait → ${result.digitsSent} digits → Enter). Verify with pikvm_screen_state (expect on:true) and pikvm_screenshot. If wrong-passcode, iPadOS will show the shake animation and remain on the passcode prompt.`,
           }],
         };
-      }
+}
 
-      case 'pikvm_ipad_lock': {
+async function handle_pikvm_ipad_lock(args: Record<string, unknown>): Promise<CallToolResult> {
         // 2026-06-03: Ctrl+Cmd+Q is the standard macOS "Lock Screen"
         // shortcut and iPadOS honors it from an attached keyboard
         // (verified live on iPadOS 26). The iPad's HDMI output turns
@@ -1377,9 +1296,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: 'Sent Ctrl+Cmd+Q (iPadOS Lock Screen). Screen should turn off within 2 s. Verify with pikvm_screen_state (expect on:false). To unlock again: sendKey Enter (wakes the screen; on iPadOS 26 with no passcode also dismisses the lock screen).',
           }],
         };
-      }
+}
 
-      case 'pikvm_dismiss_popup': {
+async function handle_pikvm_dismiss_popup(args: Record<string, unknown>): Promise<CallToolResult> {
         // Phase 165: run the documented Phase 141 hidden-popup dismiss recipe.
         // Phase 172 extracted formatDismissResult so both formatting branches
         // are regression-pinned by unit tests.
@@ -1388,9 +1307,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text', text: formatDismissResult(result) }],
         };
-      }
+}
 
-      case 'pikvm_mouse_move': {
+async function handle_pikvm_mouse_move(args: Record<string, unknown>): Promise<CallToolResult> {
         const x = requireNumber(args.x, 'x');
         const y = requireNumber(args.y, 'y');
         const relative = validateBoolean(args.relative) ?? false;
@@ -1425,9 +1344,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_mouse_click': {
+async function handle_pikvm_mouse_click(args: Record<string, unknown>): Promise<CallToolResult> {
         const button = validateEnum(args.button, VALID_BUTTONS, 'left');
         const clickX = validateNumber(args.x, 0);
         const clickY = validateNumber(args.y, 0);
@@ -1449,9 +1368,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text', text: `${button} click` }],
         };
-      }
+}
 
-      case 'pikvm_mouse_scroll': {
+async function handle_pikvm_mouse_scroll(args: Record<string, unknown>): Promise<CallToolResult> {
         const deltaY = requireNumber(args.deltaY, 'deltaY');
         const deltaX = validateNumber(args.deltaX) ?? 0;
         // Optional pane targeting (M1): position the pointer at (x,y) before
@@ -1498,9 +1417,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_calibrate': {
+async function handle_pikvm_calibrate(args: Record<string, unknown>): Promise<CallToolResult> {
         const result = await pikvm.calibrate();
         return {
           content: [
@@ -1514,9 +1433,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_set_calibration': {
+async function handle_pikvm_set_calibration(args: Record<string, unknown>): Promise<CallToolResult> {
         const factorX = requireNumber(args.factorX, 'factorX');
         const factorY = requireNumber(args.factorY, 'factorY');
         pikvm.setCalibrationFactors(factorX, factorY);
@@ -1531,9 +1450,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_get_calibration': {
+async function handle_pikvm_get_calibration(args: Record<string, unknown>): Promise<CallToolResult> {
         const calibration = pikvm.getCalibration();
         if (calibration) {
           return {
@@ -1557,9 +1476,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ],
           };
         }
-      }
+}
 
-      case 'pikvm_clear_calibration': {
+async function handle_pikvm_clear_calibration(args: Record<string, unknown>): Promise<CallToolResult> {
         pikvm.clearCalibration();
         return {
           content: [
@@ -1569,9 +1488,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
-      }
+}
 
-      case 'pikvm_ipad_unlock': {
+async function handle_pikvm_ipad_unlock(args: Record<string, unknown>): Promise<CallToolResult> {
         const result = await unlockIpad(pikvm, {
           tryKeyPressFirst: validateBoolean(args.tryKeyPressFirst),
           swipeOnKeyPressFailure: validateBoolean(args.swipeOnKeyPressFailure),
@@ -1587,9 +1506,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
           ],
         };
-      }
+}
 
-      case 'pikvm_ipad_launch_app': {
+async function handle_pikvm_ipad_launch_app(args: Record<string, unknown>): Promise<CallToolResult> {
         const appName = requireString(args.appName, 'appName');
         const result = await launchIpadApp(pikvm, appName, {
           unlockFirst: validateBoolean(args.unlockFirst) ?? true,
@@ -1603,9 +1522,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
           ],
         };
-      }
+}
 
-      case 'pikvm_detect_orientation': {
+async function handle_pikvm_detect_orientation(args: Record<string, unknown>): Promise<CallToolResult> {
         const bounds = await detectIpadBounds(pikvm, {
           brightnessSum: validateNumber(args.brightnessSum, 0, 765),
         });
@@ -1620,9 +1539,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { type: 'text', text: JSON.stringify(bounds) },
           ],
         };
-      }
+}
 
-      case 'pikvm_ipad_home': {
+async function handle_pikvm_ipad_home(args: Record<string, unknown>): Promise<CallToolResult> {
         const result = await ipadGoHome(pikvm, {
           settleMs: validateNumber(args.settleMs, 0, 5000),
           forceHomeViaSwipe: validateBoolean(args.forceHomeViaSwipe),
@@ -1634,9 +1553,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
           ],
         };
-      }
+}
 
-      case 'pikvm_ipad_app_switcher': {
+async function handle_pikvm_ipad_app_switcher(args: Record<string, unknown>): Promise<CallToolResult> {
         const result = await ipadOpenAppSwitcher(pikvm, {
           holdMs: validateNumber(args.holdMs, 100, 5000),
         });
@@ -1646,9 +1565,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
           ],
         };
-      }
+}
 
-      case 'pikvm_mouse_move_to': {
+async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promise<CallToolResult> {
         const tx = requireNumber(args.x, 'x');
         const ty = requireNumber(args.y, 'y');
         // M8: parse+validate capture up front so a bad request errors before
@@ -1711,9 +1630,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
           ],
         };
-      }
+}
 
-      case 'pikvm_mouse_click_at': {
+async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promise<CallToolResult> {
         const tx = requireNumber(args.x, 'x');
         const ty = requireNumber(args.y, 'y');
         const button = validateEnum(args.button, VALID_BUTTONS, 'left');
@@ -1949,9 +1868,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             { type: 'image', data: shot.buffer.toString('base64'), mimeType: 'image/jpeg' },
           ],
         };
-      }
+}
 
-      case 'pikvm_measure_ballistics': {
+async function handle_pikvm_measure_ballistics(args: Record<string, unknown>): Promise<CallToolResult> {
         if (lock.isBusy) {
           return {
             content: [{ type: 'text', text: 'Ballistics measurement is already in progress.' }],
@@ -2001,9 +1920,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } finally {
           lock.release();
         }
-      }
+}
 
-      case 'pikvm_seed_cursor_template': {
+async function handle_pikvm_seed_cursor_template(args: Record<string, unknown>): Promise<CallToolResult> {
         const result = await seedCursorTemplate(pikvm, {
           emitDx: args?.emitDx !== undefined ? Number(args.emitDx) : undefined,
           emitDy: args?.emitDy !== undefined ? Number(args.emitDy) : undefined,
@@ -2013,9 +1932,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{ type: 'text', text: JSON.stringify(result) }],
           isError: !result.ok,
         };
-      }
+}
 
-      case 'pikvm_auto_calibrate': {
+async function handle_pikvm_auto_calibrate(args: Record<string, unknown>): Promise<CallToolResult> {
         if (lock.isBusy) {
           return {
             content: [{ type: 'text', text: 'Auto-calibration is already in progress.' }],
@@ -2052,11 +1971,145 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } finally {
           lock.release();
         }
-      }
+}
 
-      default:
-        throw new Error(`Unknown tool: ${name}`);
+export function createMcpServer(gate?: LoginGate): Server {
+  const server = new Server(
+    {
+      name: 'pikvm-mcp-server',
+      version: VERSION,
+    },
+    {
+      capabilities: {
+        tools: {},
+        prompts: {},
+      },
     }
+  );
+
+  // Handle list prompts request
+server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  return {
+    prompts: allPrompts.map((p) => ({
+      name: p.name,
+      description: p.description,
+      arguments: p.arguments?.map((a) => ({
+        name: a.name,
+        description: a.description,
+        required: a.required,
+      })),
+    })),
+  };
+});
+
+// Handle get prompt request
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+  const result = getPromptByName(name, args);
+  if (!result) {
+    throw new Error(`Unknown prompt: ${name}`);
+  }
+  return {
+    description: result.definition.description,
+    messages: result.messages,
+  };
+});
+
+// Handle list tools request
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  // Pre-auth (login gate present, session not yet authenticated): expose ONLY
+  // the login tool — don't leak the full tool surface before authentication.
+  if (gate && !gate.session.authenticated) {
+    return { tools: [LOGIN_TOOL] };
+  }
+  return { tools };
+});
+
+// Handle tool calls
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args = {} } = request.params;
+
+  // Login gate (--allow-tool-login). The `login` tool is the ONLY tool callable
+  // on a pre-auth session; everything else is refused until it authenticates.
+  if (gate) {
+    if (name === 'login') {
+      const { username, password } = args as { username?: unknown; password?: unknown };
+      if (typeof username !== 'string' || typeof password !== 'string') {
+        return {
+          content: [{ type: 'text', text: 'Error: login requires string "username" and "password".' }],
+          isError: true,
+        };
+      }
+      if (gate.session.authenticated) {
+        return { content: [{ type: 'text', text: 'Already authenticated for this session.' }] };
+      }
+      // makeLoginGate validates via the same authorizer as the header path and
+      // flips session.authenticated on success. The password is never logged.
+      const ok = await gate.login(username, password);
+      return ok
+        ? {
+            content: [
+              {
+                type: 'text',
+                text: 'Authentication successful — session authorized. All tools are now available.',
+              },
+            ],
+          }
+        : {
+            content: [{ type: 'text', text: 'Error: authentication failed — invalid username or password.' }],
+            isError: true,
+          };
+    }
+    if (!gate.session.authenticated) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: "Error: authentication required — call the 'login' tool with your username and password first.",
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  // Block other tools while a long-running op (auto-calibration or
+  // ballistics measurement) is in progress. The excluded tools are allowed
+  // through so their own handlers can return a more specific error.
+  if (lock.isBusy && name !== 'pikvm_auto_calibrate' && name !== 'pikvm_measure_ballistics') {
+    return {
+      content: [{ type: 'text', text: `Error: ${lock.holder} in progress, please wait.` }],
+      isError: true,
+    };
+  }
+
+  // Gate absolute-mouse-only tools when the target reports mouse.absolute=false.
+  // The relative-mode tools (pikvm_mouse_move with relative:true,
+  // pikvm_mouse_click_at, etc.) remain available.
+  if (!mouseAbsoluteMode) {
+    if (requiresAbsoluteMouse(name, args as Record<string, unknown>)) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error: tool '${name}' requires absolute-mode mouse. ${ABSOLUTE_MOUSE_NOTE}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  try {
+    if (isSkillTool(name)) {
+      return handleSkillToolCall(name, args);
+    }
+
+    const entry = toolsByName.get(name);
+    if (!entry) {
+      throw new Error(`Unknown tool: ${name}`);
+    }
+    return await entry.handler(args as Record<string, unknown>);
   } catch (error) {
     // Sanitize error messages to avoid exposing sensitive information
     let message: string;
