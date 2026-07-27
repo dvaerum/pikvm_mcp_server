@@ -1114,7 +1114,16 @@ export async function clickAtWithRetry(
     const predownDir = loadSettings().movement.predownDir;
     if (predownDir) {
       try {
-        const predownShot = await client.screenshot();
+        // Use the cursor-alive capture so the proof frame actually SHOWS
+        // the cursor at the click point. A plain screenshot can land after
+        // the cursor auto-hid (the preShot/decode/template round-trips above
+        // burn enough time to cross the fade threshold), producing a
+        // cursorless frame — useless for "where was it about to click?".
+        // The ±1 keepalive nudge is net-zero, so the recorded position is
+        // still the click position.
+        const predownShot = client.screenshotKeepingCursorAlive
+          ? await client.screenshotKeepingCursorAlive()
+          : await client.screenshot();
         const fs = await import('fs');
         const path = await import('path');
         await fs.promises.mkdir(predownDir, { recursive: true });
