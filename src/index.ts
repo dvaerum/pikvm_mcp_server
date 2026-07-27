@@ -50,6 +50,7 @@ import {
   clickAtWithRetry,
   defaultMaxRetriesFor,
   defaultMaxResidualPxFor,
+  residualForSkip,
   defaultChunkPaceMsFor,
   runDismissRecipe,
   formatDismissResult,
@@ -1876,6 +1877,43 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
             ],
             isError: true,
           };
+        }
+        // Phase 88 correct-element gate, MIGRATED into the single-shot path for
+        // the retry-removal (it previously lived ONLY inside clickAtWithRetry).
+        // Even a VERIFIED cursor can sit too far from target — motion-diff can
+        // lock onto an adjacent feature, and a click 50-100px off registers on
+        // the wrong element (live-verified 2026-04-27: residual 78px activated
+        // the Apple Account row instead of Software Update). Skip rather than
+        // click the wrong thing. iPad-only (desktop positions by coordinates);
+        // maxResidualPx<=0/undefined disables the gate.
+        if (!mouseAbsoluteMode && result.finalDetectedPosition) {
+          const maxResidualPx = args.maxResidualPx !== undefined
+            ? Number(args.maxResidualPx)
+            : defaultMaxResidualPxFor(mouseAbsoluteMode);
+          if (maxResidualPx !== undefined && maxResidualPx > 0) {
+            const skipResidual = residualForSkip(
+              result.finalDetectedPosition, { x: tx, y: ty }, maxResidualPx,
+            );
+            if (skipResidual !== null) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text:
+                      result.message +
+                      `\nClick NOT performed: the cursor landed ${skipResidual.toFixed(1)}px from ` +
+                      `target (> maxResidualPx=${maxResidualPx}) — clicking would risk hitting an ` +
+                      `adjacent element, so no ${button} click was sent. Loosen maxResidualPx if a ` +
+                      `near-target click is acceptable; if a popup may be occluding the target, run ` +
+                      `pikvm_dismiss_popup then re-click.` +
+                      formatCaptureLines(captured),
+                  },
+                  { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+                ],
+                isError: true,
+              };
+            }
+          }
         }
         // Brief pause so iPadOS registers the cursor as stationary before click
         await new Promise((r) => setTimeout(r, 80));
