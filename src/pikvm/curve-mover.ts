@@ -118,6 +118,49 @@ export interface CurveOneShotOptions {
   curveScaleY?: number;
 }
 
+// Faded-cursor wake (M2). A fully-faded iPad pointer is invisible, so V8
+// start-detection fails and curve-one-shot can't compute its move. A
+// net-neutral relative jiggle un-fades the pointer in place (absolute moves are
+// a no-op on iPad — M1), after which detection succeeds. Params validated live
+// on the real rig (georgs 2026-07-27, full-fade 15s A/B: control 0/20 → wake
+// 20/20): 8 alternating emits of ±35px X / ±25px Y, ~70ms apart, ~200ms settle,
+// then re-detect. Fired ONLY on a detection failure, so the visible-cursor hot
+// path (detects first try) adds zero motion/latency.
+export const WAKE_EMIT_COUNT = 8;
+export const WAKE_EMIT_DX = 35;
+export const WAKE_EMIT_DY = 25;
+const WAKE_EMIT_PACE_MS = 70;
+const WAKE_SETTLE_MS = 200;
+
+/** The relative-emit sequence for the faded-cursor wake: `WAKE_EMIT_COUNT`
+ *  alternating-sign emits of (±WAKE_EMIT_DX, ±WAKE_EMIT_DY). The alternation
+ *  sums to a NET-ZERO displacement (even count) so the pointer un-fades in
+ *  place — the subsequent detect finds it where it faded, not somewhere new.
+ *  Pure + exported so the pattern is unit-tested without a live rig. */
+export function planWakeEmits(): Array<[number, number]> {
+  const emits: Array<[number, number]> = [];
+  for (let i = 0; i < WAKE_EMIT_COUNT; i++) {
+    const sign = i % 2 === 0 ? 1 : -1;
+    emits.push([sign * WAKE_EMIT_DX, sign * WAKE_EMIT_DY]);
+  }
+  return emits;
+}
+
+/** Apply the wake jiggle then re-detect once. Returns the detected cursor, or
+ *  null if the pointer is genuinely absent (not merely faded) — the caller then
+ *  fails honestly rather than clicking blind. */
+async function wakeCursorAndRedetect(
+  client: PiKVMClient,
+  minPresence: number,
+): Promise<{ x: number; y: number } | null> {
+  for (const [dx, dy] of planWakeEmits()) {
+    await client.mouseMoveRelative(dx, dy);
+    await sleep(WAKE_EMIT_PACE_MS);
+  }
+  await sleep(WAKE_SETTLE_MS);
+  return detect(client, minPresence);
+}
+
 async function detect(client: PiKVMClient, minPresence: number): Promise<{ x: number; y: number } | null> {
   const shot = await client.screenshot({ quality: 80 });
   // Route the "where is the cursor?" call through the single CursorLocator front
@@ -202,7 +245,16 @@ export async function moveByCurveOneShot(
   const minPresence = options.minPresence ?? 0.5;
   const resolution = await client.getResolution(true);
 
-  const start = await detect(client, minPresence);
+  // Detect the cursor. On failure (typically a fully-faded pointer), wake it
+  // with a net-neutral relative jiggle and re-detect ONCE before giving up
+  // (M2). Detect-failure-only: a visible cursor detects first try and never
+  // pays the wake cost.
+  let start = await detect(client, minPresence);
+  let woken = false;
+  if (!start) {
+    start = await wakeCursorAndRedetect(client, minPresence);
+    woken = start !== null;
+  }
   const shotAfterStart = await client.screenshot({ quality: 80 });
   const base = {
     screenshot: shotAfterStart.buffer,
@@ -221,7 +273,7 @@ export async function moveByCurveOneShot(
     return {
       ...base, emittedMickeys: { x: 0, y: 0 }, chunkCount: 0, diagnostics: [],
       finalDetectedPosition: null, finalResidualPx: null,
-      message: 'curve-one-shot: V8 start detection failed (no cursor found)',
+      message: 'curve-one-shot: V8 start detection failed (no cursor found, even after faded-cursor wake)',
     };
   }
 
@@ -264,6 +316,6 @@ export async function moveByCurveOneShot(
     diagnostics: [],
     finalDetectedPosition: landed,
     finalResidualPx: landed ? dist(landed, target) : null,
-    message: landed ? `curve-one-shot: landed ${dist(landed, target).toFixed(1)}px from target` : 'curve-one-shot: verify detection failed after move',
+    message: landed ? `curve-one-shot: landed ${dist(landed, target).toFixed(1)}px from target${woken ? ' (after faded-cursor wake)' : ''}` : 'curve-one-shot: verify detection failed after move',
   };
 }

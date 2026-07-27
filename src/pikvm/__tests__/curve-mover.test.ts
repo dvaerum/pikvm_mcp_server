@@ -1,5 +1,46 @@
 import { describe, it, expect } from 'vitest';
-import { mickeysForReport, planAxisEmits, EMIT_CURVE_X, FULL_REPORT_PX } from '../curve-mover.js';
+import {
+  mickeysForReport,
+  planAxisEmits,
+  EMIT_CURVE_X,
+  FULL_REPORT_PX,
+  planWakeEmits,
+  WAKE_EMIT_COUNT,
+  WAKE_EMIT_DX,
+  WAKE_EMIT_DY,
+} from '../curve-mover.js';
+
+// M2 faded-cursor wake: the relative-jiggle emit sequence that un-fades a fully
+// faded iPad pointer so V8 start-detection can find it (georgs live full-fade
+// A/B: control 0/20 → wake 20/20). Pattern must be net-zero so it un-fades in
+// place, not relocate the cursor.
+describe('planWakeEmits (faded-cursor wake jiggle)', () => {
+  it('emits WAKE_EMIT_COUNT alternating-sign ±dx/±dy relative moves', () => {
+    const emits = planWakeEmits();
+    expect(emits).toHaveLength(WAKE_EMIT_COUNT);
+    for (const [dx, dy] of emits) {
+      expect(Math.abs(dx)).toBe(WAKE_EMIT_DX);
+      expect(Math.abs(dy)).toBe(WAKE_EMIT_DY);
+    }
+    // Alternating sign: [+,+], [-,-], [+,+], ...
+    expect(emits[0]).toEqual([WAKE_EMIT_DX, WAKE_EMIT_DY]);
+    expect(emits[1]).toEqual([-WAKE_EMIT_DX, -WAKE_EMIT_DY]);
+  });
+
+  it('sums to a NET-ZERO displacement (un-fades in place, does not relocate)', () => {
+    const sum = planWakeEmits().reduce(
+      (a, [dx, dy]) => ({ x: a.x + dx, y: a.y + dy }),
+      { x: 0, y: 0 },
+    );
+    expect(sum).toEqual({ x: 0, y: 0 });
+  });
+
+  it('uses the live-validated magnitudes (±35px X / ±25px Y, 8 emits)', () => {
+    expect(WAKE_EMIT_COUNT).toBe(8);
+    expect(WAKE_EMIT_DX).toBe(35);
+    expect(WAKE_EMIT_DY).toBe(25);
+  });
+});
 
 describe('mickeysForReport (invert the single-report curve)', () => {
   it('maps 0 px to 0 mickeys', () => {
