@@ -8,6 +8,9 @@ import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import {
   detectIpadBoundsFromBuffer,
+  detectBoundsFromBufferOrNull,
+  ipadContentRegionFromBuffer,
+  boundsToRegion,
   clearOrientationCache,
   getLastGoodBounds,
   slamOriginFromBounds,
@@ -102,6 +105,54 @@ describe('detectIpadBoundsFromBuffer', () => {
     expect(result.orientation).toBe('landscape');
     expect(cached2!.orientation).toBe('landscape');
     expect(cached2!.width).not.toBe(cached1!.width);
+  });
+});
+
+describe('boundsToRegion', () => {
+  it('narrows bounds to an {x,y,width,height} crop rect (drops centre/orientation/resolution)', () => {
+    const region = boundsToRegion({
+      x: 616, y: 48, width: 688, height: 984,
+      centerX: 960, centerY: 540, orientation: 'portrait',
+      resolution: { width: 1920, height: 1080 },
+    });
+    expect(region).toEqual({ x: 616, y: 48, width: 688, height: 984 });
+  });
+});
+
+describe('detectBoundsFromBufferOrNull', () => {
+  it('returns bounds for a valid iPad frame', async () => {
+    clearOrientationCache();
+    const frame = await makeFrame(1920, 1080, 616, 48, 688, 984);
+    const bounds = await detectBoundsFromBufferOrNull(frame);
+    expect(bounds).not.toBeNull();
+    expect(bounds!.orientation).toBe('portrait');
+  });
+
+  it('returns null instead of throwing on an all-black frame', async () => {
+    clearOrientationCache();
+    const black = await makeFrame(640, 480, 0, 0, 0, 0);
+    await expect(detectBoundsFromBufferOrNull(black)).resolves.toBeNull();
+  });
+});
+
+describe('ipadContentRegionFromBuffer', () => {
+  it('returns the iPad-content crop region for a valid frame', async () => {
+    clearOrientationCache();
+    const frame = await makeFrame(1920, 1080, 616, 48, 688, 984);
+    const region = await ipadContentRegionFromBuffer(frame);
+    expect(region).toBeDefined();
+    // Same rect the detector reports, narrowed to {x,y,width,height}.
+    expect(region!.x).toBeGreaterThanOrEqual(615);
+    expect(region!.x).toBeLessThanOrEqual(617);
+    expect(region!.width).toBeGreaterThanOrEqual(686);
+    expect(region!.width).toBeLessThanOrEqual(690);
+    expect(Object.keys(region!).sort()).toEqual(['height', 'width', 'x', 'y']);
+  });
+
+  it('returns undefined (→ full-frame analysis) when bounds cannot be detected', async () => {
+    clearOrientationCache();
+    const black = await makeFrame(640, 480, 0, 0, 0, 0);
+    await expect(ipadContentRegionFromBuffer(black)).resolves.toBeUndefined();
   });
 });
 
