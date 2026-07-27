@@ -1807,6 +1807,31 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
               ? '1 attempt'
               : `${r.attempts} attempts (${r.success ? 'succeeded' : 'all failed'})`;
           const summaryText = r.failureSummary ? `\n${r.failureSummary}` : '';
+          // False-success safety fix (2026-07-27): if EVERY attempt skipped
+          // (cursor never verified — no button-down was ever sent), we must NOT
+          // report "Clicked". A skipped-all run means no click landed; saying
+          // "Clicked at approximate position" is the false success that let a
+          // caller believe a PIN/payment tap happened when it did not.
+          const anyClickFired = r.attemptHistory.some((a) => !a.skippedClickReason);
+          if (!anyClickFired) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text:
+                    r.finalMoveResult.message +
+                    `\nClick NOT performed: cursor position could not be verified across ${attemptsText}, ` +
+                    `so no ${button} click was sent (clicking blind risks hitting the wrong target — ` +
+                    `e.g. an adjacent key or a payment control). ` +
+                    r.finalVerification.message +
+                    summaryText +
+                    formatCaptureLines(captured),
+                },
+                { type: 'image', data: r.postClickScreenshot.toString('base64'), mimeType: 'image/jpeg' },
+              ],
+              isError: true,
+            };
+          }
           return {
             content: [
               {
@@ -1825,6 +1850,33 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         }
 
         const result = await moveToPixel(pikvm, { x: tx, y: ty }, moveOpts);
+        // False-success safety fix (2026-07-27): on a relative-mouse (iPad)
+        // target a null finalDetectedPosition means the mover could NOT verify
+        // where the cursor is — e.g. a fully-faded cursor makes curve-one-shot's
+        // V8 start-detection fail. Clicking blind taps the stale faded position,
+        // not the target — unacceptable for a PIN/payment. Report NOT-LANDED
+        // instead of firing. (Desktop/absolute positions by coordinates, not
+        // detection, so this gate is iPad-only.) The single-shot path — which
+        // singleTap/keypad mode and the no-retry default use — had no such gate,
+        // so a faded tap fired blind and read as success. The M2 wake-before-
+        // detect fix restores real landings here; until then we skip truthfully.
+        if (!mouseAbsoluteMode && result.finalDetectedPosition === null) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text:
+                  result.message +
+                  `\nClick NOT performed: the cursor position could not be verified ` +
+                  `(the pointer is likely faded/off-screen), so no ${button} click was sent. ` +
+                  `Wake the cursor first (a small pikvm_mouse_move) or retry once the screen is active.` +
+                  formatCaptureLines(captured),
+              },
+              { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+            ],
+            isError: true,
+          };
+        }
         // Brief pause so iPadOS registers the cursor as stationary before click
         await new Promise((r) => setTimeout(r, 80));
         // Pre-click screenshot AFTER cursor has settled at target, so the
