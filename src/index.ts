@@ -25,6 +25,12 @@ import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
 import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
+import {
+  parseCaptureConfig,
+  capturePhaseAdvisory,
+  formatCaptureLines,
+  type CaptureSaved,
+} from './pikvm/capture.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
@@ -226,6 +232,32 @@ function validateEnum<T extends string>(value: unknown, allowed: readonly T[], d
 
 const VALID_BUTTONS = ['left', 'right', 'middle', 'up', 'down'] as const;
 const VALID_KEY_STATES = ['press', 'release', 'click'] as const;
+
+// M8: shared before/during/after capture schema, spread into the three mouse
+// tools (click_at, move, move_to). Undefined/empty capture = OFF (zero
+// behavior change). See src/pikvm/capture.ts for the semantics.
+const CAPTURE_SCHEMA_PROPS = {
+  capture: {
+    type: 'array',
+    items: { type: 'string', enum: ['before', 'during', 'after'] },
+    description: 'M8: advisory frame capture around this operation. Any subset of ["before","during","after"]. "before" = baseline before any emit (plain screenshot). "during" = the frame where the cursor is guaranteed rendered — grabbed via the net-zero cursor-alive nudge at the operation\'s business end (for click_at: right after the final positioning emit, BEFORE button-down; for move/move_to: end-of-move, pre-fade). "after" = post-op (post-click / post-settle). Each phase writes ${capturePrefix}-${phase}.jpg and the saved paths+sizes come back in the result. NEVER alters the click/move outcome — only adds latency for the phases requested. Omit or pass [] to disable.',
+  },
+  capturePrefix: {
+    type: 'string',
+    description: 'M8: path prefix for capture frames (REQUIRED when capture is non-empty). Writes ${capturePrefix}-before.jpg / -during.jpg / -after.jpg; parent directories are created.',
+  },
+  captureRegion: {
+    type: 'object',
+    description: 'M8: optional crop { x, y, width, height } in HDMI-screenshot px applied to every capture frame. Default = full frame.',
+    properties: {
+      x: { type: 'number' },
+      y: { type: 'number' },
+      width: { type: 'number' },
+      height: { type: 'number' },
+    },
+    required: ['x', 'y', 'width', 'height'],
+  },
+} as const;
 
 // Define available tools
 const tools: Tool[] = [
@@ -508,6 +540,7 @@ const tools: Tool[] = [
           type: 'boolean',
           description: 'If true, move relative to current position (delta -127 to 127). Default: false (absolute pixel position)',
         },
+        ...CAPTURE_SCHEMA_PROPS,
       },
       required: ['x', 'y'],
     },
@@ -697,6 +730,7 @@ const tools: Tool[] = [
         maxCorrectionPasses: { type: 'number', description: 'Max correction passes. Default 5.' },
         minResidualPx: { type: 'number', description: 'Early-exit threshold (px) for correction loop. Default 25.' },
         warmupMickeys: { type: 'number', description: 'Tiny move emitted before screenshot A so cursor renders. Default 8 mickeys.' },
+        ...CAPTURE_SCHEMA_PROPS,
       },
       required: ['x', 'y'],
     },
@@ -737,6 +771,7 @@ const tools: Tool[] = [
         minBrightness: { type: 'number', description: 'Brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness AND stddev (Phase 48). The gate aborts with a "wake the iPad" error ONLY when the frame is uniformly dim (mean < threshold AND stddev < 3) — dark-mode UI passes the gate because the high stddev from text/icon contrast indicates cursor will still be detectable. Default 35 on iPad targets (Phase 39 calibrated against live data: 29 = popup overlay, 41 = bright iPad with dark wallpaper); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
         autoUnlockOnDetectFail: { type: 'boolean', description: 'Phase 72: when an attempt fails because the iPad is on the lock screen (Phase 70 found this is the dominant detect-then-move failure mode), automatically call ipadGoHome to unlock and retry once before giving up on this attempt. SIDE EFFECT: if the iPad is INSIDE AN APP and detect-then-move fails for some other reason, this will exit the app to home — not what you want for in-app clicks. Default false (preserve manual control). Set true for fire-and-forget click_at on a fresh iPad target where you don\'t care about app state.' },
         maxResidualPx: { type: 'number', description: 'Phase 88: skip the click if the verified cursor is more than this many pixels from the target. Useful when callers care about CORRECT element hit, not just "screen changed". Live-verified failure mode (2026-04-27): residual 78 px caused a click targeting Settings → Software Update to instead activate the Apple Account sidebar row. Pass a positive integer to set the tolerance (e.g. 25 for strict icon-tolerance clicks, 50 for "near-enough is fine"). Default 25 on iPad (relative-mouse) targets — the gate is ON so an off-target move skips instead of launching the wrong app; 0/undefined on desktop. Override the default without redeploy via PIKVM_CLICK_MAX_RESIDUAL_PX (a number, or "off"/0 to disable).' },
+        ...CAPTURE_SCHEMA_PROPS,
       },
       required: ['x', 'y'],
     },
@@ -1356,6 +1391,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const x = requireNumber(args.x, 'x');
         const y = requireNumber(args.y, 'y');
         const relative = validateBoolean(args.relative) ?? false;
+        // M8: parse capture before any emit (throws on a bad request).
+        const capture = parseCaptureConfig(args);
+        const captured: (CaptureSaved | null)[] = [];
+        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'before'));
         let calibrationWarning = '';
         if (relative) {
           // Relative moves are clamped to -127 to 127 in the client
@@ -1369,13 +1408,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             calibrationWarning = '\n⚠️ Resolution changed - calibration has been cleared. Recalibrate with pikvm_auto_calibrate (preferred) or pikvm_calibrate.';
           }
         }
+        if (capture) {
+          captured.push(await capturePhaseAdvisory(pikvm, capture, 'during'));
+          captured.push(await capturePhaseAdvisory(pikvm, capture, 'after'));
+        }
         return {
           content: [
             {
               type: 'text',
               text: (relative
                 ? `Moved mouse by (${x}, ${y})`
-                : `Moved mouse to pixel (${Math.max(0, Math.round(x))}, ${Math.max(0, Math.round(y))})`) + calibrationWarning,
+                : `Moved mouse to pixel (${Math.max(0, Math.round(x))}, ${Math.max(0, Math.round(y))})`) + calibrationWarning + formatCaptureLines(captured),
             },
           ],
         };
@@ -1589,6 +1632,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'pikvm_mouse_move_to': {
         const tx = requireNumber(args.x, 'x');
         const ty = requireNumber(args.y, 'y');
+        // M8: parse+validate capture up front so a bad request errors before
+        // any emit (throws → caught by the handler's error wrapper).
+        const capture = parseCaptureConfig(args);
+        const captured: (CaptureSaved | null)[] = [];
+        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'before'));
         const strategyStr = validateEnum(
           args.strategy,
           ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'] as const,
@@ -1632,9 +1680,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             forbidSlamFallback: !mouseAbsoluteMode,
           },
         );
+        if (capture) {
+          // "during" = end-of-move cursor-alive frame (before the ~1-2s fade);
+          // "after" = a post-move frame confirming the landed state.
+          captured.push(await capturePhaseAdvisory(pikvm, capture, 'during'));
+          captured.push(await capturePhaseAdvisory(pikvm, capture, 'after'));
+        }
         return {
           content: [
-            { type: 'text', text: result.message },
+            { type: 'text', text: result.message + formatCaptureLines(captured) },
             { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
           ],
         };
@@ -1644,6 +1698,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const tx = requireNumber(args.x, 'x');
         const ty = requireNumber(args.y, 'y');
         const button = validateEnum(args.button, VALID_BUTTONS, 'left');
+        // M8: parse capture up front (throws on a bad request, before any
+        // emit). "before" is a baseline grabbed now; "during" is the
+        // pre-button-down cursor-alive frame (retry path → clickAtWithRetry;
+        // single-shot → captured here); "after" reuses the post-click frame.
+        const capture = parseCaptureConfig(args);
+        const captured: (CaptureSaved | null)[] = [];
+        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'before'));
         const strategyStr = validateEnum(
           args.strategy,
           ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'] as const,
@@ -1795,8 +1856,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               maxResidualPx: args.maxResidualPx !== undefined
                 ? Number(args.maxResidualPx)
                 : defaultMaxResidualPxFor(mouseAbsoluteMode),
+              // M8: the orchestrator writes the "during" frame at its
+              // pre-button-down point (the final attempt wins).
+              capture,
             },
           );
+          // M8: "during" came back from the orchestrator; "after" reuses the
+          // already-captured post-click frame (no extra screenshot).
+          if (capture) {
+            captured.push(r.duringCapture ?? null);
+            captured.push(
+              await capturePhaseAdvisory(pikvm, capture, 'after', r.postClickScreenshot),
+            );
+          }
           const attemptsText =
             r.attempts === 1
               ? '1 attempt'
@@ -1811,7 +1883,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   `\nClicked ${button} at approximate position. ` +
                   `Phase 25 retry-on-miss ran ${attemptsText}. ` +
                   r.finalVerification.message +
-                  summaryText,
+                  summaryText +
+                  formatCaptureLines(captured),
               },
               { type: 'image', data: r.postClickScreenshot.toString('base64'), mimeType: 'image/jpeg' },
             ],
@@ -1824,10 +1897,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Pre-click screenshot AFTER cursor has settled at target, so the
         // pre→post diff isolates the click's UI effect from cursor motion.
         const preShot = verifyClick ? await pikvm.screenshot() : null;
+        // M8: "during" = pre-button-down cursor-alive frame (single-shot path;
+        // the retry path captures this inside clickAtWithRetry). Same point as
+        // the predown proof-shot.
+        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'during'));
         await pikvm.mouseClick(button);
         // Wait for the UI to render before capturing the post-click frame.
         await new Promise((r) => setTimeout(r, verifySettleMs));
         const shot = await pikvm.screenshot();
+        // M8: "after" reuses the post-click frame (no extra screenshot).
+        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'after', shot.buffer));
 
         let verificationText = '';
         if (verifyClick && preShot) {
@@ -1850,7 +1929,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 result.message +
                 `\nClicked ${button} at approximate position. Post-click screenshot attached.` +
                 singleTapNote +
-                verificationText,
+                verificationText +
+                formatCaptureLines(captured),
             },
             { type: 'image', data: shot.buffer.toString('base64'), mimeType: 'image/jpeg' },
           ],

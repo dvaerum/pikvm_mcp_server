@@ -11,7 +11,11 @@
  * return success=false with the final state.
  */
 
-import { describe, expect, it } from 'vitest';
+import { promises as fsp } from 'node:fs';
+import os from 'node:os';
+import nodePath from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { clickAtWithRetry } from '../click-verify.js';
 import type { PiKVMClient, ScreenResolution } from '../client.js';
@@ -579,6 +583,61 @@ describe('clickAtWithRetry', () => {
           minBrightness: 0,
         }),
       ).resolves.toBeDefined();
+    }, 30000);
+  });
+
+  // M8: the orchestrator writes the "during" (pre-button-down cursor-alive)
+  // frame when options.capture requests it, and returns it as duringCapture.
+  describe('M8 capture:["during"]', () => {
+    let tmpDir: string;
+    beforeEach(async () => {
+      tmpDir = await fsp.mkdtemp(nodePath.join(os.tmpdir(), 'm8-retry-'));
+    });
+    afterEach(async () => {
+      await fsp.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('writes ${prefix}-during.jpg and returns duringCapture', async () => {
+      const grey = await uniformPng(100, 100, 128);
+      const changed = await pngWithRect(100, 100, 128, { x: 10, y: 10, w: 30, h: 30, gray: 250 });
+      const client = new ScriptedClient();
+      client.beforeClickFrame = grey;
+      client.postClickFrames = [changed];
+      const prefix = nodePath.join(tmpDir, 'op');
+
+      const result = await clickAtWithRetry(client as unknown as PiKVMClient, { x: 50, y: 50 }, {
+        maxRetries: 2,
+        moveToOptions: FAST_MOVE_OPTS,
+        preClickSettleMs: 0,
+        postClickSettleMs: 0,
+        requireVerifiedCursor: false,
+        minBrightness: 0,
+        capture: { phases: ['during'], prefix },
+      });
+
+      expect(result.duringCapture).not.toBeNull();
+      expect(result.duringCapture!.phase).toBe('during');
+      expect(result.duringCapture!.path).toBe(nodePath.resolve(`${prefix}-during.jpg`));
+      await expect(fsp.stat(result.duringCapture!.path)).resolves.toBeTruthy();
+    }, 30000);
+
+    it('leaves duringCapture null when no capture is requested', async () => {
+      const grey = await uniformPng(100, 100, 128);
+      const changed = await pngWithRect(100, 100, 128, { x: 10, y: 10, w: 30, h: 30, gray: 250 });
+      const client = new ScriptedClient();
+      client.beforeClickFrame = grey;
+      client.postClickFrames = [changed];
+
+      const result = await clickAtWithRetry(client as unknown as PiKVMClient, { x: 50, y: 50 }, {
+        maxRetries: 2,
+        moveToOptions: FAST_MOVE_OPTS,
+        preClickSettleMs: 0,
+        postClickSettleMs: 0,
+        requireVerifiedCursor: false,
+        minBrightness: 0,
+      });
+
+      expect(result.duringCapture ?? null).toBeNull();
     }, 30000);
   });
 });

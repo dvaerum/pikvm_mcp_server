@@ -279,4 +279,39 @@ describe('MCP tool schema and handler exposure', () => {
       expect(handler).toMatch(/rungUsed/);
     });
   });
+
+  describe('M8 — before/during/after capture on the mouse tools', () => {
+    it('the shared CAPTURE_SCHEMA_PROPS defines capture / capturePrefix / captureRegion', async () => {
+      const src = await readIndexTs();
+      // capture: string[] enum before|during|after
+      expect(src).toMatch(/capture:\s*\{[\s\S]*?enum:\s*\['before',\s*'during',\s*'after'\]/);
+      expect(src).toMatch(/capturePrefix:\s*\{[^}]*type:\s*'string'/);
+      expect(src).toMatch(/captureRegion:\s*\{[\s\S]*?type:\s*'object'/);
+    });
+
+    for (const tool of ['pikvm_mouse_click_at', 'pikvm_mouse_move', 'pikvm_mouse_move_to']) {
+      it(`${tool} spreads CAPTURE_SCHEMA_PROPS into its schema`, async () => {
+        const src = await readIndexTs();
+        const block = extractToolBlock(src, tool);
+        expect(block).toMatch(/\.\.\.CAPTURE_SCHEMA_PROPS/);
+      });
+
+      it(`${tool} handler parses capture and captures advisorily`, async () => {
+        const src = await readIndexTs();
+        const handler = extractHandlerBlock(src, tool);
+        expect(handler).toMatch(/parseCaptureConfig\(args\)/);
+        expect(handler).toMatch(/capturePhaseAdvisory\(/);
+      });
+    }
+
+    it('click_at retry path forwards capture to clickAtWithRetry and returns its duringCapture', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      // capture is threaded into the orchestrator options...
+      expect(handler).toMatch(/capture,\n/);
+      // ...and its during frame is read back, with "after" reusing postClickScreenshot.
+      expect(handler).toMatch(/r\.duringCapture/);
+      expect(handler).toMatch(/capturePhaseAdvisory\(pikvm, capture, 'after', r\.postClickScreenshot\)/);
+    });
+  });
 });

@@ -34,6 +34,8 @@ import { findCursorByV8FullFrame } from './cursor-ml-detect.js';
 import { ipadGoHome } from './ipad-unlock.js';
 import { keepCursorAlive } from './cursor-keepalive.js';
 import { slamToCorner } from './ballistics.js';
+import { cursorAliveGrab, type CaptureConfig, type CaptureSaved } from './capture.js';
+import { saveSnapshot } from './snapshot.js';
 
 /**
  * Phase 127 — sanity-clamp the live px/mickey ratio reported by
@@ -296,6 +298,13 @@ export interface ClickAtWithRetryOptions {
   postClickSettleMs?: number;
   /** Threshold + region options forwarded to verifyClickByDiff. */
   verifyOptions?: ClickVerifyOptions;
+  /** M8: per-call capture request. When it includes the "during" phase, the
+   *  pre-button-down cursor-alive proof-shot (the same grab the
+   *  PIKVM_PREDOWN_DIR diagnostic uses) is ALSO written to
+   *  `${prefix}-during.jpg`. Advisory — a capture failure never breaks the
+   *  click. On multi-attempt runs the final attempt's frame wins (the frame of
+   *  the click that actually fired). Result comes back in `duringCapture`. */
+  capture?: CaptureConfig;
   /** Options forwarded to moveToPixel for each attempt. Default uses
    *  detect-then-move with forbidSlamFallback=true (iPad-safe). */
   moveToOptions?: MoveToOptions;
@@ -477,6 +486,9 @@ export interface ClickAtWithRetryResult {
    *  Null when ≥ 2 distinct failure classes ran, when only one attempt
    *  ran, or when at least one attempt was not a recognised skip. */
   failureSummary: string | null;
+  /** M8: the "during" capture (pre-button-down cursor-alive frame) written for
+   *  the final attempt, when `options.capture` requested it. Null otherwise. */
+  duringCapture?: CaptureSaved | null;
 }
 
 /**
@@ -500,6 +512,11 @@ export async function clickAtWithRetry(
     forbidSlamFallback: true,
   };
   const verifyOptions: ClickVerifyOptions = options.verifyOptions ?? {};
+  const capture = options.capture;
+  // M8: the final attempt's "during" (pre-button-down cursor-alive) capture,
+  // returned to the caller. Overwritten each attempt so it reflects the click
+  // that actually fired.
+  let duringCapture: CaptureSaved | null = null;
   const requireVerifiedCursor = options.requireVerifiedCursor ?? true;
   const minBrightness = options.minBrightness ?? VERY_DIM_THRESHOLD;
   // Phase 194-D (v0.5.189): tried 0.75 to catch the Firefox-instead-of-
@@ -1135,29 +1152,41 @@ export async function clickAtWithRetry(
     // mouseClick fires. This is the diagnostic for "where was the
     // cursor at click-issue time?" — the algorithm's understanding
     // of cursor position the instant the click event is sent.
+    // Both the env-gated PIKVM_PREDOWN_DIR proof-shot and the M8
+    // capture:["during"] request want the SAME pre-button-down frame: one
+    // where the cursor is guaranteed rendered at the click point. A plain
+    // screenshot can land after the cursor auto-hid (the preShot/decode/
+    // template round-trips above burn enough time to cross the fade
+    // threshold), producing a cursorless frame — useless for "where was it
+    // about to click?" (fixed in e3d9295). So grab ONCE via the shared
+    // cursor-alive helper (net-zero ±1 nudge → recorded position is still the
+    // click position) and fan it out to whichever sinks are active.
     const predownDir = loadSettings().movement.predownDir;
-    if (predownDir) {
+    const wantDuring = capture?.phases.includes('during') ?? false;
+    if (predownDir || wantDuring) {
       try {
-        // Use the cursor-alive capture so the proof frame actually SHOWS
-        // the cursor at the click point. A plain screenshot can land after
-        // the cursor auto-hid (the preShot/decode/template round-trips above
-        // burn enough time to cross the fade threshold), producing a
-        // cursorless frame — useless for "where was it about to click?".
-        // The ±1 keepalive nudge is net-zero, so the recorded position is
-        // still the click position.
-        const predownShot = client.screenshotKeepingCursorAlive
-          ? await client.screenshotKeepingCursorAlive()
-          : await client.screenshot();
-        const fs = await import('fs');
-        const path = await import('path');
-        await fs.promises.mkdir(predownDir, { recursive: true });
-        const fname = `predown-${Date.now()}-att${attempt}.jpg`;
-        await fs.promises.writeFile(
-          path.join(predownDir, fname),
-          predownShot.buffer,
-        );
+        const predownBuffer = await cursorAliveGrab(client);
+        if (predownDir) {
+          await fs.mkdir(predownDir, { recursive: true });
+          await fs.writeFile(
+            path.join(predownDir, `predown-${Date.now()}-att${attempt}.jpg`),
+            predownBuffer,
+          );
+        }
+        if (wantDuring && capture) {
+          // Final attempt wins (overwrites): the "during" frame is the
+          // pre-button-down state of the click that actually fired.
+          duringCapture = {
+            phase: 'during',
+            ...(await saveSnapshot(
+              predownBuffer,
+              `${capture.prefix}-during.jpg`,
+              capture.region,
+            )),
+          };
+        }
       } catch {
-        // Ignore capture errors — diagnostic must not break the click.
+        // Advisory: capture must never break the click.
       }
     }
 
@@ -1270,6 +1299,7 @@ export async function clickAtWithRetry(
     failureSummary: lastVerification!.screenChanged
       ? null
       : summariseFailureClass(attemptHistory),
+    duringCapture,
   };
 }
 
