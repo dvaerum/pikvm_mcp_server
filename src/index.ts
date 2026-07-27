@@ -1020,7 +1020,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Orchestration lives in pikvm/health-check.ts so it is unit-testable
         // with a stub client. It reconciles the in-process mouseAbsoluteMode
         // flag against the live HID profile and returns the refreshed value.
-        const health = await runHealthCheck(pikvm, { mouseAbsoluteMode });
+        // M4: read the ground-truth UDC state (null if the endpoint isn't wired).
+        const udcState = await getUdcStateReader()();
+        const health = await runHealthCheck(pikvm, { mouseAbsoluteMode, udcState });
         mouseAbsoluteMode = health.mouseAbsoluteMode;
         return {
           content: [{ type: 'text', text: health.lines.join('\n') }],
