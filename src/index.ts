@@ -577,13 +577,16 @@ const tools: Tool[] = [
     description:
       'Scroll the mouse wheel on the remote machine. Optionally target a pane first: pass x,y ' +
       '(screenshot pixels) to move the pointer there before scrolling, so the scroll lands on the ' +
-      'intended pane instead of wherever the pointer happened to be. Omit x,y to scroll in place.',
+      'intended pane instead of wherever the pointer happened to be. Omit x,y to scroll in place. ' +
+      'Large deltas are automatically chunked into repeated ±20 wheel events: the USB-HID wheel is ' +
+      'a signed byte and a single large value (e.g. 500) silently wraps to a no-op on iPad — pass ' +
+      'the full amount you want and let the tool chunk it.',
     inputSchema: {
       type: 'object',
       properties: {
         x: {
           type: 'number',
-          description: 'Optional target X (screenshot pixels). Requires y. Moves the pointer here (absolute) before scrolling.',
+          description: 'Optional target X (screenshot pixels). Requires y. Moves the pointer here before scrolling, via the same platform-aware path as click_at (curve-one-shot on iPad / detect-then-move on desktop).',
         },
         y: {
           type: 'number',
