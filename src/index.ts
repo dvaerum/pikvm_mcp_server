@@ -47,9 +47,9 @@ import {
 import { moveToPixel } from './pikvm/move-to.js';
 import {
   verifyClickByDiff,
-  clickAtWithRetry,
-  defaultMaxRetriesFor,
   defaultMaxResidualPxFor,
+  residualForSkip,
+  isScreenTooDimForCursorDetection,
   defaultChunkPaceMsFor,
   runDismissRecipe,
   formatDismissResult,
@@ -775,7 +775,7 @@ const toolRegistry: ToolEntry[] = [
   {
     name: 'pikvm_mouse_click_at',
     handler: handle_pikvm_mouse_click_at,
-    description: 'Move to a target HDMI pixel via pikvm_mouse_move_to then click. verifyClick (default) reports whether the click changed the screen; maxRetries re-probes on no-change; a brightness gate aborts on a dim iPad.',
+    description: 'Move to a target HDMI pixel via pikvm_mouse_move_to then click (single attempt — no retry). verifyClick (default) reports whether the click changed the screen (advisory); the click is skipped (reported not-landed) if the cursor cannot be verified or lands beyond maxResidualPx of target; a brightness gate aborts on a dim iPad. If a click reports no change and you suspect an occluding popup, run pikvm_dismiss_popup then re-click.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -804,8 +804,7 @@ const toolRegistry: ToolEntry[] = [
           required: ['x', 'y', 'width', 'height'],
         },
         verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
-        maxRetries: { type: 'number', description: 'When >0, retry the click up to N times if click verification reports no screen change. Each retry runs a fresh detect-then-move probe (NOT compound corrections — independent trials). Default: 3 on iPad (relative-mouse) targets where per-attempt hit rate is ~50% — four attempts give ~88% cumulative hit rate plus headroom for the hidden-popup auto-dismiss recipe to fire on each retry; 0 on desktop (absolute-mouse) targets where single-shot is reliable. Pass 0 explicitly to opt out (single-shot). Requires verifyClick=true.' },
-        singleTap: { type: 'boolean', description: 'KEYPAD MODE (M6): tap the target EXACTLY ONCE and NEVER re-fire based on verification. For keypads / PIN pads / any target whose tap effect is sub-threshold or unobservable — a legit tap there makes a tiny (or invisible) screen change, so the normal retry-on-no-change would re-tap the SAME key and corrupt input (one "1" → "11"). With singleTap:true, verification is ADVISORY only (the screenChanged/diff is still reported so you can judge whether it likely registered, but it never triggers a re-tap). Forces maxRetries=0 and defaults minBrightness=0 (so a dimmed PIN-sheet modal does not false-abort). Default false.' },
+        singleTap: { type: 'boolean', description: 'KEYPAD MODE (M6): defaults minBrightness=0 so a dimmed PIN-sheet modal does not false-abort the tap, and marks the call as a keypad tap in the result. (Every click is now single-attempt with no re-fire — the tap-retry mechanism was removed 2026-07-28 because it double-fired keypads; positioning is single-shot-reliable and faded cursors are recovered by the built-in wake — so singleTap no longer needs to suppress a retry.) Verification is advisory (screenChanged/diff reported, never acted on). Default false.' },
         minBrightness: { type: 'number', description: 'Brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness AND stddev (Phase 48). The gate aborts with a "wake the iPad" error ONLY when the frame is uniformly dim (mean < threshold AND stddev < 3) — dark-mode UI passes the gate because the high stddev from text/icon contrast indicates cursor will still be detectable. Default 35 on iPad targets (Phase 39 calibrated against live data: 29 = popup overlay, 41 = bright iPad with dark wallpaper); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
         autoUnlockOnDetectFail: { type: 'boolean', description: 'Phase 72: when an attempt fails because the iPad is on the lock screen (Phase 70 found this is the dominant detect-then-move failure mode), automatically call ipadGoHome to unlock and retry once before giving up on this attempt. SIDE EFFECT: if the iPad is INSIDE AN APP and detect-then-move fails for some other reason, this will exit the app to home — not what you want for in-app clicks. Default false (preserve manual control). Set true for fire-and-forget click_at on a fresh iPad target where you don\'t care about app state.' },
         maxResidualPx: { type: 'number', description: 'Phase 88: skip the click if the verified cursor is more than this many pixels from the target. Useful when callers care about CORRECT element hit, not just "screen changed". Live-verified failure mode (2026-04-27): residual 78 px caused a click targeting Settings → Software Update to instead activate the Apple Account sidebar row. Pass a positive integer to set the tolerance (e.g. 25 for strict icon-tolerance clicks, 50 for "near-enough is fine"). Default 25 on iPad (relative-mouse) targets — the gate is ON so an off-target move skips instead of launching the wrong app; 0/undefined on desktop. Override the default without redeploy via PIKVM_CLICK_MAX_RESIDUAL_PX (a number, or "off"/0 to disable).' },
@@ -1677,20 +1676,10 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
             height: requireNumber(er.height, 'expectRegion.height'),
           };
         }
-        // Phase 94: default to 2 retries on iPad (relative-mouse), 0 on
-        // desktop (absolute-mouse). Single-shot click_at is ~50% reliable
-        // on tiny iPad targets (verified Phase 70 bench), ~88% with
-        // retries=2. Phase 95 extracted defaultMaxRetriesFor so the
-        // mapping is unit-tested.
-        // M6 keypad mode: tap once, never re-fire on verification. Forces the
-        // single-shot path (maxRetries=0), where verify is already advisory-only.
+        // Retry removed (2026-07-28): every click is single-attempt. `singleTap`
+        // is retained only for its brightness default + advisory note (its old
+        // "force maxRetries=0" effect is now the universal behavior).
         const singleTap = validateBoolean(args.singleTap) ?? false;
-        const maxRetriesArg = validateNumber(args.maxRetries, 0, 10);
-        const maxRetries = singleTap
-          ? 0
-          : maxRetriesArg !== undefined
-            ? maxRetriesArg
-            : defaultMaxRetriesFor(mouseAbsoluteMode);
         // Phase 38 / v0.5.26: explicit MCP parameter for the brightness gate.
         // Default mirrors the auto-policy: VERY_DIM_THRESHOLD on iPad
         // targets (relative-mouse), 0 elsewhere. Pass 0 explicitly to disable.
@@ -1732,13 +1721,11 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
             : {}),
         };
 
-        // Phase 38: brightness precheck. The retry path (maxRetries>0) does
-        // this inside clickAtWithRetry (we pass minBrightness through). On
-        // the single-shot path (maxRetries=0) we run the gate here.
+        // Phase 38: brightness precheck (single-attempt path — always runs).
         // Phase 38b (v0.5.27): scope the brightness measurement to detected
         // iPad bounds so letterbox bars don't trigger false-positive dim
         // verdicts on a bright iPad-portrait screen.
-        if (minBrightness > 0 && maxRetries === 0) {
+        if (minBrightness > 0) {
           try {
             const shot0 = await pikvm.screenshot();
             // Scope brightness to iPad content so letterbox bars don't trigger
@@ -1746,7 +1733,19 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
             // non-iPad target (no letterbox to confuse the mean).
             const region = await ipadContentRegionFromBuffer(shot0.buffer, { verbose: false });
             const brightness = await analyzeBrightness(shot0.buffer, { region });
-            if (brightness.mean < minBrightness) {
+            // Phase 48 severity gate (restored 2026-07-28): abort ONLY on a
+            // UNIFORMLY dim frame (low mean AND low stddev → 'very-dim'), not on
+            // any low-mean frame. A dark-but-CONTRASTY modal (a dimmed PIN sheet:
+            // mean ~27 but high stddev from the keypad digits → severity 'dim')
+            // is perfectly clickable and must pass. The removed retry path used
+            // this same predicate; the single-shot gate was mean-only, so
+            // removing retry made the strict mean-only gate the default and
+            // false-aborted contrasty-dim keypads (georgs rig-caught 2026-07-28).
+            if (isScreenTooDimForCursorDetection({
+              mean: brightness.mean,
+              severity: brightness.severity,
+              minBrightness,
+            })) {
               return {
                 content: [{
                   type: 'text',
@@ -1766,89 +1765,13 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
           }
         }
 
-        // Phase 25: when maxRetries > 0, use the retry orchestrator
-        // (clickAtWithRetry) which loops moveToPixel + click + verify
-        // until success or exhausted retries. When maxRetries === 0,
-        // preserve the single-shot path for backward compat.
-        if (verifyClick && maxRetries > 0) {
-          const r = await clickAtWithRetry(
-            pikvm,
-            { x: tx, y: ty },
-            {
-              maxRetries,
-              button,
-              preClickSettleMs: 80,
-              postClickSettleMs: verifySettleMs,
-              verifyOptions: verifyOpts,
-              moveToOptions: moveOpts,
-              minBrightness,
-              autoUnlockOnDetectFail: args.autoUnlockOnDetectFail === true,
-              // Phase 135: iPad targets get a 35 px default gate so the click
-              // doesn't silently land on an adjacent icon. Caller can override
-              // (or pass 0 to disable).
-              maxResidualPx: args.maxResidualPx !== undefined
-                ? Number(args.maxResidualPx)
-                : defaultMaxResidualPxFor(mouseAbsoluteMode),
-              // M8: the orchestrator writes the "during" frame at its
-              // pre-button-down point (the final attempt wins).
-              capture,
-            },
-          );
-          // M8: "during" came back from the orchestrator; "after" reuses the
-          // already-captured post-click frame (no extra screenshot).
-          if (capture) {
-            captured.push(r.duringCapture ?? null);
-            captured.push(
-              await capturePhaseAdvisory(pikvm, capture, 'after', r.postClickScreenshot),
-            );
-          }
-          const attemptsText =
-            r.attempts === 1
-              ? '1 attempt'
-              : `${r.attempts} attempts (${r.success ? 'succeeded' : 'all failed'})`;
-          const summaryText = r.failureSummary ? `\n${r.failureSummary}` : '';
-          // False-success safety fix (2026-07-27): if EVERY attempt skipped
-          // (cursor never verified — no button-down was ever sent), we must NOT
-          // report "Clicked". A skipped-all run means no click landed; saying
-          // "Clicked at approximate position" is the false success that let a
-          // caller believe a PIN/payment tap happened when it did not.
-          const anyClickFired = r.attemptHistory.some((a) => !a.skippedClickReason);
-          if (!anyClickFired) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text:
-                    r.finalMoveResult.message +
-                    `\nClick NOT performed: cursor position could not be verified across ${attemptsText}, ` +
-                    `so no ${button} click was sent (clicking blind risks hitting the wrong target — ` +
-                    `e.g. an adjacent key or a payment control). ` +
-                    r.finalVerification.message +
-                    summaryText +
-                    formatCaptureLines(captured),
-                },
-                { type: 'image', data: r.postClickScreenshot.toString('base64'), mimeType: 'image/jpeg' },
-              ],
-              isError: true,
-            };
-          }
-          return {
-            content: [
-              {
-                type: 'text',
-                text:
-                  r.finalMoveResult.message +
-                  `\nClicked ${button} at approximate position. ` +
-                  `Phase 25 retry-on-miss ran ${attemptsText}. ` +
-                  r.finalVerification.message +
-                  summaryText +
-                  formatCaptureLines(captured),
-              },
-              { type: 'image', data: r.postClickScreenshot.toString('base64'), mimeType: 'image/jpeg' },
-            ],
-          };
-        }
-
+        // Retry removed (2026-07-28): clicks are single-attempt. Positioning is
+        // deterministic (curve-one-shot ~2-3px; georgs N=40 retry-never-fired,
+        // 40/40==40/40), faded cursors are recovered by the M2 wake (#33), and
+        // the retry loop's only remaining effect was the keypad double-fire /
+        // dismiss-escape harm. All clicks go through the single-attempt path
+        // below, which carries the three safety gates: cursor-verify (#32),
+        // maxResidualPx correct-element, and brightness.
         const result = await moveToPixel(pikvm, { x: tx, y: ty }, moveOpts);
         // False-success safety fix (2026-07-27): on a relative-mouse (iPad)
         // target a null finalDetectedPosition means the mover could NOT verify
@@ -1876,6 +1799,43 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
             ],
             isError: true,
           };
+        }
+        // Phase 88 correct-element gate, MIGRATED into the single-shot path for
+        // the retry-removal (it previously lived ONLY inside clickAtWithRetry).
+        // Even a VERIFIED cursor can sit too far from target — motion-diff can
+        // lock onto an adjacent feature, and a click 50-100px off registers on
+        // the wrong element (live-verified 2026-04-27: residual 78px activated
+        // the Apple Account row instead of Software Update). Skip rather than
+        // click the wrong thing. iPad-only (desktop positions by coordinates);
+        // maxResidualPx<=0/undefined disables the gate.
+        if (!mouseAbsoluteMode && result.finalDetectedPosition) {
+          const maxResidualPx = args.maxResidualPx !== undefined
+            ? Number(args.maxResidualPx)
+            : defaultMaxResidualPxFor(mouseAbsoluteMode);
+          if (maxResidualPx !== undefined && maxResidualPx > 0) {
+            const skipResidual = residualForSkip(
+              result.finalDetectedPosition, { x: tx, y: ty }, maxResidualPx,
+            );
+            if (skipResidual !== null) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text:
+                      result.message +
+                      `\nClick NOT performed: the cursor landed ${skipResidual.toFixed(1)}px from ` +
+                      `target (> maxResidualPx=${maxResidualPx}) — clicking would risk hitting an ` +
+                      `adjacent element, so no ${button} click was sent. Loosen maxResidualPx if a ` +
+                      `near-target click is acceptable; if a popup may be occluding the target, run ` +
+                      `pikvm_dismiss_popup then re-click.` +
+                      formatCaptureLines(captured),
+                  },
+                  { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+                ],
+                isError: true,
+              };
+            }
+          }
         }
         // Brief pause so iPadOS registers the cursor as stationary before click
         await new Promise((r) => setTimeout(r, 80));

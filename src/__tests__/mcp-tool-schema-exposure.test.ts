@@ -154,10 +154,14 @@ describe('MCP tool schema and handler exposure', () => {
       expect(tool).toMatch(/autoUnlockOnDetectFail:\s*\{[^}]*type:\s*'boolean'/);
     });
 
-    it('Phase 25 maxRetries is in the schema', async () => {
+    it('tap-retry is REMOVED — no maxRetries knob, no clickAtWithRetry call', async () => {
       const src = await readIndexTs();
       const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
-      expect(tool).toMatch(/maxRetries:\s*\{[^}]*type:\s*'number'/);
+      // The maxRetries schema knob is gone (retry removed 2026-07-28).
+      expect(tool).not.toMatch(/maxRetries:\s*\{/);
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      // Handler no longer invokes the retry orchestrator.
+      expect(handler).not.toContain('clickAtWithRetry(');
     });
 
     it('verifyClick (Phase 23 verification) is in the schema', async () => {
@@ -172,14 +176,14 @@ describe('MCP tool schema and handler exposure', () => {
       expect(tool).toMatch(/singleTap:\s*\{[^}]*type:\s*'boolean'/);
     });
 
-    it('M6 handler forces maxRetries=0 and defaults minBrightness=0 under singleTap', async () => {
+    it('M6 singleTap defaults minBrightness=0 (retry removed → no maxRetries forcing)', async () => {
       const src = await readIndexTs();
       const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
       expect(handler).toMatch(/validateBoolean\(args\.singleTap\)/);
-      // singleTap forces the single-shot (no-retry) path...
-      expect(handler).toMatch(/singleTap[\s\S]{0,40}\?\s*0/);
-      // ...and defaults the brightness gate off so a dimmed PIN modal doesn't false-abort.
+      // singleTap defaults the brightness gate off so a dimmed PIN modal doesn't false-abort.
       expect(handler).toMatch(/singleTap \|\| mouseAbsoluteMode \? 0/);
+      // Retry is gone, so there is no maxRetries variable to force to 0.
+      expect(handler).not.toMatch(/const maxRetries =/);
     });
 
     it('M6 expectRegion object is in the schema (x,y,width,height)', async () => {
@@ -310,14 +314,13 @@ describe('MCP tool schema and handler exposure', () => {
       });
     }
 
-    it('click_at retry path forwards capture to clickAtWithRetry and returns its duringCapture', async () => {
+    it('click_at (single-attempt path) captures during pre-click and after post-click', async () => {
       const src = await readIndexTs();
       const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
-      // capture is threaded into the orchestrator options...
-      expect(handler).toMatch(/capture,\n/);
-      // ...and its during frame is read back, with "after" reusing postClickScreenshot.
-      expect(handler).toMatch(/r\.duringCapture/);
-      expect(handler).toMatch(/capturePhaseAdvisory\(pikvm, capture, 'after', r\.postClickScreenshot\)/);
+      // "during" = pre-button-down cursor-alive frame; "after" reuses the
+      // post-click screenshot buffer (no retry orchestrator involved).
+      expect(handler).toMatch(/capturePhaseAdvisory\(pikvm, capture, 'during'\)/);
+      expect(handler).toMatch(/capturePhaseAdvisory\(pikvm, capture, 'after', shot\.buffer\)/);
     });
   });
 
@@ -398,12 +401,14 @@ describe('MCP tool schema and handler exposure', () => {
       expect(handler).toMatch(/Click NOT performed/);
     });
 
-    it('retry path does not report "Clicked" when every attempt skipped', async () => {
+    it('migrated maxResidualPx correct-element gate skips an off-target click', async () => {
       const src = await readIndexTs();
       const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
-      // anyClickFired guard → not-landed isError branch when no button-down was sent.
-      expect(handler).toMatch(/anyClickFired = r\.attemptHistory\.some\(\(a\) => !a\.skippedClickReason\)/);
-      expect(handler).toMatch(/if \(!anyClickFired\)/);
+      // Phase-88 gate re-homed from the removed retry path into the single
+      // path: a verified-but-too-far cursor is a not-landed skip, not a click.
+      expect(handler).toMatch(/residualForSkip\(/);
+      expect(handler).toMatch(/maxResidualPx !== undefined && maxResidualPx > 0/);
+      expect(handler).toContain('adjacent element');
     });
   });
 });
