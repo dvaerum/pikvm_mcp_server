@@ -5,7 +5,6 @@
  * and the HTTP trigger's unconfigured behaviour. Pure/injected — no PiKVM.
  */
 import { describe, expect, it } from 'vitest';
-import sharp from 'sharp';
 import {
   isHidBroken,
   checkTargetPresent,
@@ -50,25 +49,38 @@ describe('checkTargetPresent (R0)', () => {
   });
 });
 
-describe('makeBehavioralVerifier', () => {
-  const solid = (v: number) => sharp(Buffer.alloc(8 * 8 * 3, v), { raw: { width: 8, height: 8, channels: 3 } }).jpeg().toBuffer();
-
-  it('reports healthy when the emit changes the screen', async () => {
+describe('makeBehavioralVerifier (fix-c: pointer-localizable, not bare screen diff)', () => {
+  const blank = Buffer.from('frame');
+  const client = { screenshot: async () => ({ buffer: blank }), mouseMoveRelative: async () => {} };
+  // `locate` is called twice per verify: [before-emit, after-emit].
+  const scripted = (positions: Array<{ x: number; y: number } | null>) => {
     let n = 0;
-    const frames = [await solid(0), await solid(255)]; // before, after differ
-    const client = {
-      screenshot: async () => ({ buffer: frames[Math.min(n++, 1)] }),
-      mouseMoveRelative: async () => {},
-    };
-    const v = await makeBehavioralVerifier(client, { settleMs: 0 }, fakeClock()).verify();
+    return async () => positions[Math.min(n++, positions.length - 1)];
+  };
+  const run = (positions: Array<{ x: number; y: number } | null>) =>
+    makeBehavioralVerifier(client, { settleMs: 0 }, { ...fakeClock(), locate: scripted(positions) }).verify();
+
+  it('healthy: the cursor is localizable AND moved with the emit', async () => {
+    const v = await run([{ x: 100, y: 100 }, { x: 140, y: 100 }]); // moved 40px
     expect(v.healthy).toBe(true);
+    expect(v.detail).toMatch(/moved the cursor/);
   });
 
-  it('reports unhealthy when the emit changes nothing (HID not driving input)', async () => {
-    const same = await solid(120);
-    const client = { screenshot: async () => ({ buffer: same }), mouseMoveRelative: async () => {} };
-    const v = await makeBehavioralVerifier(client, { settleMs: 0 }, fakeClock()).verify();
+  it('UNHEALTHY: cursor localizable but did NOT move — the clock-tick false-positive the old check let through', async () => {
+    const v = await run([{ x: 100, y: 100 }, { x: 101, y: 100 }]); // 1px < minMovePx
     expect(v.healthy).toBe(false);
+    expect(v.detail).toMatch(/did NOT move/);
+  });
+
+  it('UNHEALTHY: no localizable cursor after the emit — pointer not rendering', async () => {
+    const v = await run([{ x: 100, y: 100 }, null]);
+    expect(v.healthy).toBe(false);
+    expect(v.detail).toMatch(/NO localizable cursor/);
+  });
+
+  it('healthy: cursor not localizable before but the emit rendered/moved it into view', async () => {
+    const v = await run([null, { x: 120, y: 90 }]);
+    expect(v.healthy).toBe(true);
   });
 });
 
