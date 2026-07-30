@@ -290,6 +290,25 @@ describe('MCP tool schema and handler exposure', () => {
     });
   });
 
+  describe('(d) — HID-down vs HID-up-but-cursor-not-localizable discriminator', () => {
+    it('usb_reconnect appends the diagnosis on failure only', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_usb_reconnect');
+      // gated on !recovered — a success must NOT pay for an extra ORT inference
+      expect(handler).toMatch(/!result\.recovered && result\.targetPresent/);
+      expect(handler).toMatch(/diagnoseHidFromClient\(pikvm,\s*reader\)/);
+      expect(handler).toMatch(/describeHidDiagnosis\(/);
+    });
+
+    it('hid_recover appends the diagnosis on failure only', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_hid_recover');
+      expect(handler).toMatch(/!result\.recovered && result\.targetPresent/);
+      expect(handler).toMatch(/diagnoseHidFromClient\(pikvm,\s*getUdcStateReader\(\)\)/);
+      expect(handler).toMatch(/describeHidDiagnosis\(/);
+    });
+  });
+
   describe('M8 — before/during/after capture on the mouse tools', () => {
     it('the shared CAPTURE_SCHEMA_PROPS defines capture / capturePrefix / captureRegion', async () => {
       const src = await readIndexTs();

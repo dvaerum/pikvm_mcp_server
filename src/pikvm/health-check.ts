@@ -13,6 +13,7 @@ import { PiKVMClient } from './client.js';
 import { detectIpadBoundsFromBuffer, boundsToRegion } from './orientation.js';
 import { analyzeBrightness, formatBrightnessReport } from './brightness.js';
 import { type UdcState } from './hid-recovery.js';
+import { classifyHid, describeHidDiagnosis, defaultCursorLocator, type CursorLocator } from './hid-diagnosis.js';
 import { VERSION } from '../version.js';
 
 /** The subset of PiKVMClient the health check drives — a structural type so
@@ -38,6 +39,12 @@ export async function runHealthCheck(
      * → the report falls back to the (lying) kvmd flags with a note.
      */
     udcState?: UdcState | null;
+    /**
+     * (d): pointer localizer for the HID-down vs HID-up-but-cursor-not-localizable
+     * split. Injectable so unit tests never touch onnxruntime; defaults to the same
+     * V8 detector the mover/click use.
+     */
+    locateCursor?: CursorLocator;
   },
 ): Promise<HealthCheckResult> {
   let mouseAbsoluteMode = opts.mouseAbsoluteMode;
@@ -81,9 +88,18 @@ export async function runHealthCheck(
   // Live HID profile — re-read so a transient startup-detection failure
   // doesn't permanently mislead the operator.
   let hidFlags: { mouseOnline: boolean; keyboardOnline: boolean } | null = null;
+  // (d): HID up/down for the pointer-diagnosis below. Seeded from the kvmd flags
+  // (advisory — they LIE; overridden by the UDC ground truth when the endpoint is
+  // wired). Fall back to mouse OR keyboard online, NOT keyboard alone: live-observed
+  // 2026-07-30 that a healthy box (mouse clicking 4/4) reported keyboard=offline
+  // persistently, so a keyboard-only fallback emits a FALSE "HID DOWN → reconnect".
+  // Genuinely-dead HID showed BOTH flags offline, so "either online ⇒ not down" is
+  // the safe bar and matches this mouse-first product's pointer focus.
+  let hidUp: boolean | null = null;
   try {
     const hid = await pikvm.getHidProfile();
     hidFlags = { mouseOnline: hid.mouseOnline, keyboardOnline: hid.keyboardOnline };
+    hidUp = hid.mouseOnline || hid.keyboardOnline;
     lines.push(
       `Live HID profile: mouse=${hid.mouseOnline ? 'online' : 'offline'}/` +
       `${hid.mouseAbsolute ? 'absolute' : 'relative'}, ` +
@@ -119,6 +135,7 @@ export async function runHealthCheck(
       `falling back to the kvmd HID flags above, which may lie). Set PIKVM_HID_RECOVERY_URL to enable.`,
     );
   } else {
+    hidUp = udc.online; // UDC ground truth overrides the advisory kvmd flags
     lines.push(
       `USB HID gadget (ground truth): ${udc.state}${udc.udc ? ` [${udc.udc}]` : ''} — ` +
       `this is THE HID up/down signal.`,
@@ -156,6 +173,30 @@ export async function runHealthCheck(
     healthShot = await pikvm.screenshot();
   } catch (err) {
     lines.push(`Screenshot: FAILED (${(err as Error).message}). Cannot run bounds or brightness checks.`);
+  }
+
+  // (d): split the "HID broken" bucket. HID DOWN (input path dead) needs
+  // usb_reconnect; HID UP but cursor NOT LOCALIZABLE (gadget attached, pointer
+  // faded/off-screen) does NOT — usb_reconnect can't fix a pointer that isn't
+  // rendering. The verdict must ALWAYS print when we have a frame — including the
+  // confirmed-DOWN case (hidUp===false), which is the whole reason (d) exists and
+  // is the state that produced no guidance before. Skipping the ORT inference on a
+  // down gadget is a separate concern: only LOCALIZE when HID might be up, but
+  // classify + print either way.
+  if (healthShot) {
+    let cursor: { x: number; y: number } | null = null;
+    if (hidUp !== false) {
+      try {
+        cursor = await (opts.locateCursor ?? defaultCursorLocator)(healthShot.buffer);
+      } catch (err) {
+        lines.push(`Pointer localization: FAILED (${(err as Error).message}).`);
+      }
+    }
+    // udcConfirmed: a CONFIDENT/directive DOWN is allowed only when the verdict
+    // rests on UDC kernel state — with no reader wired (opts.udcState null) a
+    // flags-derived down is a NON-DIRECTIVE hedge, because the flags misreport DOWN
+    // on a working HID (live-observed both-offline while clicks landed).
+    lines.push(`  → ${describeHidDiagnosis(classifyHid({ hidUp, cursor, udcConfirmed: udc != null }))}`);
   }
 
   // Attempt iPad bounds detection — informative on portrait/landscape,

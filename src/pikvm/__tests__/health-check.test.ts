@@ -110,4 +110,138 @@ describe('runHealthCheck', () => {
       expect(r.lines.join('\n')).toMatch(/HID verdict: DOWN \(UDC absent\) → run pikvm_usb_reconnect/);
     });
   });
+
+  describe('(d) — HID DOWN vs HID UP-but-cursor-not-localizable', () => {
+    const withFrame = () => stubClient({ screenshot: async () => ({ buffer: Buffer.from('frame') }) });
+
+    it('HID UP (UDC configured) + cursor localizable ⇒ healthy pointer line', async () => {
+      const r = await runHealthCheck(withFrame(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: 'fe980000.usb', state: 'configured', online: true },
+        locateCursor: async () => ({ x: 640, y: 360 }),
+      });
+      const out = r.lines.join('\n');
+      expect(out).toMatch(/HID UP and cursor localizable at \(640,360\)/);
+    });
+
+    it('HID UP but cursor NOT LOCALIZABLE ⇒ the distinct diagnosis, and does NOT tell the operator to usb_reconnect', async () => {
+      const r = await runHealthCheck(withFrame(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: 'fe980000.usb', state: 'configured', online: true },
+        locateCursor: async () => null,
+      });
+      const out = r.lines.join('\n');
+      expect(out).toMatch(/HID UP but cursor NOT LOCALIZABLE/);
+      expect(out).toMatch(/pikvm_usb_reconnect will NOT help/);
+      expect(out).toMatch(/pikvm_mouse_move/);
+    });
+
+    it('HID DOWN (UDC not attached) SKIPS the pointer probe but STILL prints the DOWN verdict', async () => {
+      let located = false;
+      const r = await runHealthCheck(withFrame(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: 'fe980000.usb', state: 'not attached', online: false },
+        locateCursor: async () => { located = true; return { x: 1, y: 1 }; },
+      });
+      expect(located).toBe(false); // guard: hidUp===false ⇒ no ORT inference on a dead gadget
+      const out = r.lines.join('\n');
+      expect(out).not.toMatch(/cursor localizable/); // pointer was not probed
+      // …but the verdict MUST still print — this is the whole reason (d) exists.
+      expect(out).toMatch(/HID DOWN/);
+      expect(out).toMatch(/pikvm_usb_reconnect/);
+    });
+
+    it('STOCK box (no UDC endpoint) + BOTH flags offline ⇒ NON-DIRECTIVE hedge, never a confident reconnect directive', async () => {
+      // No UDC reader ⇒ the down signal is flags-only, which misreport DOWN on a
+      // working HID — so the verdict must HEDGE (confirm behaviorally), never emit a
+      // bare "run pikvm_usb_reconnect". A verdict still prints (the print-fix), it's
+      // just the suspected/non-directive one.
+      let located = false;
+      const r = await runHealthCheck(
+        stubClient({
+          screenshot: async () => ({ buffer: Buffer.from('frame') }),
+          hid: async () => ({ mouseOnline: false, mouseAbsolute: false, keyboardOnline: false }),
+        }),
+        {
+          mouseAbsoluteMode: false,
+          udcState: null,
+          locateCursor: async () => { located = true; return { x: 1, y: 1 }; },
+        },
+      );
+      expect(located).toBe(false);
+      const out = r.lines.join('\n');
+      expect(out).toMatch(/Possible HID-down|UNCONFIRMED/); // a verdict DID print
+      expect(out).toMatch(/confirm behaviorally/i);
+      // the crucial invariant: NO confident down directive on the flags-only path
+      expect(out).not.toMatch(/Fix: run pikvm_usb_reconnect/);
+      expect(out).not.toMatch(/HID DOWN \(UDC/);
+    });
+
+    it('REGRESSION (live 2026-07-30): stock box, mouse ONLINE + keyboard OFFLINE ⇒ must NOT say HID DOWN', async () => {
+      // The production rig: no UDC endpoint, kvmd persistently reports keyboard=offline
+      // while the mouse clicks 4/4. A keyboard-only fallback emitted a FALSE "HID DOWN
+      // → reconnect" on a healthy box. mouse||keyboard fallback ⇒ hidUp true ⇒ pointer
+      // is probed and the verdict is a pointer one, never HID DOWN.
+      const r = await runHealthCheck(
+        stubClient({
+          screenshot: async () => ({ buffer: Buffer.from('frame') }),
+          hid: async () => ({ mouseOnline: true, mouseAbsolute: false, keyboardOnline: false }),
+        }),
+        {
+          mouseAbsoluteMode: false,
+          udcState: null,
+          locateCursor: async () => null, // pointer faded on this staged frame
+        },
+      );
+      const out = r.lines.join('\n');
+      expect(out).not.toMatch(/HID DOWN/);
+      expect(out).not.toMatch(/Fix: run pikvm_usb_reconnect/); // directiveness
+      expect(out).toMatch(/HID UP but cursor NOT LOCALIZABLE/);
+    });
+
+    it('REGRESSION (symmetric, manager-required): stock box, keyboard ONLINE + mouse OFFLINE ⇒ must NOT say HID DOWN', async () => {
+      // Mirror of the case that bit us; mouse-alone fallback would false-DOWN this
+      // idle-mouse/active-keyboard session. either-online keeps it UP → pointer verdict.
+      const r = await runHealthCheck(
+        stubClient({
+          screenshot: async () => ({ buffer: Buffer.from('frame') }),
+          hid: async () => ({ mouseOnline: false, mouseAbsolute: false, keyboardOnline: true }),
+        }),
+        { mouseAbsoluteMode: false, udcState: null, locateCursor: async () => ({ x: 5, y: 5 }) },
+      );
+      const out = r.lines.join('\n');
+      expect(out).not.toMatch(/HID DOWN/);
+      expect(out).not.toMatch(/Fix: run pikvm_usb_reconnect/);
+      expect(out).toMatch(/HID UP and cursor localizable/);
+    });
+
+    it('DIRECTIVENESS: on the udc-unavailable path, NO flag shape prints the confident reconnect directive', async () => {
+      const shapes = [
+        { mouseOnline: false, keyboardOnline: false }, // both offline ⇒ suspected/hedge
+        { mouseOnline: true, keyboardOnline: false }, // the case that bit us
+        { mouseOnline: false, keyboardOnline: true }, // symmetric
+      ];
+      for (const s of shapes) {
+        const r = await runHealthCheck(
+          stubClient({
+            screenshot: async () => ({ buffer: Buffer.from('frame') }),
+            hid: async () => ({ ...s, mouseAbsolute: false }),
+          }),
+          { mouseAbsoluteMode: false, udcState: null, locateCursor: async () => null },
+        );
+        expect(r.lines.join('\n')).not.toMatch(/Fix: run pikvm_usb_reconnect/);
+      }
+    });
+
+    it('CONFIDENT directive IS allowed from UDC kernel state (not-attached ⇒ HID DOWN + reconnect)', async () => {
+      const r = await runHealthCheck(withFrame(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: 'fe980000.usb', state: 'not attached', online: false },
+        locateCursor: async () => null,
+      });
+      const out = r.lines.join('\n');
+      expect(out).toMatch(/HID DOWN \(UDC kernel state\)/);
+      expect(out).toMatch(/run pikvm_usb_reconnect/);
+    });
+  });
 });
