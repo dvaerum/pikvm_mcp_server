@@ -365,15 +365,21 @@ export async function moveByCurveOneShot(
   const acceptGatePx = options.acceptGatePx !== undefined && options.acceptGatePx > 0
     ? options.acceptGatePx
     : DEFAULT_ACCEPT_GATE_PX;
-  // The cap prevents a caller reopening the dead band with a FINITE gate above the
-  // acceptance gate. A NON-finite override (Infinity) is the explicit "disable the
-  // correction" door for calibration/measurement — capping it would silently force a
-  // correction and corrupt an open-loop measurement (georgs, 2026-07-31), and it's
-  // not the risk the cap guards (a disabled correction makes a click LESS likely, not
-  // a wrong-element hit). So cap finite overrides, pass non-finite through untouched.
-  const correctGatePx = options.correctGatePx !== undefined
-    ? (Number.isFinite(options.correctGatePx) ? Math.min(acceptGatePx, options.correctGatePx) : options.correctGatePx)
-    : deriveCorrectionGatePx(options.acceptGatePx);
+  // Correction gate selection:
+  //  - correctGatePx === Infinity → the explicit "disable the correction" door for
+  //    calibration/measurement of the raw open-loop error (a pure single shot).
+  //  - a FINITE override → honored but CAPPED at the acceptance gate (a caller can't
+  //    reopen the dead band with a gate above it).
+  //  - anything else, incl. undefined AND bogus non-finite (NaN from Number(unset
+  //    env), -Infinity) → DERIVE from the acceptance gate. Only Infinity is the
+  //    sentinel; a garbage knob must NEVER silently disable the safety net — that's
+  //    the exact silent-knob failure class this whole change exists to close.
+  const override = options.correctGatePx;
+  const correctGatePx = override === Infinity
+    ? Infinity
+    : (override !== undefined && Number.isFinite(override)
+        ? Math.min(acceptGatePx, override)
+        : deriveCorrectionGatePx(options.acceptGatePx));
   const correctMaxPx = options.correctMaxPx ?? 80;
   const landedRes = landed ? dist(landed, target) : Infinity;
   if (landed && landedRes > correctGatePx && landedRes < correctMaxPx) {

@@ -119,6 +119,15 @@ describe('moveByCurveOneShot — correction fires iff the shot would otherwise s
     expect(r.finalResidualPx).toBeCloseTo(28, 0);
   });
 
+  it('a NaN correctGatePx (e.g. Number(unset env)) does NOT silently disable the correction — falls back to derived', async () => {
+    // Only Infinity is the disable sentinel; a garbage knob must not quietly drop the
+    // safety net (the silent-knob class this change closes). NaN ⇒ derived gate 25 ⇒
+    // a 25.3px dead-band shot still corrects.
+    const r = await run([START, landedAt(25.3), landedAt(0.2)], { acceptGatePx: 25, correctGatePx: NaN });
+    expect(r.chunkCount).toBe(2);
+    expect(r.finalResidualPx).toBeLessThan(1);
+  });
+
   it('floor-collision: a sub-floor acceptance (5px) takes ONE correction, lands at the ~8px floor, does NOT spin', async () => {
     // acceptance below the achievable precision ⇒ derived gate = 8 (floor). An 18px
     // shot corrects once → ~8px; the mover allows exactly ONE correction (no loop),
