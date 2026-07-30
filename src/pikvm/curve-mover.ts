@@ -104,8 +104,12 @@ export interface CurveOneShotOptions {
   /** V8 presence gate for start/verify detection (default 0.5). */
   minPresence?: number;
   /** Run ONE correction shot (re-detect + re-shoot) only if the first shot's
-   *  residual is in the PLAUSIBLE miss band [correctGatePx, correctMaxPx].
-   *  Default gate 30. Set correctGatePx huge for a pure single shot. */
+   *  residual is in the PLAUSIBLE miss band (correctGatePx, correctMaxPx). Default:
+   *  DERIVED from the acceptance gate (see acceptGatePx) — correct iff the shot
+   *  would otherwise skip. A FINITE explicit value is honored but CAPPED at the
+   *  acceptance gate (a caller can't reopen the dead band). Pass
+   *  `correctGatePx: Infinity` to DISABLE the correction entirely — a pure open-loop
+   *  single shot, for calibration/measurement of the raw curve error. */
   correctGatePx?: number;
   /** Upper bound of the correction band (default 80px). A residual above this
    *  after a deterministic emit is a V8 false-positive, not a real miss — trust
@@ -116,6 +120,20 @@ export interface CurveOneShotOptions {
    *  measured.x / FULL_REPORT_PX, scaleY = measured.y / (FULL_REPORT_PX×Y_SCALE). */
   curveScaleX?: number;
   curveScaleY?: number;
+  /** The caller's acceptance gate (maxResidualPx). The mover DERIVES its correction
+   *  gate strictly below this (see deriveCorrectionGatePx) so a residual in the
+   *  [correctGate, accept) band is re-shot instead of silently skipped. Threaded from
+   *  the click_at handler; defaults to DEFAULT_ACCEPT_GATE_PX when absent (move_to). */
+  acceptGatePx?: number;
+}
+
+/** Detection seam — screenshot + locate the cursor. */
+type DetectFn = (client: PiKVMClient, minPresence: number) => Promise<{ x: number; y: number } | null>;
+
+/** Test-only injection seam for {@link moveByCurveOneShot}: a scriptable detector
+ *  that keeps unit tests off onnxruntime. Defaults to the real V8 detect. */
+export interface CurveOneShotDeps {
+  detect?: DetectFn;
 }
 
 // Faded-cursor wake (M2). A fully-faded iPad pointer is invisible, so V8
@@ -131,6 +149,47 @@ export const WAKE_EMIT_DX = 35;
 export const WAKE_EMIT_DY = 25;
 const WAKE_EMIT_PACE_MS = 70;
 const WAKE_SETTLE_MS = 200;
+
+// Correction-gate invariant (2026-07-31). The curve one-shot has a systematic,
+// near-deterministic open-loop error per geometry (measured spread 17.3–19.2px on a
+// long move; ~25.3px at one gate geometry). The mover already has a correction shot
+// to mop that up, but its gate (correctGatePx) was an independent default of 30,
+// which sat ABOVE the caller's acceptance gate (maxResidualPx=25) — so a residual in
+// the [25,30) DEAD BAND was rejected by the clicker yet never re-shot by the mover
+// (measured: 18.2px identical for faded/visible — the wake is net-zero; the confound
+// was move-distance, not woken-ness). Fix: DERIVE the correction gate FROM the
+// acceptance gate the caller threads in, so the two can't silently drift (that was
+// the move-to.ts hole).
+//
+// FRACTION = 1.0 (georgs-measured 2026-07-31): correctGatePx == maxResidualPx, i.e.
+// "correct IFF the shot would otherwise SKIP." Rationale: one correction cycle costs
+// 1.37s (full detect+emit+settle) — material — so we do NOT spend it tightening shots
+// that already pass; and this makes maxResidualPx the SINGLE, visible expression of
+// how-close-is-close-enough. A caller who wants ~8px precision lowers maxResidualPx,
+// and the correction then fires there by construction — rather than a hidden second
+// tolerance baked into the correction gate. The skip test (residual > maxResidualPx)
+// and the correction test (landedRes > correctGatePx) are both strict, so gate ==
+// accept fires the correction on exactly the would-skip set (below the correctMaxPx=80
+// FP cap, which is untouched). maxResidualPx itself is untouched.
+export const CORRECTION_GATE_FRACTION = 1.0;
+/** The achievable-precision floor — corrected shots land ~8px, so an acceptance gate
+ *  below this can't be met; we make ONE correction and then skip honestly (never a
+ *  retry loop). The correction gate never drops below it (nothing to gain). */
+export const CORRECTION_GATE_FLOOR_PX = 8;
+/** Canonical iPad acceptance gate (mirrors index.ts's maxResidualPx default), used
+ *  to derive a sane correction gate when a caller doesn't thread its acceptance gate
+ *  (e.g. pikvm_mouse_move_to, which has no click and thus no maxResidualPx). */
+export const DEFAULT_ACCEPT_GATE_PX = 25;
+
+/** Derive the correction gate from the caller's acceptance gate: gate == accept
+ *  (f=1.0 → correct iff the shot would otherwise skip), floored at the ~8px
+ *  achievable precision (a tighter acceptance than we can hit gets one correction
+ *  then an honest skip, not a loop). For any acceptance gate ≥ the floor, gate ≤
+ *  accept — the dead band is closed by construction. */
+export function deriveCorrectionGatePx(acceptGatePx?: number): number {
+  const accept = acceptGatePx !== undefined && acceptGatePx > 0 ? acceptGatePx : DEFAULT_ACCEPT_GATE_PX;
+  return Math.max(CORRECTION_GATE_FLOOR_PX, Math.round(accept * CORRECTION_GATE_FRACTION));
+}
 
 /** The relative-emit sequence for the faded-cursor wake: `WAKE_EMIT_COUNT`
  *  alternating-sign emits of (±WAKE_EMIT_DX, ±WAKE_EMIT_DY). The alternation
@@ -152,13 +211,14 @@ export function planWakeEmits(): Array<[number, number]> {
 async function wakeCursorAndRedetect(
   client: PiKVMClient,
   minPresence: number,
+  detectFn: DetectFn = detect,
 ): Promise<{ x: number; y: number } | null> {
   for (const [dx, dy] of planWakeEmits()) {
     await client.mouseMoveRelative(dx, dy);
     await sleep(WAKE_EMIT_PACE_MS);
   }
   await sleep(WAKE_SETTLE_MS);
-  return detect(client, minPresence);
+  return detectFn(client, minPresence);
 }
 
 async function detect(client: PiKVMClient, minPresence: number): Promise<{ x: number; y: number } | null> {
@@ -239,20 +299,22 @@ export async function moveByCurveOneShot(
   client: PiKVMClient,
   target: { x: number; y: number },
   options: CurveOneShotOptions = {},
+  deps: CurveOneShotDeps = {},
 ): Promise<MoveToResult> {
   const paceMs = options.emitPaceMs ?? 110;
   const settleMs = options.settleMs ?? 250;
   const minPresence = options.minPresence ?? 0.5;
+  const detectFn = deps.detect ?? detect;
   const resolution = await client.getResolution(true);
 
   // Detect the cursor. On failure (typically a fully-faded pointer), wake it
   // with a net-neutral relative jiggle and re-detect ONCE before giving up
   // (M2). Detect-failure-only: a visible cursor detects first try and never
   // pays the wake cost.
-  let start = await detect(client, minPresence);
+  let start = await detectFn(client, minPresence);
   let woken = false;
   if (!start) {
-    start = await wakeCursorAndRedetect(client, minPresence);
+    start = await wakeCursorAndRedetect(client, minPresence, detectFn);
     woken = start !== null;
   }
   const shotAfterStart = await client.screenshot({ quality: 80 });
@@ -283,7 +345,7 @@ export async function moveByCurveOneShot(
   let emitted = { ...m1 };
   let chunkCount = 1;
 
-  let landed = await detect(client, minPresence);
+  let landed = await detectFn(client, minPresence);
 
   // One correction shot when the first lands in the PLAUSIBLE miss band
   // [correctGatePx, correctMaxPx] (default 30–80px). The emit is deterministic
@@ -292,8 +354,32 @@ export async function moveByCurveOneShot(
   // widget (confirmed 2026-07-20, maps-faithful.ts n=6: V8_mid FP'd at 278px, the
   // correction then shoved the correctly-placed cursor to the bottom → MISS).
   // Correcting above the cap does more harm than good, so trust the first shot
-  // there. Below the gate is good enough. Set correctGatePx huge for pure one-shot.
-  const correctGatePx = options.correctGatePx ?? 30;
+  // there. Below the gate is good enough. Pass correctGatePx:Infinity to disable
+  // the correction entirely (pure open-loop shot, for calibration).
+  // Correction gate: DERIVED from the caller's acceptance gate (f=1.0 ⇒ gate ==
+  // accept ⇒ correct IFF the shot would otherwise skip), closing the dead band by
+  // construction. An explicit options.correctGatePx still wins for callers/benches
+  // that pin a value, but it is CAPPED at the acceptance gate so a caller can't
+  // reopen the dead band by passing a gate ABOVE it — the invariant holds no matter
+  // the source. (The derived path keeps the ~8px floor for a sub-floor acceptance.)
+  const acceptGatePx = options.acceptGatePx !== undefined && options.acceptGatePx > 0
+    ? options.acceptGatePx
+    : DEFAULT_ACCEPT_GATE_PX;
+  // Correction gate selection:
+  //  - correctGatePx === Infinity → the explicit "disable the correction" door for
+  //    calibration/measurement of the raw open-loop error (a pure single shot).
+  //  - a FINITE override → honored but CAPPED at the acceptance gate (a caller can't
+  //    reopen the dead band with a gate above it).
+  //  - anything else, incl. undefined AND bogus non-finite (NaN from Number(unset
+  //    env), -Infinity) → DERIVE from the acceptance gate. Only Infinity is the
+  //    sentinel; a garbage knob must NEVER silently disable the safety net — that's
+  //    the exact silent-knob failure class this whole change exists to close.
+  const override = options.correctGatePx;
+  const correctGatePx = override === Infinity
+    ? Infinity
+    : (override !== undefined && Number.isFinite(override)
+        ? Math.min(acceptGatePx, override)
+        : deriveCorrectionGatePx(options.acceptGatePx));
   const correctMaxPx = options.correctMaxPx ?? 80;
   const landedRes = landed ? dist(landed, target) : Infinity;
   if (landed && landedRes > correctGatePx && landedRes < correctMaxPx) {
@@ -301,7 +387,7 @@ export async function moveByCurveOneShot(
     await sleep(settleMs);
     emitted = { x: emitted.x + m2.x, y: emitted.y + m2.y };
     chunkCount += 1;
-    const landed2 = await detect(client, minPresence);
+    const landed2 = await detectFn(client, minPresence);
     if (landed2) landed = landed2;
   }
 

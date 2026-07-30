@@ -1741,10 +1741,20 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // open-loop default; desktop uses caller's default. Helper is
         // regression-pinned by defaultChunkPaceMsFor.test.ts.
         const chunkPace = defaultChunkPaceMsFor(mouseAbsoluteMode);
+        // Compute the acceptance gate (maxResidualPx) ONCE, here, so the SAME value
+        // both (a) threads into the mover — which derives its correction gate strictly
+        // below it, re-shooting a residual in the dead band instead of skipping it —
+        // and (b) drives the post-move skip check below. Computing it in two places
+        // was the hole that let the mover's correction gate (30) drift above the
+        // clicker's acceptance gate (25), stranding [25,30) residuals (2026-07-31).
+        const effectiveMaxResidualPx = args.maxResidualPx !== undefined
+          ? Number(args.maxResidualPx)
+          : defaultMaxResidualPxFor(mouseAbsoluteMode);
         const moveOpts = {
           strategy: strategyStr,
           assumeCursorAt,
           profile: cachedProfile,
+          acceptGatePx: effectiveMaxResidualPx,
           forbidSlamFallback: !mouseAbsoluteMode,
           // Desktop full-frame degrade: the Phase-32 slam guard exists ONLY to
           // avoid the iPadOS hot-corner re-lock, so it must be disarmed in
@@ -1861,9 +1871,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // click the wrong thing. iPad-only (desktop positions by coordinates);
         // maxResidualPx<=0/undefined disables the gate.
         if (!mouseAbsoluteMode && result.finalDetectedPosition) {
-          const maxResidualPx = args.maxResidualPx !== undefined
-            ? Number(args.maxResidualPx)
-            : defaultMaxResidualPxFor(mouseAbsoluteMode);
+          const maxResidualPx = effectiveMaxResidualPx; // same value threaded into the mover above
           if (maxResidualPx !== undefined && maxResidualPx > 0) {
             const skipResidual = residualForSkip(
               result.finalDetectedPosition, { x: tx, y: ty }, maxResidualPx,
