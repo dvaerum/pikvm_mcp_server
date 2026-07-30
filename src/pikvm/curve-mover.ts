@@ -154,26 +154,37 @@ const WAKE_SETTLE_MS = 200;
 // the [25,30) DEAD BAND was rejected by the clicker yet never re-shot by the mover
 // (measured: 18.2px identical for faded/visible — the wake is net-zero; the confound
 // was move-distance, not woken-ness). Fix: DERIVE the correction gate FROM the
-// acceptance gate the caller threads in, so it always sits strictly BELOW it and the
-// two can't silently drift (that was the move-to.ts hole). maxResidualPx and the
-// correctMaxPx=80 FP cap are untouched. georgs-validated: gate 8 → 18.2→8.1px 12/12.
-export const CORRECTION_GATE_FRACTION = 0.5;
-/** The correction floor — corrected shots land ~8px, so a gate below this chases
- *  noise it can't improve. */
+// acceptance gate the caller threads in, so the two can't silently drift (that was
+// the move-to.ts hole).
+//
+// FRACTION = 1.0 (georgs-measured 2026-07-31): correctGatePx == maxResidualPx, i.e.
+// "correct IFF the shot would otherwise SKIP." Rationale: one correction cycle costs
+// 1.37s (full detect+emit+settle) — material — so we do NOT spend it tightening shots
+// that already pass; and this makes maxResidualPx the SINGLE, visible expression of
+// how-close-is-close-enough. A caller who wants ~8px precision lowers maxResidualPx,
+// and the correction then fires there by construction — rather than a hidden second
+// tolerance baked into the correction gate. The skip test (residual > maxResidualPx)
+// and the correction test (landedRes > correctGatePx) are both strict, so gate ==
+// accept fires the correction on exactly the would-skip set (below the correctMaxPx=80
+// FP cap, which is untouched). maxResidualPx itself is untouched.
+export const CORRECTION_GATE_FRACTION = 1.0;
+/** The achievable-precision floor — corrected shots land ~8px, so an acceptance gate
+ *  below this can't be met; we make ONE correction and then skip honestly (never a
+ *  retry loop). The correction gate never drops below it (nothing to gain). */
 export const CORRECTION_GATE_FLOOR_PX = 8;
 /** Canonical iPad acceptance gate (mirrors index.ts's maxResidualPx default), used
  *  to derive a sane correction gate when a caller doesn't thread its acceptance gate
  *  (e.g. pikvm_mouse_move_to, which has no click and thus no maxResidualPx). */
 export const DEFAULT_ACCEPT_GATE_PX = 25;
 
-/** Derive the correction gate from the caller's acceptance gate so it sits STRICTLY
- *  below it (closing the dead band by construction), with a margin down to the ~8px
- *  correction floor so corrected shots land well inside the acceptance gate. */
+/** Derive the correction gate from the caller's acceptance gate: gate == accept
+ *  (f=1.0 → correct iff the shot would otherwise skip), floored at the ~8px
+ *  achievable precision (a tighter acceptance than we can hit gets one correction
+ *  then an honest skip, not a loop). For any acceptance gate ≥ the floor, gate ≤
+ *  accept — the dead band is closed by construction. */
 export function deriveCorrectionGatePx(acceptGatePx?: number): number {
   const accept = acceptGatePx !== undefined && acceptGatePx > 0 ? acceptGatePx : DEFAULT_ACCEPT_GATE_PX;
-  const margined = Math.max(CORRECTION_GATE_FLOOR_PX, Math.floor(accept * CORRECTION_GATE_FRACTION));
-  // Guarantee strictly-below even for tiny/pathological acceptance gates.
-  return Math.min(accept - 1, margined);
+  return Math.max(CORRECTION_GATE_FLOOR_PX, Math.round(accept * CORRECTION_GATE_FRACTION));
 }
 
 /** The relative-emit sequence for the faded-cursor wake: `WAKE_EMIT_COUNT`
@@ -340,17 +351,18 @@ export async function moveByCurveOneShot(
   // correction then shoved the correctly-placed cursor to the bottom → MISS).
   // Correcting above the cap does more harm than good, so trust the first shot
   // there. Below the gate is good enough. Set correctGatePx huge for pure one-shot.
-  // Correction gate: DERIVED from the caller's acceptance gate so it sits strictly
-  // below it (closing the [correctGate, accept) dead band). An explicit
-  // options.correctGatePx still wins for callers/benches that pin a value, but it is
-  // CLAMPED below the acceptance gate too — the invariant holds no matter the source.
+  // Correction gate: DERIVED from the caller's acceptance gate (f=1.0 ⇒ gate ==
+  // accept ⇒ correct IFF the shot would otherwise skip), closing the dead band by
+  // construction. An explicit options.correctGatePx still wins for callers/benches
+  // that pin a value, but it is CAPPED at the acceptance gate so a caller can't
+  // reopen the dead band by passing a gate ABOVE it — the invariant holds no matter
+  // the source. (The derived path keeps the ~8px floor for a sub-floor acceptance.)
   const acceptGatePx = options.acceptGatePx !== undefined && options.acceptGatePx > 0
     ? options.acceptGatePx
     : DEFAULT_ACCEPT_GATE_PX;
-  const correctGatePx = Math.min(
-    acceptGatePx - 1,
-    options.correctGatePx ?? deriveCorrectionGatePx(options.acceptGatePx),
-  );
+  const correctGatePx = options.correctGatePx !== undefined
+    ? Math.min(acceptGatePx, options.correctGatePx)
+    : deriveCorrectionGatePx(options.acceptGatePx);
   const correctMaxPx = options.correctMaxPx ?? 80;
   const landedRes = landed ? dist(landed, target) : Infinity;
   if (landed && landedRes > correctGatePx && landedRes < correctMaxPx) {

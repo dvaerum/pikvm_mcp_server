@@ -5,33 +5,32 @@ import {
   CORRECTION_GATE_FLOOR_PX,
   moveByCurveOneShot,
 } from '../curve-mover.js';
+import { defaultMaxResidualPxFor } from '../click-verify.js';
 import type { PiKVMClient } from '../client.js';
 
 // Root cause (measured 2026-07-31): the curve one-shot has a systematic ~18px
 // open-loop error per geometry (~25.3px at one gate geometry). The mover's
 // correction gate defaulted to 30, ABOVE the clicker's acceptance gate 25, so a
 // residual in the [25,30) DEAD BAND was rejected by the clicker yet never re-shot.
-// Fix: derive the correction gate strictly BELOW the acceptance gate, threaded from
-// the caller so the two can't drift. maxResidualPx and the correctMaxPx=80 FP cap
-// stay untouched.
+// Fix: derive correctGatePx FROM the acceptance gate (threaded), f=1.0 ⇒ gate ==
+// accept ⇒ "correct IFF the shot would otherwise skip" — one visible tolerance knob
+// (maxResidualPx), no wasted 1.37s correction cycles on shots that already pass.
+// maxResidualPx and the correctMaxPx=80 FP cap stay untouched.
 
-describe('deriveCorrectionGatePx — the gate-ordering invariant', () => {
-  it('derives strictly BELOW the acceptance gate, with margin, for the production default', () => {
-    const g = deriveCorrectionGatePx(25);
-    expect(g).toBeLessThan(25); // the invariant
-    expect(g).toBeGreaterThanOrEqual(CORRECTION_GATE_FLOOR_PX);
-    expect(g).toBe(12); // floor(25*0.5)=12 — in the manager's 10-12 range
+describe('deriveCorrectionGatePx — the gate-ordering invariant (f=1.0)', () => {
+  it('equals the acceptance gate for the production default (correct iff would-skip)', () => {
+    expect(deriveCorrectionGatePx(25)).toBe(25);
   });
 
-  it('INVARIANT holds across every acceptance gate: derived gate < acceptance gate', () => {
-    for (const accept of [10, 12, 15, 20, 25, 30, 40, 50, 80, 100]) {
-      expect(deriveCorrectionGatePx(accept)).toBeLessThan(accept);
+  it('INVARIANT: derived gate NEVER exceeds the acceptance gate (no dead band) for any sane gate', () => {
+    for (const accept of [8, 10, 12, 15, 20, 25, 30, 40, 50, 80, 100]) {
+      expect(deriveCorrectionGatePx(accept)).toBeLessThanOrEqual(accept);
     }
   });
 
-  it('never drops below the ~8px correction floor for sane gates', () => {
-    expect(deriveCorrectionGatePx(20)).toBeGreaterThanOrEqual(CORRECTION_GATE_FLOOR_PX);
-    expect(deriveCorrectionGatePx(25)).toBeGreaterThanOrEqual(CORRECTION_GATE_FLOOR_PX);
+  it('floors at the ~8px achievable precision (a sub-floor acceptance gets one correction then honest skip)', () => {
+    expect(deriveCorrectionGatePx(6)).toBe(CORRECTION_GATE_FLOOR_PX); // 8, above the unmeetable 6
+    expect(deriveCorrectionGatePx(8)).toBe(CORRECTION_GATE_FLOOR_PX);
   });
 
   it('falls back to the canonical acceptance default when the gate is absent or disabled', () => {
@@ -39,16 +38,21 @@ describe('deriveCorrectionGatePx — the gate-ordering invariant', () => {
     expect(deriveCorrectionGatePx(0)).toBe(deriveCorrectionGatePx(DEFAULT_ACCEPT_GATE_PX));
   });
 
-  it('stays strictly below even for tiny/pathological acceptance gates', () => {
-    expect(deriveCorrectionGatePx(6)).toBeLessThan(6);
-    expect(deriveCorrectionGatePx(9)).toBeLessThan(9);
+  // georgs's regression: the two DEFAULTS must stay tied — this is exactly how the
+  // mover's hardcoded 30 silently drifted above the clicker's 25.
+  it('the fallback acceptance default matches index.ts\'s real maxResidualPx default (iPad)', () => {
+    expect(DEFAULT_ACCEPT_GATE_PX).toBe(defaultMaxResidualPxFor(false)); // false = relative-mouse (iPad)
+  });
+
+  it('the derived default correction gate is NEVER above the acceptance default (the dead-band the bug had)', () => {
+    expect(deriveCorrectionGatePx(DEFAULT_ACCEPT_GATE_PX)).toBeLessThanOrEqual(DEFAULT_ACCEPT_GATE_PX);
   });
 });
 
 // ── Integration: drive moveByCurveOneShot with an injected detect seam + a recording
 //    stub client (no onnxruntime). Prove the dead-band residual now gets ONE
-//    correction, that sub-gate and above-FP-cap residuals don't, and that an explicit
-//    over-gate override is still clamped below the acceptance gate.
+//    correction, that an already-accepted shot does NOT (no wasted 1.37s cycle under
+//    f=1.0), that above-FP-cap doesn't, and that an over-gate override is capped.
 
 class RecordingClient {
   emits: Array<[number, number]> = [];
@@ -69,7 +73,7 @@ const START = { x: 100, y: 100 };
 /** A detected landing `px` pixels from TARGET (offset along +x). */
 const landedAt = (px: number) => ({ x: TARGET.x + px, y: TARGET.y });
 
-describe('moveByCurveOneShot — correction fires for dead-band residuals (fix)', () => {
+describe('moveByCurveOneShot — correction fires iff the shot would otherwise skip (f=1.0)', () => {
   afterEach(() => vi.useRealTimers());
 
   async function run(detectSeq: Array<{ x: number; y: number } | null>, options: Record<string, unknown>) {
@@ -82,24 +86,22 @@ describe('moveByCurveOneShot — correction fires for dead-band residuals (fix)'
     return p;
   }
 
-  it('a 25.3px dead-band residual (the failing case) now takes ONE correction ⇒ lands clean', async () => {
-    // start → first shot lands 25.3px (dead band: > derived gate 12, < FP cap 80) →
-    // correction → lands ~0. accept gate 25 (production default).
+  it('a 25.3px residual (> accept 25, the failing case) takes ONE correction ⇒ lands clean', async () => {
     const r = await run([START, landedAt(25.3), landedAt(0.2)], { acceptGatePx: 25 });
     expect(r.chunkCount).toBe(2); // the correction shot ran
     expect(r.finalResidualPx).toBeLessThan(1);
   });
 
-  it('a mid-band 18px residual also corrects (systematic open-loop error) ⇒ tightens to ~0', async () => {
-    const r = await run([START, landedAt(18), landedAt(0.3)], { acceptGatePx: 25 });
-    expect(r.chunkCount).toBe(2);
-    expect(r.finalResidualPx).toBeLessThan(1);
+  it('an already-ACCEPTED 18px residual (< accept 25) does NOT correct — no wasted 1.37s cycle', async () => {
+    const r = await run([START, landedAt(18)], { acceptGatePx: 25 });
+    expect(r.chunkCount).toBe(1); // 18 ≤ 25 passes; f=1.0 does not secretly tighten it
+    expect(r.finalResidualPx).toBeCloseTo(18, 0);
   });
 
-  it('a residual BELOW the derived gate (5px) does NOT correct — no wasted shot', async () => {
-    const r = await run([START, landedAt(5)], { acceptGatePx: 25 });
-    expect(r.chunkCount).toBe(1);
-    expect(r.finalResidualPx).toBeCloseTo(5, 0);
+  it('lowering the acceptance gate AUTO-tightens via the same knob: 18px now corrects when accept=15', async () => {
+    const r = await run([START, landedAt(18), landedAt(0.3)], { acceptGatePx: 15 });
+    expect(r.chunkCount).toBe(2); // 18 > 15 ⇒ would skip ⇒ corrects — maxResidualPx is the single knob
+    expect(r.finalResidualPx).toBeLessThan(1);
   });
 
   it('a residual ABOVE the FP cap (100px) does NOT correct — the correctMaxPx guard stands', async () => {
@@ -108,9 +110,9 @@ describe('moveByCurveOneShot — correction fires for dead-band residuals (fix)'
     expect(r.finalResidualPx).toBeCloseTo(100, 0);
   });
 
-  it('an explicit over-gate correctGatePx is CLAMPED below the acceptance gate (invariant holds vs override)', async () => {
-    // correctGatePx=30 would reopen the [25,30) dead band; clamped to accept-1=24, so
-    // a 25.3px shot still corrects.
+  it('an explicit over-gate correctGatePx is CAPPED at the acceptance gate (invariant holds vs override)', async () => {
+    // correctGatePx=30 would reopen the [25,30) dead band; capped to accept=25, so a
+    // 25.3px shot still corrects.
     const r = await run([START, landedAt(25.3), landedAt(0.2)], { acceptGatePx: 25, correctGatePx: 30 });
     expect(r.chunkCount).toBe(2);
     expect(r.finalResidualPx).toBeLessThan(1);

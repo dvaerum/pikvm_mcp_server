@@ -254,11 +254,12 @@ auto-detect):
 
 - **`ipad`** — relative-mouse target: the deterministic **curve-one-shot** mover + the **cascade**
   cursor detector (the iPad path). A fully-faded cursor is un-faded by a net-zero jiggle before
-  detection (M2). The mover's one **correction shot** is gated strictly BELOW the caller's
-  `maxResidualPx` acceptance gate (derived from it, not an independent constant) so a residual in
-  what used to be the `[correctGate, maxResidualPx)` dead band is re-shot instead of silently
-  skipped — the fix for the systematic ~18px open-loop error that landed ~25.3px at some geometries.
-  `maxResidualPx` itself is untouched.
+  detection (M2). The mover's one **correction shot** is gated at the caller's `maxResidualPx`
+  acceptance gate (derived from it, not an independent constant) so it fires **iff the shot would
+  otherwise be skipped** — closing the old `[25,30)` dead band (where the mover's hardcoded `30`
+  sat above the clicker's `25` and a systematic ~18px open-loop residual that landed ~25.3px at
+  some geometries was rejected but never re-shot). `maxResidualPx` is the single tolerance knob:
+  lower it and the correction fires there by construction. `maxResidualPx` itself is untouched.
 - **`desktop`** — absolute-mouse target: the legacy **detect-then-move** path (the original
   upstream project's auto-calibrate + template/shape detection).
 
