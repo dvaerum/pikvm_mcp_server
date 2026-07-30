@@ -473,7 +473,7 @@ const toolRegistry: ToolEntry[] = [
       'Escalating recovery for a broken HID (mouse/keyboard not driving the target while video is fine). ' +
       'R0 first checks the target is present (a screenshot returns an image) — NOTHING recovers an asleep/' +
       'absent target, so wake it first. Then it climbs the ladder, verifying BEHAVIORALLY after each rung ' +
-      '(emits a mouse move + checks the screen changed — the online flags have lied). HONESTLY: R1 (soft ' +
+      '(emits a mouse move + confirms the CURSOR re-localizes and moved — NOT a bare screen diff, so a clock tick can no longer false-pass; the online flags have lied). HONESTLY: R1 (soft ' +
       'reset, = pikvm_hid_reset) is a cheap first try that often does NOT fix a controller-level drop. R2 ' +
       '(soft_connect USB pull-up toggle, host-provided) is VALIDATED — it recovered a real idle HID drop in ' +
       '~6s and is the primary no-reboot fix. R3a (UDC rebind, host) is a still-untested escalation. R3b ' +
@@ -505,7 +505,7 @@ const toolRegistry: ToolEntry[] = [
       'then runs the two VALIDATED host rungs — soft_connect (fixes an idle-drop, ~6s) then, if that ' +
       "doesn't restore input, udc-rebind (fixes a full-dead HID after a PiKVM reboot) — NO destructive " +
       'reboot. Each rung is verified by BOTH re-reading the ground-truth UDC state (/sys/class/udc state via ' +
-      'the host endpoint) AND a behavioral check (emit a move + confirm the screen changed), because the ' +
+      'the host endpoint) AND a behavioral check (emit a move + confirm the CURSOR re-localizes and moved — not a bare screen diff), because the ' +
       'kvmd HID online flags lie. This is what to reach for 99% of the time. If it still fails, escalate ' +
       'with pikvm_hid_recover (adds the reboot rung + human step). Needs the pikvm-nixos recovery endpoint ' +
       'configured (PIKVM_HID_RECOVERY_URL); without it the host rungs report unavailable.',

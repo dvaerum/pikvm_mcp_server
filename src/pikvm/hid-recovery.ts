@@ -38,7 +38,8 @@
  */
 import { execFile } from 'node:child_process';
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
-import { decodeScreenshot, diffScreenshotsDecoded } from './cursor-detect.js';
+import { decodeScreenshot } from './cursor-detect.js';
+import { findCursorByV8FullFrame } from './cursor-ml-detect.js';
 
 /** The subset of HID flag-state the cheap trigger reasons about. */
 export interface HidOnlineState {
@@ -105,36 +106,78 @@ export async function checkTargetPresent(client: Pick<HidRecoveryClient, 'screen
   }
 }
 
+/** Injectable cursor locator for {@link makeBehavioralVerifier}: returns the
+ *  pointer's frame position, or null when it cannot be localized. Default wraps
+ *  the same V8 detector the mover/click use. */
+export type BehavioralLocator = (buffer: Buffer) => Promise<{ x: number; y: number } | null>;
+
 /**
- * Default behavioral verifier: emit a mouse move and check the screen actually
- * changed (a working HID moves the cursor → pixels change). Injectable so the
- * orchestrator is unit-testable with a fake. NB this is a starting heuristic;
- * ambient screen motion can false-positive — live tuning expected (mirrors the
- * desktop-e2e residuals). Returns healthy when the post-emit frame differs from
- * the pre-emit frame.
+ * Default behavioral verifier: emit a mouse move and check the POINTER actually
+ * responded — the cursor must be LOCALIZABLE and have MOVED with the emit.
+ *
+ * Fix-(c) 2026-07-30: the old check ("any screen change after the emit") false-
+ * positived while HID was stone dead — a clock tick or app animation passed it,
+ * so hid_recover reported "RECOVERED" and sent a field agent 45 min down the
+ * wrong path. A moved, localizable cursor proves input actually reached the
+ * target AND the pointer renders. This is the POINTER layer; a recovery
+ * trigger's own UDC-`configured` check is the HID layer — the two compose, they
+ * do not replace each other (a box can be `configured` yet have an
+ * unlocalizable pointer). Injectable locate keeps it unit-testable.
  */
 export function makeBehavioralVerifier(
   client: Pick<HidRecoveryClient, 'screenshot' | 'mouseMoveRelative'>,
-  opts: { emitDx?: number; settleMs?: number } = {},
-  deps: WaitDeps = {},
+  opts: { emitDx?: number; settleMs?: number; minMovePx?: number; minPresence?: number } = {},
+  deps: WaitDeps & { locate?: BehavioralLocator } = {},
 ): HidVerifier {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const emitDx = opts.emitDx ?? 40;
   const settleMs = opts.settleMs ?? 300;
+  const minMovePx = opts.minMovePx ?? 8;
+  const minPresence = opts.minPresence ?? 0.5;
+  const locate: BehavioralLocator = deps.locate ?? (async (buffer) => {
+    const dec = await decodeScreenshot(buffer);
+    const hit = await findCursorByV8FullFrame(buffer, dec.width, dec.height, { minPresence });
+    return hit ? { x: hit.x, y: hit.y } : null;
+  });
   return {
     async verify() {
       try {
-        const before = await decodeScreenshot((await client.screenshot()).buffer);
-        // Emit a there-and-back move so a working HID visibly nudges the cursor
-        // without permanently displacing it.
+        const before = await locate((await client.screenshot()).buffer);
+        // There-and-back emit: a working HID visibly moves the cursor without
+        // permanently displacing it.
         await client.mouseMoveRelative(emitDx, 0);
         await sleep(settleMs);
-        const after = await decodeScreenshot((await client.screenshot()).buffer);
+        const after = await locate((await client.screenshot()).buffer);
         await client.mouseMoveRelative(-emitDx, 0);
-        const changed = diffScreenshotsDecoded(before, after).length > 0;
-        return changed
-          ? { healthy: true, detail: 'mouse emit moved the cursor (screen changed) — HID working' }
-          : { healthy: false, detail: 'mouse emit produced no screen change — HID not driving input' };
+        if (after === null) {
+          return {
+            healthy: false,
+            detail:
+              'mouse emit produced NO localizable cursor — the pointer is not rendering. ' +
+              'HID is not driving input, OR HID is up but the pointer is faded/off-screen (not localizable).',
+          };
+        }
+        if (before !== null) {
+          const moved = Math.hypot(after.x - before.x, after.y - before.y);
+          if (moved < minMovePx) {
+            return {
+              healthy: false,
+              detail:
+                `cursor is localizable but did NOT move on the mouse emit (${moved.toFixed(0)}px < ${minMovePx}px) — ` +
+                'HID is not driving input (a bare screen change, e.g. a clock tick, would have FALSELY passed the old check).',
+            };
+          }
+          return {
+            healthy: true,
+            detail: `mouse emit moved the cursor ${moved.toFixed(0)}px to a localizable position — HID is driving input.`,
+          };
+        }
+        // Not localizable before, localizable after: the emit rendered a
+        // previously-unfindable cursor — HID is driving input.
+        return {
+          healthy: true,
+          detail: 'mouse emit produced a localizable cursor (not visible before) — HID is driving input.',
+        };
       } catch (err) {
         return { healthy: false, detail: `behavioral verify failed: ${(err as Error).message}` };
       }
