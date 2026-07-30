@@ -24,7 +24,7 @@ import { startHttpServer } from './http-server.js';
 import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './auth.js';
 import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
-import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
+import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, makeSshUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { diagnoseHidFromClient, describeHidDiagnosis } from './pikvm/hid-diagnosis.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
 import {
@@ -114,11 +114,23 @@ function getRecoveryTrigger(): RecoveryTrigger {
   }
   return recoveryTrigger;
 }
-// Ground-truth UDC-state reader (M4/M0): GET {recovery-url}/udc-state. Same
-// endpoint/token as the trigger; returns null when unconfigured/unreachable.
+// Ground-truth UDC-state reader (M4/M0). Kernel `/sys/class/udc/<udc>/state` is
+// the AUTHORITATIVE HID up/down signal — the kvmd flags lie (P3, and live
+// 2026-07-30: mouse=online/keyboard=offline for 30s on a `configured` gadget
+// whose clicks landed 4/4). Two readers, same contract, mirroring the recovery
+// transports: the appliance's authenticated loopback endpoint, else SSH on a
+// stock box. Only when NEITHER is wired may a caller fall back to the flags.
 let udcStateReader: (() => Promise<UdcState | null>) | undefined;
 function getUdcStateReader(): () => Promise<UdcState | null> {
-  if (!udcStateReader) udcStateReader = makeUdcStateReader(recoveryEndpointConfig());
+  if (!udcStateReader) {
+    const endpoint = recoveryEndpointConfig();
+    udcStateReader = endpoint.url
+      ? makeUdcStateReader(endpoint)
+      : makeSshUdcStateReader({
+          host: process.env.PIKVM_HID_RECOVERY_SSH,
+          udc: process.env.PIKVM_HID_RECOVERY_UDC,
+        });
+  }
   return udcStateReader;
 }
 
