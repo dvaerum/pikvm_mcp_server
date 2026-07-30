@@ -98,20 +98,36 @@ describe('diagnoseHidFromClient — orchestration with graceful UDC fallback', (
     expect(d.kind).toBe('up-no-cursor');
   });
 
-  it('no UDC endpoint ⇒ falls back to the keyboard probe (keyboardOnline flag)', async () => {
-    const kbdOffline: HidDiagnosisClient = {
+  it('no UDC endpoint ⇒ falls back to the kvmd flags; DOWN only when BOTH offline', async () => {
+    const bothOffline: HidDiagnosisClient = {
       screenshot: async () => ({ buffer: Buffer.from('frame') }),
       getHidProfile: async () => ({ mouseOnline: false, keyboardOnline: false, mouseAbsolute: false }),
     };
-    const d = await diagnoseHidFromClient(kbdOffline, async () => null, locates(null));
-    expect(d.kind).toBe('hid-down'); // keyboard probe says down
+    const d = await diagnoseHidFromClient(bothOffline, async () => null, locates(null));
+    expect(d.kind).toBe('hid-down'); // both flags offline = genuinely dead
 
-    const kbdOnlineNoCursor: HidDiagnosisClient = {
+    const bothOnlineNoCursor: HidDiagnosisClient = {
       screenshot: async () => ({ buffer: Buffer.from('frame') }),
       getHidProfile: async () => ({ mouseOnline: true, keyboardOnline: true, mouseAbsolute: false }),
     };
-    const d2 = await diagnoseHidFromClient(kbdOnlineNoCursor, async () => null, locates(null));
-    expect(d2.kind).toBe('up-no-cursor'); // keyboard up but cursor not localizable
+    const d2 = await diagnoseHidFromClient(bothOnlineNoCursor, async () => null, locates(null));
+    expect(d2.kind).toBe('up-no-cursor'); // HID up but cursor not localizable
+  });
+
+  it('REGRESSION (live 2026-07-30): no UDC + mouse ONLINE + keyboard OFFLINE ⇒ must NOT say HID DOWN', async () => {
+    // The production rig: gadget configured, mouse clicking 4/4, yet kvmd reports
+    // keyboard=offline persistently. keyboard-only fallback emitted a FALSE HID DOWN.
+    const mouseOnlyOnline: HidDiagnosisClient = {
+      screenshot: async () => ({ buffer: Buffer.from('frame') }),
+      getHidProfile: async () => ({ mouseOnline: true, keyboardOnline: false, mouseAbsolute: false }),
+    };
+    const localizable = await diagnoseHidFromClient(mouseOnlyOnline, async () => null, locates({ x: 3, y: 4 }));
+    expect(localizable.kind).toBe('healthy'); // mouse online ⇒ up; cursor found ⇒ healthy
+    expect(localizable.kind).not.toBe('hid-down');
+
+    const faded = await diagnoseHidFromClient(mouseOnlyOnline, async () => null, locates(null));
+    expect(faded.kind).toBe('up-no-cursor'); // up, but pointer faded — NOT down
+    expect(faded.kind).not.toBe('hid-down');
   });
 
   it('does not throw the whole diagnosis when the keyboard probe itself fails', async () => {

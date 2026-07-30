@@ -5,8 +5,9 @@
  *
  *   - HID DOWN — the USB gadget input path is dead. Ground truth is the UDC
  *     state (not attached); when that endpoint isn't wired we fall back to the
- *     kvmd keyboard flag (the "keyboard probe"), since the keyboard path is
- *     independent of whether the pointer happens to be visible.
+ *     kvmd HID flags (mouse OR keyboard online ⇒ not down). NOT keyboard alone:
+ *     a healthy box was live-observed reporting keyboard=offline while the mouse
+ *     clicked 4/4 — the flags lie, so we only call DOWN when BOTH agree offline.
  *     Fix: pikvm_usb_reconnect / pikvm_hid_recover.
  *   - HID UP but cursor NOT LOCALIZABLE — the gadget IS attached (input reaches
  *     the target) yet the pointer can't be found on screen (faded / off-screen /
@@ -42,8 +43,8 @@ export type HidDiagnosis =
 /**
  * Pure classifier.
  * @param hidUp  ground-truth HID up/down: UDC.online when the endpoint is wired,
- *               else the kvmd keyboard flag (the "keyboard probe"), else null
- *               when neither can be read (→ 'unknown', never a false verdict).
+ *               else the kvmd flags (mouse OR keyboard online), else null when
+ *               neither can be read (→ 'unknown', never a false verdict).
  * @param cursor result of localizing the pointer in a fresh frame, or null.
  */
 export function classifyHid(input: { hidUp: boolean | null; cursor: CursorPoint | null }): HidDiagnosis {
@@ -61,7 +62,7 @@ export function describeHidDiagnosis(d: HidDiagnosis): string {
       return `HID UP and cursor localizable at (${d.cursor.x},${d.cursor.y}) — input path AND pointer both good.`;
     case 'hid-down':
       return (
-        `HID DOWN — the USB gadget input path is dead (UDC not attached / keyboard probe offline). ` +
+        `HID DOWN — the USB gadget input path is dead (UDC not attached, or both kvmd HID flags offline). ` +
         `Fix: pikvm_usb_reconnect (add the reboot rung via pikvm_hid_recover if that doesn't take).`
       );
     case 'up-no-cursor':
@@ -73,8 +74,8 @@ export function describeHidDiagnosis(d: HidDiagnosis): string {
       );
     case 'unknown':
       return (
-        `HID state UNKNOWN — no UDC endpoint and no keyboard probe available to tell HID up from down. ` +
-        `Set PIKVM_HID_RECOVERY_URL for the ground-truth UDC signal.`
+        `HID state UNKNOWN — no UDC endpoint and the kvmd HID flags could not be read to tell HID up from down. ` +
+        `Set PIKVM_HID_RECOVERY_URL (or the SSH transport) for the ground-truth UDC signal.`
       );
   }
 }
@@ -87,7 +88,7 @@ export type HidDiagnosisClient = {
 
 /**
  * Orchestrated diagnosis for the recover handlers: reads the UDC ground truth
- * (falling back to the keyboard probe when the endpoint isn't wired), localizes
+ * (falling back to the kvmd HID flags when the endpoint isn't wired), localizes
  * the cursor in a fresh frame, and classifies. Never throws — a failed keyboard
  * probe or screenshot degrades to 'unknown'/no-cursor rather than crashing the
  * caller's failure path.
@@ -97,7 +98,11 @@ export async function diagnoseHidFromClient(
   udcReader: () => Promise<UdcState | null>,
   locate: CursorLocator = defaultCursorLocator,
 ): Promise<HidDiagnosis> {
-  // HID up/down: UDC ground truth first, else the keyboard probe (advisory), else null.
+  // HID up/down: UDC ground truth first, else the kvmd flags (advisory), else null.
+  // Fall back to mouse OR keyboard online, NOT keyboard alone — a healthy box was
+  // live-observed (2026-07-30) reporting keyboard=offline while the mouse clicked
+  // 4/4, so keyboard-only would emit a FALSE "HID DOWN". Genuinely-dead HID showed
+  // BOTH flags offline, so "either online ⇒ not down" separates the states safely.
   let hidUp: boolean | null = null;
   const udc = await udcReader().catch(() => null);
   if (udc != null) {
@@ -105,7 +110,7 @@ export async function diagnoseHidFromClient(
   } else {
     try {
       const hid = await client.getHidProfile();
-      hidUp = hid.keyboardOnline;
+      hidUp = hid.mouseOnline || hid.keyboardOnline;
     } catch {
       hidUp = null;
     }

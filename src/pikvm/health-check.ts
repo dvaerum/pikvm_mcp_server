@@ -88,13 +88,18 @@ export async function runHealthCheck(
   // Live HID profile — re-read so a transient startup-detection failure
   // doesn't permanently mislead the operator.
   let hidFlags: { mouseOnline: boolean; keyboardOnline: boolean } | null = null;
-  // (d): HID up/down ground truth for the pointer-diagnosis below. Seeded from the
-  // keyboard probe (advisory), overridden by the UDC state when the endpoint is wired.
+  // (d): HID up/down for the pointer-diagnosis below. Seeded from the kvmd flags
+  // (advisory — they LIE; overridden by the UDC ground truth when the endpoint is
+  // wired). Fall back to mouse OR keyboard online, NOT keyboard alone: live-observed
+  // 2026-07-30 that a healthy box (mouse clicking 4/4) reported keyboard=offline
+  // persistently, so a keyboard-only fallback emits a FALSE "HID DOWN → reconnect".
+  // Genuinely-dead HID showed BOTH flags offline, so "either online ⇒ not down" is
+  // the safe bar and matches this mouse-first product's pointer focus.
   let hidUp: boolean | null = null;
   try {
     const hid = await pikvm.getHidProfile();
     hidFlags = { mouseOnline: hid.mouseOnline, keyboardOnline: hid.keyboardOnline };
-    hidUp = hid.keyboardOnline;
+    hidUp = hid.mouseOnline || hid.keyboardOnline;
     lines.push(
       `Live HID profile: mouse=${hid.mouseOnline ? 'online' : 'offline'}/` +
       `${hid.mouseAbsolute ? 'absolute' : 'relative'}, ` +
@@ -130,7 +135,7 @@ export async function runHealthCheck(
       `falling back to the kvmd HID flags above, which may lie). Set PIKVM_HID_RECOVERY_URL to enable.`,
     );
   } else {
-    hidUp = udc.online; // UDC ground truth overrides the advisory keyboard probe
+    hidUp = udc.online; // UDC ground truth overrides the advisory kvmd flags
     lines.push(
       `USB HID gadget (ground truth): ${udc.state}${udc.udc ? ` [${udc.udc}]` : ''} — ` +
       `this is THE HID up/down signal.`,

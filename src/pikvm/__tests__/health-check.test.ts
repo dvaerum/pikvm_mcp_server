@@ -151,10 +151,10 @@ describe('runHealthCheck', () => {
       expect(out).toMatch(/pikvm_usb_reconnect/);
     });
 
-    it('STOCK box (no UDC endpoint) + keyboard probe offline ⇒ prints the HID DOWN verdict (regression: the incident state)', async () => {
-      // This is exactly the state @georgs staged that produced NO verdict before the
-      // fix: no UDC endpoint (udcState null) so hidUp falls back to the keyboard flag,
-      // which reads offline ⇒ hidUp===false. The verdict must still appear.
+    it('STOCK box (no UDC endpoint) + BOTH flags offline ⇒ prints the HID DOWN verdict (regression: the incident state)', async () => {
+      // The state @georgs staged that produced NO verdict before the print fix: no
+      // UDC endpoint (udcState null) so hidUp falls back to the flags; BOTH offline
+      // ⇒ genuinely down ⇒ hidUp===false. The verdict must still appear.
       let located = false;
       const r = await runHealthCheck(
         stubClient({
@@ -169,6 +169,27 @@ describe('runHealthCheck', () => {
       );
       expect(located).toBe(false);
       expect(r.lines.join('\n')).toMatch(/HID DOWN/);
+    });
+
+    it('REGRESSION (live 2026-07-30): stock box, mouse ONLINE + keyboard OFFLINE ⇒ must NOT say HID DOWN', async () => {
+      // The production rig: no UDC endpoint, kvmd persistently reports keyboard=offline
+      // while the mouse clicks 4/4. A keyboard-only fallback emitted a FALSE "HID DOWN
+      // → reconnect" on a healthy box. mouse||keyboard fallback ⇒ hidUp true ⇒ pointer
+      // is probed and the verdict is a pointer one, never HID DOWN.
+      const r = await runHealthCheck(
+        stubClient({
+          screenshot: async () => ({ buffer: Buffer.from('frame') }),
+          hid: async () => ({ mouseOnline: true, mouseAbsolute: false, keyboardOnline: false }),
+        }),
+        {
+          mouseAbsoluteMode: false,
+          udcState: null,
+          locateCursor: async () => null, // pointer faded on this staged frame
+        },
+      );
+      const out = r.lines.join('\n');
+      expect(out).not.toMatch(/HID DOWN/);
+      expect(out).toMatch(/HID UP but cursor NOT LOCALIZABLE/);
     });
 
     it('no UDC endpoint: falls back to the keyboard probe (keyboardOnline) ⇒ up-no-cursor', async () => {
