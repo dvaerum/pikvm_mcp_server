@@ -104,8 +104,12 @@ export interface CurveOneShotOptions {
   /** V8 presence gate for start/verify detection (default 0.5). */
   minPresence?: number;
   /** Run ONE correction shot (re-detect + re-shoot) only if the first shot's
-   *  residual is in the PLAUSIBLE miss band [correctGatePx, correctMaxPx].
-   *  Default gate 30. Set correctGatePx huge for a pure single shot. */
+   *  residual is in the PLAUSIBLE miss band (correctGatePx, correctMaxPx). Default:
+   *  DERIVED from the acceptance gate (see acceptGatePx) — correct iff the shot
+   *  would otherwise skip. A FINITE explicit value is honored but CAPPED at the
+   *  acceptance gate (a caller can't reopen the dead band). Pass
+   *  `correctGatePx: Infinity` to DISABLE the correction entirely — a pure open-loop
+   *  single shot, for calibration/measurement of the raw curve error. */
   correctGatePx?: number;
   /** Upper bound of the correction band (default 80px). A residual above this
    *  after a deterministic emit is a V8 false-positive, not a real miss — trust
@@ -350,7 +354,8 @@ export async function moveByCurveOneShot(
   // widget (confirmed 2026-07-20, maps-faithful.ts n=6: V8_mid FP'd at 278px, the
   // correction then shoved the correctly-placed cursor to the bottom → MISS).
   // Correcting above the cap does more harm than good, so trust the first shot
-  // there. Below the gate is good enough. Set correctGatePx huge for pure one-shot.
+  // there. Below the gate is good enough. Pass correctGatePx:Infinity to disable
+  // the correction entirely (pure open-loop shot, for calibration).
   // Correction gate: DERIVED from the caller's acceptance gate (f=1.0 ⇒ gate ==
   // accept ⇒ correct IFF the shot would otherwise skip), closing the dead band by
   // construction. An explicit options.correctGatePx still wins for callers/benches
@@ -360,8 +365,14 @@ export async function moveByCurveOneShot(
   const acceptGatePx = options.acceptGatePx !== undefined && options.acceptGatePx > 0
     ? options.acceptGatePx
     : DEFAULT_ACCEPT_GATE_PX;
+  // The cap prevents a caller reopening the dead band with a FINITE gate above the
+  // acceptance gate. A NON-finite override (Infinity) is the explicit "disable the
+  // correction" door for calibration/measurement — capping it would silently force a
+  // correction and corrupt an open-loop measurement (georgs, 2026-07-31), and it's
+  // not the risk the cap guards (a disabled correction makes a click LESS likely, not
+  // a wrong-element hit). So cap finite overrides, pass non-finite through untouched.
   const correctGatePx = options.correctGatePx !== undefined
-    ? Math.min(acceptGatePx, options.correctGatePx)
+    ? (Number.isFinite(options.correctGatePx) ? Math.min(acceptGatePx, options.correctGatePx) : options.correctGatePx)
     : deriveCorrectionGatePx(options.acceptGatePx);
   const correctMaxPx = options.correctMaxPx ?? 80;
   const landedRes = landed ? dist(landed, target) : Infinity;

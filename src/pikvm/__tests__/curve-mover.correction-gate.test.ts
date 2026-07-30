@@ -110,6 +110,15 @@ describe('moveByCurveOneShot — correction fires iff the shot would otherwise s
     expect(r.finalResidualPx).toBeCloseTo(100, 0);
   });
 
+  it('correctGatePx: Infinity DISABLES the correction (pure open-loop shot for calibration) even at 28px', async () => {
+    // The cap must NOT clamp a non-finite override down to the acceptance gate —
+    // that silently corrupts open-loop measurement (georgs 2026-07-31: a 28px
+    // "control" got corrected to 5px, invalidating a Y-scale calibration run).
+    const r = await run([START, landedAt(28)], { acceptGatePx: 25, correctGatePx: Infinity });
+    expect(r.chunkCount).toBe(1); // no correction fired — raw open-loop residual preserved
+    expect(r.finalResidualPx).toBeCloseTo(28, 0);
+  });
+
   it('floor-collision: a sub-floor acceptance (5px) takes ONE correction, lands at the ~8px floor, does NOT spin', async () => {
     // acceptance below the achievable precision ⇒ derived gate = 8 (floor). An 18px
     // shot corrects once → ~8px; the mover allows exactly ONE correction (no loop),
