@@ -110,6 +110,15 @@ describe('moveByCurveOneShot — correction fires iff the shot would otherwise s
     expect(r.finalResidualPx).toBeCloseTo(100, 0);
   });
 
+  it('floor-collision: a sub-floor acceptance (5px) takes ONE correction, lands at the ~8px floor, does NOT spin', async () => {
+    // acceptance below the achievable precision ⇒ derived gate = 8 (floor). An 18px
+    // shot corrects once → ~8px; the mover allows exactly ONE correction (no loop),
+    // and 8 > 5 so the click_at handler then skips truthfully (not-landed) downstream.
+    const r = await run([START, landedAt(18), landedAt(8.0), landedAt(8.0)], { acceptGatePx: 5 });
+    expect(r.chunkCount).toBe(2); // exactly one correction — never a spin
+    expect(r.finalResidualPx).toBeCloseTo(8, 0);
+  });
+
   it('an explicit over-gate correctGatePx is CAPPED at the acceptance gate (invariant holds vs override)', async () => {
     // correctGatePx=30 would reopen the [25,30) dead band; capped to accept=25, so a
     // 25.3px shot still corrects.
