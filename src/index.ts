@@ -805,6 +805,7 @@ const toolRegistry: ToolEntry[] = [
         },
         verifyMinChangeFraction: { type: 'number', description: 'Custom minimum changed-pixel fraction for screenChanged=true. Default 0.005 (0.5% of the diffed area). Raise to 0.01-0.02 on noisy backdrops (iPad home screen with animated widgets) to be more conservative; lower for tiny UI changes.' },
         singleTap: { type: 'boolean', description: 'KEYPAD MODE (M6): defaults minBrightness=0 so a dimmed PIN-sheet modal does not false-abort the tap, and marks the call as a keypad tap in the result. (Every click is now single-attempt with no re-fire — the tap-retry mechanism was removed 2026-07-28 because it double-fired keypads; positioning is single-shot-reliable and faded cursors are recovered by the built-in wake — so singleTap no longer needs to suppress a retry.) Verification is advisory (screenChanged/diff reported, never acted on). Default false.' },
+        force: { type: 'boolean', description: 'ESCAPE HATCH (default false): by default, if the cursor position cannot be localized on an iPad target (detection fails, e.g. a faded/off-screen pointer), the click is NOT performed and a not-landed error is returned — clicking blind would tap the wrong place. Set force:true to send the click ANYWAY at the predicted position; the result is then flagged LOUD as UNVERIFIED (landing NOT confirmed) and must not be read as a confirmed landing. Use only when you accept an unverified tap (and typically pair with strategy:"assume-at" + assumeCursorAtX/Y so the pointer is positioned first). Does NOT affect the maxResidualPx gate (that guards against hitting the WRONG element, a different risk). Does nothing on desktop/absolute targets (they position by coordinates, not detection).' },
         minBrightness: { type: 'number', description: 'Brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness AND stddev (Phase 48). The gate aborts with a "wake the iPad" error ONLY when the frame is uniformly dim (mean < threshold AND stddev < 3) — dark-mode UI passes the gate because the high stddev from text/icon contrast indicates cursor will still be detectable. Default 35 on iPad targets (Phase 39 calibrated against live data: 29 = popup overlay, 41 = bright iPad with dark wallpaper); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
         autoUnlockOnDetectFail: { type: 'boolean', description: 'Phase 72: when an attempt fails because the iPad is on the lock screen (Phase 70 found this is the dominant detect-then-move failure mode), automatically call ipadGoHome to unlock and retry once before giving up on this attempt. SIDE EFFECT: if the iPad is INSIDE AN APP and detect-then-move fails for some other reason, this will exit the app to home — not what you want for in-app clicks. Default false (preserve manual control). Set true for fire-and-forget click_at on a fresh iPad target where you don\'t care about app state.' },
         maxResidualPx: { type: 'number', description: 'Phase 88: skip the click if the verified cursor is more than this many pixels from the target. Useful when callers care about CORRECT element hit, not just "screen changed". Live-verified failure mode (2026-04-27): residual 78 px caused a click targeting Settings → Software Update to instead activate the Apple Account sidebar row. Pass a positive integer to set the tolerance (e.g. 25 for strict icon-tolerance clicks, 50 for "near-enough is fine"). Default 25 on iPad (relative-mouse) targets — the gate is ON so an off-target move skips instead of launching the wrong app; 0/undefined on desktop. Override the default without redeploy via PIKVM_CLICK_MAX_RESIDUAL_PX (a number, or "off"/0 to disable).' },
@@ -1680,6 +1681,11 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // is retained only for its brightness default + advisory note (its old
         // "force maxRetries=0" effect is now the universal behavior).
         const singleTap = validateBoolean(args.singleTap) ?? false;
+        // Escape hatch (2026-07-30): explicit opt-in to click at the predicted
+        // position even when the iPad cursor can't be localized (detection
+        // null). Restores the capability #34 removed with requireVerifiedCursor,
+        // but LOUD-and-honest — never a silent phantom success.
+        const force = validateBoolean(args.force) ?? false;
         // Phase 38 / v0.5.26: explicit MCP parameter for the brightness gate.
         // Default mirrors the auto-policy: VERY_DIM_THRESHOLD on iPad
         // targets (relative-mouse), 0 elsewhere. Pass 0 explicitly to disable.
@@ -1783,7 +1789,10 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // singleTap/keypad mode and the no-retry default use — had no such gate,
         // so a faded tap fired blind and read as success. The M2 wake-before-
         // detect fix restores real landings here; until then we skip truthfully.
-        if (!mouseAbsoluteMode && result.finalDetectedPosition === null) {
+        // force:true is the explicit escape hatch — it fires the click anyway
+        // (below) at the predicted position and flags the result UNVERIFIED.
+        const forcedUnverified = !mouseAbsoluteMode && result.finalDetectedPosition === null && force;
+        if (!mouseAbsoluteMode && result.finalDetectedPosition === null && !force) {
           return {
             content: [
               {
@@ -1792,7 +1801,9 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
                   result.message +
                   `\nClick NOT performed: the cursor position could not be verified ` +
                   `(the pointer is likely faded/off-screen), so no ${button} click was sent. ` +
-                  `Wake the cursor first (a small pikvm_mouse_move) or retry once the screen is active.` +
+                  `Wake the cursor first (a small pikvm_mouse_move) or retry once the screen is active` +
+                  `, or pass force:true to click anyway at the predicted position (returns an ` +
+                  `UNVERIFIED result — landing not confirmed).` +
                   formatCaptureLines(captured),
               },
               { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
@@ -1866,13 +1877,18 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         const singleTapNote = singleTap
           ? `\n(singleTap: tapped ONCE, no retry — the verification below is ADVISORY only; the tap fired regardless of the reported screen change. Use this for keypads/PIN pads so a sub-threshold effect never re-taps the key.)`
           : '';
+        // force escape hatch: the cursor could not be localized but the caller
+        // opted in — say so LOUDLY so nobody reads this as a confirmed landing.
+        const clickLine = forcedUnverified
+          ? `\n⚠ Clicked ${button} UNVERIFIED at the predicted position (force:true): the cursor could NOT be localized, so the LANDING IS NOT CONFIRMED — do not treat this as a successful tap. Inspect the screenshot / screenChanged below to judge whether it landed; if it didn't, wake the cursor (pikvm_mouse_move) or fix HID (pikvm_usb_reconnect) and retry.`
+          : `\nClicked ${button} at approximate position. Post-click screenshot attached.`;
         return {
           content: [
             {
               type: 'text',
               text:
                 result.message +
-                `\nClicked ${button} at approximate position. Post-click screenshot attached.` +
+                clickLine +
                 singleTapNote +
                 verificationText +
                 formatCaptureLines(captured),
