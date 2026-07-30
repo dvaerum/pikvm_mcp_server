@@ -442,7 +442,16 @@ export function makeSshRecoveryTrigger(cfg: {
       'echo "" > $G/UDC',
       'sleep 3',
       'echo $U > $G/UDC',
-      'sleep 5', readAfter,
+      'sleep 5',
+      'A=$(cat /sys/class/udc/$U/state 2>/dev/null)',
+      // ONE bounded retry — re-enumeration has real settle latency and a
+      // first-attempt miss was observed live (4/5 first-call successes). This is
+      // NOT the blind click-retry we deleted: that masked positioning error with
+      // no ground truth, whereas here the kernel tells us whether the gadget
+      // actually attached, and we re-check it. Exactly one extra attempt, with a
+      // longer settle; if it still fails we report the truthful failure.
+      '[ "$A" = "configured" ] || { R=retried; echo "" > $G/UDC 2>/dev/null; sleep 2; echo $U > $G/UDC; sleep 8; A=$(cat /sys/class/udc/$U/state 2>/dev/null); }',
+      'echo "udc=$U before=$B after=$A retry=${R:-no}"',
     ].join('; '),
   };
 
