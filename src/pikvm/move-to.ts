@@ -197,9 +197,13 @@ export interface MoveToOptions {
    *  0.5). */
   minPresence?: number;
   /** strategy='curve-one-shot' only: when set, run ONE correction shot if the
-   *  post-shot residual exceeds this many px. Undefined = pure single shot
-   *  (matches the validated N=80 A/B). */
+   *  post-shot residual exceeds this many px. Undefined = derive from the acceptance
+   *  gate (see acceptGatePx) so a residual in the dead band is re-shot, not skipped. */
   oneShotCorrectGatePx?: number;
+  /** strategy='curve-one-shot' only: the caller's acceptance gate (maxResidualPx).
+   *  Threaded so the mover derives its correction gate strictly below it — the two
+   *  can't silently drift. */
+  acceptGatePx?: number;
   /** Max correction passes. Default 2. */
   maxCorrectionPasses?: number;
   /** Tolerance for early-exit (px). If observed |residual| below this in
@@ -1512,6 +1516,7 @@ export async function moveToPixel(
     return moveByCurveOneShot(client, target, {
       minPresence: options.minPresence,
       correctGatePx: options.oneShotCorrectGatePx,
+      acceptGatePx: options.acceptGatePx,
     });
   }
 

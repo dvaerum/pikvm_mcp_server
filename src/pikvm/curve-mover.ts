@@ -116,21 +116,20 @@ export interface CurveOneShotOptions {
    *  measured.x / FULL_REPORT_PX, scaleY = measured.y / (FULL_REPORT_PX×Y_SCALE). */
   curveScaleX?: number;
   curveScaleY?: number;
-  /** (e) staleness threshold (ms) past which a shot is treated cold and warmed.
-   *  Default COLD_START_STALE_MS. The relaunch case (first shot ever) always warms
-   *  regardless of this value. */
-  coldStartStaleMs?: number;
+  /** The caller's acceptance gate (maxResidualPx). The mover DERIVES its correction
+   *  gate strictly below this (see deriveCorrectionGatePx) so a residual in the
+   *  [correctGate, accept) band is re-shot instead of silently skipped. Threaded from
+   *  the click_at handler; defaults to DEFAULT_ACCEPT_GATE_PX when absent (move_to). */
+  acceptGatePx?: number;
 }
 
 /** Detection seam — screenshot + locate the cursor. */
 type DetectFn = (client: PiKVMClient, minPresence: number) => Promise<{ x: number; y: number } | null>;
 
-/** Test-only injection seams for {@link moveByCurveOneShot}: a scriptable detector
- *  (keeps unit tests off onnxruntime) and a controllable clock (drives the (e)
- *  cold-start decision deterministically). Both default to the real implementations. */
+/** Test-only injection seam for {@link moveByCurveOneShot}: a scriptable detector
+ *  that keeps unit tests off onnxruntime. Defaults to the real V8 detect. */
 export interface CurveOneShotDeps {
   detect?: DetectFn;
-  now?: () => number;
 }
 
 // Faded-cursor wake (M2). A fully-faded iPad pointer is invisible, so V8
@@ -147,31 +146,34 @@ export const WAKE_EMIT_DY = 25;
 const WAKE_EMIT_PACE_MS = 70;
 const WAKE_SETTLE_MS = 200;
 
-// Cold-start warm-up (fix (e)). Distinct from M2 above: M2 fires when the pointer
-// is INVISIBLE (detection fails). This fires when the pointer is VISIBLE but COLD —
-// the FIRST curve shot after a relaunch (module state fresh) or a long idle /
-// foreground return. A first emit computed from a cold pointer lands ~25.3px off —
-// a hair over the 25px maxResidualPx gate — while the 2nd/3rd land 1–8px. We warm
-// it with the SAME net-zero jiggle+settle, re-detect, then shoot, so the first emit
-// is computed from a warm, correctly-rendered position. This does NOT touch
-// maxResidualPx (the gate lives in the click_at handler, downstream of the mover) —
-// the fix is the settle, not the threshold.
-//
-// "Relaunch" = process restart, which re-initializes this module state for free.
-// "Foreground transition" is not independently observable, so we proxy it with a
-// staleness threshold on the last warm shot. COLD_START_STALE_MS is a TUNABLE —
-// georgs gates/tunes the value on-device (the null/relaunch case is the guaranteed
-// win; this threshold trades warm-up latency against catching a cold return).
-export const COLD_START_STALE_MS = 10_000;
-let lastWarmCurveShotAt: number | null = null;
-/** Reset the cold-start clock (module state) between unit tests. */
-export function resetCurveMoverColdStartForTest(): void {
-  lastWarmCurveShotAt = null;
-}
-/** Cold = first shot since launch (lastWarmAt null ⇒ relaunch) OR the last shot
- *  was long enough ago that the pointer likely went cold (idle / foreground return). */
-export function isCurveShotCold(lastWarmAt: number | null, nowMs: number, staleMs = COLD_START_STALE_MS): boolean {
-  return lastWarmAt === null || nowMs - lastWarmAt > staleMs;
+// Correction-gate invariant (2026-07-31). The curve one-shot has a systematic,
+// near-deterministic open-loop error per geometry (measured spread 17.3–19.2px on a
+// long move; ~25.3px at one gate geometry). The mover already has a correction shot
+// to mop that up, but its gate (correctGatePx) was an independent default of 30,
+// which sat ABOVE the caller's acceptance gate (maxResidualPx=25) — so a residual in
+// the [25,30) DEAD BAND was rejected by the clicker yet never re-shot by the mover
+// (measured: 18.2px identical for faded/visible — the wake is net-zero; the confound
+// was move-distance, not woken-ness). Fix: DERIVE the correction gate FROM the
+// acceptance gate the caller threads in, so it always sits strictly BELOW it and the
+// two can't silently drift (that was the move-to.ts hole). maxResidualPx and the
+// correctMaxPx=80 FP cap are untouched. georgs-validated: gate 8 → 18.2→8.1px 12/12.
+export const CORRECTION_GATE_FRACTION = 0.5;
+/** The correction floor — corrected shots land ~8px, so a gate below this chases
+ *  noise it can't improve. */
+export const CORRECTION_GATE_FLOOR_PX = 8;
+/** Canonical iPad acceptance gate (mirrors index.ts's maxResidualPx default), used
+ *  to derive a sane correction gate when a caller doesn't thread its acceptance gate
+ *  (e.g. pikvm_mouse_move_to, which has no click and thus no maxResidualPx). */
+export const DEFAULT_ACCEPT_GATE_PX = 25;
+
+/** Derive the correction gate from the caller's acceptance gate so it sits STRICTLY
+ *  below it (closing the dead band by construction), with a margin down to the ~8px
+ *  correction floor so corrected shots land well inside the acceptance gate. */
+export function deriveCorrectionGatePx(acceptGatePx?: number): number {
+  const accept = acceptGatePx !== undefined && acceptGatePx > 0 ? acceptGatePx : DEFAULT_ACCEPT_GATE_PX;
+  const margined = Math.max(CORRECTION_GATE_FLOOR_PX, Math.floor(accept * CORRECTION_GATE_FRACTION));
+  // Guarantee strictly-below even for tiny/pathological acceptance gates.
+  return Math.min(accept - 1, margined);
 }
 
 /** The relative-emit sequence for the faded-cursor wake: `WAKE_EMIT_COUNT`
@@ -288,7 +290,6 @@ export async function moveByCurveOneShot(
   const settleMs = options.settleMs ?? 250;
   const minPresence = options.minPresence ?? 0.5;
   const detectFn = deps.detect ?? detect;
-  const now = deps.now ?? Date.now;
   const resolution = await client.getResolution(true);
 
   // Detect the cursor. On failure (typically a fully-faded pointer), wake it
@@ -297,25 +298,10 @@ export async function moveByCurveOneShot(
   // pays the wake cost.
   let start = await detectFn(client, minPresence);
   let woken = false;
-  let warmedColdStart = false;
   if (!start) {
     start = await wakeCursorAndRedetect(client, minPresence, detectFn);
     woken = start !== null;
-  } else if (isCurveShotCold(lastWarmCurveShotAt, now(), options.coldStartStaleMs)) {
-    // (e): the pointer is VISIBLE but this is the first shot after a relaunch or a
-    // cold gap, so the first emit would be computed from a cold pointer (~25px off).
-    // Warm it with the same net-zero jiggle+settle and re-detect from the warm
-    // position. If the warm re-detect somehow fails, keep the original detection
-    // rather than blinding ourselves.
-    const warm = await wakeCursorAndRedetect(client, minPresence, detectFn);
-    if (warm) {
-      start = warm;
-      warmedColdStart = true;
-    }
   }
-  // Mark this shot's time so the next near-term shot is treated warm (2nd/3rd click
-  // don't re-pay the warm-up); a later shot past the stale window goes cold again.
-  lastWarmCurveShotAt = now();
   const shotAfterStart = await client.screenshot({ quality: 80 });
   const base = {
     screenshot: shotAfterStart.buffer,
@@ -354,7 +340,17 @@ export async function moveByCurveOneShot(
   // correction then shoved the correctly-placed cursor to the bottom → MISS).
   // Correcting above the cap does more harm than good, so trust the first shot
   // there. Below the gate is good enough. Set correctGatePx huge for pure one-shot.
-  const correctGatePx = options.correctGatePx ?? 30;
+  // Correction gate: DERIVED from the caller's acceptance gate so it sits strictly
+  // below it (closing the [correctGate, accept) dead band). An explicit
+  // options.correctGatePx still wins for callers/benches that pin a value, but it is
+  // CLAMPED below the acceptance gate too — the invariant holds no matter the source.
+  const acceptGatePx = options.acceptGatePx !== undefined && options.acceptGatePx > 0
+    ? options.acceptGatePx
+    : DEFAULT_ACCEPT_GATE_PX;
+  const correctGatePx = Math.min(
+    acceptGatePx - 1,
+    options.correctGatePx ?? deriveCorrectionGatePx(options.acceptGatePx),
+  );
   const correctMaxPx = options.correctMaxPx ?? 80;
   const landedRes = landed ? dist(landed, target) : Infinity;
   if (landed && landedRes > correctGatePx && landedRes < correctMaxPx) {
@@ -377,6 +373,6 @@ export async function moveByCurveOneShot(
     diagnostics: [],
     finalDetectedPosition: landed,
     finalResidualPx: landed ? dist(landed, target) : null,
-    message: landed ? `curve-one-shot: landed ${dist(landed, target).toFixed(1)}px from target${woken ? ' (after faded-cursor wake)' : ''}${warmedColdStart ? ' (after cold-start warm-up)' : ''}` : 'curve-one-shot: verify detection failed after move',
+    message: landed ? `curve-one-shot: landed ${dist(landed, target).toFixed(1)}px from target${woken ? ' (after faded-cursor wake)' : ''}` : 'curve-one-shot: verify detection failed after move',
   };
 }

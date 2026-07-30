@@ -253,11 +253,12 @@ The server has two movement/detection paths and **you must pick one at startup**
 auto-detect):
 
 - **`ipad`** — relative-mouse target: the deterministic **curve-one-shot** mover + the **cascade**
-  cursor detector (the iPad path). The mover self-heals a cold pointer: a fully-faded cursor is
-  un-faded by a net-zero jiggle before detection (M2), and the **first** shot after a relaunch or a
-  long idle/foreground gap gets the same jiggle+settle warm-up so it isn't computed from a cold
-  pointer (fix (e) — the ~25px first-click-after-relaunch skip). Neither loosens the `maxResidualPx`
-  correct-element gate; they warm the pointer, not the threshold.
+  cursor detector (the iPad path). A fully-faded cursor is un-faded by a net-zero jiggle before
+  detection (M2). The mover's one **correction shot** is gated strictly BELOW the caller's
+  `maxResidualPx` acceptance gate (derived from it, not an independent constant) so a residual in
+  what used to be the `[correctGate, maxResidualPx)` dead band is re-shot instead of silently
+  skipped — the fix for the systematic ~18px open-loop error that landed ~25.3px at some geometries.
+  `maxResidualPx` itself is untouched.
 - **`desktop`** — absolute-mouse target: the legacy **detect-then-move** path (the original
   upstream project's auto-calibrate + template/shape detection).
 
