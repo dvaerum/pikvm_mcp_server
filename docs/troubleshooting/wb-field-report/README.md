@@ -7,6 +7,16 @@ improvement ideas surfaced along the way. **Keep appending as new problems
 appear** — newest entries at the top of the Problem Log. Maintained by the
 Claude agent working the washing-brothers-ios repo.
 
+> ⚠️ **NEWEST → [`2026-07-30-cursor-detection-blocker.md`](2026-07-30-cursor-detection-blocker.md)**
+> — reported as "HID healthy but the cursor can't be localized, so ALL clicking
+> fails"; it blocked an on-device Stripe test entirely. **VERIFIED on the rig
+> 2026-07-30: the symptoms reproduce exactly, but the root cause was HID being
+> DOWN** (mouse *and* keyboard dead, UDC `not attached`) — one `soft_connect`
+> restored it and clicks landed 4/4 @ 1.0 px. The detector was reporting honestly.
+> Two real bugs it surfaced ARE being fixed: the missing `force` escape hatch, and
+> `PIKVM_HID_RECOVERY_URL` not being wired on pikvm01 (the incident's real fix).
+> See the **VERIFICATION** section at the end of that file before acting on it.
+
 - **App under test:** **WashingBrothers Kiosk** (SwiftUI + WKWebView hosting the
   user-web SPA), bundle id `dk.vammencamping.sumuppayment`, shown as "Kiosk 1"
   (kiosk `b78f7c49`) on screen — this is the app in all screenshots below.
@@ -196,12 +206,19 @@ scroll primitive needs an optional target coordinate (move-then-scroll) — see 
 
 ## MCP tool bugs / improvement ideas
 
-- **M0 — add a `pikvm_usb_reconnect` primitive.** Encapsulate the P1 recovery
-  ladder (soft_connect → UDC unbind/rebind → poll `state` for `configured` →
-  behavioral confirm). This turns a multi-minute, multi-SSH manual recovery (or
-  a wasted PiKVM reboot) into one call. The 2026-07-20 doc proposed this for
-  `soft_connect` only; **it must include the UDC rebind**, since soft_connect
-  alone was proven insufficient (P1).
+> **Shipped 2026-07-27:** M0 and M5 below were implemented in `pikvm_mcp_server`
+> as new MCP tools — `pikvm_usb_reconnect` and `pikvm_snapshot`. See the ✅ notes.
+
+- **M0 — add a `pikvm_usb_reconnect` primitive.** ✅ **SHIPPED as
+  `pikvm_usb_reconnect`.** Encapsulate the P1 recovery ladder (soft_connect →
+  UDC unbind/rebind → poll `state` for `configured` → behavioral confirm). This
+  turns a multi-minute, multi-SSH manual recovery (or a wasted PiKVM reboot) into
+  one call. The 2026-07-20 doc proposed this for `soft_connect` only; **it must
+  include the UDC rebind**, since soft_connect alone was proven insufficient (P1).
+  *The shipped tool does exactly this: runs soft_connect then udc-rebind (no
+  destructive reboot), and verifies each rung by BOTH the ground-truth UDC state
+  AND a behavioral move-and-diff, because the kvmd HID flags lie (P3). Reach for
+  it first when HID dies; escalate to `pikvm_hid_recover` only if it fails.*
 - **M1 — `pikvm_mouse_scroll` should accept an optional `x`/`y` target** (move
   pointer there, then scroll) so callers can scroll a specific pane. Today it
   scrolls wherever the pointer happens to be (P4). **⚠ SHIPPED but BROKEN ON iPad
@@ -224,17 +241,15 @@ scroll primitive needs an optional target coordinate (move-then-scroll) — see 
   value (`configured`/`not attached`) is the *reliable* HID-attach signal; the
   current `hid.*.online` flags are not (P3). Add it to health output.
 - **M5 — a first-class snapshot-to-file function (its own tool), + `savePath` on
-  `pikvm_screenshot`.** Snapshotting to disk should be its **own dedicated
-  function** — e.g. `pikvm_snapshot(savePath, region?)` that grabs
-  `/api/streamer/snapshot` and writes it, returning the path — NOT only a manual
-  `curl .../api/streamer/snapshot` over SSH (the only option today). Then
-  `pikvm_screenshot` can also take an optional `savePath` for the inline case.
-  Making snapshot a standalone primitive is what lets everything else compose it
-  (see M8: the mouse tools' before/during/after capture is just this function
-  called at each phase). *(Corollary from P1.5: the MCP screenshot showed the
-  stranded cursor but the follow-up disk snapshot ~1-2 s later had already lost it
-  to the auto-fade — so the ONLY frame that contained the cursor was the
-  un-saveable MCP one. A real snapshot-to-file primitive would have captured it.)*
+  `pikvm_screenshot`.** ✅ **SHIPPED as `pikvm_snapshot(savePath, region?, quality?,
+  maxWidth?, maxHeight?)`** — grabs `/streamer/snapshot`, optional region crop,
+  writes the JPEG, returns path + byte size; no base64 through the conversation,
+  no SSH/curl. Verified 2026-07-27 (saved 1920×1080 in one call). This is exactly
+  the standalone primitive requested: it lets everything else compose it (see M8 —
+  the mouse tools' before/during/after capture is just this called at each phase).
+  *(Corollary from P1.5, now moot: the ONLY frame that contained the stranded
+  cursor used to be the un-saveable MCP screenshot; `pikvm_snapshot` — ideally
+  paired with a move so the cursor is rendered — now captures it directly.)*
 - **M6 — `verifyClick` must not double-fire on keypads (P1.5).** When a click's
   legitimate effect is a sub-threshold pixel change (one dot on a PIN field, a
   key highlight), the retry loop re-taps the SAME key and corrupts input. Fix
@@ -276,13 +291,23 @@ scroll primitive needs an optional target coordinate (move-then-scroll) — see 
 ## Access / environment quick-reference
 - SSH: `ssh root@pikvm01.bb.vcamp.dk` (agent default key authorized).
 - UDC: `fe980000.usb`. Gadget configfs: `/sys/kernel/config/usb_gadget/kvmd`.
-- Snapshot: `curl -s -k -u admin:$PASS https://localhost/api/streamer/snapshot`
+- Snapshot to file: **`pikvm_snapshot(savePath, region?)`** (shipped 2026-07-27 —
+  M5). Fallback: `curl -s -k -u admin:$PASS https://localhost/api/streamer/snapshot`
   (`$PASS` = `~/.config/sops-nix/secrets/pikvm-password`).
+- HID dead (no cursor / no keys): **`pikvm_usb_reconnect`** first (shipped
+  2026-07-27 — M0; soft_connect→udc-rebind, no reboot). Manual fallback = the
+  UDC unbind/rebind in P1.
 - iPad devicectl id: `CF2B815D-7960-5B60-987B-FA2DC9A65353`
   (`xcrun devicectl device process launch --device <id> com.apple.Preferences`
   opens Settings foreground with no HID — the escape hatch when HID is dead).
 
 ## Changelog
+- **2026-07-27** (ios-agent side) — confirmed both shipped tools from the
+  washing-brothers-ios session that filed this report: **`pikvm_usb_reconnect`**
+  (M0) and **`pikvm_snapshot`** (M5) are now present; `pikvm_snapshot` re-verified
+  (1920×1080 saved in one call, no SSH/curl). Marked M0/M5 ✅ in the ideas list.
+  Noted the maintainer's M1-iPad-FAIL finding matches what this session saw
+  (absolute moves don't land on iPadOS; curve-one-shot / relative is the only path).
 - **2026-07-27** (live-verify cycle, iPad node) — M6 singleTap LIVE-verified + merged
   (#25): default maxRetries=3 triple-fired one PIN tap AND escaped the dismissed pad
   to tap a machine card → payment screen; singleTap = one tap/one dot. Fixed the
