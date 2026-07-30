@@ -78,6 +78,24 @@ describe('makeSshRecoveryTrigger', () => {
     expect(args).toContain('root@pikvm01');
   });
 
+  it('udc-rebind carries ONE bounded retry-with-settle, not a retry loop', async () => {
+    const exec = okExec('udc=x after=configured retry=no');
+    await makeSshRecoveryTrigger({ host: 'root@pikvm01', exec }).escalate('udc-rebind');
+    const remote: string = (exec as unknown as { mock: { calls: string[][][] } }).mock.calls[0][0].at(-1) as string;
+    // retry is guarded on the state re-read, and there is exactly one extra bind
+    expect(remote).toContain('[ "$A" = "configured" ] ||');
+    expect(remote).toMatch(/retry=/);
+    expect(remote).not.toMatch(/while|until|for /);          // no loop
+    expect((remote.match(/echo \$U > \$G\/UDC/g) ?? []).length).toBe(2); // initial + one retry
+  });
+
+  it('still reports the TRUTHFUL failure when even the retry does not attach', async () => {
+    const exec = okExec('udc=x before=not attached after=not attached retry=retried');
+    const r = await makeSshRecoveryTrigger({ host: 'root@pikvm01', exec }).escalate('udc-rebind');
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('retry=retried');            // the caller sees it tried
+  });
+
   it('refuses to interpolate an unsafe UDC/gadget name', () => {
     expect(() => makeSshRecoveryTrigger({ host: 'h', udc: 'x; rm -rf /' })).toThrow(/unsafe udc/);
     expect(() => makeSshRecoveryTrigger({ host: 'h', gadget: '$(id)' })).toThrow(/unsafe gadget/);
