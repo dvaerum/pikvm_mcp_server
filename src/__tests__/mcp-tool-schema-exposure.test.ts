@@ -410,5 +410,33 @@ describe('MCP tool schema and handler exposure', () => {
       expect(handler).toMatch(/maxResidualPx !== undefined && maxResidualPx > 0/);
       expect(handler).toContain('adjacent element');
     });
+
+    // The #34 regression fix: an explicit `force` escape hatch to click at the
+    // predicted position when the cursor can't be localized — but LOUD and
+    // never silently read as a landing. Default (no force) still skips.
+    it('force escape hatch is in the schema and gated explicitly', async () => {
+      const src = await readIndexTs();
+      const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
+      expect(tool).toMatch(/force:\s*\{[^}]*type:\s*'boolean'/);
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      // Explicitly parsed, not silently ignored.
+      expect(handler).toMatch(/const force = validateBoolean\(args\.force\)/);
+      // The null-detection skip only fires WITHOUT force → force falls through
+      // to the click.
+      expect(handler).toMatch(/result\.finalDetectedPosition === null && !force/);
+    });
+
+    it('a forced click is reported UNVERIFIED, never as a plain landing', async () => {
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      expect(handler).toMatch(/const forcedUnverified = /);
+      // The forced-click line must be loudly distinguishable from a landing.
+      expect(handler).toMatch(/forcedUnverified\s*\n?\s*\?/);
+      expect(handler).toContain('UNVERIFIED');
+      expect(handler).toContain('LANDING IS NOT CONFIRMED');
+      // ...and force must NOT touch the maxResidualPx (wrong-element) gate:
+      // that gate only runs when finalDetectedPosition is non-null.
+      expect(handler).toMatch(/!mouseAbsoluteMode && result\.finalDetectedPosition\)/);
+    });
   });
 });
