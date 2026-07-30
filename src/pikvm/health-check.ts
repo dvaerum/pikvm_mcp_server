@@ -192,7 +192,11 @@ export async function runHealthCheck(
         lines.push(`Pointer localization: FAILED (${(err as Error).message}).`);
       }
     }
-    lines.push(`  → ${describeHidDiagnosis(classifyHid({ hidUp, cursor }))}`);
+    // udcConfirmed: a CONFIDENT/directive DOWN is allowed only when the verdict
+    // rests on UDC kernel state — with no reader wired (opts.udcState null) a
+    // flags-derived down is a NON-DIRECTIVE hedge, because the flags misreport DOWN
+    // on a working HID (live-observed both-offline while clicks landed).
+    lines.push(`  → ${describeHidDiagnosis(classifyHid({ hidUp, cursor, udcConfirmed: udc != null }))}`);
   }
 
   // Attempt iPad bounds detection — informative on portrait/landscape,
