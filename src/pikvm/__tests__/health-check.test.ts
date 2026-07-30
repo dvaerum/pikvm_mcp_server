@@ -110,4 +110,51 @@ describe('runHealthCheck', () => {
       expect(r.lines.join('\n')).toMatch(/HID verdict: DOWN \(UDC absent\) → run pikvm_usb_reconnect/);
     });
   });
+
+  describe('(d) — HID DOWN vs HID UP-but-cursor-not-localizable', () => {
+    const withFrame = () => stubClient({ screenshot: async () => ({ buffer: Buffer.from('frame') }) });
+
+    it('HID UP (UDC configured) + cursor localizable ⇒ healthy pointer line', async () => {
+      const r = await runHealthCheck(withFrame(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: 'fe980000.usb', state: 'configured', online: true },
+        locateCursor: async () => ({ x: 640, y: 360 }),
+      });
+      const out = r.lines.join('\n');
+      expect(out).toMatch(/HID UP and cursor localizable at \(640,360\)/);
+    });
+
+    it('HID UP but cursor NOT LOCALIZABLE ⇒ the distinct diagnosis, and does NOT tell the operator to usb_reconnect', async () => {
+      const r = await runHealthCheck(withFrame(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: 'fe980000.usb', state: 'configured', online: true },
+        locateCursor: async () => null,
+      });
+      const out = r.lines.join('\n');
+      expect(out).toMatch(/HID UP but cursor NOT LOCALIZABLE/);
+      expect(out).toMatch(/pikvm_usb_reconnect will NOT help/);
+      expect(out).toMatch(/pikvm_mouse_move/);
+    });
+
+    it('HID DOWN (UDC not attached) SKIPS the pointer probe — no ORT inference on a dead gadget', async () => {
+      let located = false;
+      const r = await runHealthCheck(withFrame(), {
+        mouseAbsoluteMode: false,
+        udcState: { udc: 'fe980000.usb', state: 'not attached', online: false },
+        locateCursor: async () => { located = true; return { x: 1, y: 1 }; },
+      });
+      expect(located).toBe(false); // guard: hidUp===false ⇒ pointer probe skipped
+      expect(r.lines.join('\n')).not.toMatch(/cursor localizable/);
+    });
+
+    it('no UDC endpoint: falls back to the keyboard probe (keyboardOnline) ⇒ up-no-cursor', async () => {
+      const r = await runHealthCheck(withFrame(), {
+        mouseAbsoluteMode: false,
+        udcState: null, // graceful degrade — no ground truth
+        locateCursor: async () => null,
+      });
+      // default stub keyboardOnline:true ⇒ HID treated up ⇒ pointer probe runs
+      expect(r.lines.join('\n')).toMatch(/HID UP but cursor NOT LOCALIZABLE/);
+    });
+  });
 });

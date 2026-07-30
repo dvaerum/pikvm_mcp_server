@@ -25,6 +25,7 @@ import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './au
 import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
 import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
+import { diagnoseHidFromClient, describeHidDiagnosis } from './pikvm/hid-diagnosis.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
 import {
   parseCaptureConfig,
@@ -1219,6 +1220,13 @@ async function handle_pikvm_hid_recover(args: Record<string, unknown>): Promise<
         if (result.humanActionRequired) {
           lines.push(`R4 — HUMAN ACTION REQUIRED: ${result.humanActionRequired}`);
         }
+        // (d): on failure, tell the operator WHICH failure mode this is — a dead
+        // input path (HID DOWN → the reboot rung / re-plug make sense) vs a gadget
+        // that's attached but whose pointer can't be localized (usb_reconnect/reboot
+        // won't help; wake the cursor or fix brightness instead).
+        if (!result.recovered && result.targetPresent) {
+          lines.push(`Diagnosis: ${describeHidDiagnosis(await diagnoseHidFromClient(pikvm, getUdcStateReader()))}`);
+        }
         if (!result.recovered && result.targetPresent && maxRung < 4) {
           lines.push('Not recovered by the allowed rungs. Reboot (R3b) worked once and is the most reliable remote option: re-run with maxRung:4, allowReboot:true (needs the host recovery trigger configured).');
         }
@@ -1276,8 +1284,15 @@ async function handle_pikvm_usb_reconnect(args: Record<string, unknown>): Promis
           : result.recovered
             ? `RECONNECTED via ${rungUsed} (UDC=${finalUdc?.state ?? 'unknown'}).`
             : 'NOT recovered by soft_connect→udc-rebind — see message.';
+        // (d): on failure, distinguish a dead input path (HID DOWN) from a gadget
+        // that's attached but whose pointer can't be localized — the latter is not a
+        // reconnect problem, so escalating to a reboot would be the wrong move.
+        let diagnosisLine = '';
+        if (!result.recovered && result.targetPresent) {
+          diagnosisLine = `\nDiagnosis: ${describeHidDiagnosis(await diagnoseHidFromClient(pikvm, reader))}`;
+        }
         return {
-          content: [{ type: 'text', text: `${summary}\n${JSON.stringify(report, null, 2)}` }],
+          content: [{ type: 'text', text: `${summary}\n${JSON.stringify(report, null, 2)}${diagnosisLine}` }],
           isError: !result.recovered,
         };
 }

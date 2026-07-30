@@ -13,6 +13,7 @@ import { PiKVMClient } from './client.js';
 import { detectIpadBoundsFromBuffer, boundsToRegion } from './orientation.js';
 import { analyzeBrightness, formatBrightnessReport } from './brightness.js';
 import { type UdcState } from './hid-recovery.js';
+import { classifyHid, describeHidDiagnosis, defaultCursorLocator, type CursorLocator } from './hid-diagnosis.js';
 import { VERSION } from '../version.js';
 
 /** The subset of PiKVMClient the health check drives — a structural type so
@@ -38,6 +39,12 @@ export async function runHealthCheck(
      * → the report falls back to the (lying) kvmd flags with a note.
      */
     udcState?: UdcState | null;
+    /**
+     * (d): pointer localizer for the HID-down vs HID-up-but-cursor-not-localizable
+     * split. Injectable so unit tests never touch onnxruntime; defaults to the same
+     * V8 detector the mover/click use.
+     */
+    locateCursor?: CursorLocator;
   },
 ): Promise<HealthCheckResult> {
   let mouseAbsoluteMode = opts.mouseAbsoluteMode;
@@ -81,9 +88,13 @@ export async function runHealthCheck(
   // Live HID profile — re-read so a transient startup-detection failure
   // doesn't permanently mislead the operator.
   let hidFlags: { mouseOnline: boolean; keyboardOnline: boolean } | null = null;
+  // (d): HID up/down ground truth for the pointer-diagnosis below. Seeded from the
+  // keyboard probe (advisory), overridden by the UDC state when the endpoint is wired.
+  let hidUp: boolean | null = null;
   try {
     const hid = await pikvm.getHidProfile();
     hidFlags = { mouseOnline: hid.mouseOnline, keyboardOnline: hid.keyboardOnline };
+    hidUp = hid.keyboardOnline;
     lines.push(
       `Live HID profile: mouse=${hid.mouseOnline ? 'online' : 'offline'}/` +
       `${hid.mouseAbsolute ? 'absolute' : 'relative'}, ` +
@@ -119,6 +130,7 @@ export async function runHealthCheck(
       `falling back to the kvmd HID flags above, which may lie). Set PIKVM_HID_RECOVERY_URL to enable.`,
     );
   } else {
+    hidUp = udc.online; // UDC ground truth overrides the advisory keyboard probe
     lines.push(
       `USB HID gadget (ground truth): ${udc.state}${udc.udc ? ` [${udc.udc}]` : ''} — ` +
       `this is THE HID up/down signal.`,
@@ -156,6 +168,21 @@ export async function runHealthCheck(
     healthShot = await pikvm.screenshot();
   } catch (err) {
     lines.push(`Screenshot: FAILED (${(err as Error).message}). Cannot run bounds or brightness checks.`);
+  }
+
+  // (d): split the "HID broken" bucket. HID DOWN (input path dead) needs
+  // usb_reconnect; HID UP but cursor NOT LOCALIZABLE (gadget attached, pointer
+  // faded/off-screen) does NOT — usb_reconnect can't fix a pointer that isn't
+  // rendering. Only probe the cursor when HID might be up (skip an ORT inference
+  // on a confirmed-down gadget) and when we actually got a frame.
+  if (hidUp !== false && healthShot) {
+    let cursor: { x: number; y: number } | null = null;
+    try {
+      cursor = await (opts.locateCursor ?? defaultCursorLocator)(healthShot.buffer);
+    } catch (err) {
+      lines.push(`Pointer localization: FAILED (${(err as Error).message}).`);
+    }
+    lines.push(`  → ${describeHidDiagnosis(classifyHid({ hidUp, cursor }))}`);
   }
 
   // Attempt iPad bounds detection — informative on portrait/landscape,
