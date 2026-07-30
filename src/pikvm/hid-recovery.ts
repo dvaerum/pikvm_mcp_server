@@ -604,3 +604,58 @@ export function makeUdcStateReader(
     }
   };
 }
+
+/**
+ * GROUND-TRUTH UDC state over SSH — the STOCK-PiKVM counterpart to
+ * {@link makeUdcStateReader}, so a box with no recovery endpoint still gets
+ * KERNEL truth instead of the kvmd flags.
+ *
+ * Why this matters (live-verified 2026-07-30): on stock pikvm01 the flags read
+ * `mouse=online, keyboard=offline` for a solid 30s while the gadget was
+ * `configured` and clicking landed 4/4 — i.e. `keyboardOnline` alone is NOT a
+ * usable HID up/down signal (the long-standing "the flags lie" finding, P3).
+ * Anything diagnosing HID up/down must prefer this reader when it's available
+ * and treat the flag heuristic strictly as a fallback.
+ *
+ * Read-only: it runs `cat /sys/class/udc/<udc>/state` for the discovered UDC and
+ * nothing else. Returns null (never throws, never guesses) when unconfigured or
+ * unreadable, so callers degrade to their fallback exactly as with HTTP.
+ */
+export function makeSshUdcStateReader(cfg: {
+  /** `[user@]host`; unset ⇒ reader disabled (always null). */
+  host?: string;
+  /** Optional UDC override; default = the single entry under /sys/class/udc. */
+  udc?: string;
+  exec?: SshExec;
+  timeoutMs?: number;
+}): () => Promise<UdcState | null> {
+  const host = cfg.host?.trim();
+  if (!host) return async () => null;
+  if (cfg.udc && !SAFE_SYSFS_NAME.test(cfg.udc)) {
+    throw new Error(`makeSshUdcStateReader: refusing unsafe udc name ${JSON.stringify(cfg.udc)}`);
+  }
+  const exec = cfg.exec ?? defaultSshExec;
+  const timeoutMs = cfg.timeoutMs ?? 15_000;
+  const script = [
+    cfg.udc ? `U=${cfg.udc}` : 'U=$(ls -1 /sys/class/udc 2>/dev/null | head -n1)',
+    '[ -n "$U" ] || { echo "udc= state=absent"; exit 0; }',
+    'echo "udc=$U state=$(cat /sys/class/udc/$U/state 2>/dev/null)"',
+  ].join('; ');
+
+  return async () => {
+    try {
+      const { code, stdout } = await exec(
+        ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', host, script],
+        { timeoutMs },
+      );
+      if (code !== 0) return null;
+      const m = /udc=(\S*)\s+state=(.*)$/m.exec(stdout.trim());
+      if (!m) return null;
+      const state = m[2].trim();
+      if (!state) return null;
+      return { udc: m[1] || null, state, online: state === 'configured' };
+    } catch {
+      return null;
+    }
+  };
+}

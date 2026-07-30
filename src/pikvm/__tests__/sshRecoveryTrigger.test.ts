@@ -5,7 +5,7 @@
  * SCOPE (fixed sysfs/configfs sequences, never a general remote shell).
  */
 import { describe, it, expect, vi } from 'vitest';
-import { makeSshRecoveryTrigger, type SshExec } from '../hid-recovery.js';
+import { makeSshRecoveryTrigger, makeSshUdcStateReader, type SshExec } from '../hid-recovery.js';
 
 const okExec = (stdout: string): SshExec => vi.fn(async () => ({ code: 0, stdout, stderr: '' }));
 
@@ -99,5 +99,45 @@ describe('makeSshRecoveryTrigger', () => {
   it('refuses to interpolate an unsafe UDC/gadget name', () => {
     expect(() => makeSshRecoveryTrigger({ host: 'h', udc: 'x; rm -rf /' })).toThrow(/unsafe udc/);
     expect(() => makeSshRecoveryTrigger({ host: 'h', gadget: '$(id)' })).toThrow(/unsafe gadget/);
+  });
+});
+
+describe('makeSshUdcStateReader (stock-box kernel ground truth)', () => {
+  it('is disabled (always null) without a host, so callers fall back cleanly', async () => {
+    await expect(makeSshUdcStateReader({})()).resolves.toBeNull();
+  });
+
+  it('reports online ONLY for the kernel "configured" state', async () => {
+    const cfg = await makeSshUdcStateReader({ host: 'h', exec: okExec('udc=fe980000.usb state=configured\n') })();
+    expect(cfg).toEqual({ udc: 'fe980000.usb', state: 'configured', online: true });
+    const det = await makeSshUdcStateReader({ host: 'h', exec: okExec('udc=fe980000.usb state=not attached\n') })();
+    expect(det).toEqual({ udc: 'fe980000.usb', state: 'not attached', online: false });
+  });
+
+  it('is READ-ONLY — it must never write to sysfs', async () => {
+    const exec = okExec('udc=x state=configured');
+    await makeSshUdcStateReader({ host: 'h', exec })();
+    const remote: string = (exec as unknown as { mock: { calls: string[][][] } }).mock.calls[0][0].at(-1) as string;
+    expect(remote).toContain('cat /sys/class/udc/');
+    // read-only = no redirection INTO sysfs/configfs and no toggle/bind writes
+    // (a bare `2>/dev/null` stderr redirect is fine and must not trip this).
+    expect(remote).not.toMatch(/>\s*\/sys/);
+    expect(remote).not.toContain('soft_connect');
+    expect(remote).not.toContain('usb_gadget');
+  });
+
+  it('returns null (never a guess) on a failed or unparseable read', async () => {
+    const bad: SshExec = async () => ({ code: 255, stdout: '', stderr: 'ssh: connect timeout' });
+    await expect(makeSshUdcStateReader({ host: 'h', exec: bad })()).resolves.toBeNull();
+    await expect(makeSshUdcStateReader({ host: 'h', exec: okExec('garbage') })()).resolves.toBeNull();
+  });
+
+  it('reports the synthetic absent state when no UDC exists', async () => {
+    const r = await makeSshUdcStateReader({ host: 'h', exec: okExec('udc= state=absent') })();
+    expect(r).toEqual({ udc: null, state: 'absent', online: false });
+  });
+
+  it('refuses an unsafe udc override', () => {
+    expect(() => makeSshUdcStateReader({ host: 'h', udc: '$(reboot)' })).toThrow(/unsafe udc/);
   });
 });
