@@ -36,6 +36,7 @@
  * pikvm-nixos against the {@link RecoveryTrigger} contract (see runbook). Until
  * wired, host rungs report unavailable.
  */
+import { execFile } from 'node:child_process';
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import { decodeScreenshot, diffScreenshotsDecoded } from './cursor-detect.js';
 
@@ -343,6 +344,147 @@ export function makeHttpRecoveryTrigger(cfg: {
           return { ok: true, message: `reboot initiated (host connection dropped: ${(err as Error).message})` };
         }
         return { ok: false, message: `host trigger ${action} failed: ${(err as Error).message}` };
+      }
+    },
+  };
+}
+
+/** Runs one remote command. Injectable so the SSH trigger is unit-testable. */
+export type SshExec = (
+  args: string[],
+  opts: { timeoutMs: number },
+) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+/** UDC / gadget directory names we are willing to interpolate into a command. */
+const SAFE_SYSFS_NAME = /^[A-Za-z0-9._:-]+$/;
+
+const defaultSshExec: SshExec = (args, opts) =>
+  new Promise((resolve) => {
+    execFile('ssh', args, { timeout: opts.timeoutMs }, (err, stdout, stderr) => {
+      const code = err && typeof (err as { code?: unknown }).code === 'number'
+        ? ((err as { code: number }).code)
+        : err ? 255 : 0;
+      resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
+    });
+  });
+
+/**
+ * SSH host-recovery transport — the STOCK-PiKVM backend for the same
+ * {@link RecoveryTrigger} contract the appliance serves over loopback HTTP.
+ *
+ * Why this exists (2026-07-30): the MCP is meant to drive ANY PiKVM, including
+ * a stock Arch image that has no pikvm-nixos recovery endpoint. Live evidence:
+ * pikvm01 runs stock Arch (nothing on :8082, no recovery unit), so
+ * `pikvm_usb_reconnect` had no transport and the one failure it exists to fix —
+ * the HID gadget dropping to `not attached` — was unrecoverable from the MCP.
+ * Toggling the UDC's D+ pull-up over SSH recovers it (validated by hand on that
+ * box: `not attached` → `configured`, mouse+keyboard back, clicks landing).
+ *
+ * SCOPE: deliberately NOT a remote shell. Each action is a fixed sysfs/configfs
+ * sequence with only a discovered, charset-validated UDC/gadget name
+ * interpolated. `reboot` is intentionally unsupported here.
+ *
+ * AUTH: uses the operator's existing SSH configuration/agent (`ssh <host> …`,
+ * BatchMode so it never hangs on a prompt). No key material is read, embedded
+ * or transmitted by this code; a dedicated recovery key would be a sops concern.
+ *
+ * TRUTHFUL RESULT (the fix-(c) lesson): success is NOT "the command exited 0" —
+ * it requires the UDC `state` to actually read `configured` afterwards. The
+ * before/after states are reported either way, so a caller is never told a
+ * recovery worked when the kernel says otherwise.
+ */
+export function makeSshRecoveryTrigger(cfg: {
+  /** `[user@]host` for the PiKVM, e.g. `root@pikvm01`. Unset ⇒ not configured. */
+  host?: string;
+  /** Optional UDC override; default = the single entry under /sys/class/udc. */
+  udc?: string;
+  /** Optional gadget dir name under /sys/kernel/config/usb_gadget (rebind only). */
+  gadget?: string;
+  exec?: SshExec;
+  timeoutMs?: number;
+}): RecoveryTrigger {
+  const host = cfg.host?.trim();
+  const exec = cfg.exec ?? defaultSshExec;
+  const timeoutMs = cfg.timeoutMs ?? 45_000;
+
+  for (const [label, value] of [['udc', cfg.udc], ['gadget', cfg.gadget]] as const) {
+    if (value && !SAFE_SYSFS_NAME.test(value)) {
+      throw new Error(`makeSshRecoveryTrigger: refusing unsafe ${label} name ${JSON.stringify(value)}`);
+    }
+  }
+
+  // Resolve the UDC once per call, on the host, so nothing is hardcoded.
+  const udcExpr = cfg.udc
+    ? `U=${cfg.udc}`
+    : 'U=$(ls -1 /sys/class/udc 2>/dev/null | head -n1)';
+  const gadgetExpr = cfg.gadget
+    ? `G=/sys/kernel/config/usb_gadget/${cfg.gadget}`
+    : 'G=$(ls -1d /sys/kernel/config/usb_gadget/*/ 2>/dev/null | head -n1)';
+  const guard = '[ -n "$U" ] || { echo "no UDC under /sys/class/udc" >&2; exit 3; }';
+  const readBefore = 'B=$(cat /sys/class/udc/$U/state 2>/dev/null)';
+  const readAfter = 'A=$(cat /sys/class/udc/$U/state 2>/dev/null); echo "udc=$U before=$B after=$A"';
+
+  const SCRIPTS: Record<Exclude<HostRecoveryAction, 'reboot'>, string> = {
+    // R2 — kernel D+ pull-up toggle. The validated everyday fix.
+    soft_connect: [
+      udcExpr, guard, readBefore,
+      'printf disconnect > /sys/class/udc/$U/soft_connect',
+      'sleep 2',
+      'printf connect > /sys/class/udc/$U/soft_connect',
+      'sleep 5', readAfter,
+    ].join('; '),
+    // R3a — configfs unbind/rebind ("software replug") for the full-dead mode
+    // soft_connect can't clear. NOT `systemctl restart kvmd-otg` (FileExistsError).
+    'udc-rebind': [
+      udcExpr, guard, gadgetExpr,
+      '[ -n "$G" ] || { echo "no usb_gadget configfs dir" >&2; exit 4; }',
+      readBefore,
+      'echo "" > $G/UDC',
+      'sleep 3',
+      'echo $U > $G/UDC',
+      'sleep 5', readAfter,
+    ].join('; '),
+  };
+
+  const sshArgs = (remote: string): string[] => [
+    '-o', 'BatchMode=yes',
+    '-o', 'ConnectTimeout=10',
+    host as string,
+    remote,
+  ];
+
+  return {
+    configured: Boolean(host),
+    async escalate(action) {
+      if (!host) return { ok: false, message: 'ssh host recovery transport not configured' };
+      if (action === 'reboot') {
+        return {
+          ok: false,
+          message:
+            'reboot is not supported over the SSH recovery transport (scoped to UDC actions); ' +
+            'reboot the PiKVM manually or use the appliance recovery endpoint',
+        };
+      }
+      const script = SCRIPTS[action];
+      try {
+        const { code, stdout, stderr } = await exec(sshArgs(script), { timeoutMs });
+        const out = `${stdout}${stderr}`.trim().replace(/\s+/g, ' ');
+        const after = /after=(\S+)/.exec(stdout)?.[1];
+        if (code !== 0) {
+          return { ok: false, message: `ssh ${action} failed (exit ${code}): ${out.slice(0, 200)}` };
+        }
+        // Ground truth, not exit status: the gadget must actually be attached.
+        if (after !== 'configured') {
+          return {
+            ok: false,
+            message:
+              `ssh ${action} ran but the UDC did NOT come up — ${out.slice(0, 200)} ` +
+              `(state must read "configured"; escalate to udc-rebind or check the cable/target)`,
+          };
+        }
+        return { ok: true, message: `ssh ${action}: ${out.slice(0, 200)}` };
+      } catch (err) {
+        return { ok: false, message: `ssh ${action} failed: ${(err as Error).message}` };
       }
     },
   };
