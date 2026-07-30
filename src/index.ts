@@ -24,7 +24,7 @@ import { startHttpServer } from './http-server.js';
 import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './auth.js';
 import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
-import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
+import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
 import {
   parseCaptureConfig,
@@ -96,7 +96,21 @@ function recoveryEndpointConfig(): { url?: string; token?: string; verifySsl?: b
   };
 }
 function getRecoveryTrigger(): RecoveryTrigger {
-  if (!recoveryTrigger) recoveryTrigger = makeHttpRecoveryTrigger(recoveryEndpointConfig());
+  if (!recoveryTrigger) {
+    // Two backends, ONE tool. The appliance (pikvm-nixos) serves the trigger over
+    // an authenticated loopback endpoint; a STOCK PiKVM has no such endpoint, so
+    // PIKVM_HID_RECOVERY_SSH=[user@]host enables the SSH transport instead (the
+    // MCP must be able to drive any PiKVM, not only our image — 2026-07-30:
+    // pikvm01 is stock Arch, which left pikvm_usb_reconnect with no transport at
+    // exactly the moment HID died). HTTP wins if both are set.
+    const endpoint = recoveryEndpointConfig();
+    recoveryTrigger = endpoint.url
+      ? makeHttpRecoveryTrigger(endpoint)
+      : makeSshRecoveryTrigger({
+          host: process.env.PIKVM_HID_RECOVERY_SSH,
+          udc: process.env.PIKVM_HID_RECOVERY_UDC,
+        });
+  }
   return recoveryTrigger;
 }
 // Ground-truth UDC-state reader (M4/M0): GET {recovery-url}/udc-state. Same
