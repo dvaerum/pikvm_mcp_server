@@ -214,3 +214,45 @@ flight: verify by actual cursor **render/localization** after an emit, not a bar
 ### Also confirmed working
 `M5 pikvm_snapshot`, `M6 singleTap`, and (once HID was up) the M2 faded-cursor wake —
 DEFAULT `click_at` landed 4/4 at 1.0 px from target with the pad opening each time.
+
+### Addendum (2026-07-30, later): the kvmd HID flags lie in BOTH directions
+
+Gating the follow-up fixes turned up a stronger version of P3 than either report
+had. Measured on this rig, repeatedly:
+
+| Signal | Reading |
+|---|---|
+| kvmd flags | `mouse=offline, keyboard=offline` — **both** |
+| UDC kernel state | `configured` |
+| Reality (behavioural) | **clicks land** — 3/4 and 4/4 in separate runs, PIN pad opening each time |
+
+An earlier sample showed the mirror case: `mouse=online, keyboard=offline` held
+for 30+ s while the gadget was `configured` and clicking worked 4/4.
+
+So the flags under-report a *working* HID as well as over-reporting a dead one.
+Consequences we adopted:
+
+- **UDC kernel state is the authoritative HID up/down signal** — via the
+  appliance's loopback endpoint, or via the SSH reader on a stock box. Only a
+  UDC-backed verdict may issue a confident directive.
+- **A flags-only verdict must be NON-DIRECTIVE.** With no UDC reader available,
+  `pikvm_health_check` must hedge ("flags indicate possible HID-down… confirm
+  behaviourally before reconnecting") rather than print "HID DOWN → run
+  `pikvm_usb_reconnect`". A wrong remedial action is worse than no advice: it
+  sends an operator to reconnect/reboot a session whose mouse is fine.
+- Corollary for anyone reading a health report: **`keyboard=offline` alone means
+  nothing.** Confirm with the UDC state, or behaviourally (does a click land?).
+
+Note this cuts against Evidence #6 of the original report in the useful
+direction: the UDC state was *right* in every case tonight; it was the kvmd flags
+that were unreliable in both directions.
+
+### Deployment status (read before relying on any of this)
+
+The SSH recovery transport and the SSH UDC reader are both selected by
+`PIKVM_HID_RECOVERY_SSH`. As of this writing that variable is **not** set in the
+deployed wrapper (`modules/home/pikvm-mcp.nix` in the macos-nixos-setup repo
+carries only `PIKVM_PROXY`), so on the production WB-kiosk MCP they are inert:
+`pikvm_usb_reconnect` has no transport and the diagnosis falls back to the flags
+described above. Persisting that variable is a machine-config change and is
+user-gated — until it lands, HID recovery on this rig still needs a human SSH.
