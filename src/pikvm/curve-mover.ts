@@ -116,6 +116,21 @@ export interface CurveOneShotOptions {
    *  measured.x / FULL_REPORT_PX, scaleY = measured.y / (FULL_REPORT_PX×Y_SCALE). */
   curveScaleX?: number;
   curveScaleY?: number;
+  /** (e) staleness threshold (ms) past which a shot is treated cold and warmed.
+   *  Default COLD_START_STALE_MS. The relaunch case (first shot ever) always warms
+   *  regardless of this value. */
+  coldStartStaleMs?: number;
+}
+
+/** Detection seam — screenshot + locate the cursor. */
+type DetectFn = (client: PiKVMClient, minPresence: number) => Promise<{ x: number; y: number } | null>;
+
+/** Test-only injection seams for {@link moveByCurveOneShot}: a scriptable detector
+ *  (keeps unit tests off onnxruntime) and a controllable clock (drives the (e)
+ *  cold-start decision deterministically). Both default to the real implementations. */
+export interface CurveOneShotDeps {
+  detect?: DetectFn;
+  now?: () => number;
 }
 
 // Faded-cursor wake (M2). A fully-faded iPad pointer is invisible, so V8
@@ -131,6 +146,33 @@ export const WAKE_EMIT_DX = 35;
 export const WAKE_EMIT_DY = 25;
 const WAKE_EMIT_PACE_MS = 70;
 const WAKE_SETTLE_MS = 200;
+
+// Cold-start warm-up (fix (e)). Distinct from M2 above: M2 fires when the pointer
+// is INVISIBLE (detection fails). This fires when the pointer is VISIBLE but COLD —
+// the FIRST curve shot after a relaunch (module state fresh) or a long idle /
+// foreground return. A first emit computed from a cold pointer lands ~25.3px off —
+// a hair over the 25px maxResidualPx gate — while the 2nd/3rd land 1–8px. We warm
+// it with the SAME net-zero jiggle+settle, re-detect, then shoot, so the first emit
+// is computed from a warm, correctly-rendered position. This does NOT touch
+// maxResidualPx (the gate lives in the click_at handler, downstream of the mover) —
+// the fix is the settle, not the threshold.
+//
+// "Relaunch" = process restart, which re-initializes this module state for free.
+// "Foreground transition" is not independently observable, so we proxy it with a
+// staleness threshold on the last warm shot. COLD_START_STALE_MS is a TUNABLE —
+// georgs gates/tunes the value on-device (the null/relaunch case is the guaranteed
+// win; this threshold trades warm-up latency against catching a cold return).
+export const COLD_START_STALE_MS = 10_000;
+let lastWarmCurveShotAt: number | null = null;
+/** Reset the cold-start clock (module state) between unit tests. */
+export function resetCurveMoverColdStartForTest(): void {
+  lastWarmCurveShotAt = null;
+}
+/** Cold = first shot since launch (lastWarmAt null ⇒ relaunch) OR the last shot
+ *  was long enough ago that the pointer likely went cold (idle / foreground return). */
+export function isCurveShotCold(lastWarmAt: number | null, nowMs: number, staleMs = COLD_START_STALE_MS): boolean {
+  return lastWarmAt === null || nowMs - lastWarmAt > staleMs;
+}
 
 /** The relative-emit sequence for the faded-cursor wake: `WAKE_EMIT_COUNT`
  *  alternating-sign emits of (±WAKE_EMIT_DX, ±WAKE_EMIT_DY). The alternation
@@ -152,13 +194,14 @@ export function planWakeEmits(): Array<[number, number]> {
 async function wakeCursorAndRedetect(
   client: PiKVMClient,
   minPresence: number,
+  detectFn: DetectFn = detect,
 ): Promise<{ x: number; y: number } | null> {
   for (const [dx, dy] of planWakeEmits()) {
     await client.mouseMoveRelative(dx, dy);
     await sleep(WAKE_EMIT_PACE_MS);
   }
   await sleep(WAKE_SETTLE_MS);
-  return detect(client, minPresence);
+  return detectFn(client, minPresence);
 }
 
 async function detect(client: PiKVMClient, minPresence: number): Promise<{ x: number; y: number } | null> {
@@ -239,22 +282,40 @@ export async function moveByCurveOneShot(
   client: PiKVMClient,
   target: { x: number; y: number },
   options: CurveOneShotOptions = {},
+  deps: CurveOneShotDeps = {},
 ): Promise<MoveToResult> {
   const paceMs = options.emitPaceMs ?? 110;
   const settleMs = options.settleMs ?? 250;
   const minPresence = options.minPresence ?? 0.5;
+  const detectFn = deps.detect ?? detect;
+  const now = deps.now ?? Date.now;
   const resolution = await client.getResolution(true);
 
   // Detect the cursor. On failure (typically a fully-faded pointer), wake it
   // with a net-neutral relative jiggle and re-detect ONCE before giving up
   // (M2). Detect-failure-only: a visible cursor detects first try and never
   // pays the wake cost.
-  let start = await detect(client, minPresence);
+  let start = await detectFn(client, minPresence);
   let woken = false;
+  let warmedColdStart = false;
   if (!start) {
-    start = await wakeCursorAndRedetect(client, minPresence);
+    start = await wakeCursorAndRedetect(client, minPresence, detectFn);
     woken = start !== null;
+  } else if (isCurveShotCold(lastWarmCurveShotAt, now(), options.coldStartStaleMs)) {
+    // (e): the pointer is VISIBLE but this is the first shot after a relaunch or a
+    // cold gap, so the first emit would be computed from a cold pointer (~25px off).
+    // Warm it with the same net-zero jiggle+settle and re-detect from the warm
+    // position. If the warm re-detect somehow fails, keep the original detection
+    // rather than blinding ourselves.
+    const warm = await wakeCursorAndRedetect(client, minPresence, detectFn);
+    if (warm) {
+      start = warm;
+      warmedColdStart = true;
+    }
   }
+  // Mark this shot's time so the next near-term shot is treated warm (2nd/3rd click
+  // don't re-pay the warm-up); a later shot past the stale window goes cold again.
+  lastWarmCurveShotAt = now();
   const shotAfterStart = await client.screenshot({ quality: 80 });
   const base = {
     screenshot: shotAfterStart.buffer,
@@ -283,7 +344,7 @@ export async function moveByCurveOneShot(
   let emitted = { ...m1 };
   let chunkCount = 1;
 
-  let landed = await detect(client, minPresence);
+  let landed = await detectFn(client, minPresence);
 
   // One correction shot when the first lands in the PLAUSIBLE miss band
   // [correctGatePx, correctMaxPx] (default 30–80px). The emit is deterministic
@@ -301,7 +362,7 @@ export async function moveByCurveOneShot(
     await sleep(settleMs);
     emitted = { x: emitted.x + m2.x, y: emitted.y + m2.y };
     chunkCount += 1;
-    const landed2 = await detect(client, minPresence);
+    const landed2 = await detectFn(client, minPresence);
     if (landed2) landed = landed2;
   }
 
@@ -316,6 +377,6 @@ export async function moveByCurveOneShot(
     diagnostics: [],
     finalDetectedPosition: landed,
     finalResidualPx: landed ? dist(landed, target) : null,
-    message: landed ? `curve-one-shot: landed ${dist(landed, target).toFixed(1)}px from target${woken ? ' (after faded-cursor wake)' : ''}` : 'curve-one-shot: verify detection failed after move',
+    message: landed ? `curve-one-shot: landed ${dist(landed, target).toFixed(1)}px from target${woken ? ' (after faded-cursor wake)' : ''}${warmedColdStart ? ' (after cold-start warm-up)' : ''}` : 'curve-one-shot: verify detection failed after move',
   };
 }
