@@ -173,14 +173,19 @@ export async function runHealthCheck(
   // (d): split the "HID broken" bucket. HID DOWN (input path dead) needs
   // usb_reconnect; HID UP but cursor NOT LOCALIZABLE (gadget attached, pointer
   // faded/off-screen) does NOT — usb_reconnect can't fix a pointer that isn't
-  // rendering. Only probe the cursor when HID might be up (skip an ORT inference
-  // on a confirmed-down gadget) and when we actually got a frame.
-  if (hidUp !== false && healthShot) {
+  // rendering. The verdict must ALWAYS print when we have a frame — including the
+  // confirmed-DOWN case (hidUp===false), which is the whole reason (d) exists and
+  // is the state that produced no guidance before. Skipping the ORT inference on a
+  // down gadget is a separate concern: only LOCALIZE when HID might be up, but
+  // classify + print either way.
+  if (healthShot) {
     let cursor: { x: number; y: number } | null = null;
-    try {
-      cursor = await (opts.locateCursor ?? defaultCursorLocator)(healthShot.buffer);
-    } catch (err) {
-      lines.push(`Pointer localization: FAILED (${(err as Error).message}).`);
+    if (hidUp !== false) {
+      try {
+        cursor = await (opts.locateCursor ?? defaultCursorLocator)(healthShot.buffer);
+      } catch (err) {
+        lines.push(`Pointer localization: FAILED (${(err as Error).message}).`);
+      }
     }
     lines.push(`  → ${describeHidDiagnosis(classifyHid({ hidUp, cursor }))}`);
   }
