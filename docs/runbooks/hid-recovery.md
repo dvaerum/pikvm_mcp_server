@@ -53,6 +53,45 @@ Notes:
 - **Verify after reboot** = client-side wait: poll the behavioral verify until
   healthy (the endpoint is down for the reboot window).
 
+## Transports: stock PiKVM vs our appliance (pick one)
+
+R2/R3a are privileged HOST operations, so the MCP needs a way to reach the box.
+There are **two backends behind the one `RecoveryTrigger` contract** — the tool
+(`pikvm_usb_reconnect`, `pikvm_hid_recover`) is identical either way:
+
+| | **Appliance** (pikvm-nixos image) | **Stock PiKVM** (e.g. Arch, no helper) |
+|---|---|---|
+| Selected by | `PIKVM_HID_RECOVERY_URL` (+ `…_TOKEN`) | `PIKVM_HID_RECOVERY_SSH=[user@]host` |
+| MCP end | `makeHttpRecoveryTrigger()` | `makeSshRecoveryTrigger()` |
+| Mechanism | authenticated POST to the loopback helper | `ssh` runs a fixed sysfs/configfs sequence |
+| Auth | bearer token, loopback-only | the operator's existing ssh config/agent (`BatchMode`) |
+
+**HTTP wins if both are set.** With neither set, host rungs report *unavailable*
+(that is the failure the 2026-07-30 field incident hit: the endpoint isn't wired,
+so `pikvm_usb_reconnect` had no transport at the moment HID died).
+
+**Why the SSH backend exists.** The MCP is meant to drive *any* PiKVM, not only
+our image. Verified 2026-07-30: `pikvm01` runs stock Arch Linux ARM — nothing on
+`:8082`, no recovery unit — and the MCP driving it runs **off-box**. Note that on
+an off-box MCP the appliance's loopback default is *not* enough either: the URL
+would have to point at the appliance (and should be fronted with the bearer token
+on 443, **not** a bare `:8082` on the LAN).
+
+**What the SSH backend will and won't do.** It is deliberately **not a remote
+shell**: only the fixed sequences below, with the UDC/gadget name *discovered* on
+the host and charset-validated before interpolation. `reboot` is **refused** over
+this transport (reboot the PiKVM manually, or use the appliance endpoint).
+
+- `soft_connect` (R2) → read state → `disconnect` → sleep → `connect` → re-read state
+- `udc-rebind` (R3a) → configfs `echo "" > $G/UDC` → sleep → `echo $U > $G/UDC` → re-read state
+
+**Truthful result.** Exit status 0 is **not** success: the UDC `state` must
+actually read `configured` afterwards, otherwise the rung reports failure and
+includes the before/after states. (Same lesson as the behavioral verifier that
+false-positived on "any screen change" while HID was dead.) Live-validated
+2026-07-30 on a real unbind: `not attached` → recovery through the tool →
+`configured`, and clicking resumed.
+
 ## Trigger interface (MCP ↔ pikvm-nixos)
 
 R2/R3a/R3b are privileged host operations. The MCP service runs unprivileged
