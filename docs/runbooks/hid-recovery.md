@@ -92,6 +92,40 @@ false-positived on "any screen change" while HID was dead.) Live-validated
 2026-07-30 on a real unbind: `not attached` → recovery through the tool →
 `configured`, and clicking resumed.
 
+## Ground-truth UDC state (who may issue a confident verdict)
+
+`/sys/class/udc/<udc>/state` is the **authoritative** HID up/down signal. The
+kvmd `mouse/keyboardOnline` flags are NOT: measured on a stock box 2026-07-30,
+they read **both offline while the gadget was `configured` and clicks landed**,
+and separately `mouse=online/keyboard=offline` for 30+ s on a healthy link. They
+misreport in *both* directions.
+
+Two readers, selected exactly like the recovery transports:
+
+| | Appliance | Stock PiKVM |
+|---|---|---|
+| Reader | `makeUdcStateReader()` — GET `{recovery-url}/udc-state` | `makeSshUdcStateReader()` — `cat /sys/class/udc/<udc>/state` over SSH |
+| Enabled by | `PIKVM_HID_RECOVERY_URL` | `PIKVM_HID_RECOVERY_SSH` |
+
+Rules that follow:
+
+- A **confident** HID-down verdict (and a "run `pikvm_usb_reconnect`" directive)
+  requires a **UDC-backed** reading.
+- With **no** reader wired, a flags-derived verdict must **hedge** — say what the
+  flags show, say there is no kernel ground truth, and ask for behavioural
+  confirmation. Never issue the reconnect directive off flags alone: a wrong
+  remedial action (reconnect/reboot a working session) is worse than no advice.
+- The SSH reader is **read-only** — it runs `cat` on the state node and nothing
+  else; it never writes sysfs/configfs.
+
+> **INERT UNTIL WIRED.** Both the SSH transport and the SSH UDC reader do nothing
+> unless `PIKVM_HID_RECOVERY_SSH` is set for the MCP process. As of 2026-07-30 it
+> is **not** set in the deployed macOS wrapper (`macos-nixos-setup`
+> `modules/home/pikvm-mcp.nix` carries only `PIKVM_PROXY`), so on the production
+> WB-kiosk MCP these are inert and the diagnosis falls back to the flags above.
+> "Merged" does not mean "live on pikvm01" — persisting that variable is a
+> user-gated machine-config change.
+
 ## Trigger interface (MCP ↔ pikvm-nixos)
 
 R2/R3a/R3b are privileged host operations. The MCP service runs unprivileged
