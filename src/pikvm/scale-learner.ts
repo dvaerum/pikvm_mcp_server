@@ -244,24 +244,29 @@ export class ScaleLearner {
    *  seeing a reset, DELETES the file (not just zeroes memory). */
   reset(): void { this.st.x = this.freshAxis('x'); this.st.y = this.freshAxis('y'); this.dirty = false; }
 
-  /** Load a persisted snapshot (applied scales + counters). Clamped on the way in so
-   *  a corrupt file can't inject an out-of-band scale. */
-  loadSnapshot(snap: Partial<Record<Axis, { applied: number; accepted?: number; lastUpdate?: number | null }>>): void {
+  /** Restore ONLY the learned applied scale (clamped, so a corrupt file can't inject
+   *  an out-of-band value) + when it was last learned. Counters (seen/accepted/
+   *  rejected) are deliberately SESSION-SCOPED — persisting a cumulative `accepted`
+   *  alongside a session-zero `seen` made the status readout report accepted>seen,
+   *  and "samples this session" is the more useful diagnostic than a cumulative count
+   *  with no consumer (georgs, 2026-07-31). So a fresh process always starts the
+   *  counters at 0, consistent with each other. */
+  loadSnapshot(snap: Partial<Record<Axis, { applied: number; lastUpdate?: number | null }>>): void {
     for (const a of ['x', 'y'] as const) {
       const v = snap[a];
       if (v && Number.isFinite(v.applied)) {
         this.st[a].applied = Math.max(CLAMP_LO, Math.min(CLAMP_HI, v.applied));
-        if (v.accepted) this.st[a].accepted = v.accepted;
         if (v.lastUpdate !== undefined) this.st[a].lastUpdate = v.lastUpdate;
       }
     }
   }
 
-  /** The snapshot to persist (scales + provenance counters). */
-  snapshot(): Record<Axis, { applied: number; accepted: number; lastUpdate: number | null }> {
+  /** The snapshot to persist: only the learned scale + when it was learned. NOT the
+   *  counters (see loadSnapshot). */
+  snapshot(): Record<Axis, { applied: number; lastUpdate: number | null }> {
     return {
-      x: { applied: this.st.x.applied, accepted: this.st.x.accepted, lastUpdate: this.st.x.lastUpdate },
-      y: { applied: this.st.y.applied, accepted: this.st.y.accepted, lastUpdate: this.st.y.lastUpdate },
+      x: { applied: this.st.x.applied, lastUpdate: this.st.x.lastUpdate },
+      y: { applied: this.st.y.applied, lastUpdate: this.st.y.lastUpdate },
     };
   }
 }

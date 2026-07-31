@@ -6,7 +6,7 @@ import { stateDir, statePath, loadPersisted, savePersisted, deletePersisted, typ
 
 const mkState = (y = 1.031): PersistedState => ({
   version: 1,
-  scales: { x: { applied: 1.0, accepted: 10, lastUpdate: 1 }, y: { applied: y, accepted: 40, lastUpdate: 2 } },
+  scales: { x: { applied: 1.0, lastUpdate: 1 }, y: { applied: y, lastUpdate: 2 } },
   provenance: { region: { w: 680, h: 968 }, savedAt: '2026-07-31T00:00:00Z' },
 });
 

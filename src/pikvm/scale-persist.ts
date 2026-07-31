@@ -34,7 +34,10 @@ export interface PersistedProvenance {
 }
 export interface PersistedState {
   version: 1;
-  scales: Record<Axis, { applied: number; accepted: number; lastUpdate: number | null }>;
+  // Only the learned scale + when it was learned. Counters are session-scoped and NOT
+  // persisted (a cumulative `accepted` restored alongside a session-zero `seen` made
+  // the status readout inconsistent — georgs 2026-07-31).
+  scales: Record<Axis, { applied: number; lastUpdate: number | null }>;
   provenance: PersistedProvenance;
 }
 

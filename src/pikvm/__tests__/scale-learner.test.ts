@@ -118,14 +118,33 @@ describe('ScaleLearner — controls + persistence', () => {
     expect(l.status().killSwitch).toBe(true);
   });
 
-  it('loadSnapshot clamps an out-of-band persisted value; snapshot round-trips', () => {
+  it('loadSnapshot clamps an out-of-band persisted value; snapshot round-trips the scale', () => {
     const l = new ScaleLearner({ killSwitch: false });
-    l.loadSnapshot({ y: { applied: 9.9, accepted: 40, lastUpdate: 5 } }); // corrupt/huge
+    l.loadSnapshot({ y: { applied: 9.9, lastUpdate: 5 } }); // corrupt/huge
     expect(l.currentScale('y')).toBeLessThanOrEqual(1.15); // clamped, not injected
     const l2 = new ScaleLearner({ killSwitch: false });
-    l2.loadSnapshot({ y: { applied: 1.031, accepted: 40, lastUpdate: 5 } });
+    l2.loadSnapshot({ y: { applied: 1.031, lastUpdate: 5 } });
     expect(l2.currentScale('y')).toBeCloseTo(1.031, 5);
     expect(l2.snapshot().y.applied).toBeCloseTo(1.031, 5);
+  });
+
+  it('counters are SESSION-scoped: after a load, accepted+rejected ≤ seen (no accepted>seen nonsense)', () => {
+    const l = new ScaleLearner({ killSwitch: false });
+    // a restore only sets the learned scale — NOT a cumulative accepted alongside a
+    // session-zero seen (the status-tool inconsistency georgs caught on the rig).
+    l.loadSnapshot({ x: { applied: 1.0, lastUpdate: 5 }, y: { applied: 1.031, lastUpdate: 9 } });
+    for (const ax of ['x', 'y'] as const) {
+      const s = l.status()[ax];
+      expect(s.seen).toBe(0);
+      expect(s.accepted).toBe(0);
+      expect(s.rejected).toBe(0);
+      expect(s.accepted + s.rejected).toBeLessThanOrEqual(s.seen); // invariant, always
+    }
+    // and it holds after real traffic too
+    for (let i = 0; i < 10; i++) l.recordSample('y', 800, 820, l.currentScale('y'));
+    for (let i = 0; i < 5; i++) l.recordSample('y', 80, 82, 1.0); // sub-floor rejects
+    const y = l.status().y;
+    expect(y.accepted + y.rejected).toBeLessThanOrEqual(y.seen);
   });
 });
 
