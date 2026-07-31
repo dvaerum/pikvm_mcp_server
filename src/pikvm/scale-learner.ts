@@ -196,12 +196,20 @@ export class ScaleLearner {
     s.window.push({ implied, planned: Math.abs(planned), sigma, residual: alongTravelResidual, sign });
     if (s.window.length > WINDOW_MAX) s.window.shift();
 
-    // Update only when the median is BOTH precise (SE gate) AND representative (a
-    // balanced ±direction mix — else a direction-skewed window's median is biased,
-    // which the SE gate can't see).
+    // Update only when the estimate is precise enough (SE gate) AND the window is
+    // representative (a balanced ±direction mix). The TARGET is the regression SLOPE,
+    // not the raw median of implied: implied = achieved/planned = s + c/P, so a
+    // constant along-travel offset c biases EVERY sample by c/P and the median inherits
+    // it (measured −0.87% at c=−5px/P≈600 — the rig's dip). The along-travel residual
+    // regression (the same fit the fault detector runs) factors that constant into the
+    // INTERCEPT, so its SLOPE is the pure MULTIPLICATIVE error: s_target = sApplied·(1+
+    // slope) is UNBIASED by c (sim-confirmed: 0.02% bias vs the median's c/P bias). The
+    // slope's slightly higher per-update noise averages out through the rate cap.
     const se = this.windowSE(s);
     if (se !== null && se < SE_APPLY_THRESHOLD && this.directionBalanced(s)) {
-      const target = Math.max(CLAMP_LO, Math.min(CLAMP_HI, median(s.window.map((w) => w.implied))));
+      const fit = fitResidual(s.window);
+      const raw = fit ? s.applied * (1 + fit.slope) : median(s.window.map((w) => w.implied));
+      const target = Math.max(CLAMP_LO, Math.min(CLAMP_HI, raw));
       const step = Math.max(-RATE_LIMIT * s.applied, Math.min(RATE_LIMIT * s.applied, target - s.applied));
       if (step !== 0) { s.applied += step; s.lastUpdate = this.now(); this.dirty = true; return 'accepted-updated'; }
     }

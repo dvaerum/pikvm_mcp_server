@@ -84,3 +84,37 @@ for (const [lbl, db] of [['balanced mix', 0.5], ['down-heavy mix (0.7)', 0.7], [
 console.log('\n--- FIX (a)+(c): empirical-MAD SE AND balanced-direction requirement ---');
 for (const [lbl, db] of [['balanced mix', 0.5], ['down-heavy mix (0.7)', 0.7], ['up-heavy mix (0.3)', 0.3]] as const)
   run(lbl, { se: seEmpirical, requireBalance: 8, downBias: db, seed: 11 });
+
+// ── THE REAL DRIVER (georgs 2026-07-31): a CONSTANT along-travel offset c biases
+//    implied = s + c/P at EVERY sample, so median(implied) is biased ~c/P below s_true,
+//    while the regression SLOPE (residual vs |P|) factors c into the intercept and
+//    recovers s cleanly. Inject a known scale + offset and compare the two estimators.
+console.log('\n=== median-of-implied vs regression-SLOPE, with a constant offset (the rig driver) ===');
+function fitSlopeIntercept(pts: Array<{ x: number; y: number }>) {
+  const n = pts.length; let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (const p of pts) { sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y; }
+  const d = n * sxx - sx * sx; const slope = (n * sxy - sx * sy) / d; return { slope, intercept: (sy - slope * sx) / n };
+}
+const S = 1.031, sApp = 1.0364;                    // true scale; warm-start applied
+const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+const stdev = (a: number[]) => { const m = mean(a); return Math.sqrt(mean(a.map((v) => (v - m) ** 2))); };
+for (const c of [0, -5, -10]) {
+  const medEsts: number[] = [], slopeEsts: number[] = [], correctedEsts: number[] = [];
+  for (let seed = 1; seed <= 300; seed++) {
+    const g = makeGauss(mulberry32(seed)); const r = mulberry32(seed * 13 + 5);
+    const implied: number[] = []; const resid: Array<{ x: number; y: number }> = []; const Ps: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      const P = 300 + r() * 590;
+      const achievedMag = P * (S / sApp) + c + g(0, SIGMA_A);
+      implied.push(sApp * (achievedMag / P)); resid.push({ x: P, y: achievedMag - P }); Ps.push(P);
+    }
+    const fit = fitSlopeIntercept(resid);
+    medEsts.push(median(implied));
+    slopeEsts.push(sApp * (1 + fit.slope));
+    // intercept-corrected median: subtract the estimated constant's per-sample contribution.
+    correctedEsts.push(median(implied.map((im, i) => im - sApp * fit.intercept / Ps[i])));
+  }
+  const fmt = (a: number[]) => `${mean(a).toFixed(4)} (bias ${((mean(a) - S) * 100).toFixed(2)}%, σ ${(stdev(a) * 100).toFixed(2)}%)`;
+  console.log(`  c=${String(c).padStart(3)}px  median ${fmt(medEsts)}  |  slope ${fmt(slopeEsts)}  |  intercept-corrected-median ${fmt(correctedEsts)}`);
+}
+console.log('  ⇒ median BIAS grows with |c| (∝ c/P); slope + corrected-median are UNBIASED — pick the lower-σ of those two.');

@@ -102,6 +102,26 @@ describe('ScaleLearner — estimator + guards', () => {
     for (let i = 0; i < 10; i++) l.recordSample('y', -800, -800 * (1.05 / l.currentScale('y')), l.currentScale('y'));
     expect(l.currentScale('y')).toBeCloseTo(1.05, 2);
   });
+
+  it('learns the SLOPE, not the raw median: a constant offset does NOT bias the learned scale (task #41)', () => {
+    const l = new ScaleLearner({ killSwitch: false });
+    // true multiplicative scale 1.031 + a constant −5px along-travel offset. The median
+    // of implied would be biased ~c/P below (~1.022); the slope factors c into the
+    // intercept and recovers 1.031. Balanced ±, varied distances so the fit is clean.
+    const S = 1.031, c = -5;
+    for (let round = 0; round < 10; round++) {
+      for (const dist of [300, 450, 600, 750, 890]) {
+        for (const sign of [1, -1]) {
+          const s = l.currentScale('y');
+          const achieved = sign * (dist * (S / s) + c); // |achieved| = |P|·S/s + c
+          l.recordSample('y', sign * dist, achieved, s);
+        }
+      }
+    }
+    // ≈1.031 (the slope), NOT ≈1.022 (the c/P-biased median).
+    expect(l.currentScale('y')).toBeGreaterThan(1.028);
+    expect(l.currentScale('y')).toBeLessThan(1.034);
+  });
 });
 
 describe('ScaleLearner — controls + persistence', () => {
