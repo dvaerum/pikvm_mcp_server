@@ -98,6 +98,7 @@ function fitSlopeIntercept(pts: Array<{ x: number; y: number }>) {
 const S = 1.031, sApp = 1.0364;                    // true scale; warm-start applied
 const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
 const stdev = (a: number[]) => { const m = mean(a); return Math.sqrt(mean(a.map((v) => (v - m) ** 2))); };
+const fmt = (a: number[]) => `${mean(a).toFixed(4)} (bias ${((mean(a) - S) * 100).toFixed(2)}%, σ ${(stdev(a) * 100).toFixed(2)}%)`;
 for (const c of [0, -5, -10]) {
   const medEsts: number[] = [], slopeEsts: number[] = [], correctedEsts: number[] = [];
   for (let seed = 1; seed <= 300; seed++) {
@@ -114,7 +115,34 @@ for (const c of [0, -5, -10]) {
     // intercept-corrected median: subtract the estimated constant's per-sample contribution.
     correctedEsts.push(median(implied.map((im, i) => im - sApp * fit.intercept / Ps[i])));
   }
-  const fmt = (a: number[]) => `${mean(a).toFixed(4)} (bias ${((mean(a) - S) * 100).toFixed(2)}%, σ ${(stdev(a) * 100).toFixed(2)}%)`;
   console.log(`  c=${String(c).padStart(3)}px  median ${fmt(medEsts)}  |  slope ${fmt(slopeEsts)}  |  intercept-corrected-median ${fmt(correctedEsts)}`);
 }
 console.log('  ⇒ median BIAS grows with |c| (∝ c/P); slope + corrected-median are UNBIASED — pick the lower-σ of those two.');
+
+// ── THE RIG'S REAL PROFILE (georgs 2026-07-31, scratch/learn-speed.ts `long`):
+//    per-axis the window sees only TWO distinct |P| — Y {888,444}, X {600,300}, both
+//    signs, balanced. That's the ACTUAL two-cluster low-leverage case (the continuous
+//    draw above over-mixes distances). The manager+iPad node explicitly asked to sim
+//    THIS profile, not an idealized one. Two distinct x-values still identify a line,
+//    so the slope must stay unbiased here too — verify, and note the median's bias
+//    is axis-specific (worse on X: smaller P̄ ⇒ larger c/P̄).
+console.log('\n=== REAL RIG PROFILE: only two distinct |P| per axis (Y{888,444}, X{600,300}) ===');
+for (const [axis, dists] of [['Y', [888, 444]], ['X', [600, 300]]] as [string, number[]][]) {
+  const Pbar = mean(dists);
+  for (const c of [0, -5]) {
+    const medEsts: number[] = [], slopeEsts: number[] = [];
+    for (let seed = 1; seed <= 300; seed++) {
+      const g = makeGauss(mulberry32(seed + (axis === 'X' ? 1000 : 0)));
+      const implied: number[] = []; const resid: Array<{ x: number; y: number }> = [];
+      for (let i = 0; i < 40; i++) {
+        const P = dists[i % dists.length];              // discrete, alternating magnitudes
+        const achievedMag = P * (S / sApp) + c + g(0, SIGMA_A);
+        implied.push(sApp * (achievedMag / P)); resid.push({ x: P, y: achievedMag - P });
+      }
+      const fit = fitSlopeIntercept(resid);
+      medEsts.push(median(implied)); slopeEsts.push(sApp * (1 + fit.slope));
+    }
+    console.log(`  ${axis} P̄=${Pbar}  c=${String(c).padStart(3)}px  median ${fmt(medEsts)}  |  slope ${fmt(slopeEsts)}`);
+  }
+}
+console.log('  ⇒ two distinct distances still identify the slope; median bias ≈ c/P̄ (worse on X, smaller P̄).');
