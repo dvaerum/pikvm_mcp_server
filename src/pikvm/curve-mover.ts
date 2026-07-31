@@ -382,6 +382,9 @@ export async function moveByCurveOneShot(
   let chunkCount = 1;
 
   let landed = await detectFn(client, minPresence);
+  // (#41) capture the FIRST-shot landing before any correction shot — the passive
+  // learner's free sample (planned vs achieved). `start` is non-null here.
+  const firstLanded = landed;
 
   // One correction shot when the first lands in the PLAUSIBLE miss band
   // [correctGatePx, correctMaxPx] (default 30–80px). The emit is deterministic
@@ -439,5 +442,9 @@ export async function moveByCurveOneShot(
     finalDetectedPosition: landed,
     finalResidualPx: landed ? dist(landed, target) : null,
     message: landed ? `curve-one-shot: landed ${dist(landed, target).toFixed(1)}px from target${woken ? ' (after faded-cursor wake)' : ''}` : 'curve-one-shot: verify detection failed after move',
+    // (#41) the free passive-learning sample from the FIRST shot (start is non-null here).
+    learnSample: firstLanded
+      ? { plannedX: target.x - start.x, plannedY: target.y - start.y, achievedX: firstLanded.x - start.x, achievedY: firstLanded.y - start.y, woken }
+      : null,
   };
 }

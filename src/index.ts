@@ -26,6 +26,8 @@ import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
 import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, makeSshUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { diagnoseHidFromClient, describeHidDiagnosis } from './pikvm/hid-diagnosis.js';
+import { scaleLearner, MOVER_SCALE_TOOL_NAMES, type MoverScaleToolName } from './pikvm/scale-learner.js';
+import { loadPersisted, savePersisted, deletePersisted } from './pikvm/scale-persist.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
 import {
   parseCaptureConfig,
@@ -89,6 +91,64 @@ const lock = new BusyLock();
 // do itself, so it POSTs to a pikvm-nixos-provided helper. Configured via
 // PIKVM_HID_RECOVERY_URL (+ optional bearer token); unset ⇒ rungs 2-3 report
 // unavailable. See docs/runbooks/hid-recovery.md ("Trigger interface").
+// (#41) feed a completed curve-one-shot's free first-shot sample to the passive
+// scale learner. The learner's own hygiene rejects a faded-cursor-wake start / a
+// forced click; pre-filter + median absorb the rest. No-op when the mover produced
+// no sample (start or first landing undetected → learnSample null).
+function recordMoveSample(
+  result: { learnSample?: { plannedX: number; plannedY: number; achievedX: number; achievedY: number; woken: boolean } | null },
+  appliedX: number,
+  appliedY: number,
+  forced: boolean,
+): void {
+  const ls = result.learnSample;
+  if (!ls) return;
+  const meta = { woken: ls.woken, forced };
+  scaleLearner.recordSample('x', ls.plannedX, ls.achievedX, appliedX, meta);
+  scaleLearner.recordSample('y', ls.plannedY, ls.achievedY, appliedY, meta);
+}
+
+// (#41) Persistence lifecycle: warm-start from the last-known-good scales on boot,
+// then flush PERIODICALLY (only when dirty, never per-move). Fail-safe — an
+// unwritable state dir just means in-memory learning.
+let scalePersistTimer: NodeJS.Timeout | undefined;
+async function startScaleLearnerPersistence(): Promise<void> {
+  // (#41) EXPERIMENTAL, off by default: when not opted in we neither LOAD a leftover
+  // state file (which would move the applied scale off the shipped default) nor start
+  // the flush timer. Off must be a true no-op — the mover uses the static default.
+  if (!scaleLearner.isFeatureEnabled()) return;
+  try {
+    const persisted = await loadPersisted();
+    if (persisted) scaleLearner.loadSnapshot(persisted.scales);
+  } catch { /* fail-safe: start from shipped defaults */ }
+  const flush = async (): Promise<void> => {
+    // disabled / kill-switched learners are never dirty, so this simply no-ops then.
+    if (!scaleLearner.consumeDirty()) return;
+    const ok = await savePersisted({
+      version: 1,
+      scales: scaleLearner.snapshot(),
+      provenance: { region: null, savedAt: new Date().toISOString() },
+    });
+    if (!ok && scalePersistTimer) { clearInterval(scalePersistTimer); scalePersistTimer = undefined; console.error('[scale-learner] state dir unwritable — learning in-memory only'); }
+  };
+  scalePersistTimer = setInterval(() => { void flush(); }, 60_000);
+  if (scalePersistTimer.unref) scalePersistTimer.unref(); // don't keep the process alive
+}
+
+async function handle_pikvm_mover_scale_status(args: Record<string, unknown>): Promise<CallToolResult> {
+  return { content: [{ type: 'text', text: JSON.stringify(scaleLearner.status(), null, 2) }] };
+}
+async function handle_pikvm_mover_scale_control(args: Record<string, unknown>): Promise<CallToolResult> {
+  const action = validateEnum(args.action, ['enable', 'disable'] as const, 'enable');
+  if (action === 'disable') scaleLearner.disable(); else scaleLearner.enable();
+  return { content: [{ type: 'text', text: `Passive scale learner ${action}d. ${action === 'disable' ? 'Frozen at the current scales; no further adapting or persisting.' : 'Resumed adapting from real moves.'}\n${JSON.stringify(scaleLearner.status(), null, 2)}` }] };
+}
+async function handle_pikvm_mover_scale_reset(args: Record<string, unknown>): Promise<CallToolResult> {
+  scaleLearner.reset();
+  const deleted = await deletePersisted();
+  return { content: [{ type: 'text', text: `Passive scale learner RESET to shipped defaults; persisted state ${deleted ? 'deleted' : 'not found/undeletable'}.\n${JSON.stringify(scaleLearner.status(), null, 2)}` }] };
+}
+
 let recoveryTrigger: RecoveryTrigger | undefined;
 function recoveryEndpointConfig(): { url?: string; token?: string; verifySsl?: boolean } {
   return {
@@ -312,6 +372,24 @@ const toolRegistry: ToolEntry[] = [
       type: 'object',
       properties: {},
     },
+  },
+  {
+    name: 'pikvm_mover_scale_status',
+    handler: handle_pikvm_mover_scale_status,
+    description: 'EXPERIMENTAL (#41, opt-in via PIKVM_MOVER_LEARN=1; registered only when opted in). Report the passive curve-scale learner: per-axis applied scale, the UNCLAMPED estimate, shipped defaults, divergence, sample counters, window SE, last update, and warnings (constant landing offset ⇒ detector/pacing fault; >2% estimate divergence ⇒ re-bake candidate). NOTE: auto-adaptation does not reliably converge on real traffic (median ~1% biased) — the drift DETECTION here is the more trustworthy half. Read-only.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'pikvm_mover_scale_control',
+    handler: handle_pikvm_mover_scale_control,
+    description: 'EXPERIMENTAL (#41). Enable or disable the passive curve-scale learner within this opted-in session. disable FREEZES it at the shipped default — stops adapting AND persisting — without reverting the applied value; enable resumes. (The feature itself is OFF by default and opted into per-process with PIKVM_MOVER_LEARN=1; this tool only toggles a session that already opted in.)',
+    inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['enable', 'disable'], description: 'enable to resume adapting, disable to freeze at the current scales.' } }, required: ['action'] },
+  },
+  {
+    name: 'pikvm_mover_scale_reset',
+    handler: handle_pikvm_mover_scale_reset,
+    description: 'EXPERIMENTAL (#41). Reset the passive curve-scale learner to the shipped defaults: clears the learned state AND deletes the persisted file (so a restart will not restore the old value). Use after a deliberate geometry change or if a bad scale was learned.',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'pikvm_screenshot',
@@ -957,12 +1035,20 @@ const toolRegistry: ToolEntry[] = [
 // the skill tools (which route via isSkillTool/handleSkillToolCall in the
 // CallTool preamble, not through toolsByName). Dispatch map covers the 32
 // registry tools only; skill tools are handled before the lookup.
+// (#41) The passive scale learner is EXPERIMENTAL and OFF by default. When the process
+// has not opted in (PIKVM_MOVER_LEARN=1), its 3 control tools are NOT registered — they
+// vanish from tools/list AND from dispatch — so the default tool surface is a true
+// no-op, identical to before the feature existed. (They remain in the toolRegistry
+// literal so the doc-freshness/schema tests still see & document them.)
+const activeToolRegistry = toolRegistry.filter(
+  (entry) => scaleLearner.isFeatureEnabled() || !MOVER_SCALE_TOOL_NAMES.includes(entry.name as MoverScaleToolName),
+);
 const tools: Tool[] = [
-  ...toolRegistry.map(({ handler: _h, ...descriptor }) => descriptor),
+  ...activeToolRegistry.map(({ handler: _h, ...descriptor }) => descriptor),
   ...skillTools,
 ];
 const toolsByName = new Map<string, ToolEntry>(
-  toolRegistry.map((entry) => [entry.name, entry]),
+  activeToolRegistry.map((entry) => [entry.name, entry]),
 );
 
 // The in-band auth tool (opt-in, --allow-tool-login). Exposed ONLY when a login
@@ -1635,12 +1721,18 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
           assumeX !== undefined && assumeY !== undefined
             ? { x: assumeX, y: assumeY }
             : undefined;
+        // (#41) apply + record the passive learner's scale (bare moves are valid
+        // samples too). Captured so the sample is recorded against the scale in force.
+        const mvLearnScaleX = scaleLearner.currentScale('x');
+        const mvLearnScaleY = scaleLearner.currentScale('y');
         const result = await moveToPixel(
           pikvm,
           { x: tx, y: ty },
           {
             strategy: strategyStr,
             assumeCursorAt,
+            curveScaleX: mvLearnScaleX,
+            curveScaleY: mvLearnScaleY,
             slamOriginPx: {
               x: validateNumber(args.slamOriginX) ?? 625,
               y: validateNumber(args.slamOriginY) ?? 65,
@@ -1660,6 +1752,7 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
             forbidSlamFallback: !mouseAbsoluteMode,
           },
         );
+        if (!mouseAbsoluteMode) recordMoveSample(result, mvLearnScaleX, mvLearnScaleY, false);
         if (capture) {
           // "during" = end-of-move cursor-alive frame (before the ~1-2s fade);
           // "after" = a post-move frame confirming the landed state.
@@ -1757,11 +1850,18 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // target); the verify region stays on the original target, where the tap's UI
         // effect actually appears. Desktop/absolute clicks by coordinates → no offset.
         const aimPoint = mouseAbsoluteMode ? { x: tx, y: ty } : biasCorrectedAimPoint({ x: tx, y: ty });
+        // (#41) apply the passive learner's current per-axis scale; capture the values
+        // so the post-move sample is recorded against the scale that was actually in
+        // force (impliedScale = achieved/planned × sApplied).
+        const learnScaleX = scaleLearner.currentScale('x');
+        const learnScaleY = scaleLearner.currentScale('y');
         const moveOpts = {
           strategy: strategyStr,
           assumeCursorAt,
           profile: cachedProfile,
           acceptGatePx: effectiveMaxResidualPx,
+          curveScaleX: learnScaleX,
+          curveScaleY: learnScaleY,
           forbidSlamFallback: !mouseAbsoluteMode,
           // Desktop full-frame degrade: the Phase-32 slam guard exists ONLY to
           // avoid the iPadOS hot-corner re-lock, so it must be disarmed in
@@ -1837,6 +1937,10 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // below, which carries the three safety gates: cursor-verify (#32),
         // maxResidualPx correct-element, and brightness.
         const result = await moveToPixel(pikvm, aimPoint, moveOpts);
+        // (#41) feed the free first-shot sample to the passive scale learner. The
+        // learner's own hygiene rejects a faded-cursor-wake start or a forced click;
+        // its pre-filter + median absorb the rest. iPad/relative only.
+        if (!mouseAbsoluteMode) recordMoveSample(result, learnScaleX, learnScaleY, force);
         // False-success safety fix (2026-07-27): on a relative-mouse (iPad)
         // target a null finalDetectedPosition means the mover could NOT verify
         // where the cursor is — e.g. a fully-faded cursor makes curve-one-shot's
@@ -2245,6 +2349,10 @@ async function main() {
     );
     process.exit(2);
   }
+
+  // (#41) warm-start the passive scale learner from persisted state + begin periodic
+  // flushing. Fail-safe; never blocks startup (fire-and-forget, awaits only the load).
+  await startScaleLearnerPersistence();
 
   // In http mode the security posture is an EXPLICIT, required choice (the
   // endpoint drives real input on a physical machine). Resolve it before doing

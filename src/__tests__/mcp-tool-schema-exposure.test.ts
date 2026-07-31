@@ -353,6 +353,7 @@ describe('MCP tool schema and handler exposure', () => {
     // Pinned so a lost/renamed/spurious handler trips this test.
     const EXPECTED_TOOLS = [
       'pikvm_version', 'pikvm_health_check', 'pikvm_screenshot', 'pikvm_snapshot',
+      'pikvm_mover_scale_status', 'pikvm_mover_scale_control', 'pikvm_mover_scale_reset',
       'pikvm_get_resolution', 'pikvm_type', 'pikvm_key', 'pikvm_shortcut',
       'pikvm_screen_state', 'pikvm_hid_reset', 'pikvm_hid_recover', 'pikvm_usb_reconnect',
       'pikvm_ipad_unlock_with_code', 'pikvm_ipad_lock', 'pikvm_dismiss_popup',
@@ -457,5 +458,30 @@ describe('MCP tool schema and handler exposure', () => {
       // that gate only runs when finalDetectedPosition is non-null.
       expect(handler).toMatch(/!mouseAbsoluteMode && result\.finalDetectedPosition\)/);
     });
+  });
+});
+
+describe('(#41) passive scale learner — tools + mover wiring', () => {
+  it('registers the three learner tools', async () => {
+    const src = await readIndexTs();
+    for (const t of ['pikvm_mover_scale_status', 'pikvm_mover_scale_control', 'pikvm_mover_scale_reset']) {
+      expect(src).toContain(`name: '${t}'`);
+    }
+  });
+
+  it('click_at applies the learned per-axis scale and records the first-shot sample', async () => {
+    const src = await readIndexTs();
+    const h = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+    expect(h).toMatch(/curveScaleX:\s*learnScaleX/);
+    expect(h).toMatch(/curveScaleY:\s*learnScaleY/);
+    expect(h).toMatch(/recordMoveSample\(result, learnScaleX, learnScaleY, force\)/);
+  });
+
+  it('control tool exposes enable/disable; reset deletes the persisted file', async () => {
+    const src = await readIndexTs();
+    expect(src).toMatch(/enum:\s*\['enable',\s*'disable'\]/);
+    const reset = extractHandlerBlock(src, 'pikvm_mover_scale_reset');
+    expect(reset).toMatch(/scaleLearner\.reset\(\)/);
+    expect(reset).toMatch(/deletePersisted\(\)/);
   });
 });

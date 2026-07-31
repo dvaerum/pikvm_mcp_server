@@ -86,6 +86,8 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 
 0e. **`pikvm_usb_reconnect`** - The everyday "reconnect the USB" fix (reach for this first): presence-gate → `soft_connect` (idle-drop, ~6s) → if still dead, `udc-rebind` (full-dead-after-reboot) — **no destructive reboot**. Each rung verified by BOTH the ground-truth UDC state (`GET {PIKVM_HID_RECOVERY_URL}/udc-state`) AND a behavioral check (flags lie). Returns structured `{recovered, rungUsed, udcState, behavioralVerify, attempts, message}`. **(d): a failure also appends a Diagnosis line — HID DOWN vs HID UP-but-cursor-not-localizable — so you don't escalate to a reboot when the real problem is an invisible pointer.** If it still fails, escalate with `pikvm_hid_recover` (adds reboot + human). Same host endpoint as the ladder.
 
+0f-0h. **`pikvm_mover_scale_status`** / **`pikvm_mover_scale_control`** / **`pikvm_mover_scale_reset`** — ⚠️ **EXPERIMENTAL, OFF BY DEFAULT** (#41). The passive curve-scale learner. Opt in per-process with **`PIKVM_MOVER_LEARN=1`**; when not opted in (the default) the learner is inert, these 3 tools are **NOT registered** (they don't appear in `tools/list`), and the mover uses the static shipped `DEFAULT_CURVE_SCALE_Y` — a true no-op. **Known limitation** (real-rig verified): auto-adaptation does NOT reliably beat a one-time human measurement — the median estimator is ~1% biased and the unbiased slope estimator wanders ±2-3% on the rig's two-cluster traffic — so it ships the STABLE median tightly **clamped to ±1% of the shipped default** and is provided for evaluation, not production-trusted. The drift DETECTION/warnings (constant landing OFFSET ⇒ detector/pacing fault not geometry; >2% ESTIMATE divergence ⇒ re-bake candidate) are the more reliable half. When opted in: **status** reads per-axis applied scale + unclamped estimate + counters/SE/warnings; **control** `action:enable|disable` freezes/resumes within the session; **reset** reverts to defaults and deletes the persisted file. `maxResidualPx` and the mover's own math are untouched.
+
 ### Display
 1. **`pikvm_screenshot`** - Capture current screen as JPEG (optional `savePath` also writes it to a file)
 1a. **`pikvm_snapshot`** - Save a JPEG frame to a FILE (file-only; optional `region` crop) — persist frames without piping base64 through the conversation
@@ -166,7 +168,7 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 54** (32 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow).
+**Total tools: 57** (35 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow). ⚠️ **3 of the 35 `pikvm_*` tools — `pikvm_mover_scale_{status,control,reset}` (#41) — are EXPERIMENTAL and registered ONLY under the opt-in `PIKVM_MOVER_LEARN=1`.** So the DEFAULT registered surface a client sees is **54** tools; opting in makes it 57. (The 57 above counts every tool defined in source, incl. the 3 conditional ones.)
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
