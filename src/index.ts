@@ -50,6 +50,7 @@ import {
   verifyClickByDiff,
   defaultMaxResidualPxFor,
   residualForSkip,
+  biasCorrectedAimPoint,
   isScreenTooDimForCursorDetection,
   defaultChunkPaceMsFor,
   runDismissRecipe,
@@ -835,7 +836,7 @@ const toolRegistry: ToolEntry[] = [
         force: { type: 'boolean', description: 'ESCAPE HATCH (default false): by default, if the cursor position cannot be localized on an iPad target (detection fails, e.g. a faded/off-screen pointer), the click is NOT performed and a not-landed error is returned — clicking blind would tap the wrong place. Set force:true to send the click ANYWAY at the predicted position; the result is then flagged LOUD as UNVERIFIED (landing NOT confirmed) and must not be read as a confirmed landing. Use only when you accept an unverified tap (and typically pair with strategy:"assume-at" + assumeCursorAtX/Y so the pointer is positioned first). Does NOT affect the maxResidualPx gate (that guards against hitting the WRONG element, a different risk). Does nothing on desktop/absolute targets (they position by coordinates, not detection).' },
         minBrightness: { type: 'number', description: 'Brightness gate threshold (0-255). Before clicking, the server screenshots and computes mean RGB brightness AND stddev (Phase 48). The gate aborts with a "wake the iPad" error ONLY when the frame is uniformly dim (mean < threshold AND stddev < 3) — dark-mode UI passes the gate because the high stddev from text/icon contrast indicates cursor will still be detectable. Default 35 on iPad targets (Phase 39 calibrated against live data: 29 = popup overlay, 41 = bright iPad with dark wallpaper); 0 on non-iPad targets and to disable the gate entirely. Pass 0 explicitly to skip the gate (useful for intentionally-dark targets like video playback).' },
         autoUnlockOnDetectFail: { type: 'boolean', description: 'Phase 72: when an attempt fails because the iPad is on the lock screen (Phase 70 found this is the dominant detect-then-move failure mode), automatically call ipadGoHome to unlock and retry once before giving up on this attempt. SIDE EFFECT: if the iPad is INSIDE AN APP and detect-then-move fails for some other reason, this will exit the app to home — not what you want for in-app clicks. Default false (preserve manual control). Set true for fire-and-forget click_at on a fresh iPad target where you don\'t care about app state.' },
-        maxResidualPx: { type: 'number', description: 'Phase 88: skip the click if the verified cursor is more than this many pixels from the target. Useful when callers care about CORRECT element hit, not just "screen changed". Live-verified failure mode (2026-04-27): residual 78 px caused a click targeting Settings → Software Update to instead activate the Apple Account sidebar row. Pass a positive integer to set the tolerance (e.g. 25 for strict icon-tolerance clicks, 50 for "near-enough is fine"). Default 25 on iPad (relative-mouse) targets — the gate is ON so an off-target move skips instead of launching the wrong app; 0/undefined on desktop. Override the default without redeploy via PIKVM_CLICK_MAX_RESIDUAL_PX (a number, or "off"/0 to disable).' },
+        maxResidualPx: { type: 'number', description: 'Phase 88: skip the click if the verified cursor is more than this many pixels from the target. Useful when callers care about CORRECT element hit, not just "screen changed". Live-verified failure mode (2026-04-27): residual 78 px caused a click targeting Settings → Software Update to instead activate the Apple Account sidebar row. Pass a positive integer to set the tolerance (e.g. 15 for strict PIN-key-tolerance clicks, 50 for "near-enough is fine"). Default 15 on iPad (relative-mouse) targets (task #38: an 88×58px PIN key has a 29px half-height, so 25 was too loose) — the gate is ON so an off-target move skips instead of launching the wrong app; 0/undefined on desktop. The gate measures the bias-corrected AIM point (the tap lands ~5.9px above the detected pointer, so the aim is shifted down to compensate). Override the default without redeploy via PIKVM_CLICK_MAX_RESIDUAL_PX (a number, or "off"/0 to disable).' },
         ...CAPTURE_SCHEMA_PROPS,
       },
       required: ['x', 'y'],
@@ -1750,6 +1751,12 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         const effectiveMaxResidualPx = args.maxResidualPx !== undefined
           ? Number(args.maxResidualPx)
           : defaultMaxResidualPxFor(mouseAbsoluteMode);
+        // (a) task #38: on iPad the tap lands ~5.9px ABOVE the detected pointer, so
+        // aim the pointer that much LOWER to land the tap on the requested target.
+        // The move AND the residual gate use this aim (cursor-near-aim ⟺ tap-near-
+        // target); the verify region stays on the original target, where the tap's UI
+        // effect actually appears. Desktop/absolute clicks by coordinates → no offset.
+        const aimPoint = mouseAbsoluteMode ? { x: tx, y: ty } : biasCorrectedAimPoint({ x: tx, y: ty });
         const moveOpts = {
           strategy: strategyStr,
           assumeCursorAt,
@@ -1829,7 +1836,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // dismiss-escape harm. All clicks go through the single-attempt path
         // below, which carries the three safety gates: cursor-verify (#32),
         // maxResidualPx correct-element, and brightness.
-        const result = await moveToPixel(pikvm, { x: tx, y: ty }, moveOpts);
+        const result = await moveToPixel(pikvm, aimPoint, moveOpts);
         // False-success safety fix (2026-07-27): on a relative-mouse (iPad)
         // target a null finalDetectedPosition means the mover could NOT verify
         // where the cursor is — e.g. a fully-faded cursor makes curve-one-shot's
@@ -1874,7 +1881,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
           const maxResidualPx = effectiveMaxResidualPx; // same value threaded into the mover above
           if (maxResidualPx !== undefined && maxResidualPx > 0) {
             const skipResidual = residualForSkip(
-              result.finalDetectedPosition, { x: tx, y: ty }, maxResidualPx,
+              result.finalDetectedPosition, aimPoint, maxResidualPx,
             );
             if (skipResidual !== null) {
               return {

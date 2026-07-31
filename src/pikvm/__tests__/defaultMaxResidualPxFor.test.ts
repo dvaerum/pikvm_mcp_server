@@ -2,10 +2,11 @@
  * Unit tests for defaultMaxResidualPxFor.
  *
  * Pin the per-mouse-mode contract: iPad (relative) gets a strict proximity
- * gate (25 px default), desktop (absolute) gets undefined. Phase 134's live
- * bench measured successful trials at residuals 10-34 px (correct icon) and
- * 36-200 px (wrong icon / empty area); a tight default rejects the latter.
- * The gate is also a config line — PIKVM_CLICK_MAX_RESIDUAL_PX overrides it.
+ * gate (15 px default since task #38 — an 88×58px PIN key's 29px half-height made
+ * 25 too loose), desktop (absolute) gets undefined. Phase 134's live bench measured
+ * successful trials at residuals 10-34 px (correct icon) and 36-200 px (wrong icon /
+ * empty area); a tight default rejects the latter. The gate is also a config line —
+ * PIKVM_CLICK_MAX_RESIDUAL_PX overrides it.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,9 +21,9 @@ describe('defaultMaxResidualPxFor', () => {
     else process.env[ENV] = original;
   });
 
-  it('defaults to 25 for iPad mode (mouseAbsoluteMode=false)', () => {
+  it('defaults to 15 for iPad mode (mouseAbsoluteMode=false)', () => {
     delete process.env[ENV];
-    expect(defaultMaxResidualPxFor(false)).toBe(25);
+    expect(defaultMaxResidualPxFor(false)).toBe(15);
   });
 
   it('returns undefined for desktop mode (mouseAbsoluteMode=true)', () => {
@@ -45,7 +46,7 @@ describe('defaultMaxResidualPxFor', () => {
 
   it('config line: a non-numeric value falls back to the mode-aware default', () => {
     process.env[ENV] = 'banana';
-    expect(defaultMaxResidualPxFor(false)).toBe(25);
+    expect(defaultMaxResidualPxFor(false)).toBe(15);
   });
 
   it('REGRESSION: iPad always has a proximity gate so wrong-icon clicks are rejected', () => {

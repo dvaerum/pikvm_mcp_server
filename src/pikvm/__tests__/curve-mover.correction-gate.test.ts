@@ -47,6 +47,11 @@ describe('deriveCorrectionGatePx — the gate-ordering invariant (f=1.0)', () =>
   it('the derived default correction gate is NEVER above the acceptance default (the dead-band the bug had)', () => {
     expect(deriveCorrectionGatePx(DEFAULT_ACCEPT_GATE_PX)).toBeLessThanOrEqual(DEFAULT_ACCEPT_GATE_PX);
   });
+
+  it('the correction gate FOLLOWS the acceptance gate (task #38: 15 ⇒ gate 15, one knob via f=1.0)', () => {
+    expect(DEFAULT_ACCEPT_GATE_PX).toBe(15); // tightened from 25
+    expect(deriveCorrectionGatePx(15)).toBe(15); // f=1.0 ⇒ gate tracks accept, no manual second constant
+  });
 });
 
 // ── Integration: drive moveByCurveOneShot with an injected detect seam + a recording

@@ -546,13 +546,38 @@ export function formatDismissResult(result: {
  * `undefined`) fails a test instead of silently regressing
  * click_at quality.
  */
+/**
+ * The measured detected→ACTUAL-TAP offset on iPad: a left click registers ~5.9px
+ * ABOVE (smaller Y) the detected pointer position (bias = tap − detected =
+ * (+0.2, −5.9), N=36 onTapEvent ground truth, georgs 2026-07-31; scratch/tap-bias.ts).
+ * Y-only — the +0.2px X was noise. This is DISTINCT from the ~13px centroid-vs-tip
+ * offset in the autolabelled TRAINING data: that is a detector-internal quantity and
+ * has NOTHING to do with where a click lands. Do not conflate them.
+ */
+export const CLICK_TAP_BIAS_Y_PX = -5.9;
+
+/**
+ * Correct a requested click target to the pointer AIM point: since the tap lands
+ * ~5.9px above the detected pointer, aim the pointer that much LOWER (larger Y) so
+ * the tap lands on the requested target. Y-only. (iPad/relative only — a desktop
+ * absolute target clicks by coordinates, no tap offset.) Reduces median Y click
+ * miss 6.1px → ~1.1px.
+ */
+export function biasCorrectedAimPoint(target: { x: number; y: number }): { x: number; y: number } {
+  return { x: target.x, y: target.y - CLICK_TAP_BIAS_Y_PX };
+}
+
 export function defaultMaxResidualPxFor(mouseAbsoluteMode: boolean): number | undefined {
   // The proximity gate is an integer argument (`maxResidualPx` on
   // pikvm_mouse_click_at / clickAtWithRetry). When a positive number is passed,
-  // that value is used. When it is not passed, the default is 25 px on iPad
-  // (tight enough to reject adjacent-icon wrong-clicks; a 70 px icon tolerates
-  // ~half its width). The config line PIKVM_CLICK_MAX_RESIDUAL_PX overrides the
-  // default without a rebuild:
+  // that value is used. When it is not passed, the default is 15 px on iPad
+  // (tightened from 25 on 2026-07-31, task #38): an 88×58px PIN key has a 29px
+  // half-height, so uncorrected a tap leaves the key once an upward residual
+  // exceeds ~23px — 25 was genuinely too loose. 15 is safe both uncorrected
+  // (15 + the 5.9px tap bias = 20.9 < 29) and corrected, and sits comfortably above
+  // the post-Y-calibration single-shot floor (~9.1px, held-out max ~11.4px) so it
+  // won't manufacture spurious skips. (12 was rejected — too thin a margin.) The
+  // config line PIKVM_CLICK_MAX_RESIDUAL_PX overrides the default without a rebuild:
   //   PIKVM_CLICK_MAX_RESIDUAL_PX=40   → default 40 px
   //   PIKVM_CLICK_MAX_RESIDUAL_PX=off  (or 0) → disable the gate
   const raw = loadSettings().movement.clickMaxResidualPxRaw;
@@ -561,7 +586,7 @@ export function defaultMaxResidualPxFor(mouseAbsoluteMode: boolean): number | un
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  return mouseAbsoluteMode ? undefined : 25;
+  return mouseAbsoluteMode ? undefined : 15;
 }
 
 /**

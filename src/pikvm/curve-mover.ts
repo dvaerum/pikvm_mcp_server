@@ -208,10 +208,12 @@ export const CORRECTION_GATE_FRACTION = 1.0;
  *  below this can't be met; we make ONE correction and then skip honestly (never a
  *  retry loop). The correction gate never drops below it (nothing to gain). */
 export const CORRECTION_GATE_FLOOR_PX = 8;
-/** Canonical iPad acceptance gate (mirrors index.ts's maxResidualPx default), used
+/** Canonical iPad acceptance gate — MUST mirror click-verify.ts's maxResidualPx
+ *  default (defaultMaxResidualPxFor); a test ties the two so they can't drift. Used
  *  to derive a sane correction gate when a caller doesn't thread its acceptance gate
- *  (e.g. pikvm_mouse_move_to, which has no click and thus no maxResidualPx). */
-export const DEFAULT_ACCEPT_GATE_PX = 25;
+ *  (e.g. pikvm_mouse_move_to, which has no click and thus no maxResidualPx). Tightened
+ *  25→15 on 2026-07-31 (task #38, PIN-key tolerance). */
+export const DEFAULT_ACCEPT_GATE_PX = 15;
 
 /** Derive the correction gate from the caller's acceptance gate: gate == accept
  *  (f=1.0 → correct iff the shot would otherwise skip), floored at the ~8px
