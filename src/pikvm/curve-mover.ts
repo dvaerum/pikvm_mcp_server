@@ -65,6 +65,36 @@ export const FULL_REPORT_PX = 157;
  *  HDMI aspect-mapping ratio, ~0.965 for this setup). */
 export const Y_SCALE = 0.965;
 
+/**
+ * DEFAULT per-report Y-axis drift compensation (applied as curveScaleY unless a
+ * caller overrides it). POINT-IN-TIME value — NOT a permanent constant.
+ *
+ * WHY: the curve one-shot systematically overshot on Y by ~+3.64% on long moves
+ * (measured 2026-07-31, georgs, held-out N=80/arm), landing ~25px at some
+ * geometries — over the maxResidualPx=25 gate. Compensating with this scale brought
+ * the held-out set from median 27.0px / 63% would-skip → 4.5px / 1%.
+ *
+ * PROVENANCE = DRIFT, not a fixed miscalibration: Y_SCALE is structurally
+ * (region_h/region_w) × (logicalW/logicalH), and the DETECTED iPad HDMI region moved
+ * from the documented {692×956} to the current {680×968} (aspect +3.04%). Y_SCALE=0.965
+ * was ~exact for the documented region (back-solves to 0.9600) but is 2.5% low for the
+ * current one. So this constant is correct for TODAY's region and WILL go stale on the
+ * next HDMI/resolution/scaling change.
+ *
+ * VALUE = 1.0364, the BEHAVIORALLY-validated compensation (landing-error calibrated).
+ * Do NOT "simplify" it to the geometric ratio: the getCursor/V8-measured true Y:X ratio
+ * today is 0.9892 (a 2.51% geometric error → ~1.0109 compensation), but behavior needs
+ * 3.64% — per-report Y is 151.50px modelled vs 155.55px measured. The extra ~1pp is the
+ * mickeysForReport partial-report curve-interpolation term that a pure geometric ratio
+ * misses; a ratio-derived scale would silently leave ~a third of the error in.
+ *
+ * HOW TO RECOMPUTE on the next drift: re-run the equal-mickey X-vs-Y landing measurement
+ * against getCursor (or the V8 detector, corner-free, ~30s on the rig) and refit against
+ * MEASURED landing error, not the geometric region ratio. Proper self-healing (learn it
+ * into ballistics.json) is a deferred follow-up.
+ */
+export const DEFAULT_CURVE_SCALE_Y = 1.0364;
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Invert the single-report curve: mickeys needed for a desired |px| (0..full). */
@@ -115,9 +145,11 @@ export interface CurveOneShotOptions {
    *  after a deterministic emit is a V8 false-positive, not a real miss — trust
    *  the first shot rather than let the correction shove a good landing away. */
   correctMaxPx?: number;
-  /** Per-axis curve scale for the current geometry (default 1 = reference
-   *  session, 680×944 region). Measure via calibrateFullReport: scaleX =
-   *  measured.x / FULL_REPORT_PX, scaleY = measured.y / (FULL_REPORT_PX×Y_SCALE). */
+  /** Per-axis curve scale for the current geometry. curveScaleX defaults to 1
+   *  (X error negligible); curveScaleY defaults to DEFAULT_CURVE_SCALE_Y (1.0364,
+   *  the point-in-time Y drift compensation — see that constant). Measure via
+   *  calibrateFullReport: scaleX = measured.x / FULL_REPORT_PX, scaleY =
+   *  measured.y / (FULL_REPORT_PX×Y_SCALE). */
   curveScaleX?: number;
   curveScaleY?: number;
   /** The caller's acceptance gate (maxResidualPx). The mover DERIVES its correction
@@ -339,7 +371,9 @@ export async function moveByCurveOneShot(
     };
   }
 
-  const scaleX = options.curveScaleX ?? 1, scaleY = options.curveScaleY ?? 1;
+  // Y defaults to the point-in-time drift compensation (see DEFAULT_CURVE_SCALE_Y);
+  // X error was negligible (~-0.7%) so it stays 1. An explicit curveScaleY overrides.
+  const scaleX = options.curveScaleX ?? 1, scaleY = options.curveScaleY ?? DEFAULT_CURVE_SCALE_Y;
   const m1 = await emitToward(client, start, target, paceMs, scaleX, scaleY);
   await sleep(settleMs);
   let emitted = { ...m1 };
