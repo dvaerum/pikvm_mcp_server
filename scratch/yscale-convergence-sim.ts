@@ -146,3 +146,16 @@ for (const [axis, dists] of [['Y', [888, 444]], ['X', [600, 300]]] as [string, n
   }
 }
 console.log('  ⇒ two distinct distances still identify the slope; median bias ≈ c/P̄ (worse on X, smaller P̄).');
+
+// ── FINAL OUTCOME (rig, georgs 2026-07-31): the slope estimator, though UNBIASED here,
+//    was WORSE on hardware — it WANDERED ±2-3% (peaks 1.059) while the median sat stable
+//    ~1% low. Why this sim didn't predict it: it measures the ESTIMATOR's point-estimate
+//    at a fixed window, NOT the APPLIED-value trajectory. The live loop re-fits a ROLLING
+//    window every move and the rate cap CAPS but doesn't AVERAGE, so per-update estimator
+//    variance (amplified because a two-cluster least-squares slope = (mean₂−mean₁)/baseline)
+//    converts directly into applied wander. Unbiasedness buys nothing without damping.
+//    georg's decision: SHIP the STABLE median, tightly CLAMPED to ±1% of the shipped
+//    default, OFF by default + EXPERIMENTAL — biased-but-bounded beats unbiased-but-noisy
+//    for an opt-in. The real fixes (EMA/damping on `applied`; a distance-diversity gate)
+//    are the documented path IF the experiment is ever revisited. See scale-learner.ts.
+console.log('\n=== FINAL: ship median+clamp (stable), NOT slope (wanders on the rig). Off-by-default + experimental. ===');

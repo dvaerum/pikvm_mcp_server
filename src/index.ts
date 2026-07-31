@@ -26,7 +26,7 @@ import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
 import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, makeSshUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { diagnoseHidFromClient, describeHidDiagnosis } from './pikvm/hid-diagnosis.js';
-import { scaleLearner } from './pikvm/scale-learner.js';
+import { scaleLearner, MOVER_SCALE_TOOL_NAMES, type MoverScaleToolName } from './pikvm/scale-learner.js';
 import { loadPersisted, savePersisted, deletePersisted } from './pikvm/scale-persist.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
 import {
@@ -113,6 +113,10 @@ function recordMoveSample(
 // unwritable state dir just means in-memory learning.
 let scalePersistTimer: NodeJS.Timeout | undefined;
 async function startScaleLearnerPersistence(): Promise<void> {
+  // (#41) EXPERIMENTAL, off by default: when not opted in we neither LOAD a leftover
+  // state file (which would move the applied scale off the shipped default) nor start
+  // the flush timer. Off must be a true no-op — the mover uses the static default.
+  if (!scaleLearner.isFeatureEnabled()) return;
   try {
     const persisted = await loadPersisted();
     if (persisted) scaleLearner.loadSnapshot(persisted.scales);
@@ -372,19 +376,19 @@ const toolRegistry: ToolEntry[] = [
   {
     name: 'pikvm_mover_scale_status',
     handler: handle_pikvm_mover_scale_status,
-    description: 'Report the passive curve-scale learner (#41): per-axis scale in force, shipped defaults, divergence, sample counters (seen/accepted/rejected), current window SE, last update, and any active warnings (a constant landing offset ⇒ detector/pacing fault, a >2% divergence ⇒ re-bake candidate). The learner passively adapts curveScaleX/Y from real moves; this reads its state without changing anything.',
+    description: 'EXPERIMENTAL (#41, opt-in via PIKVM_MOVER_LEARN=1; registered only when opted in). Report the passive curve-scale learner: per-axis applied scale, the UNCLAMPED estimate, shipped defaults, divergence, sample counters, window SE, last update, and warnings (constant landing offset ⇒ detector/pacing fault; >2% estimate divergence ⇒ re-bake candidate). NOTE: auto-adaptation does not reliably converge on real traffic (median ~1% biased) — the drift DETECTION here is the more trustworthy half. Read-only.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'pikvm_mover_scale_control',
     handler: handle_pikvm_mover_scale_control,
-    description: 'Enable or disable the passive curve-scale learner (#41). disable FREEZES it at the current scales — stops adapting AND stops persisting — without reverting the applied value; enable resumes. Use to pin behaviour during a debugging session. (The PIKVM_MOVER_LEARN=0 env var is the no-session kill-switch.)',
+    description: 'EXPERIMENTAL (#41). Enable or disable the passive curve-scale learner within this opted-in session. disable FREEZES it at the shipped default — stops adapting AND persisting — without reverting the applied value; enable resumes. (The feature itself is OFF by default and opted into per-process with PIKVM_MOVER_LEARN=1; this tool only toggles a session that already opted in.)',
     inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['enable', 'disable'], description: 'enable to resume adapting, disable to freeze at the current scales.' } }, required: ['action'] },
   },
   {
     name: 'pikvm_mover_scale_reset',
     handler: handle_pikvm_mover_scale_reset,
-    description: 'Reset the passive curve-scale learner (#41) to the shipped defaults: clears the learned state AND deletes the persisted file (so a restart will not restore the old value). Use after a deliberate geometry change or if a bad scale was learned.',
+    description: 'EXPERIMENTAL (#41). Reset the passive curve-scale learner to the shipped defaults: clears the learned state AND deletes the persisted file (so a restart will not restore the old value). Use after a deliberate geometry change or if a bad scale was learned.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -1031,12 +1035,20 @@ const toolRegistry: ToolEntry[] = [
 // the skill tools (which route via isSkillTool/handleSkillToolCall in the
 // CallTool preamble, not through toolsByName). Dispatch map covers the 32
 // registry tools only; skill tools are handled before the lookup.
+// (#41) The passive scale learner is EXPERIMENTAL and OFF by default. When the process
+// has not opted in (PIKVM_MOVER_LEARN=1), its 3 control tools are NOT registered — they
+// vanish from tools/list AND from dispatch — so the default tool surface is a true
+// no-op, identical to before the feature existed. (They remain in the toolRegistry
+// literal so the doc-freshness/schema tests still see & document them.)
+const activeToolRegistry = toolRegistry.filter(
+  (entry) => scaleLearner.isFeatureEnabled() || !MOVER_SCALE_TOOL_NAMES.includes(entry.name as MoverScaleToolName),
+);
 const tools: Tool[] = [
-  ...toolRegistry.map(({ handler: _h, ...descriptor }) => descriptor),
+  ...activeToolRegistry.map(({ handler: _h, ...descriptor }) => descriptor),
   ...skillTools,
 ];
 const toolsByName = new Map<string, ToolEntry>(
-  toolRegistry.map((entry) => [entry.name, entry]),
+  activeToolRegistry.map((entry) => [entry.name, entry]),
 );
 
 // The in-band auth tool (opt-in, --allow-tool-login). Exposed ONLY when a login

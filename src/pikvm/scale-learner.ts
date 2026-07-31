@@ -13,14 +13,36 @@
  * Design signed off by georg 2026-07-31. maxResidualPx and the mover's own math are
  * untouched; this only chooses the per-axis scale the mover applies.
  *
- * The whole thing is a fail-safe: unwritable state → learn in-memory; disabled (MCP
- * tool or PIKVM_MOVER_LEARN=0 env kill-switch) → freeze at the current value; any
- * garbage sample (faded-cursor-wake start, forced click, abort, low-confidence
- * detection, correction shot) → rejected before it can move the scale.
+ * ⚠️ EXPERIMENTAL, OFF BY DEFAULT (georg's #41 decision, 2026-07-31). On the real iPad
+ * rig the auto-adaptation did NOT beat a one-time human measurement: the median
+ * estimator is ~1% biased low (a constant along-travel offset c biases implied=s+c/P),
+ * and the unbiased regression-slope estimator WANDERS ±2-3% because the rig's traffic
+ * gives each axis only two distinct |planned| values, so the two-cluster slope is
+ * noisy and the rate cap converts that noise directly into applied-value wander (it
+ * caps, it does not average). So we ship the STABLE median, tightly CLAMPED to ±1% of
+ * the shipped default so even when enabled it cannot materially hurt — but the feature
+ * is OPT-IN only (PIKVM_MOVER_LEARN=1). When off (the default) the learner is inert,
+ * the 3 pikvm_mover_scale_* tools are not registered, and the mover uses the static
+ * shipped DEFAULT_CURVE_SCALE_Y exactly as before — a true no-op. The drift DETECTION
+ * (divergence / detector-fault warnings) is the more reliable half; it ships coupled to
+ * the feature (also off by default). The two changes that WOULD make adaptation
+ * converge — an EMA/damping on the applied value, and a distance-diversity gate so a
+ * two-cluster window can't drive a fit — are the documented path IF anyone revisits it.
+ *
+ * The whole thing is a fail-safe: unwritable state → learn in-memory; not opted in, or
+ * disabled mid-session (MCP tool) → freeze at the shipped default; any garbage sample
+ * (faded-cursor-wake start, forced click, abort, low-confidence detection, correction
+ * shot) → rejected before it can move the scale.
  */
 import { DEFAULT_CURVE_SCALE_Y } from './curve-mover.js';
 
 export type Axis = 'x' | 'y';
+
+/** The 3 experimental control tools index.ts registers ONLY when opted in (#41). */
+export const MOVER_SCALE_TOOL_NAMES = [
+  'pikvm_mover_scale_status', 'pikvm_mover_scale_control', 'pikvm_mover_scale_reset',
+] as const;
+export type MoverScaleToolName = (typeof MOVER_SCALE_TOOL_NAMES)[number];
 
 /** Per-move provenance so garbage never trains the scale. A sample is learned ONLY
  *  when all of these are false/absent. */
@@ -43,7 +65,12 @@ export const MIN_PLANNED_PX = 150;             // accept floor; below this σ_i/
 export const WINDOW_MAX = 70;                  // keep the most recent N samples
 export const SE_APPLY_THRESHOLD = 0.005;       // apply an update only when window SE < 0.5%
 export const PREFILTER_LO = 0.7, PREFILTER_HI = 1.4;   // reject implied scales outside (kills gross FPs)
-export const CLAMP_LO = 0.85, CLAMP_HI = 1.15; // absolute sanity clamp on the applied scale
+// The applied scale is clamped to ±1% of the SHIPPED DEFAULT (per-axis), not an absolute
+// band. This is the experimental-safety bound (georg's #41 decision): even opted-in, the
+// learner cannot move the mover more than 1% off the hand-measured value, so its known
+// ~1% median bias / wander can't materially hurt. Tighter than the estimator's own noise
+// by design — we trust the shipped default more than the loop.
+export const CLAMP_FRACTION = 0.01;
 export const RATE_LIMIT = 0.02;                // ≤2% movement per update
 // Require a BALANCED ±direction mix before an update. The implied scale is direction-
 // dependent (measured: up 3.72% vs down 3.14% overshoot), so the window MEDIAN is only
@@ -60,6 +87,12 @@ export const INTERCEPT_ALARM_PX = 10;          // sustained constant offset ⇒ 
 export const REJECT_RATE_ALARM = 0.5;          // reject-rate spike ⇒ detector degraded
 
 const DEFAULTS: Record<Axis, number> = { x: 1.0, y: DEFAULT_CURVE_SCALE_Y };
+
+/** Clamp a scale to ±CLAMP_FRACTION of THIS axis's shipped default. */
+const clampToBand = (axis: Axis, v: number): number => {
+  const d = DEFAULTS[axis];
+  return Math.max(d * (1 - CLAMP_FRACTION), Math.min(d * (1 + CLAMP_FRACTION), v));
+};
 
 const median = (a: number[]): number => {
   if (!a.length) return NaN;
@@ -88,8 +121,9 @@ interface AxisState {
 
 export interface AxisStatus {
   applied: number;
+  estimatedScale: number | null;   // window-median implied scale (UNCLAMPED drift read); null until ≥5 samples
   shippedDefault: number;
-  divergenceFromDefault: number;   // (applied-default)/default
+  divergenceFromDefault: number;   // (estimate-default)/default — the drift signal, not the clamped applied
   seen: number; accepted: number; rejected: number;
   windowSize: number;
   windowBalance: { up: number; down: number }; // ±direction counts — an update needs ≥8 each
@@ -101,16 +135,18 @@ export interface AxisStatus {
 }
 
 export interface LearnerStatus {
-  enabled: boolean;
-  killSwitch: boolean;             // PIKVM_MOVER_LEARN=0
+  experimental: true;              // #41: off-by-default opt-in; does not reliably converge
+  featureEnabled: boolean;         // opted in via PIKVM_MOVER_LEARN=1 (else the whole feature is inert)
+  active: boolean;                 // featureEnabled AND not frozen by the control tool
   x: AxisStatus;
   y: AxisStatus;
 }
 
 export interface ScaleLearnerOpts {
   now?: () => number;
-  /** override the env read (tests). undefined ⇒ read process.env.PIKVM_MOVER_LEARN. */
-  killSwitch?: boolean;
+  /** Override the env opt-in (tests). undefined ⇒ the feature is ON only when
+   *  process.env.PIKVM_MOVER_LEARN === '1' (OFF by default — georg's #41 decision). */
+  enabled?: boolean;
 }
 
 /** Least-squares slope+intercept of residual (achieved−planned) vs planned, over the
@@ -129,14 +165,17 @@ function fitResidual(win: Sample[]): { slope: number; intercept: number } | null
 
 export class ScaleLearner {
   private readonly now: () => number;
-  private killSwitch: boolean;
-  private enabledFlag = true;
+  // OPT-IN gate (immutable per process): the experimental feature is OFF unless
+  // PIKVM_MOVER_LEARN=1. When false the learner is inert AND index.ts does not register
+  // the 3 pikvm_mover_scale_* tools — a true no-op.
+  private readonly envEnabled: boolean;
+  private enabledFlag = true; // runtime freeze via the control tool (only meaningful when opted in)
   private dirty = false; // an applied scale changed since the last persist
   private readonly st: Record<Axis, AxisState>;
 
   constructor(opts: ScaleLearnerOpts = {}) {
     this.now = opts.now ?? Date.now;
-    this.killSwitch = opts.killSwitch ?? (process.env.PIKVM_MOVER_LEARN === '0');
+    this.envEnabled = opts.enabled ?? (process.env.PIKVM_MOVER_LEARN === '1');
     this.st = {
       x: this.freshAxis('x'),
       y: this.freshAxis('y'),
@@ -147,8 +186,12 @@ export class ScaleLearner {
     return { applied: DEFAULTS[a], window: [], seen: 0, accepted: 0, rejected: 0, recentQualified: 0, recentPrefilterRejects: 0, lastUpdate: null };
   }
 
-  /** Is the learner adapting? False when disabled by tool OR the env kill-switch. */
-  isActive(): boolean { return this.enabledFlag && !this.killSwitch; }
+  /** Is the learner adapting? True only when opted in (env) AND not frozen by the tool. */
+  isActive(): boolean { return this.envEnabled && this.enabledFlag; }
+
+  /** Did the process opt into the experimental feature (PIKVM_MOVER_LEARN=1)? index.ts
+   *  gates registration of the 3 pikvm_mover_scale_* tools on this — off ⇒ they vanish. */
+  isFeatureEnabled(): boolean { return this.envEnabled; }
 
   /** The scale the mover should apply for this axis right now. Always defined,
    *  warm-started from the shipped default, never outside the clamp. */
@@ -197,19 +240,16 @@ export class ScaleLearner {
     if (s.window.length > WINDOW_MAX) s.window.shift();
 
     // Update only when the estimate is precise enough (SE gate) AND the window is
-    // representative (a balanced ±direction mix). The TARGET is the regression SLOPE,
-    // not the raw median of implied: implied = achieved/planned = s + c/P, so a
-    // constant along-travel offset c biases EVERY sample by c/P and the median inherits
-    // it (measured −0.87% at c=−5px/P≈600 — the rig's dip). The along-travel residual
-    // regression (the same fit the fault detector runs) factors that constant into the
-    // INTERCEPT, so its SLOPE is the pure MULTIPLICATIVE error: s_target = sApplied·(1+
-    // slope) is UNBIASED by c (sim-confirmed: 0.02% bias vs the median's c/P bias). The
-    // slope's slightly higher per-update noise averages out through the rate cap.
+    // representative (a balanced ±direction mix). The TARGET is the window MEDIAN of the
+    // implied scale — the STABLE estimator. We deliberately do NOT use the (unbiased)
+    // regression slope: on the real rig each axis sees only two distinct |planned|
+    // values, so the two-cluster slope is noisy and the rate cap (which caps, not
+    // averages) turns that noise into ±2-3% applied-value wander — measured worse than
+    // the median's ~1% bias. Biased-but-stable beats unbiased-but-noisy for an opt-in.
+    // The ±1% clamp bounds the median's residual bias so it cannot materially hurt.
     const se = this.windowSE(s);
     if (se !== null && se < SE_APPLY_THRESHOLD && this.directionBalanced(s)) {
-      const fit = fitResidual(s.window);
-      const raw = fit ? s.applied * (1 + fit.slope) : median(s.window.map((w) => w.implied));
-      const target = Math.max(CLAMP_LO, Math.min(CLAMP_HI, raw));
+      const target = clampToBand(axis, median(s.window.map((w) => w.implied)));
       const step = Math.max(-RATE_LIMIT * s.applied, Math.min(RATE_LIMIT * s.applied, target - s.applied));
       if (step !== 0) { s.applied += step; s.lastUpdate = this.now(); this.dirty = true; return 'accepted-updated'; }
     }
@@ -237,7 +277,13 @@ export class ScaleLearner {
   private axisStatus(a: Axis): AxisStatus {
     const s = this.st[a];
     const fit = fitResidual(s.window);
-    const divergence = (s.applied - DEFAULTS[a]) / DEFAULTS[a];
+    // The drift signal is the UNCLAMPED estimate vs the default, NOT the applied value:
+    // applied is bounded to ±1% by the clamp, so a divergence read off `applied` could
+    // never report a drift bigger than the clamp — it would silence the very "re-measure"
+    // signal this warning exists for. The window median (the estimator we ship) is the
+    // honest read of where the true scale sits.
+    const estimate = s.window.length >= 5 ? median(s.window.map((w) => w.implied)) : null;
+    const divergence = ((estimate ?? s.applied) - DEFAULTS[a]) / DEFAULTS[a];
     const warnings: string[] = [];
     if (fit && Math.abs(fit.intercept) > INTERCEPT_ALARM_PX) {
       warnings.push(`constant ${fit.intercept.toFixed(1)}px landing offset (NOT a scale drift) — detector/pacing fault, re-check the detector`);
@@ -246,10 +292,10 @@ export class ScaleLearner {
       warnings.push(`${(s.recentPrefilterRejects / s.recentQualified * 100).toFixed(0)}% of QUALIFIED (≥150px) moves rejected as physically-impossible — detector likely degraded`);
     }
     if (Math.abs(divergence) > DIVERGENCE_WARN) {
-      warnings.push(`scale ${(divergence * 100).toFixed(1)}% from shipped default — consider re-measuring + re-baking DEFAULT_CURVE_SCALE_${a.toUpperCase()}`);
+      warnings.push(`estimated scale ${(divergence * 100).toFixed(1)}% from shipped default — consider re-measuring + re-baking DEFAULT_CURVE_SCALE_${a.toUpperCase()}`);
     }
     return {
-      applied: s.applied, shippedDefault: DEFAULTS[a], divergenceFromDefault: divergence,
+      applied: s.applied, estimatedScale: estimate, shippedDefault: DEFAULTS[a], divergenceFromDefault: divergence,
       seen: s.seen, accepted: s.accepted, rejected: s.rejected, windowSize: s.window.length,
       windowBalance: { up: s.window.reduce((c, w) => c + (w.sign > 0 ? 1 : 0), 0), down: s.window.reduce((c, w) => c + (w.sign < 0 ? 1 : 0), 0) },
       windowSE: this.windowSE(s), lastUpdate: s.lastUpdate,
@@ -258,7 +304,7 @@ export class ScaleLearner {
   }
 
   status(): LearnerStatus {
-    return { enabled: this.enabledFlag, killSwitch: this.killSwitch, x: this.axisStatus('x'), y: this.axisStatus('y') };
+    return { experimental: true, featureEnabled: this.envEnabled, active: this.isActive(), x: this.axisStatus('x'), y: this.axisStatus('y') };
   }
 
   /** Freeze at the current value: stop adapting AND stop persisting (the persistence
@@ -286,7 +332,7 @@ export class ScaleLearner {
     for (const a of ['x', 'y'] as const) {
       const v = snap[a];
       if (v && Number.isFinite(v.applied)) {
-        this.st[a].applied = Math.max(CLAMP_LO, Math.min(CLAMP_HI, v.applied));
+        this.st[a].applied = clampToBand(a, v.applied);
         if (v.lastUpdate !== undefined) this.st[a].lastUpdate = v.lastUpdate;
       }
     }
