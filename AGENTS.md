@@ -168,7 +168,7 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 57** (35 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow).
+**Total tools: 57** (35 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow). ⚠️ **3 of the 35 `pikvm_*` tools — `pikvm_mover_scale_{status,control,reset}` (#41) — are EXPERIMENTAL and registered ONLY under the opt-in `PIKVM_MOVER_LEARN=1`.** So the DEFAULT registered surface a client sees is **54** tools; opting in makes it 57. (The 57 above counts every tool defined in source, incl. the 3 conditional ones.)
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |

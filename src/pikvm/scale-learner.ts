@@ -138,6 +138,10 @@ export interface LearnerStatus {
   experimental: true;              // #41: off-by-default opt-in; does not reliably converge
   featureEnabled: boolean;         // opted in via PIKVM_MOVER_LEARN=1 (else the whole feature is inert)
   active: boolean;                 // featureEnabled AND not frozen by the control tool
+  // Human-readable so a reader can tell DISABLED apart from merely IDLE — a frozen learner
+  // and a learner with nothing to learn from both sit at warm-start defaults with 0 samples,
+  // which otherwise look identical (it-03400 / georgs, 2026-07-31).
+  state: 'disabled' | 'idle (no qualifying samples yet)' | 'learning';
   x: AxisStatus;
   y: AxisStatus;
 }
@@ -304,7 +308,10 @@ export class ScaleLearner {
   }
 
   status(): LearnerStatus {
-    return { experimental: true, featureEnabled: this.envEnabled, active: this.isActive(), x: this.axisStatus('x'), y: this.axisStatus('y') };
+    const state: LearnerStatus['state'] = !this.isActive()
+      ? 'disabled'
+      : (this.st.x.accepted + this.st.y.accepted === 0 ? 'idle (no qualifying samples yet)' : 'learning');
+    return { experimental: true, featureEnabled: this.envEnabled, active: this.isActive(), state, x: this.axisStatus('x'), y: this.axisStatus('y') };
   }
 
   /** Freeze at the current value: stop adapting AND stop persisting (the persistence

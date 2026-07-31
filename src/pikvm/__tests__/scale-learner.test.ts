@@ -151,6 +151,17 @@ describe('ScaleLearner — controls + persistence', () => {
     expect(l.status().active).toBe(true);
   });
 
+  it('status distinguishes DISABLED from IDLE (both sit at warm-start defaults, 0 samples)', () => {
+    const idle = new ScaleLearner({ enabled: true });
+    expect(idle.status().state).toBe('idle (no qualifying samples yet)'); // opted in, nothing learned yet
+    feed(idle, 1.045, 20);
+    expect(idle.status().state).toBe('learning');
+    idle.disable();
+    expect(idle.status().state).toBe('disabled');                         // frozen ≠ idle
+    const off = new ScaleLearner({ enabled: false });
+    expect(off.status().state).toBe('disabled');                          // not opted in
+  });
+
   it('reset reverts to the shipped defaults and clears the window', () => {
     const l = new ScaleLearner({ enabled: true });
     feed(l, 1.05, 20);
