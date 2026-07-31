@@ -147,6 +147,32 @@ describe('ScaleLearner — fault discrimination (slope vs intercept)', () => {
     expect(l.status().y.warnings.join(' ')).toMatch(/from shipped default/i);
   });
 
+  it('DEFECT A regression: sub-150px moves (rejected-gate) do NOT trigger the detector-degraded alarm', () => {
+    const l = new ScaleLearner({ killSwitch: false });
+    for (let i = 0; i < 20; i++) l.recordSample('x', 80, 82, 1.0); // all below the floor = normal traffic
+    expect(l.status().x.warnings.join(' ')).not.toMatch(/detector/i);
+    expect(l.status().x.rejected).toBe(20);
+  });
+
+  it('a high PREFILTER-reject rate among QUALIFIED (≥150px) moves DOES flag a degraded detector', () => {
+    const l = new ScaleLearner({ killSwitch: false });
+    for (let i = 0; i < 12; i++) l.recordSample('x', 800, 1600, 1.0); // implied ~2 → prefilter reject
+    for (let i = 0; i < 3; i++) l.recordSample('x', 800, 800, 1.0);    // clean
+    expect(l.status().x.warnings.join(' ')).toMatch(/detector likely degraded/i);
+  });
+
+  it('DEFECT B regression: direction asymmetry (±P back-and-forth) does NOT masquerade as an intercept alarm', () => {
+    const l = new ScaleLearner({ killSwitch: false });
+    // up-moves overshoot 3.72%, down-moves 3.14% (the real #39 asymmetry), NO detector fault.
+    for (const d of [300, 500, 700, 800, 850]) {
+      l.recordSample('y', d, d * 1.0372, 1.0);   // up:  +3.72%
+      l.recordSample('y', -d, -d * 1.0314, 1.0); // down: +3.14% overshoot in the −direction
+    }
+    const st = l.status().y;
+    expect(Math.abs(st.intercept ?? 0)).toBeLessThan(10);          // asymmetry ≠ a false intercept
+    expect(st.warnings.join(' ')).not.toMatch(/detector|offset/i); // no false fault alarm
+  });
+
   it('a clean scale drift (pure slope, ~zero intercept) does NOT raise the detector-fault alarm', () => {
     const l = new ScaleLearner({ killSwitch: false });
     // consistent multiplicative overshoot (achieved = 1.01·planned), no constant

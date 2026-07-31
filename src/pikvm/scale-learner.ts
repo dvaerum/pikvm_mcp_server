@@ -68,7 +68,11 @@ interface AxisState {
   applied: number;
   window: Sample[];
   seen: number; accepted: number; rejected: number;
-  recentRejects: number; recentSeen: number; // rolling reject-rate signal
+  // Detector-degraded signal: the reject rate AMONG QUALIFIED samples (those that
+  // passed hygiene + the ≥150px gate and reached the pre-filter). A sub-floor move
+  // (rejected-gate) is EXPECTED normal traffic — on WB pad ~50% of moves are under
+  // the floor — so it must NOT count here, or the alarm fires permanently.
+  recentQualified: number; recentPrefilterRejects: number;
   lastUpdate: number | null;
 }
 
@@ -129,7 +133,7 @@ export class ScaleLearner {
   }
 
   private freshAxis(a: Axis): AxisState {
-    return { applied: DEFAULTS[a], window: [], seen: 0, accepted: 0, rejected: 0, recentRejects: 0, recentSeen: 0, lastUpdate: null };
+    return { applied: DEFAULTS[a], window: [], seen: 0, accepted: 0, rejected: 0, recentQualified: 0, recentPrefilterRejects: 0, lastUpdate: null };
   }
 
   /** Is the learner adapting? False when disabled by tool OR the env kill-switch. */
@@ -148,21 +152,36 @@ export class ScaleLearner {
     // The kill-switch/disable FREEZES: we don't even count samples we won't learn from,
     // so status counters reflect real learning traffic, not frozen no-ops.
     if (!this.isActive()) return 'rejected-disabled';
-    s.seen++; s.recentSeen++;
-    const bumpReject = (): void => { s.rejected++; s.recentRejects++; this.decayRecent(s); };
+    s.seen++;
 
+    // Hygiene + the distance gate reject BEFORE the sample is "qualified": these are
+    // expected traffic, NOT a detector-degraded signal, so they only bump `rejected`.
     if (meta.woken || meta.forced || meta.aborted || meta.lowConfidence || meta.isCorrectionShot
         || !Number.isFinite(planned) || !Number.isFinite(achieved) || Math.abs(planned) < 1) {
-      bumpReject(); return 'rejected-hygiene';
+      s.rejected++; return 'rejected-hygiene';
     }
-    if (Math.abs(planned) < MIN_PLANNED_PX) { bumpReject(); return 'rejected-gate'; }
+    if (Math.abs(planned) < MIN_PLANNED_PX) { s.rejected++; return 'rejected-gate'; }
 
+    // A QUALIFIED sample (passed hygiene + gate, reached the pre-filter). Only here on
+    // does a rejection signal a lying detector (a ≥150px move whose implied scale is
+    // physically impossible = a gross V8 false-positive).
+    s.recentQualified++;
     const implied = sApplied * (achieved / planned);
-    if (!(implied >= PREFILTER_LO && implied <= PREFILTER_HI)) { bumpReject(); return 'rejected-prefilter'; }
+    if (!(implied >= PREFILTER_LO && implied <= PREFILTER_HI)) {
+      s.rejected++; s.recentPrefilterRejects++; this.decayRecent(s); return 'rejected-prefilter';
+    }
 
     s.accepted++; this.decayRecent(s);
     const sigma = (SIGMA_DETECT_PX * Math.SQRT2) / Math.abs(planned);
-    s.window.push({ implied, planned: Math.abs(planned), sigma, residual: achieved - planned });
+    // DIRECTION-NORMALISED residual: real traffic clusters at ±P (moves go back and
+    // forth), so a signed residual-vs-signed-planned fit is degenerate — direction
+    // asymmetry (down 3.14% vs up 3.72%) leaks into slope, noise into intercept. We
+    // store the along-travel overshoot (residual · sign(planned)) against |planned|,
+    // collapsing both clusters onto one line: a true SCALE error is the slope, a true
+    // constant OFFSET is the intercept, and up/down asymmetry becomes spread — not a
+    // false intercept.
+    const alongTravelResidual = (achieved - planned) * Math.sign(planned);
+    s.window.push({ implied, planned: Math.abs(planned), sigma, residual: alongTravelResidual });
     if (s.window.length > WINDOW_MAX) s.window.shift();
 
     const se = this.windowSE(s);
@@ -175,8 +194,8 @@ export class ScaleLearner {
   }
 
   private decayRecent(s: AxisState): void {
-    // simple rolling window on the reject-rate signal so a burst shows, then fades.
-    if (s.recentSeen > WINDOW_MAX) { s.recentSeen = Math.round(s.recentSeen * 0.7); s.recentRejects = Math.round(s.recentRejects * 0.7); }
+    // rolling decay on the qualified-sample reject-rate signal so a burst shows, then fades.
+    if (s.recentQualified > WINDOW_MAX) { s.recentQualified = Math.round(s.recentQualified * 0.7); s.recentPrefilterRejects = Math.round(s.recentPrefilterRejects * 0.7); }
   }
 
   private windowSE(s: AxisState): number | null {
@@ -193,8 +212,8 @@ export class ScaleLearner {
     if (fit && Math.abs(fit.intercept) > INTERCEPT_ALARM_PX) {
       warnings.push(`constant ${fit.intercept.toFixed(1)}px landing offset (NOT a scale drift) — detector/pacing fault, re-check the detector`);
     }
-    if (s.recentSeen >= 10 && s.recentRejects / s.recentSeen > REJECT_RATE_ALARM) {
-      warnings.push(`reject-rate ${(s.recentRejects / s.recentSeen * 100).toFixed(0)}% — detector likely degraded`);
+    if (s.recentQualified >= 10 && s.recentPrefilterRejects / s.recentQualified > REJECT_RATE_ALARM) {
+      warnings.push(`${(s.recentPrefilterRejects / s.recentQualified * 100).toFixed(0)}% of QUALIFIED (≥150px) moves rejected as physically-impossible — detector likely degraded`);
     }
     if (Math.abs(divergence) > DIVERGENCE_WARN) {
       warnings.push(`scale ${(divergence * 100).toFixed(1)}% from shipped default — consider re-measuring + re-baking DEFAULT_CURVE_SCALE_${a.toUpperCase()}`);
