@@ -5,10 +5,16 @@
  * the last-known-good value instead of re-learning (and clicking uncorrected) each
  * session. Writes are PERIODIC/debounced, never per-move.
  *
- * Location precedence (pikvm-nixos wires the first; the rest are safe fallbacks):
- *   PIKVM_MCP_STATE_DIR  →  $XDG_STATE_HOME/pikvm-mcp  →  ~/.local/state/pikvm-mcp
- * NOT ./data/ballistics.json — that resolves under cwd and is inert against the
- * read-only nix store the appliance/wrapper runs from.
+ * Location (contract locked with pikvm-nixos 2026-07-31): the wrapper sets
+ *   PIKVM_STATE_DIR = the pikvm-mcp home-manager dataDir (~/.local/share/pikvm-mcp)
+ * — the dir that ALREADY survives darwin-rebuild switches and holds the production
+ * data/ (ballistics.json, cursor templates). We persist a SEPARATE file
+ *   ${PIKVM_STATE_DIR}/data/mover-scale.json
+ * in that same surviving data/ dir — deliberately NOT merged into ballistics.json:
+ * that file is the ballistics PROFILE (loadProfile requires version:1 and rethrows
+ * on a malformed parse), and mixing the unrelated curveScale-learner state into it
+ * risks breaking the profile loader for zero benefit. A sibling file survives
+ * identically and orphans nothing. Dev fallback: cwd/data. (Env unset ⇒ cwd.)
  *
  * Everything here is FAIL-SAFE: an unreadable/corrupt file → start from defaults; an
  * unwritable dir → learn in-memory only (logged once). The learner never blocks or
@@ -16,7 +22,6 @@
  */
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import type { Axis } from './scale-learner.js';
 
 const FILE = 'mover-scale.json';
@@ -33,14 +38,14 @@ export interface PersistedState {
   provenance: PersistedProvenance;
 }
 
-/** Resolve the state directory by the documented precedence. */
+/** The base dir the wrapper provides (PIKVM_STATE_DIR), else cwd for dev. Read as an
+ *  OPAQUE absolute path — do not assume XDG_STATE vs XDG_DATA. */
 export function stateDir(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.PIKVM_MCP_STATE_DIR) return env.PIKVM_MCP_STATE_DIR;
-  if (env.XDG_STATE_HOME) return path.join(env.XDG_STATE_HOME, 'pikvm-mcp');
-  return path.join(os.homedir(), '.local', 'state', 'pikvm-mcp');
+  return env.PIKVM_STATE_DIR ?? process.cwd();
 }
+/** The persisted file, a sibling of ballistics.json in the surviving data/ dir. */
 export function statePath(env?: NodeJS.ProcessEnv): string {
-  return path.join(stateDir(env), FILE);
+  return path.join(stateDir(env), 'data', FILE);
 }
 
 /** Load the persisted state, or null if absent/unreadable/corrupt (never throws). */
@@ -61,12 +66,13 @@ export async function loadPersisted(env?: NodeJS.ProcessEnv): Promise<PersistedS
  */
 export async function savePersisted(state: PersistedState, env?: NodeJS.ProcessEnv): Promise<boolean> {
   try {
-    const dir = stateDir(env);
+    const file = statePath(env);
+    const dir = path.dirname(file); // the surviving data/ dir
     await fs.mkdir(dir, { recursive: true });
     // atomic-ish: write a temp then rename, so a crash mid-write can't corrupt the file.
-    const tmp = path.join(dir, `${FILE}.tmp`);
+    const tmp = `${file}.tmp`;
     await fs.writeFile(tmp, JSON.stringify(state, null, 2));
-    await fs.rename(tmp, path.join(dir, FILE));
+    await fs.rename(tmp, file);
     return true;
   } catch {
     return false;

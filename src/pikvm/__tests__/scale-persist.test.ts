@@ -10,18 +10,19 @@ const mkState = (y = 1.031): PersistedState => ({
   provenance: { region: { w: 680, h: 968 }, savedAt: '2026-07-31T00:00:00Z' },
 });
 
-describe('scale-persist — location precedence', () => {
-  it('prefers PIKVM_MCP_STATE_DIR, then $XDG_STATE_HOME/pikvm-mcp, then ~/.local/state/pikvm-mcp', () => {
-    expect(stateDir({ PIKVM_MCP_STATE_DIR: '/custom' } as NodeJS.ProcessEnv)).toBe('/custom');
-    expect(stateDir({ XDG_STATE_HOME: '/xdg' } as NodeJS.ProcessEnv)).toBe(path.join('/xdg', 'pikvm-mcp'));
-    expect(stateDir({} as NodeJS.ProcessEnv)).toBe(path.join(os.homedir(), '.local', 'state', 'pikvm-mcp'));
-    expect(statePath({ PIKVM_MCP_STATE_DIR: '/custom' } as NodeJS.ProcessEnv)).toBe(path.join('/custom', 'mover-scale.json'));
+describe('scale-persist — location contract (PIKVM_STATE_DIR)', () => {
+  it('reads PIKVM_STATE_DIR as an opaque abs path (else cwd) and joins data/mover-scale.json', () => {
+    expect(stateDir({ PIKVM_STATE_DIR: '/Users/georg/.local/share/pikvm-mcp' } as NodeJS.ProcessEnv))
+      .toBe('/Users/georg/.local/share/pikvm-mcp');
+    expect(stateDir({} as NodeJS.ProcessEnv)).toBe(process.cwd()); // dev fallback
+    expect(statePath({ PIKVM_STATE_DIR: '/base' } as NodeJS.ProcessEnv))
+      .toBe(path.join('/base', 'data', 'mover-scale.json')); // sibling of ballistics.json, NOT merged into it
   });
 });
 
 describe('scale-persist — round-trip + fail-safe (temp dir)', () => {
   let dir: string | null = null;
-  const envFor = (d: string) => ({ PIKVM_MCP_STATE_DIR: d } as NodeJS.ProcessEnv);
+  const envFor = (d: string) => ({ PIKVM_STATE_DIR: d } as NodeJS.ProcessEnv);
   afterEach(async () => { if (dir) { await fs.rm(dir, { recursive: true, force: true }); dir = null; } });
 
   it('save → load round-trips the state', async () => {
@@ -37,6 +38,7 @@ describe('scale-persist — round-trip + fail-safe (temp dir)', () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scalep-'));
     const env = envFor(dir);
     expect(await loadPersisted(env)).toBeNull();          // absent
+    await fs.mkdir(path.dirname(statePath(env)), { recursive: true });
     await fs.writeFile(statePath(env), '{ not json');       // corrupt
     expect(await loadPersisted(env)).toBeNull();
   });
@@ -55,7 +57,7 @@ describe('scale-persist — round-trip + fail-safe (temp dir)', () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scalep-'));
     const blocker = path.join(dir, 'blocker');
     await fs.writeFile(blocker, 'x');
-    const env = { PIKVM_MCP_STATE_DIR: path.join(blocker, 'sub') } as NodeJS.ProcessEnv; // under a file
+    const env = { PIKVM_STATE_DIR: path.join(blocker, 'sub') } as NodeJS.ProcessEnv; // under a file
     expect(await savePersisted(mkState(), env)).toBe(false);
   });
 });
