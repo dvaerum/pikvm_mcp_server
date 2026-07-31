@@ -2,14 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { ScaleLearner } from '../scale-learner.js';
 import { DEFAULT_CURVE_SCALE_Y } from '../curve-mover.js';
 
-/** Feed N clean long-move samples on axis y that imply a target scale. implied =
- *  sApplied·(achieved/planned) = target ⇒ achieved = planned · target / sApplied. */
+/** Feed N clean long-move samples on axis y that imply a target scale, ALTERNATING
+ *  ±direction so the balance gate (≥8/direction) is satisfied. implied =
+ *  sApplied·(achieved/planned) = target ⇒ achieved = planned · target / sApplied
+ *  (sign of planned carries through). Use n≥16 for the first update to fire. */
 function feed(l: ScaleLearner, target: number, n: number, P = 800, axis: 'x' | 'y' = 'y') {
   let last = '';
   for (let i = 0; i < n; i++) {
     const sApplied = l.currentScale(axis);
-    const achieved = P * (target / sApplied);
-    last = l.recordSample(axis, P, achieved, sApplied);
+    const planned = i % 2 === 0 ? P : -P; // alternate direction
+    const achieved = planned * (target / sApplied);
+    last = l.recordSample(axis, planned, achieved, sApplied);
   }
   return last;
 }
@@ -48,7 +51,7 @@ describe('ScaleLearner — warm start + hygiene', () => {
 describe('ScaleLearner — estimator + guards', () => {
   it('adapts toward the windowed-median implied scale once the SE gate clears', () => {
     const l = new ScaleLearner({ killSwitch: false, now: () => 1000 });
-    feed(l, 1.05, 12); // 12 clean P=800 samples imply 1.05 (within band, within one rate step of default)
+    feed(l, 1.05, 20); // 12 clean P=800 samples imply 1.05 (within band, within one rate step of default)
     expect(l.currentScale('y')).toBeCloseTo(1.05, 2);
     expect(l.status().y.lastUpdate).toBe(1000);
   });
@@ -63,9 +66,10 @@ describe('ScaleLearner — estimator + guards', () => {
 
   it('rate-limits each update to ≤2% of the current scale (no lurch)', () => {
     const l = new ScaleLearner({ killSwitch: false });
-    // imply 1.15 (way above default 1.0364) — the first update must move only ~2%
+    // imply 1.15 (way above default 1.0364) — the FIRST update (at 16 samples = 8/8
+    // balanced) must move only ~2%. (More samples would fire more capped updates.)
     const before = l.currentScale('y');
-    feed(l, 1.15, 6);
+    feed(l, 1.15, 16);
     const after = l.currentScale('y');
     expect((after - before) / before).toBeLessThanOrEqual(0.0201);
     expect(after).toBeGreaterThan(before); // moved the right direction
@@ -80,17 +84,30 @@ describe('ScaleLearner — estimator + guards', () => {
 
   it('uses the MEDIAN, so a minority of borderline-passing samples do not drag it', () => {
     const l = new ScaleLearner({ killSwitch: false });
-    // 15 good (imply ~1.03) + 5 borderline-high (imply 1.39, inside the prefilter) → median ~1.03
-    for (let i = 0; i < 15; i++) l.recordSample('y', 800, 800 * (1.03 / l.currentScale('y')), l.currentScale('y'));
-    for (let i = 0; i < 5; i++) l.recordSample('y', 800, 800 * (1.39 / l.currentScale('y')), l.currentScale('y'));
+    const push = (target: number, i: number) => { const P = i % 2 === 0 ? 800 : -800; l.recordSample('y', P, P * (target / l.currentScale('y')), l.currentScale('y')); };
+    for (let i = 0; i < 16; i++) push(1.03, i);  // balanced majority → median ~1.03
+    for (let i = 0; i < 4; i++) push(1.39, i);   // balanced minority (inside prefilter)
     expect(l.currentScale('y')).toBeLessThan(1.06); // median-driven, not dragged toward the 1.39s
+  });
+
+  it('BALANCE GATE (task #41): a direction-SKEWED window does NOT update even with SE<0.5%; balancing it enables the update', () => {
+    const l = new ScaleLearner({ killSwitch: false });
+    // 20 samples ALL in one direction imply 1.05 with a tiny SE — but the median of a
+    // one-sided window is biased (implied is direction-dependent), so no update fires.
+    for (let i = 0; i < 20; i++) l.recordSample('y', 800, 800 * (1.05 / l.currentScale('y')), l.currentScale('y'));
+    expect(l.currentScale('y')).toBe(DEFAULT_CURVE_SCALE_Y); // frozen — window unbalanced
+    expect(l.status().y.windowSE).toBeLessThan(0.005);       // SE alone WOULD have passed
+    expect(l.status().y.windowBalance).toEqual({ up: 20, down: 0 });
+    // now add the other direction — once ≥8 each, the update fires.
+    for (let i = 0; i < 10; i++) l.recordSample('y', -800, -800 * (1.05 / l.currentScale('y')), l.currentScale('y'));
+    expect(l.currentScale('y')).toBeCloseTo(1.05, 2);
   });
 });
 
 describe('ScaleLearner — controls + persistence', () => {
   it('disable freezes (rejects samples, keeps the current value); enable resumes', () => {
     const l = new ScaleLearner({ killSwitch: false });
-    feed(l, 1.05, 12);
+    feed(l, 1.05, 20);
     const frozen = l.currentScale('y');
     l.disable();
     expect(l.recordSample('y', 800, 900, l.currentScale('y'))).toBe('rejected-disabled');
@@ -102,7 +119,7 @@ describe('ScaleLearner — controls + persistence', () => {
 
   it('reset reverts to the shipped defaults and clears the window', () => {
     const l = new ScaleLearner({ killSwitch: false });
-    feed(l, 1.05, 12);
+    feed(l, 1.05, 20);
     expect(l.currentScale('y')).not.toBe(DEFAULT_CURVE_SCALE_Y);
     l.reset();
     expect(l.currentScale('y')).toBe(DEFAULT_CURVE_SCALE_Y);

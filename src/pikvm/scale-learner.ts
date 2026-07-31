@@ -45,6 +45,16 @@ export const SE_APPLY_THRESHOLD = 0.005;       // apply an update only when wind
 export const PREFILTER_LO = 0.7, PREFILTER_HI = 1.4;   // reject implied scales outside (kills gross FPs)
 export const CLAMP_LO = 0.85, CLAMP_HI = 1.15; // absolute sanity clamp on the applied scale
 export const RATE_LIMIT = 0.02;                // ≤2% movement per update
+// Require a BALANCED ±direction mix before an update. The implied scale is direction-
+// dependent (measured: up 3.72% vs down 3.14% overshoot), so the window MEDIAN is only
+// an accurate estimate of the compromise-optimum once BOTH directions are represented.
+// The SE gate alone is optimistic here — it measures random-noise precision of the
+// median, not whether the window is REPRESENTATIVE — so a direction-skewed small window
+// passes SE<0.5% yet the median is biased (sim-confirmed: σ-model SE 0.48% at ~0.8-1.1%
+// true error; requiring ≥8/direction cuts the first-update error to ~0.14%). This is the
+// fix that works — an empirical-MAD gate fires EARLIER/worse, since MAD of a tiny window
+// is tiny.
+export const MIN_SAMPLES_PER_DIRECTION = 8;
 export const DIVERGENCE_WARN = 0.02;           // >2% from default → "re-measure/re-bake" warning
 export const INTERCEPT_ALARM_PX = 10;          // sustained constant offset ⇒ detector/pacing fault, not geometry
 export const REJECT_RATE_ALARM = 0.5;          // reject-rate spike ⇒ detector degraded
@@ -62,7 +72,7 @@ export type RecordOutcome =
   | 'accepted' | 'accepted-updated'
   | 'rejected-hygiene' | 'rejected-gate' | 'rejected-prefilter' | 'rejected-disabled';
 
-interface Sample { implied: number; planned: number; sigma: number; residual: number }
+interface Sample { implied: number; planned: number; sigma: number; residual: number; sign: number }
 
 interface AxisState {
   applied: number;
@@ -82,6 +92,7 @@ export interface AxisStatus {
   divergenceFromDefault: number;   // (applied-default)/default
   seen: number; accepted: number; rejected: number;
   windowSize: number;
+  windowBalance: { up: number; down: number }; // ±direction counts — an update needs ≥8 each
   windowSE: number | null;         // 1.25·median(σ_i)/√N, null until enough samples
   lastUpdate: number | null;
   slope: number | null;            // residual-vs-planned fit
@@ -180,12 +191,16 @@ export class ScaleLearner {
     // collapsing both clusters onto one line: a true SCALE error is the slope, a true
     // constant OFFSET is the intercept, and up/down asymmetry becomes spread — not a
     // false intercept.
-    const alongTravelResidual = (achieved - planned) * Math.sign(planned);
-    s.window.push({ implied, planned: Math.abs(planned), sigma, residual: alongTravelResidual });
+    const sign = Math.sign(planned);
+    const alongTravelResidual = (achieved - planned) * sign;
+    s.window.push({ implied, planned: Math.abs(planned), sigma, residual: alongTravelResidual, sign });
     if (s.window.length > WINDOW_MAX) s.window.shift();
 
+    // Update only when the median is BOTH precise (SE gate) AND representative (a
+    // balanced ±direction mix — else a direction-skewed window's median is biased,
+    // which the SE gate can't see).
     const se = this.windowSE(s);
-    if (se !== null && se < SE_APPLY_THRESHOLD) {
+    if (se !== null && se < SE_APPLY_THRESHOLD && this.directionBalanced(s)) {
       const target = Math.max(CLAMP_LO, Math.min(CLAMP_HI, median(s.window.map((w) => w.implied))));
       const step = Math.max(-RATE_LIMIT * s.applied, Math.min(RATE_LIMIT * s.applied, target - s.applied));
       if (step !== 0) { s.applied += step; s.lastUpdate = this.now(); this.dirty = true; return 'accepted-updated'; }
@@ -196,6 +211,13 @@ export class ScaleLearner {
   private decayRecent(s: AxisState): void {
     // rolling decay on the qualified-sample reject-rate signal so a burst shows, then fades.
     if (s.recentQualified > WINDOW_MAX) { s.recentQualified = Math.round(s.recentQualified * 0.7); s.recentPrefilterRejects = Math.round(s.recentPrefilterRejects * 0.7); }
+  }
+
+  /** Both directions represented ≥ MIN_SAMPLES_PER_DIRECTION — the window is a fair
+   *  sample of the direction-dependent implied scale, so its median isn't skewed. */
+  private directionBalanced(s: AxisState): boolean {
+    const up = s.window.reduce((c, w) => c + (w.sign > 0 ? 1 : 0), 0);
+    return Math.min(up, s.window.length - up) >= MIN_SAMPLES_PER_DIRECTION;
   }
 
   private windowSE(s: AxisState): number | null {
@@ -221,6 +243,7 @@ export class ScaleLearner {
     return {
       applied: s.applied, shippedDefault: DEFAULTS[a], divergenceFromDefault: divergence,
       seen: s.seen, accepted: s.accepted, rejected: s.rejected, windowSize: s.window.length,
+      windowBalance: { up: s.window.reduce((c, w) => c + (w.sign > 0 ? 1 : 0), 0), down: s.window.reduce((c, w) => c + (w.sign < 0 ? 1 : 0), 0) },
       windowSE: this.windowSE(s), lastUpdate: s.lastUpdate,
       slope: fit?.slope ?? null, intercept: fit?.intercept ?? null, warnings,
     };
