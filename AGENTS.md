@@ -86,6 +86,12 @@ Current version on `main`: 0.5.64 (Phase 73 — refreshed click-at skill prompt 
 
 0e. **`pikvm_usb_reconnect`** - The everyday "reconnect the USB" fix (reach for this first): presence-gate → `soft_connect` (idle-drop, ~6s) → if still dead, `udc-rebind` (full-dead-after-reboot) — **no destructive reboot**. Each rung verified by BOTH the ground-truth UDC state (`GET {PIKVM_HID_RECOVERY_URL}/udc-state`) AND a behavioral check (flags lie). Returns structured `{recovered, rungUsed, udcState, behavioralVerify, attempts, message}`. **(d): a failure also appends a Diagnosis line — HID DOWN vs HID UP-but-cursor-not-localizable — so you don't escalate to a reboot when the real problem is an invisible pointer.** If it still fails, escalate with `pikvm_hid_recover` (adds reboot + human). Same host endpoint as the ladder.
 
+0f. **`pikvm_mover_scale_status`** - Read the passive curve-scale learner (#41): per-axis scale in force, shipped defaults, divergence, sample counters (seen/accepted/rejected), current window SE, last update, active warnings. The learner passively learns `curveScaleX/Y` from real moves' free planned-vs-achieved residual (first-shot only, per-axis, ≥150px gate, rolling median, SE-gated ≤2%/update, clamp [0.85,1.15]); warm-started from the shipped defaults, persisted across restarts. A warning fires on a constant landing OFFSET (detector/pacing fault, NOT geometry) or >2% divergence (re-bake candidate).
+
+0g. **`pikvm_mover_scale_control`** - `action: enable|disable` the learner. **disable** freezes it at the current scales (stops adapting AND persisting) without reverting; **enable** resumes. (`PIKVM_MOVER_LEARN=0` is the no-session env kill-switch.)
+
+0h. **`pikvm_mover_scale_reset`** - Reset the learner to the shipped defaults: clears learned state AND deletes the persisted file (a restart won't restore the old value). Use after a deliberate geometry change or a bad learned scale.
+
 ### Display
 1. **`pikvm_screenshot`** - Capture current screen as JPEG (optional `savePath` also writes it to a file)
 1a. **`pikvm_snapshot`** - Save a JPEG frame to a FILE (file-only; optional `region` crop) — persist frames without piping base64 through the conversation
@@ -166,7 +172,7 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 54** (32 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow).
+**Total tools: 57** (35 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow).
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |

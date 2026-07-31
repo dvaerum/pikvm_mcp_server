@@ -204,6 +204,10 @@ export interface MoveToOptions {
    *  Threaded so the mover derives its correction gate strictly below it — the two
    *  can't silently drift. */
   acceptGatePx?: number;
+  /** strategy='curve-one-shot' only: per-axis curve scale (the passive learner's
+   *  current value; defaults to the shipped constant inside the mover when absent). */
+  curveScaleX?: number;
+  curveScaleY?: number;
   /** Max correction passes. Default 2. */
   maxCorrectionPasses?: number;
   /** Tolerance for early-exit (px). If observed |residual| below this in
@@ -417,6 +421,14 @@ export interface MoveToResult {
   bailedToBestPass: boolean;
   resolution: ScreenResolution;
   message: string;
+  /** (#41) First-shot passive-learning sample: planned (target−start) vs achieved
+   *  (FIRST-shot landing − start, before any correction) per axis, for the scale
+   *  learner. null when it can't be measured (start or first landing undetected).
+   *  `woken` marks a faded-cursor-wake start (a garbage sample, excluded from
+   *  learning). curve-one-shot only; other strategies leave it undefined. */
+  learnSample?: {
+    plannedX: number; plannedY: number; achievedX: number; achievedY: number; woken: boolean;
+  } | null;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -1517,6 +1529,8 @@ export async function moveToPixel(
       minPresence: options.minPresence,
       correctGatePx: options.oneShotCorrectGatePx,
       acceptGatePx: options.acceptGatePx,
+      curveScaleX: options.curveScaleX,
+      curveScaleY: options.curveScaleY,
     });
   }
 
