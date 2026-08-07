@@ -117,3 +117,30 @@ input." The setter begins the mode-settling gate.
   which is stock Arch, not the appliance. Real-iron behavioural stays georg's
   standing iPad-rig gate. A green here reads as "contract satisfied," not
   "verified on iron."
+
+## Known assumption / open dependency: the endpoint must report the ARTIFACT, not the marker
+
+`GET /hidmode` currently reports the appliance's **marker file**
+(`/var/lib/kvmd/hidmode`) — i.e. the executor's *intent*, written **before** it
+restarts kvmd-otg and kvmd. That makes the resolver vulnerable to a
+**confidently-wrong** read, distinct from unreachable: if a switch to `ipad` is
+written but the kvmd-otg restart fails / is slow / partially applies, `/hidmode`
+returns `ipad` while the assembled USB gadget is still the desktop dual-mouse.
+The resolver believes it, flips `mouseAbsoluteMode`, and the mover drives relative
+emits into an absolute gadget — a silent no-op on iPad, with the click path
+reporting positions it never achieved. This is the deployed≠live class
+(pikvm-nixos #49) one level deeper: **marker = intent, the assembled gadget =
+truth.** Fail-closed guards *unreachable*; it does not guard *wrong-mode*.
+
+The correct fix is appliance-side (raised with the module author by the iPad
+node): the endpoint should report the **assembled gadget** — self-describing in
+configfs (`functions/hid.usb1` report_length + descriptor sha: `4/55c045b2…` =
+relative-single; `mouse_alt` node present = desktop-dual, absent = ipad-single) —
+rather than the marker. Then the resolver consumes `body.mode` **unchanged** and
+is correct by construction (one reader of truth, not N clients re-deriving). The
+MCP cannot self-mitigate: it is offline from the appliance except through these
+endpoints and cannot read configfs directly; and the mode-settling gate clears on
+UDC-confirmed-**online**, which does not distinguish online-in-the-right-mode from
+online-in-the-wrong-mode. **So this resolver assumes `/hidmode` reports the
+assembled gadget.** Until the endpoint does, a failed/partial switch can leave the
+derived mode wrong-but-confident.
