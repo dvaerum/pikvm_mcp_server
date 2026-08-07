@@ -88,6 +88,11 @@ describe('parseCliOptions', () => {
     expect(() => parseCliOptions(['--target', 'auto'], {})).toThrow(/target/i);
   });
 
+  it('an empty target (blank flag or PIKVM_TARGET="") is UNSET, not invalid (#51)', () => {
+    expect(parseCliOptions(['--target', ''], {}).target).toBeUndefined();
+    expect(parseCliOptions([], { PIKVM_TARGET: '' }).target).toBeUndefined();
+  });
+
   it('security is undefined by default (main enforces required in http mode)', () => {
     expect(parseCliOptions([], {}).security).toBeUndefined();
   });
