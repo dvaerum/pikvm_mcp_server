@@ -2,6 +2,10 @@
 
 let
   cfg = config.services.pikvm-mcp;
+  # (#51) Is a derive-from-endpoint URL declared eval-visibly? Either the first-class
+  # `hidModeUrl` option or a PIKVM_HIDMODE_URL in extraEnv. (A URL that arrives only
+  # via a runtime EnvironmentFile is invisible here — hence hidModeUrl is preferred.)
+  hidModeUrlSet = cfg.hidModeUrl != null || (cfg.extraEnv ? "PIKVM_HIDMODE_URL");
 in
 {
   options.services.pikvm-mcp = {
@@ -16,12 +20,38 @@ in
     };
 
     target = lib.mkOption {
-      type = lib.types.enum [ "ipad" "desktop" ];
+      type = lib.types.nullOr (lib.types.enum [ "ipad" "desktop" ]);
+      default = null;
       example = "desktop";
       description = ''
-        Which control path to use (REQUIRED — no auto-detect). `ipad` =
-        curve-one-shot mover + cascade detector (relative mouse); `desktop` =
-        legacy detect-then-move (absolute mouse). Passed as `--target`.
+        The DECLARED control path (stock PiKVM / pikvm01). `ipad` = curve-one-shot
+        mover + cascade detector (relative mouse); `desktop` = legacy
+        detect-then-move (absolute mouse). Passed as `--target` when set.
+
+        Leave `null` on an appliance that DERIVES its mode from the /hidmode
+        endpoint — set {option}`services.pikvm-mcp.hidModeUrl` instead. Exactly one
+        of `target` / `hidModeUrl` must be the source (both = eval error; see the
+        assertion below); a declared `target` would be a second copy of the mode
+        that can disagree with the appliance at runtime (pikvm-nixos #51).
+      '';
+    };
+
+    hidModeUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "http://127.0.0.1:8083/hidmode";
+      description = ''
+        The appliance's loopback /hidmode endpoint (pikvm-nixos #51). When set, the
+        MCP DERIVES its relative/absolute behaviour from the assembled gadget the
+        endpoint reports and holds no copy of the mode — so leave
+        {option}`services.pikvm-mcp.target` `null`. Wired as `PIKVM_HIDMODE_URL`.
+
+        The bearer token is a secret and is NOT set here — inject
+        `PIKVM_HIDMODE_TOKEN` via {option}`services.pikvm-mcp.extraEnv` or a
+        systemd `EnvironmentFile` (e.g. the appliance's hidmode-endpoint module).
+        Setting the URL here (rather than only via an EnvironmentFile) keeps it
+        eval-visible so the mutual-exclusion assertion can protect against a
+        both-set misconfiguration at eval time instead of a runtime crash-loop.
       '';
     };
 
@@ -152,7 +182,29 @@ in
           + "to be set (use security = \"kvmd\" to validate clients against PiKVM's own users, "
           + "or security = \"no\" to serve /mcp without authentication).";
       }
+      {
+        # (#51) Mutual exclusion at EVAL time — a declared target AND a derive-URL
+        # both set is the two-copies defect, and would crash-loop at runtime (the
+        # server fail-fasts on --target + PIKVM_HIDMODE_URL). Catch it here so the
+        # toplevel eval / host-eval gate rejects it, not the running unit.
+        assertion = !(cfg.target != null && hidModeUrlSet);
+        message =
+          "services.pikvm-mcp: `target` and `hidModeUrl` are mutually exclusive — the appliance "
+          + "/hidmode endpoint is the single source of truth for the HID mode, so a declared "
+          + "`target` would be a second copy that disagrees at runtime. Set exactly one (leave "
+          + "`target = null` when deriving from `hidModeUrl`; unset `hidModeUrl`/PIKVM_HIDMODE_URL "
+          + "when using a declared `target`).";
+      }
     ];
+
+    # A soft nudge for the no-source case (the server fail-fasts at startup either
+    # way). Not a hard assertion: the URL may legitimately arrive via a runtime-only
+    # EnvironmentFile the module can't see at eval time.
+    warnings = lib.optional (cfg.target == null && !hidModeUrlSet) (
+      "services.pikvm-mcp: neither `target` nor `hidModeUrl` is set. The service will fail to "
+      + "start unless PIKVM_HIDMODE_URL is injected another way (e.g. an EnvironmentFile). Set "
+      + "`target = \"ipad\"|\"desktop\"` (declared) or `hidModeUrl` (derive) to be explicit."
+    );
 
     systemd.services.pikvm-mcp = {
       description = "PiKVM MCP server (Streamable HTTP)";
@@ -169,13 +221,21 @@ in
       // lib.optionalAttrs (cfg.usernameFile == null && cfg.username != null) {
         PIKVM_USERNAME = cfg.username;
       }
+      # (#51) Derive the HID mode from the appliance /hidmode endpoint (the token is
+      # a secret — inject PIKVM_HIDMODE_TOKEN via extraEnv / an EnvironmentFile).
+      // lib.optionalAttrs (cfg.hidModeUrl != null) {
+        PIKVM_HIDMODE_URL = cfg.hidModeUrl;
+      }
       // cfg.extraEnv;
 
       serviceConfig = {
         # HTTP transport (a long-lived system service can't use stdio).
         ExecStart =
           "${lib.getExe cfg.package} --transport http --host ${cfg.address} "
-          + "--port ${toString cfg.port} --target ${cfg.target} --security ${cfg.security}"
+          + "--port ${toString cfg.port} --security ${cfg.security}"
+          # (#51) --target ONLY for a declared source; omitted when deriving from
+          # hidModeUrl (both-set would be the runtime fail-fast we now reject at eval).
+          + lib.optionalString (cfg.target != null) " --target ${cfg.target}"
           + lib.optionalString (cfg.security == "yes") " --auth-username ${cfg.authUsername}"
           + lib.optionalString cfg.allowToolLogin " --allow-tool-login";
 
