@@ -183,11 +183,17 @@ MCP must respect:
   resolver drives **`mode`/observed** and fail-closes on `mode:null`; it does **not**
   gate on `{ok, settled}`. Driving the observed gadget means a failed switch just
   keeps us driving `desktop` (correct — the gadget IS desktop), never wrong-mode.
-- **Drift diagnostic.** `settled && requested !== mode` is a **stuck/failed switch**
-  (the operator asked for `ipad`, the gadget didn't change). `pikvm_hidmode_status`
-  surfaces this as `driftDetected` + `requestedMode` + a `warnings` STUCK-SWITCH
-  line so a stuck switch is never silent. It is a *diagnostic*, not a mover block —
-  driving the actual gadget is correct regardless.
+- **Drift diagnostic.** `settled && requested !== mode` is a **next-boot-pending
+  divergence** — since #53 `requested` is sourced from the boot-authoritative
+  `/var/lib/kvmd/hidmode.yaml` (the mode that assembles on the next reboot), so
+  `requested != observed` means the configured next-boot mode differs from the
+  currently-assembled gadget (the switch applies on the next reboot; kvmd-otg is
+  out of `restartTriggers`). `pikvm_hidmode_status` surfaces it as `driftDetected`
+  + `requestedMode` + a `warnings` NEXT-BOOT-PENDING line (matching the appliance
+  #44 "will boot into X on next reboot" warning) so it is never silent. It is a
+  *diagnostic*, not a mover block — driving the actual gadget is correct regardless.
+  (Pre-#53 `requested` was the last-intent marker, vulnerable to a torn write; from
+  the atomic yaml it is reliable.)
 - **`mode:null` = unsettled** (gadget mid-reassembly / unrecognisable) → fail-closed
   (mover refuses), distinct from unreachable (endpoint down). Both refuse; the
   status/gate reasons distinguish them.
