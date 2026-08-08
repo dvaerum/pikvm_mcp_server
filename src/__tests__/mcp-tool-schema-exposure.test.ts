@@ -354,6 +354,7 @@ describe('MCP tool schema and handler exposure', () => {
     const EXPECTED_TOOLS = [
       'pikvm_version', 'pikvm_health_check', 'pikvm_screenshot', 'pikvm_snapshot',
       'pikvm_mover_scale_status', 'pikvm_mover_scale_control', 'pikvm_mover_scale_reset',
+      'pikvm_hidmode_status', 'pikvm_hidmode_set',
       'pikvm_get_resolution', 'pikvm_type', 'pikvm_key', 'pikvm_shortcut',
       'pikvm_screen_state', 'pikvm_hid_reset', 'pikvm_hid_recover', 'pikvm_usb_reconnect',
       'pikvm_ipad_unlock_with_code', 'pikvm_ipad_lock', 'pikvm_dismiss_popup',

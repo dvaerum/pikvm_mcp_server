@@ -19,7 +19,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { PiKVMClient, createDefaultBelief } from './pikvm/client.js';
 import { loadConfig, resolveHttpAuth } from './config.js';
-import { parseCliOptions, helpText } from './cli.js';
+import { parseCliOptions, helpText, resolveHidModeSource, type HidModeSource } from './cli.js';
 import { startHttpServer } from './http-server.js';
 import { makeStaticAuthorizer, type HttpAuth, type HeaderAuthorizer } from './auth.js';
 import { makeKvmdAuthorizer } from './kvmd-auth.js';
@@ -27,6 +27,7 @@ import { type LoginGate } from './session-auth.js';
 import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, makeSshUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { diagnoseHidFromClient, describeHidDiagnosis } from './pikvm/hid-diagnosis.js';
 import { scaleLearner, MOVER_SCALE_TOOL_NAMES, type MoverScaleToolName } from './pikvm/scale-learner.js';
+import { HidModeResolver, makeHttpHidModeEndpoint, modeIsAbsolute, type HidMode } from './pikvm/hid-mode.js';
 import { loadPersisted, savePersisted, deletePersisted } from './pikvm/scale-persist.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
 import {
@@ -157,6 +158,67 @@ function recoveryEndpointConfig(): { url?: string; token?: string; verifySsl?: b
     verifySsl: process.env.PIKVM_HID_RECOVERY_VERIFY_SSL === 'true',
   };
 }
+
+// (#51) HID-mode source. The appliance owns the mode and serves it at
+// PIKVM_HIDMODE_URL/hidmode; when that env is set the MCP DERIVES the mode from it
+// (fail-closed). When unset, the declared --target IS the mode (stock pikvm01).
+// Exactly one — the both-set case is a startup error. See ADR 0002.
+let hidModeResolver: HidModeResolver | undefined;
+function hidModeEndpointConfig(): { url?: string; token?: string; verifySsl?: boolean } {
+  return {
+    url: process.env.PIKVM_HIDMODE_URL,
+    token: process.env.PIKVM_HIDMODE_TOKEN,
+    verifySsl: process.env.PIKVM_HIDMODE_VERIFY_SSL === 'true',
+  };
+}
+/**
+ * Resolve the current HID mode and reconcile the module-global mouseAbsoluteMode.
+ * Cheap no-op for a declared target; a TTL-cached endpoint read otherwise. Leaves
+ * mouseAbsoluteMode UNCHANGED when the mode is unknown (unreachable) — the mover
+ * gate refuses in that state, so the last value is never acted on.
+ */
+async function refreshHidMode(): Promise<void> {
+  if (!hidModeResolver) return;
+  const mode = await hidModeResolver.resolve();
+  if (mode) mouseAbsoluteMode = modeIsAbsolute(mode);
+}
+/** The set of pointer-driving tools whose correctness depends on the HID mode.
+ *  In endpoint mode these are REFUSED while the mode is unknown (unreachable) or
+ *  settling (post-switch re-enumeration). Keyboard / screenshot / health / recovery
+ *  are deliberately excluded — they work regardless of mouse mode. Cross-checked
+ *  against the tool list by mcp-hidmode-gate.test.ts so a new mover can't slip in. */
+const MODE_SENSITIVE_TOOLS = new Set<string>([
+  'pikvm_mouse_move', 'pikvm_mouse_click', 'pikvm_mouse_scroll',
+  'pikvm_mouse_move_to', 'pikvm_mouse_click_at',
+  'pikvm_calibrate', 'pikvm_auto_calibrate', 'pikvm_measure_ballistics',
+  'pikvm_seed_cursor_template',
+  'pikvm_ipad_unlock', 'pikvm_ipad_unlock_with_code', 'pikvm_ipad_lock',
+  'pikvm_ipad_home', 'pikvm_ipad_app_switcher', 'pikvm_ipad_launch_app',
+  'pikvm_dismiss_popup',
+]);
+
+// (#51) HID-mode tools. status reads the derived/declared mode; set switches the
+// appliance mode via POST /hidmode (georg's design: settable on kvmd API, web UI,
+// AND the MCP). See ADR 0002.
+async function handle_pikvm_hidmode_status(args: Record<string, unknown>): Promise<CallToolResult> {
+  if (!hidModeResolver) {
+    return { content: [{ type: 'text', text: 'HID-mode resolver not initialized (server not fully started).' }], isError: true };
+  }
+  await refreshHidMode(); // a fresh read so the status isn't stale
+  return { content: [{ type: 'text', text: JSON.stringify(hidModeResolver.status(), null, 2) }] };
+}
+async function handle_pikvm_hidmode_set(args: Record<string, unknown>): Promise<CallToolResult> {
+  if (!hidModeResolver) {
+    return { content: [{ type: 'text', text: 'HID-mode resolver not initialized (server not fully started).' }], isError: true };
+  }
+  const mode = args.mode as HidMode;
+  if (mode !== 'ipad' && mode !== 'desktop') {
+    return { content: [{ type: 'text', text: 'Error: mode is required and must be "ipad" or "desktop".' }], isError: true };
+  }
+  const r = await hidModeResolver.set(mode);
+  return { content: [{ type: 'text', text: r.message }], isError: !r.ok };
+}
+
 function getRecoveryTrigger(): RecoveryTrigger {
   if (!recoveryTrigger) {
     // Two backends, ONE tool. The appliance (pikvm-nixos) serves the trigger over
@@ -390,6 +452,18 @@ const toolRegistry: ToolEntry[] = [
     handler: handle_pikvm_mover_scale_reset,
     description: 'EXPERIMENTAL (#41). Reset the passive curve-scale learner to the shipped defaults: clears the learned state AND deletes the persisted file (so a restart will not restore the old value). Use after a deliberate geometry change or if a bad scale was learned.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'pikvm_hidmode_status',
+    handler: handle_pikvm_hidmode_status,
+    description: 'Report the HID-mode source and current mode (#51). source: "declared" (a fixed --target, e.g. stock pikvm01) or "endpoint" (derived from the appliance /hidmode). Fields: mode ("ipad"=relative / "desktop"=absolute, or null=UNKNOWN when the endpoint is unreachable), reachable, settling (HID mid-switch/re-enumerating), and moverAllowed + moverBlockReason (pointer ops refuse when the mode is unknown or settling). Read-only.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'pikvm_hidmode_set',
+    handler: handle_pikvm_hidmode_set,
+    description: 'Switch the appliance HID mode (#51): POSTs to the appliance /hidmode endpoint. Only works when the mode is endpoint-derived (PIKVM_HIDMODE_URL set); a declared --target is fixed and cannot be switched. The switch physically re-assembles the USB gadget — THE SESSION WILL DROP and the new mode is NOT live immediately; reconnect and re-read (pikvm_hidmode_status) before driving input. desktop = absolute dual mouse; ipad = single relative mouse.',
+    inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['ipad', 'desktop'], description: 'The HID mode to switch the appliance to.' } }, required: ['mode'] },
   },
   {
     name: 'pikvm_screenshot',
@@ -1107,6 +1181,16 @@ async function handle_pikvm_health_check(args: Record<string, unknown>): Promise
         const udcState = await getUdcStateReader()();
         const health = await runHealthCheck(pikvm, { mouseAbsoluteMode, udcState });
         mouseAbsoluteMode = health.mouseAbsoluteMode;
+        // (#51) endpoint mode: the appliance /hidmode is authoritative, so re-derive
+        // (a health_check is a natural reconnect point) — this overrides the device
+        // reconcile above. The re-enumeration after a switch is complete once the HID
+        // is back online (UDC ground truth preferred; a successful health read is the
+        // fallback), so clear the settling gate then. See ADR 0002.
+        if (hidModeResolver?.isEndpoint) {
+          hidModeResolver.markReconnect();
+          await refreshHidMode();
+          if (udcState ? udcState.online : true) hidModeResolver.clearSettling();
+        }
         return {
           content: [{ type: 'text', text: health.lines.join('\n') }],
         };
@@ -2272,6 +2356,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   // Gate absolute-mouse-only tools when the target reports mouse.absolute=false.
+  // (#51) HID-mode mover gate: pointer-driving tools need the mode KNOWN and the HID
+  // settled before they move. Refreshing here also reconciles mouseAbsoluteMode for the
+  // gate below. Declared targets always pass; an endpoint source refuses when the mode
+  // is unknown (endpoint unreachable) or settling (post-switch re-enumeration). See ADR 0002.
+  if (MODE_SENSITIVE_TOOLS.has(name)) {
+    await refreshHidMode();
+    const gate = hidModeResolver?.moverGate();
+    if (gate && !gate.allowed) {
+      return { content: [{ type: 'text', text: `Error: ${gate.reason}` }], isError: true };
+    }
+  }
+
   // The relative-mode tools (pikvm_mouse_move with relative:true,
   // pikvm_mouse_click_at, etc.) remain available.
   if (!mouseAbsoluteMode) {
@@ -2342,13 +2438,16 @@ async function main() {
     console.log(helpText());
     return;
   }
-  if (!cli.target) {
-    console.error(
-      "--target is required — pass --target ipad or --target desktop (or set PIKVM_TARGET).\n" +
-        "Run 'pikvm-mcp-server --help' for usage.",
-    );
-    process.exit(2);
-  }
+  // (#51) HID-mode source: exactly one of a declared --target OR PIKVM_HIDMODE_URL
+  // (derive from the appliance /hidmode endpoint). Fail fast on both / neither. ADR 0002.
+  const hidModeSource: HidModeSource = (() => {
+    const resolved = resolveHidModeSource(cli.target, process.env.PIKVM_HIDMODE_URL);
+    if ('error' in resolved) {
+      console.error(`${resolved.error}\nRun 'pikvm-mcp-server --help' for usage.`);
+      process.exit(2);
+    }
+    return resolved;
+  })();
 
   // (#41) warm-start the passive scale learner from persisted state + begin periodic
   // flushing. Fail-safe; never blocks startup (fire-and-forget, awaits only the load).
@@ -2461,21 +2560,34 @@ async function main() {
     );
   }
 
-  // --target (required) sets the mouse mode: 'ipad' = relative (curve-one-shot +
-  // cascade), 'desktop' = absolute (legacy detect-then-move). The HID read above is
-  // kept only to warn on a mismatch.
-  const forcedAbsolute = cli.target === 'desktop';
-  if (forcedAbsolute !== mouseAbsoluteMode) {
+  // (#51) The HID mode comes from the resolver, not the device HID read above (which
+  // is kept only for the mismatch warning). DECLARED (--target) = a fixed mode, exactly
+  // as before. ENDPOINT (PIKVM_HIDMODE_URL) = derived from the appliance /hidmode, and
+  // UNKNOWN when unreachable (mover ops then refuse rather than guess). See ADR 0002.
+  const hidDetectedAbsolute = mouseAbsoluteMode; // snapshot before the resolver overrides it
+  hidModeResolver = hidModeSource.kind === 'endpoint'
+    ? new HidModeResolver({ endpoint: makeHttpHidModeEndpoint(hidModeEndpointConfig()) })
+    : new HidModeResolver({ declared: hidModeSource.target });
+  await refreshHidMode();
+  if (hidModeSource.kind === 'endpoint') {
+    const st = hidModeResolver.status();
     console.error(
-      `⚠ --target ${cli.target} overrides the HID-detected mode ` +
-        `(HID reported ${mouseAbsoluteMode ? 'absolute/desktop' : 'relative/iPad'}).`,
+      st.mode
+        ? `Control path: derived ${st.mode} → ${mouseAbsoluteMode ? 'desktop (absolute, detect-then-move)' : 'iPad (relative, curve-one-shot + cascade)'} from the appliance /hidmode endpoint.`
+        : `⚠ Control path: HID mode UNKNOWN — the appliance /hidmode endpoint is unreachable; pointer ops will REFUSE until it answers (keyboard / screenshot / recovery still work).`,
+    );
+  } else {
+    if ((cli.target === 'desktop') !== hidDetectedAbsolute) {
+      console.error(
+        `⚠ --target ${cli.target} overrides the HID-detected mode ` +
+          `(HID reported ${hidDetectedAbsolute ? 'absolute/desktop' : 'relative/iPad'}).`,
+      );
+    }
+    console.error(
+      `Control path: ${cli.target} → ` +
+        `${mouseAbsoluteMode ? 'desktop (absolute, detect-then-move)' : 'iPad (relative, curve-one-shot + cascade)'} (declared).`,
     );
   }
-  mouseAbsoluteMode = forcedAbsolute;
-  console.error(
-    `Control path: ${cli.target} → ` +
-      `${mouseAbsoluteMode ? 'desktop (absolute, detect-then-move)' : 'iPad (relative, curve-one-shot + cascade)'}.`,
-  );
 
   if (cli.transport === 'http') {
     // Streamable HTTP: one Server per session, minted by createMcpServer.
