@@ -30,7 +30,7 @@ function fakeEndpoint(init?: {
     writes: [] as HidMode[],
     writeResult: { ok: true, message: 'mode switching, wait ~8s; USB re-enumerates, session drops' },
     set(m: HidMode | null, r = true) { mode = m; requested = m; settled = true; reachable = r; },
-    /** stuck switch: gadget stayed `observed` while the marker asked for `requested`. */
+    /** next-boot pending: the gadget stays `observed` while the yaml requests a different mode. */
     setDrift(observed: HidMode, req: HidMode) { mode = observed; requested = req; settled = true; reachable = true; },
     async read(): Promise<HidModeReading | null> {
       state.reads++;
@@ -197,17 +197,18 @@ describe('HidModeResolver — endpoint (appliance)', () => {
 
   it('drives the OBSERVED gadget, not the request: a DRIFT (settled, requested≠observed) is NOT wrong-mode', async () => {
     // it-03400 contract: settled = "gadget recognisable", NOT "switch succeeded".
-    // Marker asked ipad but the gadget is still desktop ⇒ mode=observed=desktop.
+    // requested (the next-boot mode, from the yaml) is ipad but the gadget is still
+    // desktop ⇒ mode=observed=desktop; the switch applies on the next reboot.
     const ep = fakeEndpoint({ mode: 'desktop' });
     const l = new HidModeResolver({ endpoint: ep });
     await l.resolve();
-    ep.setDrift('desktop', 'ipad'); // stuck switch: gadget stayed desktop
+    ep.setDrift('desktop', 'ipad'); // next-boot pending: gadget desktop, requested ipad
     l.markReconnect();
     expect(await l.resolve()).toBe('desktop'); // we drive the ACTUAL gadget — correct, not confidently-wrong
     expect(l.moverGate().allowed).toBe(true);  // desktop IS a valid assembled mode
   });
 
-  it('surfaces the DRIFT DIAGNOSTIC in status: settled + requested≠observed ⇒ a visible STUCK-SWITCH warning', async () => {
+  it('surfaces the DRIFT DIAGNOSTIC in status: settled + requested≠observed ⇒ a visible NEXT-BOOT-PENDING warning (#53)', async () => {
     const ep = fakeEndpoint({ mode: 'desktop' });
     const l = new HidModeResolver({ endpoint: ep });
     await l.resolve();
@@ -219,7 +220,8 @@ describe('HidModeResolver — endpoint (appliance)', () => {
     expect(s.driftDetected).toBe(true);
     expect(s.requestedMode).toBe('ipad');
     expect(s.mode).toBe('desktop'); // still driving the real gadget
-    expect(s.warnings.join(' ')).toMatch(/stuck switch|did not take effect/i);
+    // wording matches #44's appliance warning ("will boot into X on next reboot").
+    expect(s.warnings.join(' ')).toMatch(/next-boot pending|takes effect on the next reboot|will boot into/i);
   });
 
   it('UNSETTLED (mode=null while recognisable-pending) fail-closes with a re-assembly reason, not "unreachable"', async () => {

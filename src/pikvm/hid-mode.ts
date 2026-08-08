@@ -27,7 +27,8 @@ export const modeIsAbsolute = (mode: HidMode): boolean => mode === 'desktop';
  *  is the OBSERVED gadget (authoritative for driving); `null` = unrecognisable /
  *  mid-reassembly (unsettled). `requested` is the marker's INTENT and `settled` is
  *  "gadget recognisable" (NOT "the switch succeeded"): `settled && requested !==
- *  mode` is a stuck/failed switch (drift). See ADR 0002. */
+ *  mode` is a next-boot-pending divergence (drift) — the config (requested) will
+ *  assemble on the next reboot but differs from the current gadget. See ADR 0002. */
 export interface HidModeReading {
   mode: HidMode | null;
   requested?: HidMode | null;
@@ -50,7 +51,8 @@ export interface HidModeStatus {
   lastReadAt: number | null;
   /** the marker's intent from the last read (null for declared / not read). */
   requestedMode: HidMode | null;
-  /** the assembled gadget ≠ the requested mode while recognisable ⇒ a stuck/failed switch. */
+  /** the assembled gadget ≠ the requested (next-boot) mode while recognisable ⇒ a
+   *  next-boot-pending divergence (the requested mode assembles on the next reboot). */
   driftDetected: boolean;
   moverAllowed: boolean;
   moverBlockReason: string | null;
@@ -145,7 +147,7 @@ export class HidModeResolver {
     return this.currentMode;
   }
 
-  /** requested≠observed while the gadget is recognisable ⇒ a stuck/failed switch. */
+  /** requested(next-boot)≠observed while the gadget is recognisable ⇒ a next-boot-pending divergence. */
   private drift(): boolean {
     const r = this.lastReading;
     return !!(this.declared === undefined && r && r.settled && r.requested && r.mode && r.requested !== r.mode);
@@ -176,8 +178,9 @@ export class HidModeResolver {
     const warnings: string[] = [];
     if (driftDetected) {
       warnings.push(
-        `STUCK SWITCH: requested "${r!.requested}" but the assembled gadget is "${r!.mode}" — the mode switch did not take ` +
-        `effect (the mover is correctly driving the actual gadget "${r!.mode}", so no wrong-mode risk; the switch needs re-triggering).`,
+        `NEXT-BOOT PENDING: the appliance will boot into "${r!.requested}" but the gadget is currently assembled as ` +
+        `"${r!.mode}" — the mover is correctly driving the current gadget "${r!.mode}" (no wrong-mode risk); the ` +
+        `requested mode takes effect on the next reboot.`,
       );
     }
     return {
