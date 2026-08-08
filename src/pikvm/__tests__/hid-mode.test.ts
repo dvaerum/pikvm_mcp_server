@@ -5,9 +5,11 @@ import {
   modeIsAbsolute,
   type HidMode,
   type HidModeEndpoint,
+  type HidModeReading,
 } from '../hid-mode.js';
 
-/** In-memory endpoint: programmable read result + call counters, injectable clock. */
+/** In-memory endpoint: programmable read result + call counters, injectable clock.
+ *  `mode` = the OBSERVED gadget; `requested` defaults to `mode` (no drift) unless set. */
 function fakeEndpoint(init?: {
   mode?: HidMode | null;
   reachable?: boolean;
@@ -15,19 +17,24 @@ function fakeEndpoint(init?: {
   reads: number;
   writes: HidMode[];
   set(mode: HidMode | null, reachable?: boolean): void;
+  setDrift(observed: HidMode, requested: HidMode): void;
   writeResult: { ok: boolean; message: string };
 } {
   let mode: HidMode | null = init?.mode ?? 'ipad';
+  let requested: HidMode | null = init?.mode ?? 'ipad';
+  let settled = true;
   let reachable = init?.reachable ?? true;
   const state = {
     configured: true,
     reads: 0,
     writes: [] as HidMode[],
     writeResult: { ok: true, message: 'mode switching, wait ~8s; USB re-enumerates, session drops' },
-    set(m: HidMode | null, r = true) { mode = m; reachable = r; },
-    async read(): Promise<HidMode | null> {
+    set(m: HidMode | null, r = true) { mode = m; requested = m; settled = true; reachable = r; },
+    /** stuck switch: gadget stayed `observed` while the marker asked for `requested`. */
+    setDrift(observed: HidMode, req: HidMode) { mode = observed; requested = req; settled = true; reachable = true; },
+    async read(): Promise<HidModeReading | null> {
       state.reads++;
-      return reachable ? mode : null;
+      return reachable ? { mode, requested, settled } : null;
     },
     async write(m: HidMode): Promise<{ ok: boolean; message: string }> {
       state.writes.push(m);
@@ -50,12 +57,12 @@ describe('makeHttpHidModeEndpoint — consumes the FULL PIKVM_HIDMODE_URL (modul
     const ep = makeHttpHidModeEndpoint(
       { url: 'http://127.0.0.1:8083/hidmode', token: 'tok' },
       {
-        get: async (u, h) => { seen.get.push(u); expect(h.authorization).toBe('Bearer tok'); return { status: 200, body: { ok: true, mode: 'ipad' } }; },
+        get: async (u, h) => { seen.get.push(u); expect(h.authorization).toBe('Bearer tok'); return { status: 200, body: { ok: true, mode: 'ipad', requested: 'ipad', settled: true } }; },
         post: async (u, h, b) => { seen.post.push({ u, b, auth: h.authorization }); return { status: 200, body: { ok: true, mode: 'desktop', message: 'mode switching to desktop; USB re-enumerates and the active session drops (~5s)' } }; },
       },
     );
     expect(ep.configured).toBe(true);
-    expect(await ep.read()).toBe('ipad');
+    expect(await ep.read()).toEqual({ mode: 'ipad', requested: 'ipad', settled: true }); // mode=observed, ignores `ok`
     expect(seen.get[0]).toBe('http://127.0.0.1:8083/hidmode'); // AS-IS — NOT .../hidmode/hidmode
     const w = await ep.write('desktop');
     expect(seen.post[0].u).toBe('http://127.0.0.1:8083/hidmode');
@@ -186,5 +193,44 @@ describe('HidModeResolver — endpoint (appliance)', () => {
     expect(r.message).toMatch(/not.*live|session.*drop|re-?enumerat|reconnect/i);
     expect(l.status().settling).toBe(true);       // held until confirmed online
     expect(l.moverGate().allowed).toBe(false);
+  });
+
+  it('drives the OBSERVED gadget, not the request: a DRIFT (settled, requested≠observed) is NOT wrong-mode', async () => {
+    // it-03400 contract: settled = "gadget recognisable", NOT "switch succeeded".
+    // Marker asked ipad but the gadget is still desktop ⇒ mode=observed=desktop.
+    const ep = fakeEndpoint({ mode: 'desktop' });
+    const l = new HidModeResolver({ endpoint: ep });
+    await l.resolve();
+    ep.setDrift('desktop', 'ipad'); // stuck switch: gadget stayed desktop
+    l.markReconnect();
+    expect(await l.resolve()).toBe('desktop'); // we drive the ACTUAL gadget — correct, not confidently-wrong
+    expect(l.moverGate().allowed).toBe(true);  // desktop IS a valid assembled mode
+  });
+
+  it('surfaces the DRIFT DIAGNOSTIC in status: settled + requested≠observed ⇒ a visible STUCK-SWITCH warning', async () => {
+    const ep = fakeEndpoint({ mode: 'desktop' });
+    const l = new HidModeResolver({ endpoint: ep });
+    await l.resolve();
+    expect(l.status().driftDetected).toBe(false); // requested==observed
+    ep.setDrift('desktop', 'ipad');
+    l.markReconnect();
+    await l.resolve();
+    const s = l.status();
+    expect(s.driftDetected).toBe(true);
+    expect(s.requestedMode).toBe('ipad');
+    expect(s.mode).toBe('desktop'); // still driving the real gadget
+    expect(s.warnings.join(' ')).toMatch(/stuck switch|did not take effect/i);
+  });
+
+  it('UNSETTLED (mode=null while recognisable-pending) fail-closes with a re-assembly reason, not "unreachable"', async () => {
+    const ep = fakeEndpoint({ mode: 'ipad' });
+    const l = new HidModeResolver({ endpoint: ep });
+    await l.resolve();
+    ep.set(null, true); // reachable, but the gadget is mid-reassembly (mode=null)
+    l.markReconnect();
+    expect(await l.resolve()).toBeNull();
+    expect(l.status().reachable).toBe(true);       // the endpoint answered
+    expect(l.moverGate().allowed).toBe(false);
+    expect(l.moverGate().reason).toMatch(/reassembl|unsettled|settle/i);
   });
 });

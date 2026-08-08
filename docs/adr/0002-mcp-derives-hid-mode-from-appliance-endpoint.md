@@ -147,4 +147,26 @@ truth must come from the endpoint.
 **Interim (until the endpoint change lands):** a marker-based `/hidmode` can leave
 the derived mode wrong-but-confident after a failed/partial switch. This is a #51
 ship-gate: the endpoint reporting the assembled gadget must land before the
-derived mode is trusted on a real appliance.
+derived mode is trusted on a real appliance. (The endpoint change landed
+appliance-side as `feat/hidmode-assembled-mode`, real-iron gated by it-03400.)
+
+### Response contract (finalized 2026-08-08, it-03400 real-iron gate)
+
+`GET /hidmode` → `{ ok, mode, requested, observed, settled }` where **`mode` =
+`observed` = the assembled gadget** (authoritative for driving). Two subtleties the
+MCP must respect:
+
+- **`settled` means "gadget recognisable", NOT "the requested switch succeeded".**
+  A genuine drift — marker/`requested` = `ipad` but the gadget is still `desktop` —
+  returns `ok:true, settled:true, mode:observed:desktop, requested:ipad`. So the
+  resolver drives **`mode`/observed** and fail-closes on `mode:null`; it does **not**
+  gate on `{ok, settled}`. Driving the observed gadget means a failed switch just
+  keeps us driving `desktop` (correct — the gadget IS desktop), never wrong-mode.
+- **Drift diagnostic.** `settled && requested !== mode` is a **stuck/failed switch**
+  (the operator asked for `ipad`, the gadget didn't change). `pikvm_hidmode_status`
+  surfaces this as `driftDetected` + `requestedMode` + a `warnings` STUCK-SWITCH
+  line so a stuck switch is never silent. It is a *diagnostic*, not a mover block —
+  driving the actual gadget is correct regardless.
+- **`mode:null` = unsettled** (gadget mid-reassembly / unrecognisable) → fail-closed
+  (mover refuses), distinct from unreachable (endpoint down). Both refuse; the
+  status/gate reasons distinguish them.

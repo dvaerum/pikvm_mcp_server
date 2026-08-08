@@ -23,21 +23,38 @@ export const modeIsAbsolute = (mode: HidMode): boolean => mode === 'desktop';
 
 /** MCP end of the /hidmode contract. `read()` returns the mode, or **null** when
  *  the route is unconfigured / unreachable / non-200 (unknown ≠ a guessed mode). */
+/** One parse of GET /hidmode. The endpoint reports the ASSEMBLED gadget, so `mode`
+ *  is the OBSERVED gadget (authoritative for driving); `null` = unrecognisable /
+ *  mid-reassembly (unsettled). `requested` is the marker's INTENT and `settled` is
+ *  "gadget recognisable" (NOT "the switch succeeded"): `settled && requested !==
+ *  mode` is a stuck/failed switch (drift). See ADR 0002. */
+export interface HidModeReading {
+  mode: HidMode | null;
+  requested?: HidMode | null;
+  settled?: boolean;
+}
+
 export interface HidModeEndpoint {
   readonly configured: boolean;
-  read(): Promise<HidMode | null>;
+  /** null = unreachable / non-200; else the parsed reading (mode may be null = unsettled). */
+  read(): Promise<HidModeReading | null>;
   write(mode: HidMode): Promise<{ ok: boolean; message: string }>;
 }
 
 export interface HidModeStatus {
-  /** the resolved mode, or **null** = UNKNOWN (endpoint fail-closed / not yet read). */
+  /** the resolved mode (observed gadget), or **null** = UNKNOWN (unreachable / unsettled / not yet read). */
   mode: HidMode | null;
   source: 'declared' | 'endpoint';
   reachable: boolean;
   settling: boolean;
   lastReadAt: number | null;
+  /** the marker's intent from the last read (null for declared / not read). */
+  requestedMode: HidMode | null;
+  /** the assembled gadget ≠ the requested mode while recognisable ⇒ a stuck/failed switch. */
+  driftDetected: boolean;
   moverAllowed: boolean;
   moverBlockReason: string | null;
+  warnings: string[];
 }
 
 export interface HidModeResolverOpts {
@@ -63,9 +80,11 @@ export class HidModeResolver {
   private readonly ttlMs: number;
   private readonly now: () => number;
 
-  private lastGoodMode: HidMode | null = null; // last SUCCESSFUL read (persists across failures for change-detection)
+  private lastGoodMode: HidMode | null = null; // last VALID observed mode (persists across failures for change-detection)
   private lastOkAt: number | null = null;      // when lastGoodMode was read (TTL anchor)
-  private reachable: boolean;                   // was the most recent resolve readable / cache-fresh
+  private currentMode: HidMode | null = null;  // mode as of the last resolve: null when unreachable OR unsettled
+  private lastReading: HidModeReading | null = null; // last endpoint parse, for the drift diagnostic
+  private reachable: boolean;                   // did the endpoint answer on the most recent resolve / cache-fresh
   private settling = false;                     // re-enumeration in progress → refuse mover ops
 
   constructor(opts: HidModeResolverOpts) {
@@ -75,7 +94,7 @@ export class HidModeResolver {
     this.now = opts.now ?? Date.now;
     // Declared is known + reachable from the start; endpoint is UNKNOWN until read.
     this.reachable = this.declared !== undefined;
-    if (this.declared !== undefined) this.lastGoodMode = this.declared;
+    if (this.declared !== undefined) { this.lastGoodMode = this.declared; this.currentMode = this.declared; }
   }
 
   /** True when this resolver derives from an endpoint (vs a declared target). */
@@ -93,34 +112,53 @@ export class HidModeResolver {
     const t = this.now();
     if (this.lastOkAt !== null && t - this.lastOkAt < this.ttlMs) {
       this.reachable = true;
-      return this.lastGoodMode; // fresh cache — no I/O
+      this.currentMode = this.lastGoodMode; // fresh cache — no I/O
+      return this.lastGoodMode;
     }
-    const m = await ep.read();
-    if (m === null) {
-      this.reachable = false; // FAIL-CLOSED; do not cache the failure
+    const reading = await ep.read();
+    this.lastReading = reading;
+    if (reading === null) {
+      this.reachable = false; // UNREACHABLE → FAIL-CLOSED; never cached, so recovery is immediate
+      this.currentMode = null;
       return null;
     }
+    this.reachable = true;
+    const m = reading.mode;
+    if (m === null) {
+      this.currentMode = null; // reachable but UNSETTLED (gadget mid-reassembly) → fail-closed; not cached
+      return null;
+    }
+    // The endpoint reports the OBSERVED gadget, so a changed observed mode means the
+    // gadget re-assembled elsewhere — begin settling. (A drift, where the gadget did
+    // NOT change, is surfaced separately in status; it is not a settling event.)
     if (this.lastGoodMode !== null && m !== this.lastGoodMode) this.settling = true;
     this.lastGoodMode = m;
     this.lastOkAt = t;
-    this.reachable = true;
+    this.currentMode = m;
     return m;
   }
 
-  /** The mode as of the last resolve(), fail-closed to null when unreachable. */
+  /** The mode as of the last resolve(): declared value, or the observed gadget mode,
+   *  fail-closed to null when unreachable OR unsettled. */
   private resolvedMode(): HidMode | null {
     if (this.declared !== undefined) return this.declared;
-    return this.reachable ? this.lastGoodMode : null;
+    return this.currentMode;
+  }
+
+  /** requested≠observed while the gadget is recognisable ⇒ a stuck/failed switch. */
+  private drift(): boolean {
+    const r = this.lastReading;
+    return !!(this.declared === undefined && r && r.settled && r.requested && r.mode && r.requested !== r.mode);
   }
 
   /** Whether a mover op may proceed, and why not. */
   moverGate(): { allowed: boolean; reason: string | null } {
     const mode = this.resolvedMode();
     if (mode === null) {
-      return {
-        allowed: false,
-        reason: 'HID mode unknown — the appliance /hidmode endpoint is unreachable; refusing to move rather than guess the mode',
-      };
+      const reason = this.declared === undefined && this.reachable
+        ? 'HID gadget not recognisable — it is mid-reassembly (unsettled); refusing to move until it settles'
+        : 'HID mode unknown — the appliance /hidmode endpoint is unreachable; refusing to move rather than guess the mode';
+      return { allowed: false, reason };
     }
     if (this.settling) {
       return {
@@ -133,14 +171,26 @@ export class HidModeResolver {
 
   status(): HidModeStatus {
     const gate = this.moverGate();
+    const r = this.lastReading;
+    const driftDetected = this.drift();
+    const warnings: string[] = [];
+    if (driftDetected) {
+      warnings.push(
+        `STUCK SWITCH: requested "${r!.requested}" but the assembled gadget is "${r!.mode}" — the mode switch did not take ` +
+        `effect (the mover is correctly driving the actual gadget "${r!.mode}", so no wrong-mode risk; the switch needs re-triggering).`,
+      );
+    }
     return {
       mode: this.resolvedMode(),
       source: this.declared !== undefined ? 'declared' : 'endpoint',
       reachable: this.reachable,
       settling: this.settling,
       lastReadAt: this.lastOkAt,
+      requestedMode: this.declared !== undefined ? null : (r?.requested ?? null),
+      driftDetected,
       moverAllowed: gate.allowed,
       moverBlockReason: gate.reason,
+      warnings,
     };
   }
 
@@ -228,13 +278,15 @@ export function makeHttpHidModeEndpoint(
 
   return {
     configured,
-    async read(): Promise<HidMode | null> {
+    async read(): Promise<HidModeReading | null> {
       if (!url) return null;
       try {
         const { status, body } = await get(url, authHeaders());
-        if (status !== 200) return null;
-        const m = (body as { mode?: unknown })?.mode;
-        return m === 'ipad' || m === 'desktop' ? m : null;
+        if (status !== 200) return null; // unreachable / auth / error → unknown (fail-closed upstream)
+        const b = body as { mode?: unknown; requested?: unknown; settled?: unknown };
+        const coerce = (v: unknown): HidMode | null => (v === 'ipad' || v === 'desktop' ? v : null);
+        // `mode` = the OBSERVED assembled gadget (authoritative); requested/settled for drift.
+        return { mode: coerce(b?.mode), requested: coerce(b?.requested), settled: b?.settled === true };
       } catch {
         return null;
       }
