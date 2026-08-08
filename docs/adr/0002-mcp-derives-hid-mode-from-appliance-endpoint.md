@@ -117,6 +117,27 @@ input." The setter begins the mode-settling gate.
   which is stock Arch, not the appliance. Real-iron behavioural stays georg's
   standing iPad-rig gate. A green here reads as "contract satisfied," not
   "verified on iron."
+- **Gate (b) — what the iPad-node on-device gate actually proved (be precise).**
+  On real HW (iPad rig, stock-Arch pikvm01), the DECLARED path (absent
+  `PIKVM_HIDMODE_URL` → `--target ipad`) has **no regression**: the tool surface
+  (56 tools), the health preamble, the resolver `status` (declared), and
+  **MOVES-ONLY positioning inside noise** — MAIN median **2.90 px**, reproducing
+  the post-#44 `|miss|` baseline (paired Δ −0.30 px). Re-verified on `9ab2083` by
+  measurement + a byte-identical content-hash of the mover surface (`curve-mover`,
+  `click-verify`, `move-to`, `index`, `cli`). It is **explicitly NOT**:
+  click-success (the run was moves-only — no clicks sent, the live WB payment
+  kiosk was foreground; the manager accepted (b) without click-success on the
+  sound reasoning that the mover path is unchanged and clicks are single-attempt
+  through it), NOT the derive/endpoint path, NOT appliance-iron behavioural, NOT
+  the nix build (c). The `|miss|` baseline is **2.90 px**, not the pre-#44
+  landing-position spread of 5.1 px — that is a different measure.
+- **Rollback trap (appliance-side, tracked with the endpoint author).** Rolling a
+  generation back from post-#51 to pre-#51 removes the endpoint but NOT the `/var`
+  marker + `/etc` symlink (kvmd-otg is deliberately outside `restartTriggers`), so
+  the gadget stays in the last-applied mode while the pre-#51 MCP pins a static
+  `--target` with no endpoint left to contradict it — the same intent-vs-assembled
+  hole one layer down. Not fixable MCP-side; noted so a rollback isn't read as a
+  clean revert.
 
 ## Decision: `GET /hidmode` reports the ASSEMBLED gadget, not the marker
 
