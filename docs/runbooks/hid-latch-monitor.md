@@ -146,10 +146,16 @@ which was a relative-counter null misread as a positive):
   return ONLY the wrapper's `STATE=`/`REENUM=`/`BOOT=` lines — sshd discards the
   client-supplied command, so the bin's inline script (and every env-derived command
   in it) never runs.
-- **Delta test (it-03400):** with `PIKVM_LATCH_REENUM_CMD='echo 5'` deliberately set,
-  an injected +12 gave `reenumCountInWindow=12` → `thrashing`; had the env applied it
-  would have been delta 0 → `latched`. The wrapper's value won — a control that could
-  have failed, and didn't.
+- **Delta test (it-03400 — the control that could have failed):** the wrapper reads
+  REENUM from a file, baseline 100 → bumped to 112 mid-window, with
+  `PIKVM_LATCH_REENUM_CMD='echo 5'` deliberately set wrong. Result:
+  `reenumCountInWindow: 12`, `classification "thrashing"`, `recommendedRung
+  "power_cable"`, `source_errors 0`. Had the env override applied, raw would be a
+  constant 5 → delta 0 → `latched`. It came out 12 → thrashing: the wrapper won.
+- **Contract enforcement (it-03400, through the genuine forced command):** an empty
+  STATE line → 7 `source_errors` (not a silent "up"); `exit 1` with otherwise-valid
+  stdout → 6 `source_errors`. So the wrapper's explicit `exit 0` and a non-empty
+  STATE are LOAD-BEARING — measured, not assumed.
 
 ## Output — JSONL to stdout (the durable report)
 
