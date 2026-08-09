@@ -94,10 +94,19 @@ export interface MonitorConfig {
    * on-box down-duration measurement; the default is provisional and deliberately conservative.
    */
   escalatedIntervalMs: number;
-  /** Fire when non-`configured` persists this long (ms) with no intervening `configured`. */
+  /** Fire when non-healthy persists this long (ms) with no intervening healthy sample. */
   persistenceThresholdMs: number;
   /** reenumCountInWindow ≤ this ⇒ `latched` (flatline); above ⇒ `thrashing`. */
   latchReenumMax: number;
+  /**
+   * The UDC `state` string that means HEALTHY for THIS target — PER-TARGET, not a
+   * global truth. On pikvm01 (a live HID target) `configured` is healthy and
+   * `not attached` is the fault. But an UNCABLED box (e.g. it-03400's appliance)
+   * reads `not attached` on every boot as its correct baseline — hardcoding
+   * `configured` there would alert forever and get muted. So the healthy state is
+   * configurable; a sample equal to it resets the persistence timer.
+   */
+  healthyState: UdcState;
 }
 
 /**
@@ -114,6 +123,7 @@ export const DEFAULT_MONITOR_CONFIG: MonitorConfig = {
   escalatedIntervalMs: 5_000,
   persistenceThresholdMs: 90_000,
   latchReenumMax: 2,
+  healthyState: UDC_UP, // `configured` — correct for pikvm01; override per uncabled target
 };
 
 /**
@@ -134,15 +144,20 @@ export class HidLatchMonitor {
     this.cfg = { ...DEFAULT_MONITOR_CONFIG, ...cfg };
   }
 
+  /** Whether a UDC `state` is the healthy baseline for THIS target (per-target config). */
+  isHealthy(state: UdcState): boolean {
+    return state === this.cfg.healthyState;
+  }
+
   observe(sample: UdcSample): LatchAlert | null {
-    if (isUdcUp(sample.state)) {
-      // Any `configured` resets the persistence window and re-arms the alert.
+    if (this.isHealthy(sample.state)) {
+      // Any healthy sample resets the persistence window and re-arms the alert.
       this.downSince = null;
       this.alerted = false;
       return null;
     }
 
-    // non-`configured`
+    // non-healthy
     if (this.downSince === null) {
       this.downSince = sample.t;
       this.reenumAtDown = sample.reenumCount;

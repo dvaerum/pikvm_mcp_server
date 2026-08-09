@@ -161,6 +161,27 @@ describe('HidLatchMonitor — fires on a genuine latch and on the never-settling
   });
 });
 
+describe('HidLatchMonitor — per-target healthy state (rig-dependent baseline)', () => {
+  it('NEGATIVE CONTROL: a legitimately-uncabled box whose baseline is `not attached` never alerts', () => {
+    // it-03400's appliance reads `not attached` on every boot (nothing cabled) —
+    // that is its CORRECT baseline. With healthyState set accordingly, a constant
+    // `not attached` stream must stay QUIET (else the monitor alerts forever → muted).
+    const m = new HidLatchMonitor({ healthyState: 'not attached' });
+    const stream = Array.from({ length: 200 }, (_, i) => s(i * 60_000, 'not attached', 0));
+    expect(run(m, stream)).toHaveLength(0);
+    expect(m.isHealthy('not attached')).toBe(true);
+    expect(m.isHealthy('configured')).toBe(false);
+  });
+
+  it('with the default healthy state (`configured`), `not attached` IS the fault and a sustained run fires', () => {
+    const m = new HidLatchMonitor();
+    expect(m.isHealthy('configured')).toBe(true);
+    const stream: UdcSample[] = [s(0, 'configured', 0)];
+    for (let t = 1_000; t <= 120_000; t += 5_000) stream.push(s(t, DOWN, 0));
+    expect(run(m, stream)).toHaveLength(1);
+  });
+});
+
 describe('HidLatchMonitor — adaptive cadence', () => {
   it('desiredIntervalMs: baseline while up, escalated once a down-window opens, back to baseline on recovery', () => {
     const m = new HidLatchMonitor();

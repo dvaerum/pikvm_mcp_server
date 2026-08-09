@@ -25,7 +25,6 @@
  */
 import {
   HidLatchMonitor,
-  isUdcUp,
   type LatchAlert,
   type UdcSample,
   type UdcState,
@@ -142,7 +141,7 @@ export async function runMonitorLoop(deps: RunnerDeps): Promise<void> {
     }
     lastRaw = reading.rawReenum;
 
-    const up = isUdcUp(reading.state);
+    const up = monitor.isHealthy(reading.state);
     const sample: UdcSample = { t, state: reading.state, reenumCount: monotonicReenum };
     const alert = monitor.observe(sample);
     const st = monitor.status();

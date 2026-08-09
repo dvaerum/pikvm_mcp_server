@@ -16,6 +16,9 @@
  *   PIKVM_LATCH_PERSIST_MS   persistence threshold (ms, default 90000).
  *   PIKVM_LATCH_REENUM_MAX   reenum-in-window ≤ this ⇒ `latched` else `thrashing`.
  *   PIKVM_LATCH_REENUM_CMD   remote cmd printing a cumulative re-enum count.
+ *   PIKVM_LATCH_HEALTHY_STATE  the UDC `state` that is HEALTHY for this target
+ *                            (default `configured`; set to `not attached` for an
+ *                            intentionally-uncabled box so it doesn't alert forever).
  */
 import { HidLatchMonitor, type MonitorConfig } from './pikvm/hid-latch-monitor.js';
 import { runMonitorLoop } from './pikvm/hid-latch-runner.js';
@@ -47,6 +50,8 @@ const persist = numEnv('PIKVM_LATCH_PERSIST_MS');
 if (persist !== undefined) cfg.persistenceThresholdMs = persist;
 const reenumMax = numEnv('PIKVM_LATCH_REENUM_MAX');
 if (reenumMax !== undefined) cfg.latchReenumMax = reenumMax;
+const healthy = process.env.PIKVM_LATCH_HEALTHY_STATE?.trim();
+if (healthy) cfg.healthyState = healthy;
 
 const monitor = new HidLatchMonitor(cfg);
 const source = makeSshLatchSource({ host, reenumCountCmd: process.env.PIKVM_LATCH_REENUM_CMD });

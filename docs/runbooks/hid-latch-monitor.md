@@ -26,7 +26,15 @@ self-healing in 1–3s. Naively alerting on `UDC != configured` fires hourly and
 gets muted — manufacturing the exact silence we're removing. So:
 
 - **Ground truth = the UDC `state`** (`/sys/class/udc/<udc>/state`), NEVER kvmd's
-  online flags (they lie in both directions).
+  online flags (they lie in both directions — on pikvm01 `online=False` persisted
+  several seconds *after* a rebind had genuinely restored HID; the persistence
+  window below rides over that transient rather than misreading a recovery as a
+  continuing latch).
+- **Healthy state is per-target, not a global truth.** `not attached` is the fault
+  on pikvm01 (baseline `configured`) but the *correct* baseline on an uncabled box
+  (e.g. it-03400's appliance reads `not attached` every boot) — a hardcoded
+  `configured⇒healthy` would alert forever there. Set `PIKVM_LATCH_HEALTHY_STATE`
+  per target; a sample equal to it resets the timer.
 - **Persistence, not consecutive-count**: the timer resets on *any* observed
   `configured`; we alert only when non-`configured` persists **≥ 90s**.
 - **Adaptive cadence**: baseline 60s; on the first non-`configured` sample the
@@ -101,6 +109,7 @@ liveness heartbeat — so a long healthy or long latched stretch stays greppable
 | `PIKVM_LATCH_PERSIST_MS` | persistence threshold (ms) | 90000 |
 | `PIKVM_LATCH_REENUM_MAX` | reenum-in-window ≤ this ⇒ `latched` else `thrashing` | 2 |
 | `PIKVM_LATCH_REENUM_CMD` | remote cmd printing a cumulative re-enum count | see below |
+| `PIKVM_LATCH_HEALTHY_STATE` | the UDC `state` that is HEALTHY for **this** target | `configured` |
 
 `PIKVM_LATCH_REENUM_CMD` default:
 `journalctl -k -b --no-pager | grep -c 'new device is high-speed'`.
