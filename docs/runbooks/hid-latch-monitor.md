@@ -139,6 +139,18 @@ wrapper instead — so:
   (same silent-no-op class as the vacuous ssh-path pass). Tune the pattern in the
   wrapper, not the env.
 
+Evidence (falsifiable, on real HW — NOT the withdrawn `echo 999999`→0 reading,
+which was a relative-counter null misread as a positive):
+
+- **Transport-layer:** under the forced command, `ssh <host> whoami` / `'id; uname -a'`
+  return ONLY the wrapper's `STATE=`/`REENUM=`/`BOOT=` lines — sshd discards the
+  client-supplied command, so the bin's inline script (and every env-derived command
+  in it) never runs.
+- **Delta test (it-03400):** with `PIKVM_LATCH_REENUM_CMD='echo 5'` deliberately set,
+  an injected +12 gave `reenumCountInWindow=12` → `thrashing`; had the env applied it
+  would have been delta 0 → `latched`. The wrapper's value won — a control that could
+  have failed, and didn't.
+
 ## Output — JSONL to stdout (the durable report)
 
 One JSON object per line. pikvm-nixos routes StandardOutPath → the log.
