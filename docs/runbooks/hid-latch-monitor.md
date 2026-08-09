@@ -100,6 +100,63 @@ A transport failure (`ok:false`) is reported as a distinct `source_error` record
 and **does not advance the latch timer** — an SSH/network/Mac outage can never
 masquerade as a HID latch, nor hide one.
 
+## The remote contract — FROZEN interface (`STATE=` / `REENUM=` / `BOOT=`)
+
+The remote side (the bin's own one-shot script, OR a forced-command wrapper —
+see below) MUST emit exactly this on stdout, or every poll silently becomes a
+`source_error` (the same vacuous class as a wrong `PIKVM_LATCH_SSH_BIN`). This is
+the interface the bin parses (`hid-latch-ssh-source.ts`); treat it as frozen.
+
+- **Exit 0.** A non-zero exit makes the whole read a `source_error` regardless of
+  stdout.
+- **`STATE=<value>`** — parsed `/STATE=(.*)/` then trimmed: the raw
+  `/sys/class/udc/<udc>/state` (`configured` / `not attached`, space and all).
+  **Must be non-empty** — an empty/missing STATE is a `source_error`, NOT a silent
+  "up".
+- **`REENUM=<digits>`** — parsed `/REENUM=(\d+)/`: a plain integer, the cumulative
+  enumeration-**attempts** count (`journalctl -k -b | grep -c 'new device is high-speed'`).
+  A leading space / non-digit breaks the capture → the bin reuses the last-known
+  value (classification degrades). Tolerated if missing, but emit it.
+- **`BOOT=<hex-and-dashes>`** — parsed `/BOOT=([0-9a-fA-F-]+)/`:
+  `/proc/sys/kernel/random/boot_id`. Missing just disables reboot-mid-window
+  detection; emit it so `classificationConfidence` works.
+
+Order-independent, one value per key, no trailing junk (only STATE is trimmed).
+
+### Forced-command auth (the LaunchDaemon scoped key)
+
+The deploy uses a least-privilege **scoped key** whose `authorized_keys` entry
+pins a **forced command** (`command="…",restrict`). Under a forced command, sshd
+**ignores the client-supplied command** (`$SSH_ORIGINAL_COMMAND`) and runs the
+wrapper instead — so:
+
+- The **wrapper on pikvm01 is the source of truth** for the remote-side commands
+  (the UDC `state` read and the re-enum count); it must emit the frozen
+  `STATE=`/`REENUM=`/`BOOT=` contract above.
+- **`PIKVM_LATCH_REENUM_CMD` (and any remote-command override) is SILENTLY INERT**
+  in this mode — the bin still sends its script, but sshd discards it. Anyone later
+  "tuning the re-enum pattern" via that env var changes nothing and gets no error
+  (same silent-no-op class as the vacuous ssh-path pass). Tune the pattern in the
+  wrapper, not the env.
+
+Evidence (falsifiable, on real HW — NOT the withdrawn `echo 999999`→0 reading,
+which was a relative-counter null misread as a positive):
+
+- **Transport-layer:** under the forced command, `ssh <host> whoami` / `'id; uname -a'`
+  return ONLY the wrapper's `STATE=`/`REENUM=`/`BOOT=` lines — sshd discards the
+  client-supplied command, so the bin's inline script (and every env-derived command
+  in it) never runs.
+- **Delta test (it-03400 — the control that could have failed):** the wrapper reads
+  REENUM from a file, baseline 100 → bumped to 112 mid-window, with
+  `PIKVM_LATCH_REENUM_CMD='echo 5'` deliberately set wrong. Result:
+  `reenumCountInWindow: 12`, `classification "thrashing"`, `recommendedRung
+  "power_cable"`, `source_errors 0`. Had the env override applied, raw would be a
+  constant 5 → delta 0 → `latched`. It came out 12 → thrashing: the wrapper won.
+- **Contract enforcement (it-03400, through the genuine forced command):** an empty
+  STATE line → 7 `source_errors` (not a silent "up"); `exit 1` with otherwise-valid
+  stdout → 6 `source_errors`. So the wrapper's explicit `exit 0` and a non-empty
+  STATE are LOAD-BEARING — measured, not assumed.
+
 ## Output — JSONL to stdout (the durable report)
 
 One JSON object per line. pikvm-nixos routes StandardOutPath → the log.
