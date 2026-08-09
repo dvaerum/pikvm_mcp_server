@@ -44,11 +44,14 @@ export function isUdcUp(state: UdcState): boolean {
  * One reading from the sampler.
  * - `t`: epoch ms of the read.
  * - `state`: the raw `/sys/class/udc/<udc>/state` value.
- * - `reenumCount`: a CUMULATIVE, monotonic-since-boot count of kernel re-enumeration
- *   events (e.g. from a dmesg/journal grep). It is carried on the sample rather than
- *   derived from `state` transitions, because within a latch window there are BY
- *   DEFINITION zero `configured` samples — so the count can't come from up→down
- *   transitions; it must come from an independent kernel counter.
+ * - `reenumCount`: a monotonic, NON-DECREASING count of kernel re-enumeration events,
+ *   NORMALISED by the runner and baselined at its first read — i.e. a RELATIVE
+ *   counter starting near 0, not the raw since-boot value (the runner accumulates
+ *   only positive deltas of the source's raw count, so a journal reset/ring wrap
+ *   contributes nothing). Only the in-window DELTA (fire − anchor) is used, so the
+ *   absolute origin is irrelevant. It is carried on the sample rather than derived
+ *   from `state` transitions because within a latch window there are BY DEFINITION
+ *   zero healthy samples — the count must come from an independent kernel counter.
  */
 export interface UdcSample {
   t: number;
@@ -89,6 +92,9 @@ export interface LatchAlert {
   reenumCountInWindow: number;
   classification: LatchClassification;
   recommendedRung: RecommendedRung;
+  /** Human-readable rationale for the rung, incl. the pikvm01 incident caveat that
+   *  `soft_connect` has been insufficient for the `not attached` flatline signature. */
+  note: string;
   /** True if the target rebooted during the window (boot_id changed) — the reenum
    *  baseline reset, so a small count may be an artifact, not a real flatline. */
   rebootedDuringWindow: boolean;
@@ -205,6 +211,19 @@ export class HidLatchMonitor {
       const reenumCountInWindow = sample.reenumCount - this.reenumAtDown;
       const classification: LatchClassification =
         reenumCountInWindow <= this.cfg.latchReenumMax ? 'latched' : 'thrashing';
+      // A flatline `not attached` latch is Mode B in the HID-recovery ladder: R2
+      // soft_connect has been INSUFFICIENT for this exact signature on pikvm01
+      // (2026-07-26 + 2026-08-08 — it left UDC `not attached`; only R3a udc-rebind
+      // revived it), so we recommend udc-rebind directly rather than burning an
+      // operator round-trip on the lighter rung. A thrashing storm is electrical.
+      const recommendedRung: RecommendedRung = classification === 'latched' ? 'udc-rebind' : 'power_cable';
+      let note =
+        classification === 'latched'
+          ? 'flatline `not attached`: the M0 ladder starts at soft_connect, but this signature on pikvm01 has needed udc-rebind (soft_connect insufficient 2026-07-26 + 2026-08-08) — expect to escalate.'
+          : 'never-settling storm: an under-volt/electrical fault — a UDC rebind will not fix it; check power/cable.';
+      if (this.rebootedInWindow) {
+        note = `classification UNRELIABLE — the target rebooted mid-window (reenum baseline reset), so latched/thrashing cannot be trusted. ${note}`;
+      }
       return {
         kind: 'alert',
         firedAt: sample.t,
@@ -212,10 +231,9 @@ export class HidLatchMonitor {
         latchDurationMs,
         state: sample.state,
         reenumCountInWindow,
-        // A flatline latch is rebind-able (R2 soft_connect); a thrashing storm is an
-        // electrical fault a rebind won't fix — point at power/cable instead.
         classification,
-        recommendedRung: classification === 'latched' ? 'soft_connect' : 'power_cable',
+        recommendedRung,
+        note,
         rebootedDuringWindow: this.rebootedInWindow,
         // A mid-window reboot resets the reenum baseline → the split can't be trusted.
         classificationConfidence: this.rebootedInWindow ? 'unreliable' : 'reliable',

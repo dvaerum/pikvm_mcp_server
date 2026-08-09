@@ -104,7 +104,7 @@ describe('HidLatchMonitor — quiet on the normal/recoverable cases (STAYS-QUIET
 });
 
 describe('HidLatchMonitor — fires on a genuine latch and on the never-settling storm (FIRES leg)', () => {
-  it('ROW C: a flatline latch (never `configured`, reenum counter FLAT) → alert classified `latched` → recommend soft_connect', () => {
+  it('ROW C: a flatline latch (never `configured`, reenum counter FLAT) → `latched` → recommend udc-rebind (Mode B; soft_connect insufficient on pikvm01)', () => {
     const m = new HidLatchMonitor();
     const stream: UdcSample[] = [s(0, 'configured', 42)];
     // goes down and stays down; kernel emits NO further re-enumerations (dead).
@@ -113,7 +113,9 @@ describe('HidLatchMonitor — fires on a genuine latch and on the never-settling
     expect(alerts).toHaveLength(1);
     const a = alerts[0];
     expect(a.classification).toBe('latched');
-    expect(a.recommendedRung).toBe('soft_connect');
+    expect(a.recommendedRung).toBe('udc-rebind'); // NOT soft_connect — it failed twice for this signature
+    expect(a.note).toMatch(/escalate|udc-rebind|soft_connect insufficient/i);
+    expect(a.classificationConfidence).toBe('reliable');
     expect(a.reenumCountInWindow).toBe(0);
     expect(a.downSince).toBe(1_000);
     expect(a.latchDurationMs).toBeGreaterThanOrEqual(DEFAULT_MONITOR_CONFIG.persistenceThresholdMs);

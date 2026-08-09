@@ -44,6 +44,17 @@ describe('makeSshLatchSource — SSH idiom + parsing', () => {
     expect(remote).toContain('/proc/sys/kernel/random/boot_id');
   });
 
+  it('honors a sshBinary override (runnable where /usr/bin/ssh is absent, e.g. NixOS) without weakening the default', async () => {
+    const exec = fakeExec([okOut('configured', 1)]);
+    const src = makeSshLatchSource({ host: 'h', exec, sshBinary: '/run/current-system/sw/bin/ssh' });
+    await src.read();
+    expect(exec.calls[0].bin).toBe('/run/current-system/sw/bin/ssh');
+    // default is unchanged for the Mac.
+    const exec2 = fakeExec([okOut('configured', 1)]);
+    await makeSshLatchSource({ host: 'h', exec: exec2 }).read();
+    expect(exec2.calls[0].bin).toBe('/usr/bin/ssh');
+  });
+
   it('parses a multi-word down state (`not attached`) and the boot_id', async () => {
     const src = makeSshLatchSource({ host: 'h', exec: fakeExec([okOut('not attached', 7)]) });
     expect(await src.read()).toEqual({ ok: true, state: 'not attached', rawReenum: 7, bootId: BOOT_ID });

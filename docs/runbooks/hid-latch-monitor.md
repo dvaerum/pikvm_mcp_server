@@ -42,8 +42,11 @@ gets muted — manufacturing the exact silence we're removing. So:
   coarse grid.
 - **Two faults, one alarm, different remediation** — the alert carries the
   re-enumeration count observed in the window:
-  - `latched` (count ≈ 0, flatlined/dead) → **`soft_connect`** (R2), escalate
-    `udc-rebind` (R3a).
+  - `latched` (count ≈ 0, flatlined/dead — a `not attached` flatline = Mode B) →
+    **`udc-rebind`** (R3a). NOT `soft_connect`: for this exact signature on pikvm01,
+    soft_connect was insufficient twice (2026-07-26 + 2026-08-08 — it left UDC
+    `not attached`; only a UDC-rebind revived it), so the alert points straight at
+    the rung that works and the `note` field says to expect to escalate.
   - `thrashing` (count high, re-enumerating but never settling — the metronomic
     ~3.15s pattern that PRECEDED the real 6.6-day latch) → **`power_cable`**: an
     under-volt storm (`vcgencmd get_throttled` had voltage bits set), which a UDC
@@ -104,11 +107,24 @@ One JSON object per line. pikvm-nixos routes StandardOutPath → the log.
 | `kind` | when | fields |
 |---|---|---|
 | `tick` | on an up↔down transition, or a periodic heartbeat | `reason` (`transition`\|`heartbeat`), `t`, `state`, `up`, `reenumCount`, `down`, `downSince` |
-| `alert` | once, when a down-window first crosses 90s | `firedAt`, `downSince`, `latchDurationMs`, `state`, `reenumCountInWindow`, `classification` (`latched`\|`thrashing`), `recommendedRung` (`soft_connect`\|`udc-rebind`\|`power_cable`), `rebootedDuringWindow`, `classificationConfidence` (`reliable`\|`unreliable`) |
+| `alert` | once, when a down-window first crosses 90s | `firedAt`, `downSince`, `latchDurationMs`, `state`, `reenumCountInWindow`, `classification` (`latched`\|`thrashing`), `recommendedRung` (`soft_connect`\|`udc-rebind`\|`power_cable`), `note`, `rebootedDuringWindow`, `classificationConfidence` (`reliable`\|`unreliable`) |
 | `source_error` | a read failed (SSH/parse) | `t`, `error`, `consecutive` |
 
+(`tick.reenumCount` is the RELATIVE counter — the runner baselines it at its first
+read and accumulates only positive deltas, so it starts near 0, not the box's
+absolute since-boot value; only the in-window delta drives classification.)
+
 Steady state is NOT logged every poll — only transitions, alerts, errors, and a
-liveness heartbeat — so a long healthy or long latched stretch stays greppable.
+liveness heartbeat (~every 10 min at the 60s baseline). Two reading rules:
+
+- **A quiet log is NOT proof of life.** The heartbeat bounds staleness but the
+  authoritative liveness check is on the launchd side (the agent is `KeepAlive`);
+  don't read a gap as "healthy" without confirming the process is alive.
+- **A STAYS-QUIET result is valid ONLY if `source_errors == 0`.** With a wrong
+  `PIKVM_LATCH_SSH_BIN` (e.g. the Mac's `/usr/bin/ssh` on a NixOS host) every read
+  ENOENTs into `source_error`, the monitor is fed nothing, and it emits zero
+  alerts — a vacuous pass indistinguishable from a real one unless you check the
+  error count. (Caught by it-03400's negative-control run.)
 
 ## Configuration (env — launchd can tune without a rebuild)
 
@@ -121,6 +137,7 @@ liveness heartbeat — so a long healthy or long latched stretch stays greppable
 | `PIKVM_LATCH_REENUM_MAX` | reenum-in-window ≤ this ⇒ `latched` else `thrashing` | 2 |
 | `PIKVM_LATCH_REENUM_CMD` | remote cmd printing a cumulative re-enum count | see below |
 | `PIKVM_LATCH_HEALTHY_STATE` | the UDC `state` that is HEALTHY for **this** target | `configured` |
+| `PIKVM_LATCH_SSH_BIN` | absolute path of the ssh binary to spawn (override only off-Mac) | `/usr/bin/ssh` |
 
 `PIKVM_LATCH_REENUM_CMD` default:
 `journalctl -k -b --no-pager | grep -c 'new device is high-speed'`.

@@ -135,6 +135,6 @@ describe('runMonitorLoop — end-to-end latch fires exactly once with the right 
     const records = await drive(source, monitor, 9);
     const a = alerts(records);
     expect(a).toHaveLength(1);
-    expect(a[0]).toMatchObject({ classification: 'latched', recommendedRung: 'soft_connect', reenumCountInWindow: 0 });
+    expect(a[0]).toMatchObject({ classification: 'latched', recommendedRung: 'udc-rebind', reenumCountInWindow: 0 });
   });
 });

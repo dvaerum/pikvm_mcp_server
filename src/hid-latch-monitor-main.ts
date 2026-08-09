@@ -19,6 +19,10 @@
  *   PIKVM_LATCH_HEALTHY_STATE  the UDC `state` that is HEALTHY for this target
  *                            (default `configured`; set to `not attached` for an
  *                            intentionally-uncabled box so it doesn't alert forever).
+ *   PIKVM_LATCH_SSH_BIN      absolute path of the ssh binary to spawn (default the
+ *                            Mac's system `/usr/bin/ssh`). Override ONLY to run where
+ *                            that path is absent (e.g. NixOS test hosts) — otherwise
+ *                            it silently ENOENTs into `source_error`, a vacuous pass.
  */
 import { HidLatchMonitor, type MonitorConfig } from './pikvm/hid-latch-monitor.js';
 import { runMonitorLoop } from './pikvm/hid-latch-runner.js';
@@ -54,7 +58,11 @@ const healthy = process.env.PIKVM_LATCH_HEALTHY_STATE?.trim();
 if (healthy) cfg.healthyState = healthy;
 
 const monitor = new HidLatchMonitor(cfg);
-const source = makeSshLatchSource({ host, reenumCountCmd: process.env.PIKVM_LATCH_REENUM_CMD });
+const source = makeSshLatchSource({
+  host,
+  reenumCountCmd: process.env.PIKVM_LATCH_REENUM_CMD,
+  sshBinary: process.env.PIKVM_LATCH_SSH_BIN?.trim() || undefined,
+});
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 runMonitorLoop({ source, monitor, now: () => Date.now(), sleep }).catch((err: unknown) => {

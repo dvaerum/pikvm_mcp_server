@@ -77,7 +77,11 @@ export interface RunnerConfig {
 }
 
 export const DEFAULT_RUNNER_CONFIG: RunnerConfig = {
-  heartbeatEveryTicks: 60,
+  // ~10 min between heartbeats at the 60s baseline. A hourly heartbeat left the log
+  // looking like a dead monitor for ~10 min (iPad node); this is proof-of-life at
+  // low cost. A quiet log is still NOT proof of life — the external staleness check
+  // on the launchd side is load-bearing.
+  heartbeatEveryTicks: 10,
 };
 
 export interface RunnerDeps {
