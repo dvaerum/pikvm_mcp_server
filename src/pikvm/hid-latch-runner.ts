@@ -37,7 +37,7 @@ import {
  * (SSH/network/Mac), categorically distinct from a UDC-down reading.
  */
 export type SourceReading =
-  | { ok: true; state: UdcState; rawReenum: number }
+  | { ok: true; state: UdcState; rawReenum: number; bootId?: string }
   | { ok: false; error: string };
 
 /** Pulls one reading. The SSH adapter implements this; tests inject a fake. */
@@ -142,7 +142,7 @@ export async function runMonitorLoop(deps: RunnerDeps): Promise<void> {
     lastRaw = reading.rawReenum;
 
     const up = monitor.isHealthy(reading.state);
-    const sample: UdcSample = { t, state: reading.state, reenumCount: monotonicReenum };
+    const sample: UdcSample = { t, state: reading.state, reenumCount: monotonicReenum, bootId: reading.bootId };
     const alert = monitor.observe(sample);
     const st = monitor.status();
 

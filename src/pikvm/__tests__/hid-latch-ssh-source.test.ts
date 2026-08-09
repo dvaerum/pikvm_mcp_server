@@ -14,14 +14,19 @@ function fakeExec(results: Array<{ code: number; stdout: string; stderr: string 
   return Object.assign(fn, { calls });
 }
 
-const okOut = (state: string, reenum: number) => ({ code: 0, stdout: `STATE=${state}\nREENUM=${reenum}\n`, stderr: '' });
+const BOOT_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+const okOut = (state: string, reenum: number, boot: string = BOOT_ID) => ({
+  code: 0,
+  stdout: `STATE=${state}\nREENUM=${reenum}\nBOOT=${boot}\n`,
+  stderr: '',
+});
 
 describe('makeSshLatchSource — SSH idiom + parsing', () => {
   it('uses BatchMode + ConnectTimeout, passes the host, and resolves the UDC + state on-host', async () => {
     const exec = fakeExec([okOut('configured', 42)]);
     const src = makeSshLatchSource({ host: 'root@pikvm01.bb.vcamp.dk', exec, connectTimeoutS: 5 });
     const r = await src.read();
-    expect(r).toEqual({ ok: true, state: 'configured', rawReenum: 42 });
+    expect(r).toEqual({ ok: true, state: 'configured', rawReenum: 42, bootId: BOOT_ID });
     // MUST spawn Apple's system ssh (absolute) — an in-process store-binary
     // connection resurfaces the macOS Local-Network block, invisible in this VM.
     expect(exec.calls[0].bin).toBe(DEFAULT_SSH_BINARY);
@@ -35,11 +40,13 @@ describe('makeSshLatchSource — SSH idiom + parsing', () => {
     expect(remote).toContain('/sys/class/udc'); // reads the sysfs latch file
     expect(remote).toContain('STATE=');
     expect(remote).toContain('REENUM=');
+    expect(remote).toContain('BOOT='); // boot_id for mid-window reboot detection
+    expect(remote).toContain('/proc/sys/kernel/random/boot_id');
   });
 
-  it('parses a multi-word down state (`not attached`)', async () => {
+  it('parses a multi-word down state (`not attached`) and the boot_id', async () => {
     const src = makeSshLatchSource({ host: 'h', exec: fakeExec([okOut('not attached', 7)]) });
-    expect(await src.read()).toEqual({ ok: true, state: 'not attached', rawReenum: 7 });
+    expect(await src.read()).toEqual({ ok: true, state: 'not attached', rawReenum: 7, bootId: BOOT_ID });
   });
 
   it('a non-zero ssh exit is a SOURCE ERROR carrying the stderr (unreachable ≠ UDC-down)', async () => {
@@ -58,7 +65,7 @@ describe('makeSshLatchSource — SSH idiom + parsing', () => {
   it('LENIENT count: a missing REENUM keeps the last known value and still returns the latch state', async () => {
     const exec = fakeExec([okOut('configured', 100), { code: 0, stdout: 'STATE=not attached\n', stderr: '' }]);
     const s = makeSshLatchSource({ host: 'h', exec });
-    expect(await s.read()).toEqual({ ok: true, state: 'configured', rawReenum: 100 });
+    expect(await s.read()).toEqual({ ok: true, state: 'configured', rawReenum: 100, bootId: BOOT_ID });
     // second read has no REENUM line → reuse 100, but DO surface the (down) latch state.
     expect(await s.read()).toEqual({ ok: true, state: 'not attached', rawReenum: 100 });
   });

@@ -182,6 +182,47 @@ describe('HidLatchMonitor — per-target healthy state (rig-dependent baseline)'
   });
 });
 
+describe('HidLatchMonitor — a mid-window reboot makes the classification unreliable (not a false `latched`)', () => {
+  const withBoot = (t: number, state: UdcState, reenum: number, bootId: string): UdcSample => ({
+    t,
+    state,
+    reenumCount: reenum,
+    bootId,
+  });
+
+  it('boot_id change within the down-window → rebootedDuringWindow + confidence `unreliable`', () => {
+    // The defect it-03400 found: a reboot mid-window resets journalctl -k -b, so the
+    // reenum delta under-counts and would read `latched` by count alone — recommending
+    // a UDC rebind on a box whose real fault (post power-cycle, still down) is electrical.
+    const m = new HidLatchMonitor({ escalatedIntervalMs: 1_000, persistenceThresholdMs: 5_000, latchReenumMax: 2 });
+    const stream: UdcSample[] = [withBoot(0, 'configured', 100, 'boot-A')];
+    stream.push(withBoot(1_000, DOWN, 100, 'boot-A'), withBoot(2_000, DOWN, 100, 'boot-A'));
+    stream.push(withBoot(3_000, DOWN, 101, 'boot-B')); // reboot mid-window
+    for (let t = 4_000; t <= 10_000; t += 1_000) stream.push(withBoot(t, DOWN, 101, 'boot-B'));
+    const a = run(m, stream);
+    expect(a).toHaveLength(1);
+    expect(a[0].rebootedDuringWindow).toBe(true);
+    expect(a[0].classificationConfidence).toBe('unreliable');
+    expect(a[0].reenumCountInWindow).toBeLessThanOrEqual(2); // the under-count artifact is present…
+    // …but the alert flags it rather than silently trusting `latched`.
+  });
+
+  it('constant boot_id → `reliable`; a source that omits boot_id never falsely reports unreliable', () => {
+    const m1 = new HidLatchMonitor({ escalatedIntervalMs: 1_000, persistenceThresholdMs: 5_000, latchReenumMax: 2 });
+    const s1: UdcSample[] = [withBoot(0, 'configured', 50, 'boot-A')];
+    for (let t = 1_000; t <= 10_000; t += 1_000) s1.push(withBoot(t, DOWN, 50, 'boot-A'));
+    const a1 = run(m1, s1);
+    expect(a1[0].rebootedDuringWindow).toBe(false);
+    expect(a1[0].classificationConfidence).toBe('reliable');
+
+    // bootId omitted (older source) → treated as reliable, never false-unreliable.
+    const m2 = new HidLatchMonitor({ escalatedIntervalMs: 1_000, persistenceThresholdMs: 5_000, latchReenumMax: 2 });
+    const s2: UdcSample[] = [s(0, 'configured', 0)];
+    for (let t = 1_000; t <= 10_000; t += 1_000) s2.push(s(t, DOWN, 0));
+    expect(run(m2, s2)[0].classificationConfidence).toBe('reliable');
+  });
+});
+
 describe('HidLatchMonitor — adaptive cadence', () => {
   it('desiredIntervalMs: baseline while up, escalated once a down-window opens, back to baseline on recovery', () => {
     const m = new HidLatchMonitor();

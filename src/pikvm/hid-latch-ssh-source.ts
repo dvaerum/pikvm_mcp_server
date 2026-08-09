@@ -99,11 +99,14 @@ export function makeSshLatchSource(cfg: SshLatchSourceConfig): SampleSource {
   const connectTimeoutS = cfg.connectTimeoutS ?? 5;
   const timeoutMs = cfg.timeoutMs ?? 8_000;
 
-  // Resolve the UDC on-host (nothing hardcoded); emit STATE=/REENUM= for robust parsing.
+  // Resolve the UDC on-host (nothing hardcoded); emit STATE=/REENUM=/BOOT= for robust
+  // parsing. BOOT (boot_id) lets the monitor detect a mid-window reboot, which resets
+  // the journal the re-enum count derives from and would otherwise fake a `latched`.
   const remote = [
     'U=$(ls -1 /sys/class/udc 2>/dev/null | head -n1)',
     'printf "STATE=%s\\n" "$(cat /sys/class/udc/$U/state 2>/dev/null)"',
     `printf "REENUM=%s\\n" "$(${reenumCmd})"`,
+    'printf "BOOT=%s\\n" "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"',
   ].join('; ');
   // BatchMode → fail fast (never hang on a prompt) so unreachable is a reportable
   // state, not a silent hang. StrictHostKeyChecking=yes → known_hosts already has
@@ -139,7 +142,8 @@ export function makeSshLatchSource(cfg: SshLatchSourceConfig): SampleSource {
       const reenumStr = /REENUM=(\d+)/.exec(res.stdout)?.[1];
       if (reenumStr !== undefined) lastRawReenum = Number(reenumStr);
       // else: keep lastRawReenum — a count-read miss must not drop the latch signal.
-      return { ok: true, state, rawReenum: lastRawReenum };
+      const bootId = /BOOT=([0-9a-fA-F-]+)/.exec(res.stdout)?.[1];
+      return { ok: true, state, rawReenum: lastRawReenum, bootId };
     },
   };
 }

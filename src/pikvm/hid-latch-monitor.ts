@@ -54,6 +54,14 @@ export interface UdcSample {
   t: number;
   state: UdcState;
   reenumCount: number;
+  /**
+   * Kernel boot id (`/proc/sys/kernel/random/boot_id`), when the source supplies it.
+   * A change WITHIN a down-window means the target rebooted — which resets the
+   * journal the re-enum count is derived from while `downSince` survives (a reboot
+   * emits no healthy sample), so `reenumAtDown` becomes a meaningless baseline and
+   * the latched/thrashing split across that window cannot be trusted.
+   */
+  bootId?: string;
 }
 
 /** `latched` = flatlined/dead (rebind-able); `thrashing` = re-enumerating but never settling (power/cable). */
@@ -81,6 +89,18 @@ export interface LatchAlert {
   reenumCountInWindow: number;
   classification: LatchClassification;
   recommendedRung: RecommendedRung;
+  /** True if the target rebooted during the window (boot_id changed) — the reenum
+   *  baseline reset, so a small count may be an artifact, not a real flatline. */
+  rebootedDuringWindow: boolean;
+  /**
+   * `unreliable` when a reboot reset the reenum counter mid-window: the
+   * latched/thrashing split (and thus `recommendedRung`) is a best-effort guess and
+   * MUST NOT be auto-acted on — a reboot under-counts and would fake `latched`
+   * (→ a UDC rebind) on a box whose real fault is electrical. The latch itself is
+   * still real (HID down past threshold, and a reboot that didn't restore it is a
+   * strong signal), which is why the window is kept rather than discarded.
+   */
+  classificationConfidence: 'reliable' | 'unreliable';
 }
 
 export interface MonitorConfig {
@@ -137,6 +157,10 @@ export class HidLatchMonitor {
   private downSince: number | null = null;
   /** reenumCount snapshot at downSince, to compute the in-window delta. */
   private reenumAtDown = 0;
+  /** boot_id observed when the window was anchored; null if the source omits it. */
+  private bootIdAtDown: string | null = null;
+  /** Whether a reboot (boot_id change) has been seen within the current down-window. */
+  private rebootedInWindow = false;
   /** Whether we've already fired for the current down-window (fire-once-per-latch). */
   private alerted = false;
 
@@ -153,6 +177,8 @@ export class HidLatchMonitor {
     if (this.isHealthy(sample.state)) {
       // Any healthy sample resets the persistence window and re-arms the alert.
       this.downSince = null;
+      this.bootIdAtDown = null;
+      this.rebootedInWindow = false;
       this.alerted = false;
       return null;
     }
@@ -161,7 +187,16 @@ export class HidLatchMonitor {
     if (this.downSince === null) {
       this.downSince = sample.t;
       this.reenumAtDown = sample.reenumCount;
+      this.bootIdAtDown = sample.bootId ?? null;
+      this.rebootedInWindow = false;
       this.alerted = false;
+    } else if (
+      sample.bootId !== undefined &&
+      this.bootIdAtDown !== null &&
+      sample.bootId !== this.bootIdAtDown
+    ) {
+      // Target rebooted mid-window: the reenum baseline reset while the window lives.
+      this.rebootedInWindow = true;
     }
 
     const latchDurationMs = sample.t - this.downSince;
@@ -181,6 +216,9 @@ export class HidLatchMonitor {
         // electrical fault a rebind won't fix — point at power/cable instead.
         classification,
         recommendedRung: classification === 'latched' ? 'soft_connect' : 'power_cable',
+        rebootedDuringWindow: this.rebootedInWindow,
+        // A mid-window reboot resets the reenum baseline → the split can't be trusted.
+        classificationConfidence: this.rebootedInWindow ? 'unreliable' : 'reliable',
       };
     }
     return null;

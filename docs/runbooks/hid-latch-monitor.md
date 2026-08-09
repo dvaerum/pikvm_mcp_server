@@ -48,6 +48,17 @@ gets muted — manufacturing the exact silence we're removing. So:
     ~3.15s pattern that PRECEDED the real 6.6-day latch) → **`power_cable`**: an
     under-volt storm (`vcgencmd get_throttled` had voltage bits set), which a UDC
     rebind will not fix. This storm case is a **true positive**, not noise.
+- **A reboot mid-window ⇒ `classificationConfidence: 'unreliable'`.** `journalctl -k -b`
+  resets on reboot (not just a ring wrap), while `downSince` survives (a reboot emits
+  no healthy sample), so the count under-reports and would fake `latched` on a box
+  whose real fault is electrical — a normal event on the under-volted pikvm01, where
+  `power_cable` remediation *is* a power-cycle. The monitor reads `boot_id` on the same
+  SSH round-trip; a change within the window sets `rebootedDuringWindow: true` and marks
+  the split **unreliable** (the latch is still real, so the window is kept, but the
+  rung recommendation must not be auto-acted on). Credit it-03400 for the catch.
+- **`latchDurationMs` is a LOWER BOUND.** `downSince` anchors to the first *observed*
+  non-healthy sample, so at the 60s baseline cadence the true onset can be up to a poll
+  earlier. Don't quote it as the exact outage duration.
 
 ## The escalated interval (aliasing turned out non-binding)
 
@@ -93,7 +104,7 @@ One JSON object per line. pikvm-nixos routes StandardOutPath → the log.
 | `kind` | when | fields |
 |---|---|---|
 | `tick` | on an up↔down transition, or a periodic heartbeat | `reason` (`transition`\|`heartbeat`), `t`, `state`, `up`, `reenumCount`, `down`, `downSince` |
-| `alert` | once, when a down-window first crosses 90s | `firedAt`, `downSince`, `latchDurationMs`, `state`, `reenumCountInWindow`, `classification` (`latched`\|`thrashing`), `recommendedRung` (`soft_connect`\|`udc-rebind`\|`power_cable`) |
+| `alert` | once, when a down-window first crosses 90s | `firedAt`, `downSince`, `latchDurationMs`, `state`, `reenumCountInWindow`, `classification` (`latched`\|`thrashing`), `recommendedRung` (`soft_connect`\|`udc-rebind`\|`power_cable`), `rebootedDuringWindow`, `classificationConfidence` (`reliable`\|`unreliable`) |
 | `source_error` | a read failed (SSH/parse) | `t`, `error`, `consecutive` |
 
 Steady state is NOT logged every poll — only transitions, alerts, errors, and a
@@ -104,7 +115,7 @@ liveness heartbeat — so a long healthy or long latched stretch stays greppable
 | var | meaning | default |
 |---|---|---|
 | `PIKVM_HID_RECOVERY_SSH` | `[user@]host` of the PiKVM (**required**) | — |
-| `PIKVM_LATCH_ESCALATED_MS` | escalated cadence (ms) — **set from the down-duration measurement** | 1000 |
+| `PIKVM_LATCH_ESCALATED_MS` | escalated cadence (ms) — PROVISIONAL, pending manager sign-off | 5000 |
 | `PIKVM_LATCH_BASELINE_MS` | baseline cadence (ms) | 60000 |
 | `PIKVM_LATCH_PERSIST_MS` | persistence threshold (ms) | 90000 |
 | `PIKVM_LATCH_REENUM_MAX` | reenum-in-window ≤ this ⇒ `latched` else `thrashing` | 2 |
