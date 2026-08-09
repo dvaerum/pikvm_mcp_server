@@ -26,7 +26,7 @@ describe('makeSshLatchSource — SSH idiom + parsing', () => {
     const exec = fakeExec([okOut('configured', 42)]);
     const src = makeSshLatchSource({ host: 'root@pikvm01.bb.vcamp.dk', exec, connectTimeoutS: 5 });
     const r = await src.read();
-    expect(r).toEqual({ ok: true, state: 'configured', rawReenum: 42, bootId: BOOT_ID });
+    expect(r).toEqual({ ok: true, healthy: true, rawReenum: 42, bootId: BOOT_ID, detail: 'configured', state: 'configured' });
     // MUST spawn Apple's system ssh (absolute) — an in-process store-binary
     // connection resurfaces the macOS Local-Network block, invisible in this VM.
     expect(exec.calls[0].bin).toBe(DEFAULT_SSH_BINARY);
@@ -57,7 +57,7 @@ describe('makeSshLatchSource — SSH idiom + parsing', () => {
 
   it('parses a multi-word down state (`not attached`) and the boot_id', async () => {
     const src = makeSshLatchSource({ host: 'h', exec: fakeExec([okOut('not attached', 7)]) });
-    expect(await src.read()).toEqual({ ok: true, state: 'not attached', rawReenum: 7, bootId: BOOT_ID });
+    expect(await src.read()).toEqual({ ok: true, healthy: false, rawReenum: 7, bootId: BOOT_ID, detail: 'not attached', state: 'not attached' });
   });
 
   it('a non-zero ssh exit is a SOURCE ERROR carrying the stderr (unreachable ≠ UDC-down)', async () => {
@@ -76,9 +76,9 @@ describe('makeSshLatchSource — SSH idiom + parsing', () => {
   it('LENIENT count: a missing REENUM keeps the last known value and still returns the latch state', async () => {
     const exec = fakeExec([okOut('configured', 100), { code: 0, stdout: 'STATE=not attached\n', stderr: '' }]);
     const s = makeSshLatchSource({ host: 'h', exec });
-    expect(await s.read()).toEqual({ ok: true, state: 'configured', rawReenum: 100, bootId: BOOT_ID });
+    expect(await s.read()).toEqual({ ok: true, healthy: true, rawReenum: 100, bootId: BOOT_ID, detail: 'configured', state: 'configured' });
     // second read has no REENUM line → reuse 100, but DO surface the (down) latch state.
-    expect(await s.read()).toEqual({ ok: true, state: 'not attached', rawReenum: 100 });
+    expect(await s.read()).toEqual({ ok: true, healthy: false, rawReenum: 100, detail: 'not attached', state: 'not attached' });
   });
 });
 

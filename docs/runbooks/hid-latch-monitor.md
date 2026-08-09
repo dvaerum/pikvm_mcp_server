@@ -1,4 +1,15 @@
-# Runbook: pikvm01 HID-latch monitor (report-only v1)
+# Runbook: HID-latch monitor (report-only v1)
+
+> **⚠️ ARCHITECTURE RE-SCOPE (2026-08-09).** The monitor now ships as a NATIVE
+> systemd service on the pikvm-nixos APPLIANCE reading LOCAL sysfs
+> (`PIKVM_LATCH_SOURCE=local`) — no Mac/SSH/key/sops, and systemd `Restart` + a
+> `lastSampleAt` freshness field make the dead-man on-box (the external heartbeat
+> is retired). The classifier is now SIGNAL-AGNOSTIC (consumes a source-computed
+> `healthy` boolean, `HealthSample`), and the two SOURCES are `hid-latch-local-source.ts`
+> (appliance; composite `healthy = gadget-BOUND (/sys/class/udc/<udc>/function
+> non-empty) AND state-acceptable`) and `hid-latch-ssh-source.ts` (pikvm01 over SSH,
+> retained). The Mac LaunchDaemon path below is HISTORICAL. Appliance design detail:
+> pikvm-nixos ADR (linked from that repo).
 
 Detects a HID **latch** — the emulated USB gadget stuck non-`configured` — that
 [HID recovery](hid-recovery.md) would fix but nobody notices, because
@@ -193,8 +204,13 @@ liveness heartbeat (~every 10 min at the 60s baseline). Two reading rules:
 | `PIKVM_LATCH_PERSIST_MS` | persistence threshold (ms) | 90000 |
 | `PIKVM_LATCH_REENUM_MAX` | reenum-in-window ≤ this ⇒ `latched` else `thrashing` | 2 |
 | `PIKVM_LATCH_REENUM_CMD` | remote cmd printing a cumulative re-enum count | see below |
-| `PIKVM_LATCH_HEALTHY_STATE` | the UDC `state` that is HEALTHY for **this** target | `configured` |
-| `PIKVM_LATCH_SSH_BIN` | absolute path of the ssh binary to spawn (override only off-Mac) | `/usr/bin/ssh` |
+| `PIKVM_LATCH_HEALTHY_STATE` | HEALTHY state — one state (ssh) or a comma-separated ACCEPTABLE set (local, `configured,not attached`) | `configured` |
+| `PIKVM_LATCH_SSH_BIN` | (ssh) absolute path of the ssh binary to spawn (override only off-Mac) | `/usr/bin/ssh` |
+| `PIKVM_LATCH_SOURCE` | `local` (appliance sysfs) or `ssh` (pikvm01) | `ssh` |
+| `PIKVM_LATCH_UDC` | (local) UDC name; default = first of `/sys/class/udc` | auto |
+| `PIKVM_LATCH_GADGET` | (local) configfs gadget name for the `detail` corroboration | `kvmd` |
+| `PIKVM_LATCH_REENUM_PATTERN` | (local) `journalctl -k -b` grep pattern (boot-scoped, no `--since`) | `bound driver configfs-gadget` |
+| `PIKVM_LATCH_STATUS_PATH` | write the status JSON atomically here each poll (e.g. `/run/pikvm-hid-latch/status.json`) | unset |
 
 `PIKVM_LATCH_REENUM_CMD` default:
 `journalctl -k -b --no-pager | grep -c 'new device is high-speed'`.
