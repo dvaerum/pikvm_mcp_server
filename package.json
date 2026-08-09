@@ -4,7 +4,8 @@
   "description": "MCP server for controlling remote machines via PiKVM",
   "main": "dist/index.js",
   "bin": {
-    "pikvm-mcp-server": "dist/index.js"
+    "pikvm-mcp-server": "dist/index.js",
+    "pikvm-hid-latch-monitor": "dist/hid-latch-monitor-main.js"
   },
   "type": "module",
   "scripts": {
