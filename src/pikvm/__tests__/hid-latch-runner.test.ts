@@ -7,6 +7,7 @@ import {
   type SourceReading,
   type TickRecord,
   type LatchAlertRecord,
+  type LatchStatus,
 } from '../hid-latch-runner.js';
 
 /** A fake wall clock: now() reads it, sleep(ms) advances it. Deterministic. */
@@ -32,8 +33,8 @@ function scriptedSource(readings: SourceReading[]): SampleSource {
   };
 }
 
-const up = (rawReenum = 0): SourceReading => ({ ok: true, state: 'configured', rawReenum });
-const down = (rawReenum = 0): SourceReading => ({ ok: true, state: 'not attached', rawReenum });
+const up = (rawReenum = 0): SourceReading => ({ ok: true, healthy: true, state: 'configured', detail: 'configured', rawReenum });
+const down = (rawReenum = 0): SourceReading => ({ ok: true, healthy: false, state: 'not attached', detail: 'not attached', rawReenum });
 const err = (error = 'ssh: connect to host pikvm01 port 22: Operation timed out'): SourceReading => ({
   ok: false,
   error,
@@ -64,7 +65,7 @@ describe('runMonitorLoop — emit policy (transitions + heartbeat, not per-poll 
   it('a healthy run emits ONE transition tick then only periodic heartbeats — not one per poll', async () => {
     const records = await drive(scriptedSource([up()]), new HidLatchMonitor(), 10, 4);
     const t = ticks(records);
-    expect(t[0]).toMatchObject({ kind: 'tick', reason: 'transition', up: true });
+    expect(t[0]).toMatchObject({ kind: 'tick', reason: 'transition', healthy: true });
     // 10 polls, heartbeat every 4 → 1 transition + heartbeats at ticks 4 and 8 = 3 total, not 10.
     expect(t.length).toBeLessThan(10);
     expect(t.filter((x) => x.reason === 'transition')).toHaveLength(1);
@@ -75,7 +76,7 @@ describe('runMonitorLoop — emit policy (transitions + heartbeat, not per-poll 
     const source = scriptedSource([up(), up(), down(), down(), up(), up()]);
     const records = await drive(source, new HidLatchMonitor(), 6, 1000);
     const transitions = ticks(records).filter((x) => x.reason === 'transition');
-    expect(transitions.map((x) => x.up)).toEqual([true, false, true]); // up → down → up
+    expect(transitions.map((x) => x.healthy)).toEqual([true, false, true]); // up → down → up
   });
 });
 
@@ -125,6 +126,61 @@ describe('runMonitorLoop — monotonic re-enum normalisation across a dmesg-ring
     }
     // total monotonic increments = (105-100) + (8-3) = 10; the 105→3 wrap adds 0.
     expect(reenumSeries.at(-1)).toBe(10);
+  });
+});
+
+describe('runMonitorLoop — status snapshot (appliance /run status.json → health_check)', () => {
+  it('builds the status shape; alert/classification populate on fire; lastSampleAt advances every iteration', async () => {
+    const clock = fakeClock();
+    const statuses: LatchStatus[] = [];
+    const monitor = new HidLatchMonitor({ baselineIntervalMs: 1_000, escalatedIntervalMs: 1_000, persistenceThresholdMs: 5_000, latchReenumMax: 2 });
+    const source = scriptedSource([up(50), down(50), down(50), down(50), down(50), down(50), down(50)]);
+    let n = 0;
+    await runMonitorLoop({
+      source,
+      monitor,
+      now: clock.now,
+      sleep: clock.sleep,
+      emit: () => {},
+      onStatus: (s) => statuses.push(s),
+      shouldStop: () => n++ >= 7,
+    });
+    const last = statuses.at(-1)!;
+    expect(last).toMatchObject({
+      ok: true,
+      healthy: false,
+      state: 'not attached',
+      detail: 'not attached',
+      alert: true, // fired
+      classification: 'latched',
+      classificationConfidence: 'ok', // internal `reliable` mapped to `ok`
+      recommendedRung: 'udc-rebind',
+    });
+    expect(last.downSince).toBe(1_000);
+    expect(last.sustainedForSec).toBeGreaterThan(0);
+    // lastSampleAt advances every iteration (a hung loop shows as a stale timestamp).
+    const stamps = statuses.map((s) => s.lastSampleAt);
+    for (let i = 1; i < stamps.length; i++) expect(stamps[i]).toBeGreaterThan(stamps[i - 1]);
+  });
+
+  it('a source_error status carries ok:false + lastError while still advancing lastSampleAt (liveness)', async () => {
+    const clock = fakeClock();
+    const statuses: LatchStatus[] = [];
+    let n = 0;
+    await runMonitorLoop({
+      source: scriptedSource([err('boom')]),
+      monitor: new HidLatchMonitor(),
+      now: clock.now,
+      sleep: clock.sleep,
+      emit: () => {},
+      onStatus: (s) => statuses.push(s),
+      shouldStop: () => n++ >= 3,
+    });
+    expect(statuses.every((s) => s.ok === false)).toBe(true);
+    expect(statuses.at(-1)!.lastError).toBe('boom');
+    expect(statuses.at(-1)!.alert).toBe(false);
+    const stamps = statuses.map((s) => s.lastSampleAt);
+    for (let i = 1; i < stamps.length; i++) expect(stamps[i]).toBeGreaterThan(stamps[i - 1]);
   });
 });
 

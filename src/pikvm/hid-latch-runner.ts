@@ -2,45 +2,37 @@
  * HID-latch monitor RUNNER — the headless poll loop around the pure
  * {@link HidLatchMonitor} core.
  *
- * PLACEMENT (settled with the wrapper owner, verified against macos-nixos-setup
- * @ c334cfc): the WB-kiosk MCP server is a PER-SESSION stdio spawn — Claude Code
- * launches it when the iOS project is open and SIGKILLs it on disconnect, and no
- * launchd agent keeps it alive. So an in-process `setInterval` inside the MCP
- * server would be inert between sessions and dead through exactly the multi-day
- * outage we're detecting. This runner is therefore a SEPARATE headless entrypoint
- * (`pikvm-hid-latch-monitor`) that pikvm-nixos owns placing under
- * `launchd.user.agents` with RunAtLoad+KeepAlive. It emits JSONL to stdout; the
- * launchd agent routes StandardOutPath → the durable log.
- *
- * TRANSPORT: SSH, reusing `PIKVM_HID_RECOVERY_SSH` (root@pikvm01…). The macOS
- * Local-Network privacy grant that the MCP's HTTPS path depends on (loopback
- * tinyproxy in a granted Terminal.app) is NOT available to a headless launchd
- * agent, so the HTTPS API path can't be assumed. Reading the sysfs file over SSH
- * sidesteps it. (Whether SSH from a launchd-spawned nix-store binary itself trips
- * Local-Network privacy is the first on-box check — the SSH adapter lives in
- * {@link ./hid-latch-ssh-source}, kept thin for that reason.)
- *
- * This module holds the loop LOGIC only; the transport and the wall clock are
- * injected, so the loop is unit-tested deterministically with a scripted source.
+ * The source is INJECTED (SSH for pikvm01, local sysfs on the pikvm-nixos
+ * appliance), and so is the wall clock, so the loop is unit-tested deterministically
+ * with a scripted source. The source computes the `healthy` verdict; the runner
+ * normalises the raw re-enum count to monotonic, feeds the signal-agnostic
+ * classifier, emits JSONL (tick/alert/source_error), and — for the appliance
+ * systemd deployment — builds a {@link LatchStatus} snapshot each iteration that the
+ * caller persists (atomically to /run/pikvm-hid-latch/status.json) for the appliance
+ * endpoint + MCP health_check. `lastSampleAt` advances EVERY iteration, so a hung
+ * loop shows as a stale timestamp (systemd Restart covers a crash; this covers a hang).
  */
 import {
   HidLatchMonitor,
+  type HealthSample,
   type LatchAlert,
-  type UdcSample,
-  type UdcState,
+  type LatchClassification,
+  type RecommendedRung,
 } from './hid-latch-monitor.js';
 
 /**
- * One raw reading from the transport: the UDC state plus a RAW re-enumeration
- * count (e.g. a dmesg-ring grep — NOT guaranteed monotonic across a ring wrap),
- * or an error when the box was unreachable. `ok:false` is a TRANSPORT fault
- * (SSH/network/Mac), categorically distinct from a UDC-down reading.
+ * One raw reading from the transport. The source computes `healthy` (the composite
+ * health verdict) + a RAW re-enum count (NOT guaranteed monotonic across a journal
+ * reset); `detail`/`bound`/`state` are diagnostics passed through to the records.
+ * `ok:false` is a genuine TRANSPORT/read fault (e.g. `/sys` unreadable), categorically
+ * distinct from a healthy:false reading — a `#48` unbound gadget is `healthy:false`,
+ * NOT a source error.
  */
 export type SourceReading =
-  | { ok: true; state: UdcState; rawReenum: number; bootId?: string }
+  | { ok: true; healthy: boolean; rawReenum: number; bootId?: string; detail?: string; bound?: boolean; state?: string }
   | { ok: false; error: string };
 
-/** Pulls one reading. The SSH adapter implements this; tests inject a fake. */
+/** Pulls one reading. The SSH + local adapters implement this; tests inject a fake. */
 export interface SampleSource {
   read(): Promise<SourceReading>;
 }
@@ -53,11 +45,13 @@ export type TickRecord = {
   kind: 'tick';
   reason: TickReason;
   t: number;
-  state: UdcState;
-  up: boolean;
+  healthy: boolean;
   reenumCount: number;
   down: boolean;
   downSince: number | null;
+  detail?: string;
+  bound?: boolean;
+  state?: string;
 };
 export type SourceErrorRecord = {
   kind: 'source_error';
@@ -70,17 +64,37 @@ export type SourceErrorRecord = {
 export type LatchAlertRecord = LatchAlert;
 export type MonitorRecord = TickRecord | LatchAlertRecord | SourceErrorRecord;
 
+/**
+ * The status snapshot the appliance surface reads (→ /run/pikvm-hid-latch/status.json
+ * → GET /hid-recovery/latch-status → MCP health_check). `lastSampleAt` is the
+ * self-liveness read (advances every loop iteration; stale ⇒ the monitor hung).
+ */
+export interface LatchStatus {
+  ok: boolean;
+  healthy: boolean | null;
+  bound: boolean | null;
+  state: string | null;
+  detail: string | null;
+  alert: boolean;
+  classification: LatchClassification | null;
+  classificationConfidence: 'ok' | 'unreliable' | null;
+  recommendedRung: RecommendedRung | null;
+  downSince: number | null;
+  sustainedForSec: number;
+  reenumCount: number;
+  bootId: string | null;
+  lastSampleAt: number;
+  /** Last source_error message, when `ok:false`; null otherwise. */
+  lastError: string | null;
+}
+
 export interface RunnerConfig {
-  /** Emit a heartbeat `tick` after this many polls with no transition, so a long
-   *  healthy (or long latched) stretch still proves the monitor is alive. */
+  /** Emit a heartbeat `tick` after this many polls with no transition (proof-of-life in the log). */
   heartbeatEveryTicks: number;
 }
 
 export const DEFAULT_RUNNER_CONFIG: RunnerConfig = {
-  // ~10 min between heartbeats at the 60s baseline. A hourly heartbeat left the log
-  // looking like a dead monitor for ~10 min (iPad node); this is proof-of-life at
-  // low cost. A quiet log is still NOT proof of life — the external staleness check
-  // on the launchd side is load-bearing.
+  // ~10 min between heartbeats at the 60s baseline — proof-of-life at low log cost.
   heartbeatEveryTicks: 10,
 };
 
@@ -93,26 +107,25 @@ export interface RunnerDeps {
   sleep: (ms: number) => Promise<void>;
   /** Sink for JSONL records. Default: one JSON object per line to stdout. */
   emit?: (rec: MonitorRecord) => void;
+  /** Called each iteration with the current status snapshot (main persists it atomically). */
+  onStatus?: (status: LatchStatus) => void;
   /** Loop while this returns false. Omit for a never-ending daemon; tests pass a bounded one. */
   shouldStop?: () => boolean;
   config?: Partial<RunnerConfig>;
 }
 
 const stdoutEmit = (rec: MonitorRecord): void => {
-  // one JSON object per line — the launchd StandardOutPath log is the source of truth.
   process.stdout.write(JSON.stringify(rec) + '\n');
 };
 
 /**
- * The poll loop. Each iteration: read the transport, normalise the re-enum counter
- * to a monotonic value, feed the pure monitor, and emit JSONL for transitions,
- * alerts, source errors, and periodic heartbeats. The cadence is the monitor's
- * `desiredIntervalMs()` (baseline while healthy, escalated once a down-window opens).
+ * The poll loop. Each iteration: read the source, normalise the re-enum counter to a
+ * monotonic value, feed the pure monitor, emit JSONL (transitions/alerts/errors/
+ * heartbeats), and build the status snapshot.
  *
- * INVARIANT: a transport failure (`ok:false`) does NOT advance the latch timer —
- * the monitor is only fed real UDC readings. An SSH/network outage can therefore
- * never masquerade as a HID latch (nor can a real latch be hidden by pretending the
- * box is merely unreachable); the two faults are reported as different records.
+ * INVARIANT: a read failure (`ok:false`) does NOT advance the latch timer — the
+ * monitor is only fed real readings, so a transport/read outage can never masquerade
+ * as a latch nor hide one; the two faults are reported as different records.
  */
 export async function runMonitorLoop(deps: RunnerDeps): Promise<void> {
   const cfg = { ...DEFAULT_RUNNER_CONFIG, ...deps.config };
@@ -122,8 +135,36 @@ export async function runMonitorLoop(deps: RunnerDeps): Promise<void> {
   let monotonicReenum = 0;
   let lastRaw: number | null = null;
   let consecutiveErrors = 0;
-  let lastEmittedUp: boolean | null = null;
+  let lastEmittedHealthy: boolean | null = null;
   let ticksSinceEmit = 0;
+  // Last successful sample diagnostics, retained for the status snapshot across errors.
+  let lastHealthy: boolean | null = null;
+  let lastBound: boolean | null = null;
+  let lastState: string | null = null;
+  let lastDetail: string | null = null;
+  let lastBootId: string | null = null;
+
+  const buildStatus = (t: number, ok: boolean, lastError: string | null): LatchStatus => {
+    const st = monitor.status();
+    const a = st.activeAlert;
+    return {
+      ok,
+      healthy: lastHealthy,
+      bound: lastBound,
+      state: lastState,
+      detail: lastDetail,
+      alert: st.alerted,
+      classification: a?.classification ?? null,
+      classificationConfidence: a ? (a.classificationConfidence === 'reliable' ? 'ok' : 'unreliable') : null,
+      recommendedRung: a?.recommendedRung ?? null,
+      downSince: st.downSince,
+      sustainedForSec: st.downSince !== null ? Math.max(0, (t - st.downSince) / 1000) : 0,
+      reenumCount: monotonicReenum,
+      bootId: lastBootId,
+      lastSampleAt: t, // advances every iteration → a stale value means the loop hung
+      lastError,
+    };
+  };
 
   while (!(deps.shouldStop?.() ?? false)) {
     const t = deps.now();
@@ -132,42 +173,59 @@ export async function runMonitorLoop(deps: RunnerDeps): Promise<void> {
     if (!reading.ok) {
       consecutiveErrors += 1;
       emit({ kind: 'source_error', t, error: reading.error, consecutive: consecutiveErrors });
-      // Do NOT feed the monitor: unreachable ≠ UDC-down. Poll at the current cadence.
+      // Do NOT feed the monitor: a read fault ≠ unhealthy. Still refresh liveness/status.
+      deps.onStatus?.(buildStatus(t, false, reading.error));
       await deps.sleep(monitor.desiredIntervalMs());
       continue;
     }
     consecutiveErrors = 0;
 
-    // Normalise the raw (dmesg-ring) reading to a monotonic counter: a DECREASE
-    // means the ring wrapped/was cleared — never count a negative increment.
+    // Normalise the raw reading to a monotonic counter: a DECREASE means the journal
+    // reset/ring-wrapped — never count a negative increment (boot_id guards the reboot).
     if (lastRaw !== null && reading.rawReenum >= lastRaw) {
       monotonicReenum += reading.rawReenum - lastRaw;
     }
     lastRaw = reading.rawReenum;
 
-    const up = monitor.isHealthy(reading.state);
-    const sample: UdcSample = { t, state: reading.state, reenumCount: monotonicReenum, bootId: reading.bootId };
+    lastHealthy = reading.healthy;
+    lastBound = reading.bound ?? null;
+    lastState = reading.state ?? null;
+    lastDetail = reading.detail ?? null;
+    lastBootId = reading.bootId ?? null;
+
+    const sample: HealthSample = {
+      t,
+      healthy: reading.healthy,
+      reenumCount: monotonicReenum,
+      bootId: reading.bootId,
+      detail: reading.detail,
+      bound: reading.bound,
+      state: reading.state,
+    };
     const alert = monitor.observe(sample);
     const st = monitor.status();
 
     ticksSinceEmit += 1;
-    const isTransition = lastEmittedUp === null || up !== lastEmittedUp;
+    const isTransition = lastEmittedHealthy === null || reading.healthy !== lastEmittedHealthy;
     if (isTransition || ticksSinceEmit >= cfg.heartbeatEveryTicks) {
       emit({
         kind: 'tick',
         reason: isTransition ? 'transition' : 'heartbeat',
         t,
-        state: reading.state,
-        up,
+        healthy: reading.healthy,
         reenumCount: monotonicReenum,
         down: st.down,
         downSince: st.downSince,
+        detail: reading.detail,
+        bound: reading.bound,
+        state: reading.state,
       });
-      lastEmittedUp = up;
+      lastEmittedHealthy = reading.healthy;
       ticksSinceEmit = 0;
     }
 
     if (alert) emit(alert);
+    deps.onStatus?.(buildStatus(t, true, null));
 
     await deps.sleep(monitor.desiredIntervalMs());
   }

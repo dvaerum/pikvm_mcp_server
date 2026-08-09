@@ -17,6 +17,7 @@
  * than suppressing the latch alarm, since only `state` decides whether we fire.
  */
 import { execFile } from 'node:child_process';
+import { UDC_UP } from './hid-latch-monitor.js';
 import type { SampleSource, SourceReading } from './hid-latch-runner.js';
 
 /**
@@ -50,6 +51,12 @@ export interface SshLatchSourceConfig {
    * counter by the runner, so this need only be monotonic BETWEEN wraps.
    */
   reenumCountCmd?: string;
+  /**
+   * The UDC `state` that means HEALTHY for this target — the source computes the
+   * `healthy` boolean the (signal-agnostic) classifier consumes. Default `configured`
+   * (pikvm01, a live HID target). Per-target because an uncabled box's baseline differs.
+   */
+  healthyState?: string;
   connectTimeoutS?: number;
   timeoutMs?: number;
   exec?: SshLatchExec;
@@ -96,6 +103,7 @@ export function makeSshLatchSource(cfg: SshLatchSourceConfig): SampleSource {
   const exec = cfg.exec ?? defaultExec;
   const sshBinary = cfg.sshBinary ?? DEFAULT_SSH_BINARY;
   const reenumCmd = cfg.reenumCountCmd ?? DEFAULT_REENUM_COUNT_CMD;
+  const healthyState = cfg.healthyState ?? UDC_UP;
   const connectTimeoutS = cfg.connectTimeoutS ?? 5;
   const timeoutMs = cfg.timeoutMs ?? 8_000;
 
@@ -143,7 +151,8 @@ export function makeSshLatchSource(cfg: SshLatchSourceConfig): SampleSource {
       if (reenumStr !== undefined) lastRawReenum = Number(reenumStr);
       // else: keep lastRawReenum — a count-read miss must not drop the latch signal.
       const bootId = /BOOT=([0-9a-fA-F-]+)/.exec(res.stdout)?.[1];
-      return { ok: true, state, rawReenum: lastRawReenum, bootId };
+      // The source owns the health verdict; the classifier just consumes the boolean.
+      return { ok: true, healthy: state === healthyState, rawReenum: lastRawReenum, bootId, detail: state, state };
     },
   };
 }

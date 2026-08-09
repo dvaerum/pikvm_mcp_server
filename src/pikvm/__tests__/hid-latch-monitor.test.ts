@@ -3,7 +3,7 @@ import {
   HidLatchMonitor,
   DEFAULT_MONITOR_CONFIG,
   isUdcUp,
-  type UdcSample,
+  type HealthSample,
   type UdcState,
 } from '../hid-latch-monitor.js';
 
@@ -20,13 +20,15 @@ const PRELATCH_DELTAS_S = [1.04, 3.14, 3.15, 1.05, 2.01, 1.47, 3.12, 3.13, 3.14,
 /** A non-`configured` UDC state (any of these ⇒ HID down). */
 const DOWN: UdcState = 'not attached';
 
-/** Build one sample. */
-function s(t: number, state: UdcState, reenumCount: number): UdcSample {
-  return { t, state, reenumCount };
+/** Build one sample. The classifier is signal-agnostic; the helper maps the legacy
+ *  `state` string to the `healthy` boolean (`configured`=healthy) so call sites read the
+ *  same, and carries `state`/`detail` as a real source would for the diagnostics. */
+function s(t: number, state: UdcState, reenumCount: number): HealthSample {
+  return { t, healthy: state === 'configured', reenumCount, state, detail: state };
 }
 
 /** Feed a whole stream; return every alert emitted (usually 0 or 1 per latch). */
-function run(m: HidLatchMonitor, stream: UdcSample[]) {
+function run(m: HidLatchMonitor, stream: HealthSample[]) {
   return stream.map((x) => m.observe(x)).filter((a): a is NonNullable<typeof a> => a !== null);
 }
 
@@ -37,8 +39,8 @@ function run(m: HidLatchMonitor, stream: UdcSample[]) {
  * This models the ALIASING risk: whether a sampler of a given interval actually
  * LANDS on the short `configured` windows between re-enumerations.
  */
-function sampleTimeline(segments: Array<[number, UdcState]>, intervalMs: number): UdcSample[] {
-  const out: UdcSample[] = [];
+function sampleTimeline(segments: Array<[number, UdcState]>, intervalMs: number): HealthSample[] {
+  const out: HealthSample[] = [];
   // Precompute segment boundaries + the reenum counter timeline.
   const bounds: Array<{ start: number; end: number; state: UdcState; reenum: number }> = [];
   let tCursor = 0;
@@ -91,7 +93,7 @@ describe('HidLatchMonitor — quiet on the normal/recoverable cases (STAYS-QUIET
     // — however often it re-enumerates — must never fire. This is the manager's
     // mandatory "zero alerts across a measured storm window" requirement.
     const m = new HidLatchMonitor();
-    const stream: UdcSample[] = [];
+    const stream: HealthSample[] = [];
     let reenum = 0;
     for (let cycle = 0; cycle < 20; cycle++) {
       const base = cycle * 7_100;
@@ -106,7 +108,7 @@ describe('HidLatchMonitor — quiet on the normal/recoverable cases (STAYS-QUIET
 describe('HidLatchMonitor — fires on a genuine latch and on the never-settling storm (FIRES leg)', () => {
   it('ROW C: a flatline latch (never `configured`, reenum counter FLAT) → `latched` → recommend udc-rebind (Mode B; soft_connect insufficient on pikvm01)', () => {
     const m = new HidLatchMonitor();
-    const stream: UdcSample[] = [s(0, 'configured', 42)];
+    const stream: HealthSample[] = [s(0, 'configured', 42)];
     // goes down and stays down; kernel emits NO further re-enumerations (dead).
     for (let t = 1_000; t <= 120_000; t += 5_000) stream.push(s(t, DOWN, 42));
     const alerts = run(m, stream);
@@ -129,7 +131,7 @@ describe('HidLatchMonitor — fires on a genuine latch and on the never-settling
     // ⚠️ If a future change makes this row QUIET, it has broken the detector for the
     // precursor to the real incident. Do NOT "fix" this as a false positive.
     const m = new HidLatchMonitor();
-    const stream: UdcSample[] = [s(0, 'configured', 0)];
+    const stream: HealthSample[] = [s(0, 'configured', 0)];
     let t = 0;
     let reenum = 0;
     // replay the real pre-latch deltas, then continue the ~3.15s metronome past 90s,
@@ -151,45 +153,54 @@ describe('HidLatchMonitor — fires on a genuine latch and on the never-settling
 
   it('fires EXACTLY ONCE per latch and re-arms only after an observed `configured`', () => {
     const m = new HidLatchMonitor();
-    const down: UdcSample[] = [s(0, 'configured', 0)];
+    const down: HealthSample[] = [s(0, 'configured', 0)];
     for (let t = 1_000; t <= 200_000; t += 5_000) down.push(s(t, DOWN, 0));
     expect(run(m, down)).toHaveLength(1); // one alert despite the latch lasting way past threshold
 
     // recovery, then a fresh latch → a new alert.
     expect(m.observe(s(205_000, 'configured', 0))).toBeNull(); // re-arm
-    const second: UdcSample[] = [];
+    const second: HealthSample[] = [];
     for (let t = 206_000; t <= 320_000; t += 5_000) second.push(s(t, DOWN, 0));
     expect(run(m, second)).toHaveLength(1);
   });
 });
 
-describe('HidLatchMonitor — per-target healthy state (rig-dependent baseline)', () => {
-  it('NEGATIVE CONTROL: a legitimately-uncabled box whose baseline is `not attached` never alerts', () => {
-    // it-03400's appliance reads `not attached` on every boot (nothing cabled) —
-    // that is its CORRECT baseline. With healthyState set accordingly, a constant
-    // `not attached` stream must stay QUIET (else the monitor alerts forever → muted).
-    const m = new HidLatchMonitor({ healthyState: 'not attached' });
-    const stream = Array.from({ length: 200 }, (_, i) => s(i * 60_000, 'not attached', 0));
+describe('HidLatchMonitor — signal-agnostic (the classifier reads only `healthy`, not the state)', () => {
+  it('a source-computed-healthy stream never alerts, whatever the underlying state string is', () => {
+    // The per-target baseline (e.g. an uncabled box where `not attached` IS healthy)
+    // now lives in the SOURCE — the classifier just consumes `healthy`. So a stream a
+    // source deems healthy (here `not attached` marked healthy:true) must stay QUIET.
+    const m = new HidLatchMonitor();
+    const stream: HealthSample[] = Array.from({ length: 200 }, (_, i) => ({
+      t: i * 60_000,
+      healthy: true, // source verdict — regardless of the state string
+      reenumCount: 0,
+      state: 'not attached',
+      detail: 'not attached (bound)',
+    }));
     expect(run(m, stream)).toHaveLength(0);
-    expect(m.isHealthy('not attached')).toBe(true);
-    expect(m.isHealthy('configured')).toBe(false);
   });
 
-  it('with the default healthy state (`configured`), `not attached` IS the fault and a sustained run fires', () => {
+  it('a sustained `healthy:false` run fires regardless of the state string', () => {
     const m = new HidLatchMonitor();
-    expect(m.isHealthy('configured')).toBe(true);
-    const stream: UdcSample[] = [s(0, 'configured', 0)];
-    for (let t = 1_000; t <= 120_000; t += 5_000) stream.push(s(t, DOWN, 0));
-    expect(run(m, stream)).toHaveLength(1);
+    const stream: HealthSample[] = [{ t: 0, healthy: true, reenumCount: 0 }];
+    for (let t = 1_000; t <= 120_000; t += 5_000) {
+      stream.push({ t, healthy: false, reenumCount: 0, state: 'not attached', detail: 'unbound (#48: no gadget dir)' });
+    }
+    const alerts = run(m, stream);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].detail).toBe('unbound (#48: no gadget dir)'); // source diagnostic carried to the alert
   });
 });
 
 describe('HidLatchMonitor — a mid-window reboot makes the classification unreliable (not a false `latched`)', () => {
-  const withBoot = (t: number, state: UdcState, reenum: number, bootId: string): UdcSample => ({
+  const withBoot = (t: number, state: UdcState, reenum: number, bootId: string): HealthSample => ({
     t,
-    state,
+    healthy: state === 'configured',
     reenumCount: reenum,
     bootId,
+    state,
+    detail: state,
   });
 
   it('boot_id change within the down-window → rebootedDuringWindow + confidence `unreliable`', () => {
@@ -197,7 +208,7 @@ describe('HidLatchMonitor — a mid-window reboot makes the classification unrel
     // reenum delta under-counts and would read `latched` by count alone — recommending
     // a UDC rebind on a box whose real fault (post power-cycle, still down) is electrical.
     const m = new HidLatchMonitor({ escalatedIntervalMs: 1_000, persistenceThresholdMs: 5_000, latchReenumMax: 2 });
-    const stream: UdcSample[] = [withBoot(0, 'configured', 100, 'boot-A')];
+    const stream: HealthSample[] = [withBoot(0, 'configured', 100, 'boot-A')];
     stream.push(withBoot(1_000, DOWN, 100, 'boot-A'), withBoot(2_000, DOWN, 100, 'boot-A'));
     stream.push(withBoot(3_000, DOWN, 101, 'boot-B')); // reboot mid-window
     for (let t = 4_000; t <= 10_000; t += 1_000) stream.push(withBoot(t, DOWN, 101, 'boot-B'));
@@ -211,7 +222,7 @@ describe('HidLatchMonitor — a mid-window reboot makes the classification unrel
 
   it('constant boot_id → `reliable`; a source that omits boot_id never falsely reports unreliable', () => {
     const m1 = new HidLatchMonitor({ escalatedIntervalMs: 1_000, persistenceThresholdMs: 5_000, latchReenumMax: 2 });
-    const s1: UdcSample[] = [withBoot(0, 'configured', 50, 'boot-A')];
+    const s1: HealthSample[] = [withBoot(0, 'configured', 50, 'boot-A')];
     for (let t = 1_000; t <= 10_000; t += 1_000) s1.push(withBoot(t, DOWN, 50, 'boot-A'));
     const a1 = run(m1, s1);
     expect(a1[0].rebootedDuringWindow).toBe(false);
@@ -219,7 +230,7 @@ describe('HidLatchMonitor — a mid-window reboot makes the classification unrel
 
     // bootId omitted (older source) → treated as reliable, never false-unreliable.
     const m2 = new HidLatchMonitor({ escalatedIntervalMs: 1_000, persistenceThresholdMs: 5_000, latchReenumMax: 2 });
-    const s2: UdcSample[] = [s(0, 'configured', 0)];
+    const s2: HealthSample[] = [s(0, 'configured', 0)];
     for (let t = 1_000; t <= 10_000; t += 1_000) s2.push(s(t, DOWN, 0));
     expect(run(m2, s2)[0].classificationConfidence).toBe('reliable');
   });
