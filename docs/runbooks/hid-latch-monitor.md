@@ -8,8 +8,10 @@
 > `healthy` boolean, `HealthSample`), and the two SOURCES are `hid-latch-local-source.ts`
 > (appliance; composite `healthy = gadget-BOUND (/sys/class/udc/<udc>/function
 > non-empty) AND state-acceptable`) and `hid-latch-ssh-source.ts` (pikvm01 over SSH,
-> retained). The Mac LaunchDaemon path below is HISTORICAL. Appliance design detail:
-> pikvm-nixos ADR (linked from that repo).
+> retained). The Mac LaunchDaemon path below is HISTORICAL. Appliance design +
+> the fault-mode split (default covers the unbound/#48 teardown; the target-attached
+> VBUS latch is OPT-IN via `PIKVM_LATCH_HEALTHY_STATE=configured`) live in the
+> pikvm-nixos ADR `docs/decisions/0003-hid-latch-monitor.md` — the canonical home.
 
 Detects a HID **latch** — the emulated USB gadget stuck non-`configured` — that
 [HID recovery](hid-recovery.md) would fix but nobody notices, because
