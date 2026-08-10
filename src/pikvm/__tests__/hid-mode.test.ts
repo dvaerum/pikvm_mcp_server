@@ -175,6 +175,41 @@ describe('HidModeResolver — endpoint (appliance)', () => {
     expect(l.moverGate().allowed).toBe(true);
   });
 
+  it('LATCH REGRESSION (#51): settling AUTO-EXPIRES after the window with NO clearSettling — the mover cannot dead-latch across a healthy box', async () => {
+    // The #51 bug: settling was a one-way flag cleared ONLY by pikvm_health_check's
+    // clearSettling(); polling pikvm_hidmode_status (which never clears) left the mover
+    // gated until an MCP restart. Here health_check NEVER runs — the gate must self-heal
+    // from the clock once the bounded re-enum window elapses.
+    let t = 1000;
+    const ep = fakeEndpoint({ mode: 'ipad' });
+    const l = new HidModeResolver({ endpoint: ep, ttlMs: 1, settleWindowMs: 15000, now: () => t });
+    await l.resolve();
+    ep.set('desktop'); // switched by another surface
+    t += 10;
+    await l.resolve(); // detects the change → settling
+    expect(l.status().settling).toBe(true);
+    expect(l.moverGate().allowed).toBe(false); // correctly gated DURING the re-enum window
+    // ...no clearSettling(), no restart — just the clock advancing past the window.
+    t += 15000;
+    expect(l.status().settling).toBe(false);   // re-derived from now(): window elapsed ⇒ open
+    expect(l.moverGate().allowed).toBe(true);  // self-healed — the latch is impossible
+  });
+
+  it('settling stays closed for the FULL window when clearSettling never runs (no premature open)', async () => {
+    let t = 1000;
+    const ep = fakeEndpoint({ mode: 'ipad' });
+    const l = new HidModeResolver({ endpoint: ep, ttlMs: 1, settleWindowMs: 15000, now: () => t });
+    await l.resolve();
+    ep.set('desktop');
+    t += 10;         // t=1010: the resolve below anchors the window ⇒ settleUntil=1010+15000=16010
+    await l.resolve();
+    expect(l.moverGate().allowed).toBe(false);
+    t += 14999;      // t=16009: still inside the window (< 16010)
+    expect(l.moverGate().allowed).toBe(false);
+    t += 2;          // t=16011: past the window ⇒ gate re-opens
+    expect(l.moverGate().allowed).toBe(true);
+  });
+
   it('the FIRST read does not settle (no prior mode to differ from)', async () => {
     const ep = fakeEndpoint({ mode: 'desktop' });
     const l = new HidModeResolver({ endpoint: ep });
