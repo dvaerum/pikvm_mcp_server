@@ -65,10 +65,19 @@ export interface HidModeResolverOpts {
   endpoint?: HidModeEndpoint;
   /** Endpoint cache lifetime; a read within this window is reused, not re-fetched. */
   ttlMs?: number;
+  /** Max time the settling gate stays closed after a switch before it AUTO-EXPIRES
+   *  (the backstop that makes the gate un-latchable — see {@link HidModeResolver}). */
+  settleWindowMs?: number;
   now?: () => number;
 }
 
 const DEFAULT_TTL_MS = 5000;
+// Backstop for the settling gate. clearSettling() (health_check on UDC-online) is the
+// fast path; this bounds the MAX time the mover stays gated when that path doesn't run,
+// so a missed clear can't dead-latch the mover (the #51 bug: settling was a one-way flag
+// cleared ONLY by health_check, so polling status left it stuck until an MCP restart).
+// 15s comfortably covers a real post-switch USB re-enumeration (a few seconds).
+const DEFAULT_SETTLE_WINDOW_MS = 15000;
 
 /**
  * Resolves the HID mode the mover should use. Declared sources are trivial and
@@ -80,6 +89,7 @@ export class HidModeResolver {
   private readonly declared?: HidMode;
   private readonly endpoint?: HidModeEndpoint;
   private readonly ttlMs: number;
+  private readonly settleWindowMs: number;
   private readonly now: () => number;
 
   private lastGoodMode: HidMode | null = null; // last VALID observed mode (persists across failures for change-detection)
@@ -87,12 +97,13 @@ export class HidModeResolver {
   private currentMode: HidMode | null = null;  // mode as of the last resolve: null when unreachable OR unsettled
   private lastReading: HidModeReading | null = null; // last endpoint parse, for the drift diagnostic
   private reachable: boolean;                   // did the endpoint answer on the most recent resolve / cache-fresh
-  private settling = false;                     // re-enumeration in progress → refuse mover ops
+  private settleUntil: number | null = null;    // re-enum window deadline; settling === now() < settleUntil (re-derived, never latches)
 
   constructor(opts: HidModeResolverOpts) {
     this.declared = opts.declared;
     this.endpoint = opts.endpoint;
     this.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
+    this.settleWindowMs = opts.settleWindowMs ?? DEFAULT_SETTLE_WINDOW_MS;
     this.now = opts.now ?? Date.now;
     // Declared is known + reachable from the start; endpoint is UNKNOWN until read.
     this.reachable = this.declared !== undefined;
@@ -133,7 +144,7 @@ export class HidModeResolver {
     // The endpoint reports the OBSERVED gadget, so a changed observed mode means the
     // gadget re-assembled elsewhere — begin settling. (A drift, where the gadget did
     // NOT change, is surfaced separately in status; it is not a settling event.)
-    if (this.lastGoodMode !== null && m !== this.lastGoodMode) this.settling = true;
+    if (this.lastGoodMode !== null && m !== this.lastGoodMode) this.settleUntil = t + this.settleWindowMs;
     this.lastGoodMode = m;
     this.lastOkAt = t;
     this.currentMode = m;
@@ -145,6 +156,13 @@ export class HidModeResolver {
   private resolvedMode(): HidMode | null {
     if (this.declared !== undefined) return this.declared;
     return this.currentMode;
+  }
+
+  /** Settling is RE-DERIVED from the clock, never a latched flag: true only while the
+   *  bounded re-enum window is still open. It auto-expires (so a missed clearSettling()
+   *  can't dead-latch the mover) and clearSettling() clears it early on confirmed UDC-online. */
+  private isSettling(): boolean {
+    return this.settleUntil !== null && this.now() < this.settleUntil;
   }
 
   /** requested(next-boot)≠observed while the gadget is recognisable ⇒ a next-boot-pending divergence. */
@@ -162,7 +180,7 @@ export class HidModeResolver {
         : 'HID mode unknown — the appliance /hidmode endpoint is unreachable; refusing to move rather than guess the mode';
       return { allowed: false, reason };
     }
-    if (this.settling) {
+    if (this.isSettling()) {
       return {
         allowed: false,
         reason: 'HID re-enumerating after a mode switch — the target USB is not back online yet; retry once it reconnects',
@@ -187,7 +205,7 @@ export class HidModeResolver {
       mode: this.resolvedMode(),
       source: this.declared !== undefined ? 'declared' : 'endpoint',
       reachable: this.reachable,
-      settling: this.settling,
+      settling: this.isSettling(),
       lastReadAt: this.lastOkAt,
       requestedMode: this.declared !== undefined ? null : (r?.requested ?? null),
       driftDetected,
@@ -203,11 +221,14 @@ export class HidModeResolver {
     this.lastOkAt = null;
   }
 
-  beginSettling(): void { this.settling = true; }
+  /** Open a bounded settling window from now (a switch we initiated). Auto-expires
+   *  after settleWindowMs; clearSettling() ends it early on confirmed UDC-online. */
+  beginSettling(): void { this.settleUntil = this.now() + this.settleWindowMs; }
 
-  /** Clear the settling gate — the integration calls this once the target HID is
-   *  confirmed ONLINE (UDC ground truth; the kvmd flags lie). */
-  clearSettling(): void { this.settling = false; }
+  /** Clear the settling gate early — the integration calls this once the target HID is
+   *  confirmed ONLINE (UDC ground truth; the kvmd flags lie). The window ALSO auto-expires
+   *  without this, so a missed call can't dead-latch the mover (the #51 bug). */
+  clearSettling(): void { this.settleUntil = null; }
 
   /**
    * Switch the appliance mode (POST /hidmode). Begins settling and forces a
