@@ -252,7 +252,13 @@ Move the mouse cursor to an absolute pixel position or by a relative delta.
 ## Tips
 - If calibration is active, absolute coordinates are automatically adjusted.
 - A **resolution change** will invalidate calibration — you'll see a warning in the response.
-- To move and click in one step, use \`pikvm_mouse_click\` with x/y parameters instead.`,
+- To move and click in one step, use \`pikvm_mouse_click\` with x/y parameters instead.
+- \`relative\` must match the target's actual HID mode: \`relative:true\` on an absolute/desktop
+  target and absolute (non-relative) coordinates on a relative/iPad target are both refused
+  with an error, rather than silently doing nothing — a mismatched emit is accepted by the
+  device but never delivered. Use \`pikvm_hidmode_status\` to check the current mode, or the
+  mode-aware \`pikvm_mouse_move_to\` / \`pikvm_mouse_click_at\` instead, which select the correct
+  strategy automatically.`,
           },
         },
       ];
