@@ -164,10 +164,20 @@ function recoveryEndpointConfig(): { url?: string; token?: string; verifySsl?: b
 // (fail-closed). When unset, the declared --target IS the mode (stock pikvm01).
 // Exactly one — the both-set case is a startup error. See ADR 0002.
 let hidModeResolver: HidModeResolver | undefined;
-function hidModeEndpointConfig(): { url?: string; token?: string; verifySsl?: boolean } {
+/**
+ * `pikvmCreds` are the ALREADY-RESOLVED kvmd credentials (config.pikvm) — the
+ * Basic-auth fallback for the off-box front-door /hidmode deployment reuses
+ * them rather than re-reading PIKVM_USERNAME/PASSWORD (which would duplicate
+ * resolveSecret's env/_FILE/CREDENTIALS_DIRECTORY precedence). See hid-mode.ts.
+ */
+function hidModeEndpointConfig(
+  pikvmCreds: { username: string; password: string },
+): { url?: string; token?: string; username?: string; password?: string; verifySsl?: boolean } {
   return {
     url: process.env.PIKVM_HIDMODE_URL,
     token: process.env.PIKVM_HIDMODE_TOKEN,
+    username: pikvmCreds.username,
+    password: pikvmCreds.password,
     verifySsl: process.env.PIKVM_HIDMODE_VERIFY_SSL === 'true',
   };
 }
@@ -2609,7 +2619,7 @@ async function main() {
   // UNKNOWN when unreachable (mover ops then refuse rather than guess). See ADR 0002.
   const hidDetectedAbsolute = mouseAbsoluteMode; // snapshot before the resolver overrides it
   hidModeResolver = hidModeSource.kind === 'endpoint'
-    ? new HidModeResolver({ endpoint: makeHttpHidModeEndpoint(hidModeEndpointConfig()) })
+    ? new HidModeResolver({ endpoint: makeHttpHidModeEndpoint(hidModeEndpointConfig(config.pikvm)) })
     : new HidModeResolver({ declared: hidModeSource.target });
   await refreshHidMode();
   if (hidModeSource.kind === 'endpoint') {
