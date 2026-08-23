@@ -14,7 +14,7 @@
  *
  * `mouseAbsoluteMode` is derived from the resolved mode via {@link modeIsAbsolute}.
  */
-import { Agent, fetch as undiciFetch } from 'undici';
+import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
 import { basicAuthHeader } from '../session-auth.js';
 
 export type HidMode = 'ipad' | 'desktop';
@@ -268,11 +268,17 @@ export interface HidModeHttpDeps {
  *      REJECTS a bearer token (401). A single instance only ever points
  *      PIKVM_HIDMODE_URL at ONE endpoint, so either/or precedence is sufficient —
  *      no need to send both simultaneously.
+ * PROXY: routes through `cfg.proxyUrl` (PIKVM_PROXY) when configured, exactly like
+ * `client.ts` — required for the off-box front-door case, where macOS TCC blocks LAN
+ * access for nix-store binaries and a plain `Agent` throws "fetch failed" outright
+ * (curl, being a TCC-exempt system binary, would succeed on the identical request).
+ * Without this, an off-box MCP behind that block fails closed (mover offline) even
+ * with correct auth (#56) — the fetch never leaves the process.
  * TLS-verify defaults off for the loopback self-signed cert either way.
  * `read()` degrades to null on any non-200 / error so the resolver fails closed.
  */
 export function makeHttpHidModeEndpoint(
-  cfg: { url?: string; token?: string; username?: string; password?: string; verifySsl?: boolean; timeoutMs?: number },
+  cfg: { url?: string; token?: string; username?: string; password?: string; proxyUrl?: string; verifySsl?: boolean; timeoutMs?: number },
   deps: HidModeHttpDeps = {},
 ): HidModeEndpoint {
   // PIKVM_HIDMODE_URL is the FULL endpoint (e.g. http://127.0.0.1:8083/hidmode),
@@ -286,11 +292,19 @@ export function makeHttpHidModeEndpoint(
     if (cfg.username && cfg.password) return { authorization: basicAuthHeader(cfg.username, cfg.password) };
     return {};
   };
+  // When a proxy is configured, route everything through it via CONNECT tunnelling
+  // (client.ts's exact idiom); otherwise connect directly. Either way the origin
+  // TLS keeps rejectUnauthorized: verifySsl so the appliance's self-signed cert
+  // (or the front-door's, if terminated there) is accepted per config.
+  const makeDispatcher = (): Agent | ProxyAgent =>
+    cfg.proxyUrl
+      ? new ProxyAgent({ uri: cfg.proxyUrl, requestTls: { rejectUnauthorized: cfg.verifySsl ?? false } })
+      : new Agent({ connect: { rejectUnauthorized: cfg.verifySsl ?? false } });
 
   const get =
     deps.get ??
     (async (u: string, headers: Record<string, string>) => {
-      const dispatcher = new Agent({ connect: { rejectUnauthorized: cfg.verifySsl ?? false } });
+      const dispatcher = makeDispatcher();
       const res = await undiciFetch(u, { method: 'GET', headers, dispatcher, signal: AbortSignal.timeout(timeoutMs) });
       let body: unknown;
       try { body = await res.json(); } catch { /* non-JSON / empty */ }
@@ -299,7 +313,7 @@ export function makeHttpHidModeEndpoint(
   const post =
     deps.post ??
     (async (u: string, headers: Record<string, string>, b: string) => {
-      const dispatcher = new Agent({ connect: { rejectUnauthorized: cfg.verifySsl ?? false } });
+      const dispatcher = makeDispatcher();
       const res = await undiciFetch(u, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...headers },
