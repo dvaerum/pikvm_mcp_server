@@ -89,6 +89,78 @@ describe('makeHttpHidModeEndpoint — consumes the FULL PIKVM_HIDMODE_URL (modul
     expect(ep.configured).toBe(false);
     expect(await ep.read()).toBeNull();
   });
+
+  it('BASIC-AUTH FALLBACK (off-box front-door design): no token, but username+password configured → HTTP Basic', async () => {
+    const seen: { auth?: string }[] = [];
+    const ep = makeHttpHidModeEndpoint(
+      { url: 'https://appliance/hidmode', username: 'admin', password: 'admin' },
+      {
+        get: async (_u, h) => { seen.push({ auth: h.authorization }); return { status: 200, body: { mode: 'ipad', requested: 'ipad', settled: true } }; },
+        post: async (_u, h) => { seen.push({ auth: h.authorization }); return { status: 200, body: { ok: true, message: 'ok' } }; },
+      },
+    );
+    await ep.read();
+    await ep.write('desktop');
+    // Basic base64("admin:admin") — matches the same header shape client.ts/session-auth.ts build.
+    const expected = 'Basic ' + Buffer.from('admin:admin', 'utf8').toString('base64');
+    expect(seen[0].auth).toBe(expected);
+    expect(seen[1].auth).toBe(expected);
+  });
+
+  it('PRECEDENCE: token takes priority over username/password when both are configured', async () => {
+    let seenAuth: string | undefined;
+    const ep = makeHttpHidModeEndpoint(
+      { url: 'http://127.0.0.1:8083/hidmode', token: 'tok', username: 'admin', password: 'admin' },
+      { get: async (_u, h) => { seenAuth = h.authorization; return { status: 200, body: { mode: 'ipad', requested: 'ipad', settled: true } }; } },
+    );
+    await ep.read();
+    expect(seenAuth).toBe('Bearer tok'); // the on-box loopback deployment's shape, unchanged
+  });
+
+  it('no token AND no (or incomplete) credentials → no Authorization header at all (unchanged pre-fix behavior)', async () => {
+    const cases = [
+      {},
+      { username: 'admin' }, // password missing — half a credential is not a credential
+      { password: 'admin' }, // username missing
+    ];
+    for (const creds of cases) {
+      let seenAuth: string | undefined = 'unset';
+      const ep = makeHttpHidModeEndpoint(
+        { url: 'http://x/hidmode', ...creds },
+        { get: async (_u, h) => { seenAuth = h.authorization; return { status: 200, body: { mode: 'ipad', requested: 'ipad', settled: true } }; } },
+      );
+      await ep.read();
+      expect(seenAuth, JSON.stringify(creds)).toBeUndefined();
+    }
+  });
+
+  // END-TO-END (iPad node's ask, msg d9b32f44db01e20f): the failure mode here is worse than
+  // "doesn't derive" — on any non-200 the resolver treats the endpoint as unreachable and
+  // FAILS CLOSED (moverAllowed:false), so a half-working auth path takes the mover offline
+  // rather than degrading. Assert the FULL chain (HidModeResolver wired on top of the real
+  // endpoint, not just the raw fetch), for both the success and failure side of the same
+  // fixture — mirroring the front-door's live 401/200 discriminator.
+  it('END-TO-END: a successful Basic-auth derive resolves the mode AND leaves the mover ALLOWED', async () => {
+    const ep = makeHttpHidModeEndpoint(
+      { url: 'https://appliance/hidmode', username: 'admin', password: 'admin' },
+      { get: async () => ({ status: 200, body: { mode: 'ipad', requested: 'ipad', settled: true } }) },
+    );
+    const resolver = new HidModeResolver({ endpoint: ep });
+    expect(await resolver.resolve()).toBe('ipad');
+    expect(resolver.moverGate()).toEqual({ allowed: true, reason: null });
+  });
+
+  it('END-TO-END: rejected Basic auth (simulating the front-door\'s 401 on a missing/wrong credential) fails closed — mover REFUSED, not a guess', async () => {
+    const ep = makeHttpHidModeEndpoint(
+      { url: 'https://appliance/hidmode', username: 'admin', password: 'wrong' },
+      { get: async () => ({ status: 401, body: { message: 'unauthorized' } }) },
+    );
+    const resolver = new HidModeResolver({ endpoint: ep });
+    expect(await resolver.resolve()).toBeNull();
+    const gate = resolver.moverGate();
+    expect(gate.allowed).toBe(false);
+    expect(gate.reason).toMatch(/unreachable|refusing to guess/i);
+  });
 });
 
 describe('HidModeResolver — declared (pikvm01 / no endpoint)', () => {

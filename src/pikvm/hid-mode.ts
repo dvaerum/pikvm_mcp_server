@@ -15,6 +15,7 @@
  * `mouseAbsoluteMode` is derived from the resolved mode via {@link modeIsAbsolute}.
  */
 import { Agent, fetch as undiciFetch } from 'undici';
+import { basicAuthHeader } from '../session-auth.js';
 
 export type HidMode = 'ipad' | 'desktop';
 
@@ -258,12 +259,20 @@ export interface HidModeHttpDeps {
 }
 
 /**
- * HTTP client for the appliance /hidmode endpoint. Mirrors the recovery-endpoint
- * idiom (bearer token, TLS-verify default off for the loopback self-signed cert).
+ * HTTP client for the appliance /hidmode endpoint. Two auth shapes, tried in order:
+ *   1. Bearer token (PIKVM_HIDMODE_TOKEN) — the ORIGINAL on-box loopback deployment
+ *      (the standalone `pikvm-hidmode-endpoint` daemon at 127.0.0.1:8083). Unchanged.
+ *   2. HTTP Basic, using the SAME kvmd credentials the MCP already sends for every
+ *      other appliance call (`client.ts`) — the off-box front-door deployment
+ *      (nginx `auth_request`-gated dashboard auth; pikvm-nixos@georgs-mac-mini's design), which
+ *      REJECTS a bearer token (401). A single instance only ever points
+ *      PIKVM_HIDMODE_URL at ONE endpoint, so either/or precedence is sufficient —
+ *      no need to send both simultaneously.
+ * TLS-verify defaults off for the loopback self-signed cert either way.
  * `read()` degrades to null on any non-200 / error so the resolver fails closed.
  */
 export function makeHttpHidModeEndpoint(
-  cfg: { url?: string; token?: string; verifySsl?: boolean; timeoutMs?: number },
+  cfg: { url?: string; token?: string; username?: string; password?: string; verifySsl?: boolean; timeoutMs?: number },
   deps: HidModeHttpDeps = {},
 ): HidModeEndpoint {
   // PIKVM_HIDMODE_URL is the FULL endpoint (e.g. http://127.0.0.1:8083/hidmode),
@@ -272,8 +281,11 @@ export function makeHttpHidModeEndpoint(
   const url = cfg.url?.trim() ?? '';
   const configured = Boolean(url);
   const timeoutMs = cfg.timeoutMs ?? 2000; // a hung /hidmode must not stall the mover gate / startup
-  const authHeaders = (): Record<string, string> =>
-    cfg.token ? { authorization: `Bearer ${cfg.token}` } : {};
+  const authHeaders = (): Record<string, string> => {
+    if (cfg.token) return { authorization: `Bearer ${cfg.token}` };
+    if (cfg.username && cfg.password) return { authorization: basicAuthHeader(cfg.username, cfg.password) };
+    return {};
+  };
 
   const get =
     deps.get ??
