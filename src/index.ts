@@ -165,19 +165,21 @@ function recoveryEndpointConfig(): { url?: string; token?: string; verifySsl?: b
 // Exactly one — the both-set case is a startup error. See ADR 0002.
 let hidModeResolver: HidModeResolver | undefined;
 /**
- * `pikvmCreds` are the ALREADY-RESOLVED kvmd credentials (config.pikvm) — the
- * Basic-auth fallback for the off-box front-door /hidmode deployment reuses
- * them rather than re-reading PIKVM_USERNAME/PASSWORD (which would duplicate
- * resolveSecret's env/_FILE/CREDENTIALS_DIRECTORY precedence). See hid-mode.ts.
+ * `pikvmCreds` are the ALREADY-RESOLVED kvmd credentials + proxy (config.pikvm) —
+ * the Basic-auth fallback and proxy support for the off-box front-door /hidmode
+ * deployment reuse them rather than re-reading PIKVM_USERNAME/PASSWORD/PROXY
+ * (which would duplicate resolveSecret's env/_FILE/CREDENTIALS_DIRECTORY
+ * precedence, and PIKVM_PROXY's own resolution). See hid-mode.ts.
  */
 function hidModeEndpointConfig(
-  pikvmCreds: { username: string; password: string },
-): { url?: string; token?: string; username?: string; password?: string; verifySsl?: boolean } {
+  pikvmCreds: { username: string; password: string; proxyUrl: string },
+): { url?: string; token?: string; username?: string; password?: string; proxyUrl?: string; verifySsl?: boolean } {
   return {
     url: process.env.PIKVM_HIDMODE_URL,
     token: process.env.PIKVM_HIDMODE_TOKEN,
     username: pikvmCreds.username,
     password: pikvmCreds.password,
+    proxyUrl: pikvmCreds.proxyUrl || undefined,
     verifySsl: process.env.PIKVM_HIDMODE_VERIFY_SSL === 'true',
   };
 }
