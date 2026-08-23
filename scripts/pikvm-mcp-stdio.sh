@@ -35,4 +35,16 @@ fi
 # PIKVM_PROXY in the environment / .mcp.json if the port differs.
 export PIKVM_PROXY="${PIKVM_PROXY:-http://127.0.0.1:8888}"
 
-exec "${NODE_BIN:-node}" dist/index.js
+# --- HID-mode source (#51) ---------------------------------------------------
+# The server REQUIRES exactly one HID-mode source and exit(2)s at startup with
+# neither: a declared --target, or PIKVM_HIDMODE_URL for an appliance that serves
+# /hidmode. pikvm01 is stock Arch with no such endpoint, so it is the declared
+# case. The two are mutually exclusive — passing both is also a startup error —
+# so only declare a target when no endpoint URL is set, which keeps this launcher
+# usable against an appliance without editing it.
+TARGET_ARGS=()
+if [[ -z "${PIKVM_HIDMODE_URL:-}" ]]; then
+  TARGET_ARGS=(--target "${PIKVM_TARGET:-ipad}")
+fi
+
+exec "${NODE_BIN:-node}" dist/index.js "${TARGET_ARGS[@]}"
