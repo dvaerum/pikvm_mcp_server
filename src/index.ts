@@ -292,6 +292,33 @@ function requiresAbsoluteMouse(name: string, args: Record<string, unknown>): boo
   return gate ? gate(args) : false;
 }
 
+const RELATIVE_MOUSE_NOTE =
+  'This target reports mouse.absolute=true (desktop, dual absolute+relative gadget). ' +
+  'A forced relative:true emit here is a documented silent no-op (see ADR 0002: relative ' +
+  'reports into an absolute-assembled gadget are accepted by kvmd but never delivered) — ' +
+  'pass absolute pixel coordinates instead (omit relative, or pass relative:false), or use ' +
+  'pikvm_mouse_move_to / pikvm_mouse_click_at, which already select the correct strategy ' +
+  'for this mode.';
+
+/**
+ * The mirror of ABSOLUTE_MOUSE_GATE: "which calls need mouse.absolute=false" (an explicit
+ * FORCED relative emit). Currently only pikvm_mouse_move's relative:true path — the one
+ * place a caller can force a relative HID report regardless of the assembled gadget.
+ * (#3, it-03400 2026-08-10): on a desktop/absolute target this was a silent no-op — kvmd
+ * accepted the event and the handler reported success, but nothing moved. Gated here
+ * rather than let the caller believe a move landed that never did. Symmetric with the
+ * ABSOLUTE_MOUSE_GATE check above (which catches the same mismatch in the other direction).
+ */
+const RELATIVE_MOUSE_GATE: Record<string, (args: Record<string, unknown>) => boolean> = {
+  pikvm_mouse_move: (args) => args.relative === true,
+};
+
+/** True when this call requires a relative-mode mouse on the target (a forced relative emit). */
+function requiresRelativeMouse(name: string, args: Record<string, unknown>): boolean {
+  const gate = RELATIVE_MOUSE_GATE[name];
+  return gate ? gate(args) : false;
+}
+
 // ============================================================================
 // Input Validation Helpers
 // ============================================================================
@@ -726,7 +753,7 @@ const toolRegistry: ToolEntry[] = [
   {
     name: 'pikvm_mouse_move',
     handler: handle_pikvm_mouse_move,
-    description: 'Move the mouse cursor to a position on the remote machine. For absolute moves, coordinates are in screen pixels (0,0 = top-left). For relative moves, deltas are clamped to -127 to 127.',
+    description: 'Move the mouse cursor to a position on the remote machine. For absolute moves, coordinates are in screen pixels (0,0 = top-left). For relative moves, deltas are clamped to -127 to 127. `relative` must match the target\'s actual HID mode (pikvm_hidmode_status) — a mismatched emit is refused rather than silently no-op\'d.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2377,6 +2404,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           {
             type: 'text',
             text: `Error: tool '${name}' requires absolute-mode mouse. ${ABSOLUTE_MOUSE_NOTE}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  // Mirror of the above (#3): a FORCED relative emit into an absolute/desktop gadget is
+  // a documented silent no-op (ADR 0002) — refuse rather than report a false success.
+  if (mouseAbsoluteMode) {
+    if (requiresRelativeMouse(name, args as Record<string, unknown>)) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error: tool '${name}' requires relative-mode mouse. ${RELATIVE_MOUSE_NOTE}`,
           },
         ],
         isError: true,
