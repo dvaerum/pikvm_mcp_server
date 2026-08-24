@@ -191,6 +191,33 @@ function sleepMs(ms: number): Promise<void> {
 }
 
 /**
+ * ORPHANED PREDICATES, KEPT DELIBERATELY (2026-08-24 Phase 6 audit): the
+ * seven exported predicates in this file from here through
+ * `evaluatePreClickAgreement` (isRateLimited, shouldFireDismissRecipe,
+ * shouldFireSecondOpinion, shouldAdoptSecondOpinion, shouldEmitApproach,
+ * isLockScreenRecoveryError, evaluatePreClickAgreement) have ZERO real
+ * callers anywhere in src/, benches/, or scratch/ today — only their own
+ * dedicated test files exercise them. All seven were orphaned by the same
+ * event: PR #34 (1b900df, 2026-07-28, "remove tap-retry — single-attempt
+ * clicks") deleted `clickAtWithRetry`, the retry orchestrator that was
+ * their only real caller. That commit's own message says they were "kept
+ * ... deliberately" even then — this note makes that decision durable
+ * rather than tribal knowledge.
+ *
+ * They stay because each one is a pure, deterministic, well-tested
+ * predicate that pins a specific real historical bug or incident — read
+ * each function's own doc comment for its bug history (e.g.
+ * isLockScreenRecoveryError documents its regex as "load-bearing" for
+ * Phase 72's auto-recovery; evaluatePreClickAgreement's comment narrates
+ * Phase 41→42→51→52→PA19-c, the densest bug-history artifact in this
+ * file; shouldFireSecondOpinion/shouldAdoptSecondOpinion pin Phase 140's
+ * live motion-diff mislocalization, recurring per a Phase-296 report).
+ * Deleting any of them as "unused" would lose that record. If a future
+ * caller needs this arbitration logic again, they're ready to use as-is;
+ * if not, they still document bug classes worth remembering. Don't delete
+ * these without understanding what each one protects first — read its own
+ * comment, not just this note.
+ *
  * Phase 50 — pure helper: classify the live-measured px/mickey ratio
  * as rate-limited (true) or normal (false).
  *
@@ -248,17 +275,10 @@ export function shouldFireDismissRecipe(args: {
 }
 
 /**
- * KEPT DESPITE NO CURRENT CALLER (2026-08-24): the only real caller was
- * cursor-locator.ts's `verify` profile, deleted in ADR 0003
- * (docs/adr/0003-cursor-locator-is-the-front-door.md) because it was never
- * wired to a real call site. These two predicates stay — they're pure
- * regression-knowledge artifacts pinning a real, previously-observed bug
- * (Phase 140 caught motion-diff picking an icon-LABEL feature 30px below
- * the real cursor live; a Phase-296 report showed the same bug class
- * recurring weeks later). Deleting them as "unused" would lose that
- * record. If a future caller needs second-opinion arbitration again,
- * these are ready; if you're looking at this thinking "dead code, remove
- * it" — don't, without understanding what they protect first.
+ * Orphaned, kept deliberately — see the group note above `isRateLimited`
+ * (this file) for why. Their most recent real caller was cursor-locator.ts's
+ * `verify` profile, deleted in ADR 0003
+ * (docs/adr/0003-cursor-locator-is-the-front-door.md).
  *
  * Phase 148 (v0.5.138) — pure helper: gate the Phase 137/140 wake-
  * nudge + second-opinion template-match. Extracted from the inline

@@ -78,3 +78,33 @@ Only worth it if repo size matters.
 How to store all created/collected data + trained models so we can (a) fully reproduce/retrain
 from scratch AND (b) have models ready-to-go without rerunning the pipeline. See the design being
 added to docs/ (data-and-model-storage plan).
+
+## click-verify.ts orphaned predicates — kept, not dead code  [RESOLVED 2026-08-24]
+Phase 6 architecture-review audit: `isRateLimited`, `shouldFireDismissRecipe`,
+`shouldFireSecondOpinion`, `shouldAdoptSecondOpinion`, `shouldEmitApproach`,
+`isLockScreenRecoveryError`, `evaluatePreClickAgreement` (all `src/pikvm/click-verify.ts`)
+have zero real callers anywhere in `src/`/`benches/`/`scratch/` — only their own test
+files exercise them. Root cause: PR #34 (`1b900df`, 2026-07-28, "remove tap-retry —
+single-attempt clicks") deleted `clickAtWithRetry`, their only real caller, and its own
+commit message says they were kept deliberately even then. The second-opinion pair
+briefly regained a caller (`cursor-locator.ts`'s offline `'verify'` profile) before that
+too was deleted as dead scaffolding in ADR 0003
+(`docs/adr/0003-cursor-locator-is-the-front-door.md`).
+
+**Decision: keep all seven.** Each is a pure, deterministic, well-tested predicate pinning
+a specific real historical bug (see each function's own doc comment for its bug history —
+`evaluatePreClickAgreement`'s is the densest in the file, narrating Phase 41→42→51→52→
+PA19-c). Deleting them as "unused" would lose that record; if a future caller needs this
+arbitration logic again, they're ready as-is. Signpost comment (with the full reasoning)
+lives above `isRateLimited` in `click-verify.ts` — this entry exists so the decision is
+also discoverable from the backlog, not just in-code.
+
+## isUdcUp — genuinely dead, unlike the click-verify.ts group  [CANDIDATE, 2026-08-24]
+`isUdcUp` (`src/pikvm/hid-latch-monitor.ts`) — a trivial `state === UDC_UP` wrapper — has
+zero real callers; its own sibling constant `UDC_UP` is used directly by
+`hid-latch-ssh-source.ts` instead of going through the wrapper. Unlike the click-verify.ts
+group above, it carries no historical-bug narrative — its doc comment reads as
+"convenience predicate for state-based sources," i.e. written for an intended caller that
+ended up inlining the comparison itself instead. Candidate for deletion (same bar as ADR
+0003's `verify` profile: confirmed zero real callers, no bug-history reason to keep) —
+flagged here pending confirmation rather than deleted unilaterally.
