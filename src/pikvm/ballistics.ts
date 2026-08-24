@@ -106,7 +106,18 @@ export interface MeasureBallisticsResult {
 // Helpers
 // ============================================================================
 
-async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
+/**
+ * ADR 0001 (docs/adr/0001-do-not-merge-cursor-detection-and-calibration-
+ * sampling-lookalikes.md): the non-nudging takeRawScreenshot variant — a
+ * wake nudge right before a calibration/ballistics capture would
+ * contaminate the very displacement being measured. Exported so
+ * cursor-anchor.ts's `caller-asserted`/`none-calibration` call sites
+ * (unlockIpad, ipadGoHome, eventually measureCell) can pass this exact
+ * implementation as their `screenshot` fn rather than writing a 4th copy —
+ * that's reusing the existing implementation through the unified
+ * interface, not merging it with cursor-detect.ts's nudging variant.
+ */
+export async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
   const result = await client.screenshot();
   return result.buffer;
 }
