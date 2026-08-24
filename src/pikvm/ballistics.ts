@@ -507,13 +507,29 @@ async function measureCell(
 ): Promise<BallisticsSample | null> {
   // Reset: slam to top-left, then nudge past the edge dead zone so the
   // cursor sits in open space where movement registers and detection is
-  // clean.
-  await slamToCorner(client, {
+  // clean. verifyMotion:true (2026-08-24, live-confirmed by the #60 gate:
+  // the very first production-shape measureBallistics run hit a genuine
+  // iPad lock screen mid-sweep) — without this, a slam interrupted by a
+  // system-gesture reinterpretation reads as ordinary near-zero-displacement
+  // noise, silently poisoning the cell rather than failing loudly. On
+  // verified:false we reject the cell outright: no retry (unlike unlockIpad,
+  // which can't call itself to recover) — ballistics already resamples via
+  // `reps`, so a rejected cell is a cheap, no-new-risk response.
+  const slamCheck = await slamToCorner(client, {
     calls: options.slamCalls,
     paceMs: options.slamPaceMs,
     corner: 'top-left',
     verbose: false,
+    verifyMotion: true,
+    cornerTolerance: options.cornerTolerance,
+    detection: options.detection,
   });
+  if (slamCheck && !slamCheck.verified) {
+    if (options.verbose) {
+      console.error(`[cell ${axis}/${magnitude}/${pace}/r${rep}] slam motion not verified — rejecting cell`);
+    }
+    return null;
+  }
   // Nudge PERPENDICULAR to the measurement axis so the cursor stays near
   // the edge it will travel away from (maximising measurement headroom).
   // For +x measurements: nudge down (onlyAxis=y), cursor lands at left-middle.
