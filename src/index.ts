@@ -50,13 +50,10 @@ import {
 } from './pikvm/ballistics.js';
 import { moveToPixel } from './pikvm/move-to.js';
 import {
-  verifyClickByDiff,
-  residualForSkip,
-  biasCorrectedAimPoint,
-  isScreenTooDimForCursorDetection,
   runDismissRecipe,
   formatDismissResult,
 } from './pikvm/click-verify.js';
+import { clickAt, type ClickAtOutcome } from './pikvm/click-at.js';
 import { seedCursorTemplate } from './pikvm/seed-template.js';
 import { VERSION } from './version.js';
 import {
@@ -66,8 +63,7 @@ import {
   ipadGoHome,
   ipadOpenAppSwitcher,
 } from './pikvm/ipad-unlock.js';
-import { detectIpadBounds, ipadContentRegionFromBuffer } from './pikvm/orientation.js';
-import { analyzeBrightness } from './pikvm/brightness.js';
+import { detectIpadBounds } from './pikvm/orientation.js';
 import { runHealthCheck } from './pikvm/health-check.js';
 
 // Defer initialization to main() for proper error handling
@@ -1910,23 +1906,17 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
 async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promise<CallToolResult> {
         // ADR-0002 Phase 1: this handler is in MODE_SENSITIVE_TOOLS, so the
         // dispatch preamble's moverGate() check already refused the call if
-        // the mode were unknown/settling — policy() is non-null here. Still
-        // checked explicitly (not asserted) so a future gate change can't
-        // silently let a null policy reach the mover.
-        const policy = hidModeResolver?.policy();
-        if (!policy) {
-          return { content: [{ type: 'text', text: 'Error: HID mode unknown or settling — refusing to click.' }], isError: true };
-        }
+        // the mode were unknown/settling — policy() is non-null here in
+        // practice. clickAt() still checks explicitly (not asserted) so a
+        // future dispatch-gate change can't silently let a null policy
+        // reach the mover.
+        const policy = hidModeResolver?.policy() ?? null;
         const tx = requireNumber(args.x, 'x');
         const ty = requireNumber(args.y, 'y');
         const button = validateEnum(args.button, VALID_BUTTONS, 'left');
         // M8: parse capture up front (throws on a bad request, before any
-        // emit). "before" is a baseline grabbed now; "during" is the
-        // pre-button-down cursor-alive frame (retry path → clickAtWithRetry;
-        // single-shot → captured here); "after" reuses the post-click frame.
+        // emit) — clickAt() drives the before/during/after phase captures.
         const capture = parseCaptureConfig(args);
-        const captured: (CaptureSaved | null)[] = [];
-        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'before'));
         const strategyStr = validateEnum(
           args.strategy,
           ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'] as const,
@@ -1937,7 +1927,12 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
           // keeps detect-then-move. Failure mode is safe: the proximity gate
           // skips rather than wrong-clicks. Curve is calibrated for the current
           // iPad-in-HDMI geometry (see curve-mover.ts's emit-curve scale logic).
-          policy.strategy,
+          //
+          // policy may be null here (mode-unknown) — clickAt() applies its own
+          // policy.strategy default when policy is non-null; when policy IS
+          // null the strategy value is moot (clickAt returns 'mode-unknown'
+          // before reading it), so 'detect-then-move' is a harmless placeholder.
+          policy?.strategy ?? 'detect-then-move',
         );
         const assumeX = validateNumber(args.assumeCursorAtX);
         const assumeY = validateNumber(args.assumeCursorAtY);
@@ -1950,7 +1945,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         const verifyRegionHalfPx = validateNumber(args.verifyRegionHalfPx, 1, 1920);
         const verifyMinChangeFraction = validateNumber(args.verifyMinChangeFraction, 0.0001, 1);
         // M6 expectRegion: caller-supplied rectangular verify box (HDMI px). Takes
-        // precedence over verifyRegionHalfPx at the verify layer — see verifyOpts.
+        // precedence over verifyRegionHalfPx at the verify layer — see clickAt's verifyOpts.
         let expectRegion: { x: number; y: number; width: number; height: number } | undefined;
         if (args.expectRegion !== undefined && args.expectRegion !== null) {
           const er = args.expectRegion as Record<string, unknown>;
@@ -1971,240 +1966,61 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // but LOUD-and-honest — never a silent phantom success.
         const force = validateBoolean(args.force) ?? false;
         // Phase 38 / v0.5.26: explicit MCP parameter for the brightness gate.
-        // Default mirrors the auto-policy: VERY_DIM_THRESHOLD on iPad
-        // targets (relative-mouse), 0 elsewhere. Pass 0 explicitly to disable.
-        // M6: singleTap defaults to 0 too — a dimmed PIN-sheet modal must not
-        // false-abort a deliberate keypad tap (still overridable explicitly).
-        const minBrightnessArg = validateNumber(args.minBrightness, 0, 255);
-        const minBrightness = minBrightnessArg !== undefined
-          ? minBrightnessArg
-          : (singleTap ? 0 : policy.dimThreshold);
+        // Undefined → clickAt() applies the auto-policy default. Pass 0
+        // explicitly to disable.
+        const minBrightness = validateNumber(args.minBrightness, 0, 255);
+        // Preserved exactly as pre-extraction: NOT range-validated, just
+        // coerced — a malformed maxResidualPx becomes NaN rather than
+        // being rejected. Not fixed here; flag separately if worth tightening.
+        const maxResidualPx = args.maxResidualPx !== undefined ? Number(args.maxResidualPx) : undefined;
 
-        // Phase 136 / Phase 156: iPad targets get chunkPaceMs=100ms
-        // open-loop default; desktop uses caller's default. Helper is
-        // regression-pinned by defaultChunkPaceMsFor.test.ts.
-        const chunkPace = policy.chunkPaceMs;
-        // Compute the acceptance gate (maxResidualPx) ONCE, here, so the SAME value
-        // both (a) threads into the mover — which derives its correction gate strictly
-        // below it, re-shooting a residual in the dead band instead of skipping it —
-        // and (b) drives the post-move skip check below. Computing it in two places
-        // was the hole that let the mover's correction gate (30) drift above the
-        // clicker's acceptance gate (25), stranding [25,30) residuals (2026-07-31).
-        const effectiveMaxResidualPx = args.maxResidualPx !== undefined
-          ? Number(args.maxResidualPx)
-          : policy.maxResidualPx;
-        // (a) task #38: on iPad the tap lands ~5.9px ABOVE the detected pointer, so
-        // aim the pointer that much LOWER to land the tap on the requested target.
-        // The move AND the residual gate use this aim (cursor-near-aim ⟺ tap-near-
-        // target); the verify region stays on the original target, where the tap's UI
-        // effect actually appears. Desktop/absolute clicks by coordinates → no offset.
-        const aimPoint = policy.applyTapBias ? biasCorrectedAimPoint({ x: tx, y: ty }) : { x: tx, y: ty };
-        // (#41) apply the passive learner's current per-axis scale; capture the values
-        // so the post-move sample is recorded against the scale that was actually in
-        // force (impliedScale = achieved/planned × sApplied).
-        const learnScaleX = scaleLearner.currentScale('x');
-        const learnScaleY = scaleLearner.currentScale('y');
-        const moveOpts = {
+        const outcome = await clickAt({
+          client: pikvm,
+          policy,
+          target: { x: tx, y: ty },
+          button,
           strategy: strategyStr,
           assumeCursorAt,
           profile: cachedProfile,
-          acceptGatePx: effectiveMaxResidualPx,
-          curveScaleX: learnScaleX,
-          curveScaleY: learnScaleY,
-          forbidSlamFallback: policy.forbidSlamFallback,
-          // Desktop full-frame degrade: the Phase-32 slam guard exists ONLY to
-          // avoid the iPadOS hot-corner re-lock, so it must be disarmed in
-          // absolute/desktop mode. Otherwise a blank/uniform desktop frame
-          // (cursor-locate miss + bounds-detect null) FALSE-ABORTS with "target
-          // type undetermined" — the guard presumes an undetermined target is an
-          // iPad. `--target desktop` declares it is not, so opt out (safe: no
-          // iPad hot-corners exist on a desktop). Mirrors forbidSlamFallback above.
-          forbidSlamOnIpad: policy.forbidSlamOnIpad,
-          ...(chunkPace !== undefined ? { chunkPaceMs: chunkPace } : {}),
-        };
-        const verifyOpts = {
-          ...(verifyRegionHalfPx !== undefined
-            ? { region: { x: tx, y: ty, halfWidth: verifyRegionHalfPx, halfHeight: verifyRegionHalfPx } }
-            : {}),
-          // expectRegion takes precedence over the target-centered `region` — the
-          // verify layer (verifyClickByDecodedFrames) honours regionRect first.
-          ...(expectRegion !== undefined ? { regionRect: expectRegion } : {}),
-          ...(verifyMinChangeFraction !== undefined
-            ? { minChangedFraction: verifyMinChangeFraction }
-            : {}),
-        };
+          verifyClick,
+          verifySettleMs,
+          verifyRegionHalfPx,
+          verifyMinChangeFraction,
+          expectRegion,
+          singleTap,
+          force,
+          minBrightness,
+          maxResidualPx,
+          capture,
+        });
+        return renderClickAtOutcome(outcome);
+}
 
-        // Phase 38: brightness precheck (single-attempt path — always runs).
-        // Phase 38b (v0.5.27): scope the brightness measurement to detected
-        // iPad bounds so letterbox bars don't trigger false-positive dim
-        // verdicts on a bright iPad-portrait screen.
-        if (minBrightness > 0) {
-          try {
-            const shot0 = await pikvm.screenshot();
-            // Scope brightness to iPad content so letterbox bars don't trigger
-            // a false-positive dim verdict; undefined → full frame on a
-            // non-iPad target (no letterbox to confuse the mean).
-            const region = await ipadContentRegionFromBuffer(shot0.buffer, { verbose: false });
-            const brightness = await analyzeBrightness(shot0.buffer, { region });
-            // Phase 48 severity gate (restored 2026-07-28): abort ONLY on a
-            // UNIFORMLY dim frame (low mean AND low stddev → 'very-dim'), not on
-            // any low-mean frame. A dark-but-CONTRASTY modal (a dimmed PIN sheet:
-            // mean ~27 but high stddev from the keypad digits → severity 'dim')
-            // is perfectly clickable and must pass. The removed retry path used
-            // this same predicate; the single-shot gate was mean-only, so
-            // removing retry made the strict mean-only gate the default and
-            // false-aborted contrasty-dim keypads (georgs rig-caught 2026-07-28).
-            if (isScreenTooDimForCursorDetection({
-              mean: brightness.mean,
-              severity: brightness.severity,
-              minBrightness,
-            })) {
-              return {
-                content: [{
-                  type: 'text',
-                  text:
-                    `Click aborted: iPad display blocked ` +
-                    `(mean brightness=${brightness.mean.toFixed(0)}/255, threshold=${minBrightness}). ` +
-                    `iPad auto-brightness does NOT affect HDMI — dim HDMI means an ` +
-                    `iOS modal/security prompt is dimming the screen. Try ` +
-                    `pikvm_key Escape, Enter, or Cmd+Period to dismiss blindly; ` +
-                    `if none work, a human must dismiss the prompt physically on the iPad.`,
-                }],
-                isError: true,
-              };
-            }
-          } catch (_err) {
-            // Precheck failure is non-fatal — fall through to the click.
-          }
-        }
-
-        // Retry removed (2026-07-28): clicks are single-attempt. Positioning is
-        // deterministic (curve-one-shot ~2-3px; georgs N=40 retry-never-fired,
-        // 40/40==40/40), faded cursors are recovered by the M2 wake (#33), and
-        // the retry loop's only remaining effect was the keypad double-fire /
-        // dismiss-escape harm. All clicks go through the single-attempt path
-        // below, which carries the three safety gates: cursor-verify (#32),
-        // maxResidualPx correct-element, and brightness.
-        const result = await moveToPixel(pikvm, aimPoint, moveOpts);
-        // (#41) feed the free first-shot sample to the passive scale learner. The
-        // learner's own hygiene rejects a faded-cursor-wake start or a forced click;
-        // its pre-filter + median absorb the rest. iPad/relative only.
-        if (!policy.mouseAbsolute) recordMoveSample(result, learnScaleX, learnScaleY, force);
-        // False-success safety fix (2026-07-27): on a relative-mouse (iPad)
-        // target a null finalDetectedPosition means the mover could NOT verify
-        // where the cursor is — e.g. a fully-faded cursor makes curve-one-shot's
-        // V8 start-detection fail. Clicking blind taps the stale faded position,
-        // not the target — unacceptable for a PIN/payment. Report NOT-LANDED
-        // instead of firing. (Desktop/absolute positions by coordinates, not
-        // detection, so this gate is iPad-only.) The single-shot path — which
-        // singleTap/keypad mode and the no-retry default use — had no such gate,
-        // so a faded tap fired blind and read as success. The M2 wake-before-
-        // detect fix restores real landings here; until then we skip truthfully.
-        // force:true is the explicit escape hatch — it fires the click anyway
-        // (below) at the predicted position and flags the result UNVERIFIED.
-        const forcedUnverified = !policy.mouseAbsolute && result.finalDetectedPosition === null && force;
-        if (!policy.mouseAbsolute && result.finalDetectedPosition === null && !force) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text:
-                  result.message +
-                  `\nClick NOT performed: the cursor position could not be verified ` +
-                  `(the pointer is likely faded/off-screen), so no ${button} click was sent. ` +
-                  `Wake the cursor first (a small pikvm_mouse_move) or retry once the screen is active` +
-                  `, or pass force:true to click anyway at the predicted position (returns an ` +
-                  `UNVERIFIED result — landing not confirmed).` +
-                  formatCaptureLines(captured),
-              },
-              { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
-            ],
-            isError: true,
-          };
-        }
-        // Phase 88 correct-element gate, MIGRATED into the single-shot path for
-        // the retry-removal (it previously lived ONLY inside clickAtWithRetry).
-        // Even a VERIFIED cursor can sit too far from target — motion-diff can
-        // lock onto an adjacent feature, and a click 50-100px off registers on
-        // the wrong element (live-verified 2026-04-27: residual 78px activated
-        // the Apple Account row instead of Software Update). Skip rather than
-        // click the wrong thing. iPad-only (desktop positions by coordinates);
-        // maxResidualPx<=0/undefined disables the gate.
-        if (!policy.mouseAbsolute && result.finalDetectedPosition) {
-          const maxResidualPx = effectiveMaxResidualPx; // same value threaded into the mover above
-          if (maxResidualPx !== undefined && maxResidualPx > 0) {
-            const skipResidual = residualForSkip(
-              result.finalDetectedPosition, aimPoint, maxResidualPx,
-            );
-            if (skipResidual !== null) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text:
-                      result.message +
-                      `\nClick NOT performed: the cursor landed ${skipResidual.toFixed(1)}px from ` +
-                      `target (> maxResidualPx=${maxResidualPx}) — clicking would risk hitting an ` +
-                      `adjacent element, so no ${button} click was sent. Loosen maxResidualPx if a ` +
-                      `near-target click is acceptable; if a popup may be occluding the target, run ` +
-                      `pikvm_dismiss_popup then re-click.` +
-                      formatCaptureLines(captured),
-                  },
-                  { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
-                ],
-                isError: true,
-              };
-            }
-          }
-        }
-        // Brief pause so iPadOS registers the cursor as stationary before click
-        await new Promise((r) => setTimeout(r, 80));
-        // Pre-click screenshot AFTER cursor has settled at target, so the
-        // pre→post diff isolates the click's UI effect from cursor motion.
-        const preShot = verifyClick ? await pikvm.screenshot() : null;
-        // M8: "during" = pre-button-down cursor-alive frame (single-shot path;
-        // the retry path captures this inside clickAtWithRetry). Same point as
-        // the predown proof-shot.
-        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'during'));
-        await pikvm.mouseClick(button);
-        // Wait for the UI to render before capturing the post-click frame.
-        await new Promise((r) => setTimeout(r, verifySettleMs));
-        const shot = await pikvm.screenshot();
-        // M8: "after" reuses the post-click frame (no extra screenshot).
-        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'after', shot.buffer));
-
-        let verificationText = '';
-        if (verifyClick && preShot) {
-          try {
-            const verification = await verifyClickByDiff(preShot.buffer, shot.buffer, verifyOpts);
-            verificationText = `\n${verification.message}`;
-          } catch (err) {
-            verificationText = `\nClick verification skipped: ${err instanceof Error ? err.message : String(err)}.`;
-          }
-        }
-
-        const singleTapNote = singleTap
-          ? `\n(singleTap: tapped ONCE, no retry — the verification below is ADVISORY only; the tap fired regardless of the reported screen change. Use this for keypads/PIN pads so a sub-threshold effect never re-taps the key.)`
-          : '';
-        // force escape hatch: the cursor could not be localized but the caller
-        // opted in — say so LOUDLY so nobody reads this as a confirmed landing.
-        const clickLine = forcedUnverified
-          ? `\n⚠ Clicked ${button} UNVERIFIED at the predicted position (force:true): the cursor could NOT be localized, so the LANDING IS NOT CONFIRMED — do not treat this as a successful tap. Inspect the screenshot / screenChanged below to judge whether it landed; if it didn't, wake the cursor (pikvm_mouse_move) or fix HID (pikvm_usb_reconnect) and retry.`
-          : `\nClicked ${button} at approximate position. Post-click screenshot attached.`;
-        return {
-          content: [
-            {
-              type: 'text',
-              text:
-                result.message +
-                clickLine +
-                singleTapNote +
-                verificationText +
-                formatCaptureLines(captured),
-            },
-            { type: 'image', data: shot.buffer.toString('base64'), mimeType: 'image/jpeg' },
-          ],
-        };
+/** clickAt()'s ClickAtOutcome → MCP CallToolResult. Pure protocol shaping —
+ *  the human-readable message text (including whether capture-advisory
+ *  lines are appended) is assembled inside clickAt() itself. */
+function renderClickAtOutcome(outcome: ClickAtOutcome): CallToolResult {
+  switch (outcome.kind) {
+    case 'mode-unknown':
+    case 'brightness-abort':
+      return { content: [{ type: 'text', text: outcome.message }], isError: true };
+    case 'cursor-unverified':
+    case 'residual-skip':
+      return {
+        content: [
+          { type: 'text', text: outcome.message },
+          { type: 'image', data: outcome.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+        ],
+        isError: true,
+      };
+    case 'clicked':
+      return {
+        content: [
+          { type: 'text', text: outcome.message },
+          { type: 'image', data: outcome.screenshot.toString('base64'), mimeType: 'image/jpeg' },
+        ],
+      };
+  }
 }
 
 async function handle_pikvm_measure_ballistics(args: Record<string, unknown>): Promise<CallToolResult> {
