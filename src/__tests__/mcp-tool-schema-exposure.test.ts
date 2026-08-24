@@ -28,6 +28,15 @@ async function readIndexTs(): Promise<string> {
   return fs.readFile(path.join(repoRoot(), 'src', 'index.ts'), 'utf8');
 }
 
+/** Phase 4/F5 (2026-08-24): click_at's core orchestration (brightness/
+ *  cursor-verify/residual gates, capture-during/after, force/forcedUnverified,
+ *  the #41 scale-learner recording) moved out of index.ts into
+ *  src/pikvm/click-at.ts. index.ts's handler now owns only arg-parsing +
+ *  rendering — assertions about that business logic read this file instead. */
+async function readClickAtTs(): Promise<string> {
+  return fs.readFile(path.join(repoRoot(), 'src', 'pikvm', 'click-at.ts'), 'utf8');
+}
+
 /** Find a tool's full block by `name: '<toolName>'` and return everything
  *  up to the next standalone `},\n  {` separator. */
 function extractToolBlock(src: string, toolName: string): string {
@@ -160,8 +169,12 @@ describe('MCP tool schema and handler exposure', () => {
       // The maxRetries schema knob is gone (retry removed 2026-07-28).
       expect(tool).not.toMatch(/maxRetries:\s*\{/);
       const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
-      // Handler no longer invokes the retry orchestrator.
+      // Handler no longer invokes the retry orchestrator — checked in both
+      // index.ts's shrunk handler and click-at.ts (Phase 4/F5), which now
+      // owns the actual click orchestration.
       expect(handler).not.toContain('clickAtWithRetry(');
+      const clickAt = await readClickAtTs();
+      expect(clickAt).not.toContain('clickAtWithRetry(');
     });
 
     it('verifyClick (Phase 23 verification) is in the schema', async () => {
@@ -179,13 +192,17 @@ describe('MCP tool schema and handler exposure', () => {
     it('M6 singleTap defaults minBrightness=0 (retry removed → no maxRetries forcing)', async () => {
       const src = await readIndexTs();
       const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      // Arg-parsing stays in index.ts's shrunk handler.
       expect(handler).toMatch(/validateBoolean\(args\.singleTap\)/);
-      // singleTap defaults the brightness gate off so a dimmed PIN modal doesn't false-abort.
+      // singleTap defaults the brightness gate off so a dimmed PIN modal doesn't
+      // false-abort — this default is computed in click-at.ts now (Phase 4/F5).
       // ADR-0002 Phase 1: policy.dimThreshold already folds in the mode (0 on
       // desktop/absolute), so singleTap is the only ternary left at the call site.
-      expect(handler).toMatch(/singleTap \? 0 : policy\.dimThreshold/);
+      const clickAt = await readClickAtTs();
+      expect(clickAt).toMatch(/singleTap \? 0 : policy\.dimThreshold/);
       // Retry is gone, so there is no maxRetries variable to force to 0.
       expect(handler).not.toMatch(/const maxRetries =/);
+      expect(clickAt).not.toMatch(/const maxRetries =/);
     });
 
     it('M6 expectRegion object is in the schema (x,y,width,height)', async () => {
@@ -201,12 +218,15 @@ describe('MCP tool schema and handler exposure', () => {
     it('M6 handler parses expectRegion and forwards it as regionRect (precedence)', async () => {
       const src = await readIndexTs();
       const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
-      // Parsed from args into a rectangular box...
+      // Parsed from args into a rectangular box — arg-parsing stays in
+      // index.ts's shrunk handler.
       expect(handler).toMatch(/args\.expectRegion/);
       expect(handler).toMatch(/requireNumber\(er\.width, 'expectRegion\.width'\)/);
-      // ...and fed to the verify layer as regionRect, which takes precedence
-      // over the target-centered `region` inside verifyClickByDecodedFrames.
-      expect(handler).toMatch(/regionRect:\s*expectRegion/);
+      // ...and fed to the verify layer as regionRect (click-at.ts, Phase 4/F5),
+      // which takes precedence over the target-centered `region` inside
+      // verifyClickByDecodedFrames.
+      const clickAt = await readClickAtTs();
+      expect(clickAt).toMatch(/regionRect:\s*req\.expectRegion/);
     });
 
   });
@@ -334,17 +354,27 @@ describe('MCP tool schema and handler exposure', () => {
         const src = await readIndexTs();
         const handler = extractHandlerBlock(src, tool);
         expect(handler).toMatch(/parseCaptureConfig\(args\)/);
-        expect(handler).toMatch(/capturePhaseAdvisory\(/);
+        if (tool === 'pikvm_mouse_click_at') {
+          // Phase 4/F5 (2026-08-24): click_at's capturePhaseAdvisory calls
+          // moved into click-at.ts along with the rest of the click
+          // orchestration — index.ts's shrunk handler only parses the
+          // config and passes it through.
+          const clickAt = await readClickAtTs();
+          expect(clickAt).toMatch(/capturePhaseAdvisory\(/);
+        } else {
+          expect(handler).toMatch(/capturePhaseAdvisory\(/);
+        }
       });
     }
 
     it('click_at (single-attempt path) captures during pre-click and after post-click', async () => {
-      const src = await readIndexTs();
-      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
       // "during" = pre-button-down cursor-alive frame; "after" reuses the
       // post-click screenshot buffer (no retry orchestrator involved).
-      expect(handler).toMatch(/capturePhaseAdvisory\(pikvm, capture, 'during'\)/);
-      expect(handler).toMatch(/capturePhaseAdvisory\(pikvm, capture, 'after', shot\.buffer\)/);
+      // Moved into click-at.ts (Phase 4/F5, 2026-08-24) — its own client
+      // param is named `client`, not `pikvm`.
+      const clickAt = await readClickAtTs();
+      expect(clickAt).toMatch(/capturePhaseAdvisory\(client, req\.capture, 'during'\)/);
+      expect(clickAt).toMatch(/capturePhaseAdvisory\(client, req\.capture, 'after', shot\.buffer\)/);
     });
   });
 
@@ -419,22 +449,24 @@ describe('MCP tool schema and handler exposure', () => {
   // False-success safety fix: pikvm_mouse_click_at must never report a click it
   // did not send. Both paths gate on a verified cursor.
   describe('false-success safety — click_at reports not-landed, never blind-fires', () => {
+    // These four assertions are about click_at's business logic, which
+    // moved into click-at.ts (Phase 4/F5, 2026-08-24) — see
+    // click-at.test.ts for the real behavioral coverage of the same
+    // properties; these stay as source pins for the exact mechanism.
     it('single-shot path skips + isError when the cursor is unverified on iPad', async () => {
-      const src = await readIndexTs();
-      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      const clickAt = await readClickAtTs();
       // iPad-only gate: null finalDetectedPosition → NOT-LANDED before any click.
-      expect(handler).toMatch(/!policy\.mouseAbsolute && result\.finalDetectedPosition === null/);
-      expect(handler).toMatch(/Click NOT performed/);
+      expect(clickAt).toMatch(/!policy\.mouseAbsolute && result\.finalDetectedPosition === null/);
+      expect(clickAt).toMatch(/Click NOT performed/);
     });
 
     it('migrated maxResidualPx correct-element gate skips an off-target click', async () => {
-      const src = await readIndexTs();
-      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
+      const clickAt = await readClickAtTs();
       // Phase-88 gate re-homed from the removed retry path into the single
       // path: a verified-but-too-far cursor is a not-landed skip, not a click.
-      expect(handler).toMatch(/residualForSkip\(/);
-      expect(handler).toMatch(/maxResidualPx !== undefined && maxResidualPx > 0/);
-      expect(handler).toContain('adjacent element');
+      expect(clickAt).toMatch(/residualForSkip\(/);
+      expect(clickAt).toMatch(/maxResidualPx !== undefined && maxResidualPx > 0/);
+      expect(clickAt).toContain('adjacent element');
     });
 
     // The #34 regression fix: an explicit `force` escape hatch to click at the
@@ -445,24 +477,25 @@ describe('MCP tool schema and handler exposure', () => {
       const tool = extractToolBlock(src, 'pikvm_mouse_click_at');
       expect(tool).toMatch(/force:\s*\{[^}]*type:\s*'boolean'/);
       const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
-      // Explicitly parsed, not silently ignored.
+      // Explicitly parsed, not silently ignored — arg-parsing stays in
+      // index.ts's shrunk handler.
       expect(handler).toMatch(/const force = validateBoolean\(args\.force\)/);
-      // The null-detection skip only fires WITHOUT force → force falls through
-      // to the click.
-      expect(handler).toMatch(/result\.finalDetectedPosition === null && !force/);
+      // The null-detection skip only fires WITHOUT force → force falls
+      // through to the click. That decision now lives in click-at.ts.
+      const clickAt = await readClickAtTs();
+      expect(clickAt).toMatch(/result\.finalDetectedPosition === null && !force/);
     });
 
     it('a forced click is reported UNVERIFIED, never as a plain landing', async () => {
-      const src = await readIndexTs();
-      const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
-      expect(handler).toMatch(/const forcedUnverified = /);
+      const clickAt = await readClickAtTs();
+      expect(clickAt).toMatch(/const forcedUnverified = /);
       // The forced-click line must be loudly distinguishable from a landing.
-      expect(handler).toMatch(/forcedUnverified\s*\n?\s*\?/);
-      expect(handler).toContain('UNVERIFIED');
-      expect(handler).toContain('LANDING IS NOT CONFIRMED');
+      expect(clickAt).toMatch(/forcedUnverified\s*\n?\s*\?/);
+      expect(clickAt).toContain('UNVERIFIED');
+      expect(clickAt).toContain('LANDING IS NOT CONFIRMED');
       // ...and force must NOT touch the maxResidualPx (wrong-element) gate:
       // that gate only runs when finalDetectedPosition is non-null.
-      expect(handler).toMatch(/!policy\.mouseAbsolute && result\.finalDetectedPosition\)/);
+      expect(clickAt).toMatch(/!policy\.mouseAbsolute && result\.finalDetectedPosition\)/);
     });
   });
 });
@@ -476,11 +509,11 @@ describe('(#41) passive scale learner — tools + mover wiring', () => {
   });
 
   it('click_at applies the learned per-axis scale and records the first-shot sample', async () => {
-    const src = await readIndexTs();
-    const h = extractHandlerBlock(src, 'pikvm_mouse_click_at');
-    expect(h).toMatch(/curveScaleX:\s*learnScaleX/);
-    expect(h).toMatch(/curveScaleY:\s*learnScaleY/);
-    expect(h).toMatch(/recordMoveSample\(result, learnScaleX, learnScaleY, force\)/);
+    // Moved into click-at.ts (Phase 4/F5, 2026-08-24).
+    const clickAt = await readClickAtTs();
+    expect(clickAt).toMatch(/curveScaleX:\s*learnScaleX/);
+    expect(clickAt).toMatch(/curveScaleY:\s*learnScaleY/);
+    expect(clickAt).toMatch(/recordMoveSample\(result, learnScaleX, learnScaleY, force\)/);
   });
 
   it('control tool exposes enable/disable; reset deletes the persisted file', async () => {
