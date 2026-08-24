@@ -10,6 +10,13 @@
  * `forbidSlamOnIpad` (default true) detects iPad bounds before the slam
  * and refuses with a clear error. Caller must opt out (forbidSlamOnIpad=false)
  * to allow the dangerous behaviour.
+ *
+ * The guard logic itself now lives in cursor-anchor.ts's `bounds-guard`
+ * AnchorGuard (moveToPixel's `forbidSlamOnIpad=false` maps to
+ * `allowOnUndetermined: true` — see its doc comment for why that's a
+ * throw-only toggle, not a computation toggle). This file stays as the
+ * end-to-end pin through the real moveToPixel path; see
+ * cursor-anchor.test.ts for direct unit coverage of the guard combinations.
  */
 
 import { describe, expect, it } from 'vitest';

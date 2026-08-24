@@ -4,10 +4,11 @@
  * iPadOS auto-hides the cursor after ~1 s of inactivity. When a
  * cursor-detection screenshot is taken during the fade window, the
  * frame contains no cursor pixels — motion-diff sees no clusters,
- * template-match returns garbage scores. Existing wakeupCursor (Phase
- * 5) wakes the cursor at origin discovery time, but later phases
- * (post-moveToPixel pre-click verification, micro-correction iteration
- * after a long settle, pre-click template-match) take fresh
+ * template-match returns garbage scores. cursor-anchor.ts's wake-nudging
+ * screenshot (Phase 5's original wakeupCursor, since folded into the
+ * anchor primitive) wakes the cursor at origin discovery time, but later
+ * phases (post-moveToPixel pre-click verification, micro-correction
+ * iteration after a long settle, pre-click template-match) take fresh
  * screenshots that may land in the fade window.
  *
  * The keepalive helper tracks the timestamp of the last mouse emit

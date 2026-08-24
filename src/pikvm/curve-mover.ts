@@ -277,54 +277,6 @@ async function emitToward(client: PiKVMClient, from: { x: number; y: number }, t
 }
 
 /**
- * Calibrate the emit-curve SCALE for the current iPad-in-HDMI geometry.
- *
- * The curve shape is device-intrinsic (iPad pointer accel in logical px); only
- * the scale (HDMI px per logical px = region-size / logical-resolution) changes
- * when the iPad's screen size/position in the frame changes. So we measure one
- * scale per axis: emit a LARGE burst (reports × ±127, ~300px) where the ~11px
- * detector noise is negligible, and read the per-full-report displacement. The
- * returned {x,y} are measured FULL_REPORT_PX per axis; divide by FULL_REPORT_PX
- * (X) / FULL_REPORT_PX×Y_SCALE (Y) to get the scale factor for the curve.
- *
- * Uses the same V8 detector as production (no getCursor needed). Averages `reps`.
- */
-export async function calibrateFullReport(
-  client: PiKVMClient,
-  opts: { reports?: number; reps?: number; minPresence?: number; settleMs?: number; paceMs?: number } = {},
-): Promise<{ x: number; y: number; samplesX: number[]; samplesY: number[] }> {
-  const reports = opts.reports ?? 2;
-  const reps = opts.reps ?? 3;
-  const minPresence = opts.minPresence ?? 0.5;
-  const settleMs = opts.settleMs ?? 300;
-  const paceMs = opts.paceMs ?? 110;
-  const slamCorner = async (): Promise<void> => { for (let s = 0; s < 6; s++) await client.mouseMoveRelative(-127, -127); await sleep(settleMs); };
-
-  const measure = async (axis: 'x' | 'y'): Promise<number[]> => {
-    const out: number[] = [];
-    for (let r = 0; r < reps; r++) {
-      await slamCorner();
-      // inset a little off the hard corner so detection isn't clipped
-      await client.mouseMoveRelative(axis === 'x' ? 15 : 40, axis === 'x' ? 40 : 15);
-      await sleep(settleMs);
-      const start = await detect(client, minPresence);
-      if (!start) continue;
-      for (let i = 0; i < reports; i++) { await client.mouseMoveRelative(axis === 'x' ? 127 : 0, axis === 'y' ? 127 : 0); await sleep(paceMs); }
-      await sleep(settleMs);
-      const end = await detect(client, minPresence);
-      if (!end) continue;
-      const disp = axis === 'x' ? (end.x - start.x) : (end.y - start.y);
-      if (disp > reports * 40) out.push(disp / reports); // sanity: a full report is ~150px; reject tiny/stale
-    }
-    return out;
-  };
-  const samplesX = await measure('x');
-  const samplesY = await measure('y');
-  const med = (a: number[]): number => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : NaN; };
-  return { x: med(samplesX), y: med(samplesY), samplesX, samplesY };
-}
-
-/**
  * Detect the cursor once (V8), then move to `target` in a single deterministic
  * curve-based open-loop shot. Optionally one correction shot if `correctGatePx`
  * is set. Returns a MoveToResult-shaped object so existing callers work.

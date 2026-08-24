@@ -112,7 +112,9 @@ async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
 
 // median moved to ./util.js (shared with auto-calibrate).
 
-function cornerVector(corner: Corner): { x: -1 | 1; y: -1 | 1 } {
+/** Exported for cursor-anchor.ts's own verification capture (see the
+ *  cornerTargetPx doc above — same reasoning). */
+export function cornerVector(corner: Corner): { x: -1 | 1; y: -1 | 1 } {
   switch (corner) {
     case 'top-left': return { x: -1, y: -1 };
     case 'top-right': return { x: 1, y: -1 };
@@ -262,7 +264,12 @@ export interface SlamMotionCheck {
   matchedClusters: Cluster[];
 }
 
-function cornerTargetPx(corner: Corner, resolution: ScreenResolution): { x: number; y: number } {
+/** Exported for cursor-anchor.ts, which reimplements slamToCorner's
+ *  verifyMotion diff/cluster-match against a caller-injected screenshot fn
+ *  (ADR 0001 — slamToCorner's own verifyMotion is hardwired to this
+ *  module's private non-nudging takeRawScreenshot, which isn't right for
+ *  every anchorCursor call site). */
+export function cornerTargetPx(corner: Corner, resolution: ScreenResolution): { x: number; y: number } {
   switch (corner) {
     case 'top-left': return { x: 0, y: 0 };
     case 'top-right': return { x: resolution.width, y: 0 };
