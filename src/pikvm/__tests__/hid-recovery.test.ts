@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  isHidBroken,
+  flagsSuggestPartialHidLoss,
   checkTargetPresent,
   makeBehavioralVerifier,
   waitForRecovery,
@@ -29,11 +29,11 @@ const fakeClock = () => {
   return { now: () => t, sleep: async (ms: number) => { t += ms; } };
 };
 
-describe('isHidBroken (cheap trigger)', () => {
+describe('flagsSuggestPartialHidLoss (cheap trigger)', () => {
   it('is false only when mouse AND keyboard flags are online', () => {
-    expect(isHidBroken(ONLINE)).toBe(false);
-    expect(isHidBroken(BROKEN)).toBe(true);
-    expect(isHidBroken({ online: true, mouseOnline: true, keyboardOnline: false })).toBe(true);
+    expect(flagsSuggestPartialHidLoss(ONLINE)).toBe(false);
+    expect(flagsSuggestPartialHidLoss(BROKEN)).toBe(true);
+    expect(flagsSuggestPartialHidLoss({ online: true, mouseOnline: true, keyboardOnline: false })).toBe(true);
   });
 });
 

@@ -120,6 +120,35 @@ export type HidDiagnosisClient = {
 };
 
 /**
+ * The OR-semantics HID up/down resolution, as a PURE function over
+ * already-obtained readings (no I/O — callers own fetching, since they fetch
+ * on different schedules: diagnoseHidFromClient below skips the kvmd-flags
+ * read entirely when a UDC reading is available, while health-check.ts always
+ * fetches both for its own flag-lie reporting). UDC KERNEL STATE is
+ * authoritative when present; only then is a down verdict confident/directive.
+ * Else fall back to the kvmd flags — mouse OR keyboard online (NOT keyboard
+ * alone: a healthy box was live-observed 2026-07-30 reporting keyboard=offline
+ * while the mouse clicked 4/4; genuinely-dead HID showed BOTH offline). A
+ * flags-derived down is only SUSPECTED, never a reconnect directive (see
+ * udcConfirmed in classifyHid above).
+ *
+ * This was previously duplicated inline in both diagnoseHidFromClient and
+ * health-check.ts's runHealthCheck — extracted so the OR-semantics decision
+ * has one home. Do NOT confuse with hid-recovery.ts's flagsSuggestPartialHidLoss,
+ * which is deliberately AND-semantics for a different purpose (see its doc).
+ */
+export function resolveHidUp(input: {
+  udc: UdcState | null;
+  hidFlags: { mouseOnline: boolean; keyboardOnline: boolean } | null;
+}): { hidUp: boolean | null; udcConfirmed: boolean } {
+  if (input.udc != null) return { hidUp: input.udc.online, udcConfirmed: true };
+  if (input.hidFlags != null) {
+    return { hidUp: input.hidFlags.mouseOnline || input.hidFlags.keyboardOnline, udcConfirmed: false };
+  }
+  return { hidUp: null, udcConfirmed: false };
+}
+
+/**
  * Orchestrated diagnosis for the recover handlers: reads the UDC ground truth
  * (falling back to the kvmd HID flags when the endpoint isn't wired), localizes
  * the cursor in a fresh frame, and classifies. Never throws — a failed keyboard
@@ -131,26 +160,20 @@ export async function diagnoseHidFromClient(
   udcReader: () => Promise<UdcState | null>,
   locate: CursorLocator = defaultCursorLocator,
 ): Promise<HidDiagnosis> {
-  // HID up/down: UDC KERNEL STATE is authoritative when a reader yields it; only
-  // then is a down verdict confident/directive. Else fall back to the kvmd flags —
-  // mouse OR keyboard online (NOT keyboard alone: a healthy box was live-observed
-  // 2026-07-30 reporting keyboard=offline while the mouse clicked 4/4; genuinely-
-  // dead HID showed BOTH offline). A flags-derived down is only SUSPECTED, never a
-  // reconnect directive.
-  let hidUp: boolean | null = null;
-  let udcConfirmed = false;
   const udc = await udcReader().catch(() => null);
-  if (udc != null) {
-    hidUp = udc.online;
-    udcConfirmed = true;
-  } else {
+  // Only fetch the kvmd flags when there's no UDC reading to fall back on —
+  // resolveHidUp ignores hidFlags entirely once udc is non-null, so fetching
+  // them unconditionally here would be a wasted call on every diagnosis.
+  let hidFlags: { mouseOnline: boolean; keyboardOnline: boolean } | null = null;
+  if (udc == null) {
     try {
       const hid = await client.getHidProfile();
-      hidUp = hid.mouseOnline || hid.keyboardOnline;
+      hidFlags = { mouseOnline: hid.mouseOnline, keyboardOnline: hid.keyboardOnline };
     } catch {
-      hidUp = null;
+      hidFlags = null;
     }
   }
+  const { hidUp, udcConfirmed } = resolveHidUp({ udc, hidFlags });
 
   // Only bother localizing the cursor when HID might be up — a down input path is
   // DOWN no matter what the pointer looks like, and we skip an ORT inference.

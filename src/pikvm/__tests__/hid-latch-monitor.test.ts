@@ -4,7 +4,7 @@ import {
   DEFAULT_MONITOR_CONFIG,
   isUdcUp,
   type HealthSample,
-  type UdcState,
+  type UdcKernelState,
 } from '../hid-latch-monitor.js';
 
 /**
@@ -18,12 +18,12 @@ import {
 const PRELATCH_DELTAS_S = [1.04, 3.14, 3.15, 1.05, 2.01, 1.47, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18];
 
 /** A non-`configured` UDC state (any of these ⇒ HID down). */
-const DOWN: UdcState = 'not attached';
+const DOWN: UdcKernelState = 'not attached';
 
 /** Build one sample. The classifier is signal-agnostic; the helper maps the legacy
  *  `state` string to the `healthy` boolean (`configured`=healthy) so call sites read the
  *  same, and carries `state`/`detail` as a real source would for the diagnostics. */
-function s(t: number, state: UdcState, reenumCount: number): HealthSample {
+function s(t: number, state: UdcKernelState, reenumCount: number): HealthSample {
   return { t, healthy: state === 'configured', reenumCount, state, detail: state };
 }
 
@@ -39,10 +39,10 @@ function run(m: HidLatchMonitor, stream: HealthSample[]) {
  * This models the ALIASING risk: whether a sampler of a given interval actually
  * LANDS on the short `configured` windows between re-enumerations.
  */
-function sampleTimeline(segments: Array<[number, UdcState]>, intervalMs: number): HealthSample[] {
+function sampleTimeline(segments: Array<[number, UdcKernelState]>, intervalMs: number): HealthSample[] {
   const out: HealthSample[] = [];
   // Precompute segment boundaries + the reenum counter timeline.
-  const bounds: Array<{ start: number; end: number; state: UdcState; reenum: number }> = [];
+  const bounds: Array<{ start: number; end: number; state: UdcKernelState; reenum: number }> = [];
   let tCursor = 0;
   let reenum = 0;
   for (const [dur, state] of segments) {
@@ -194,7 +194,7 @@ describe('HidLatchMonitor — signal-agnostic (the classifier reads only `health
 });
 
 describe('HidLatchMonitor — a mid-window reboot makes the classification unreliable (not a false `latched`)', () => {
-  const withBoot = (t: number, state: UdcState, reenum: number, bootId: string): HealthSample => ({
+  const withBoot = (t: number, state: UdcKernelState, reenum: number, bootId: string): HealthSample => ({
     t,
     healthy: state === 'configured',
     reenumCount: reenum,
@@ -272,7 +272,7 @@ describe('ANTI-ALIAS property — the escalated interval must be ≤ the shortes
     const C = 3_150;
     const W = 1_500; // synthetic short configured window (not the measured one)
     const downHalf = (C - W) / 2;
-    const segments: Array<[number, UdcState]> = [];
+    const segments: Array<[number, UdcKernelState]> = [];
     for (let cycle = 0; cycle < 45; cycle++) {
       segments.push([downHalf, DOWN], [W, 'configured'], [downHalf, DOWN]);
     }

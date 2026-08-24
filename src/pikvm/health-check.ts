@@ -18,7 +18,7 @@ import { PiKVMClient } from './client.js';
 import { detectIpadBoundsFromBuffer, boundsToRegion } from './orientation.js';
 import { analyzeBrightness, formatBrightnessReport } from './brightness.js';
 import { type UdcState } from './hid-recovery.js';
-import { classifyHid, describeHidDiagnosis, defaultCursorLocator, type CursorLocator } from './hid-diagnosis.js';
+import { classifyHid, describeHidDiagnosis, defaultCursorLocator, resolveHidUp, type CursorLocator } from './hid-diagnosis.js';
 import { VERSION } from '../version.js';
 
 /** The subset of PiKVMClient the health check drives — a structural type so
@@ -99,18 +99,9 @@ export async function runHealthCheck(
   // Live HID profile — re-read so a transient startup-detection failure
   // doesn't permanently mislead the operator.
   let hidFlags: { mouseOnline: boolean; keyboardOnline: boolean } | null = null;
-  // (d): HID up/down for the pointer-diagnosis below. Seeded from the kvmd flags
-  // (advisory — they LIE; overridden by the UDC ground truth when the endpoint is
-  // wired). Fall back to mouse OR keyboard online, NOT keyboard alone: live-observed
-  // 2026-07-30 that a healthy box (mouse clicking 4/4) reported keyboard=offline
-  // persistently, so a keyboard-only fallback emits a FALSE "HID DOWN → reconnect".
-  // Genuinely-dead HID showed BOTH flags offline, so "either online ⇒ not down" is
-  // the safe bar and matches this mouse-first product's pointer focus.
-  let hidUp: boolean | null = null;
   try {
     const hid = await pikvm.getHidProfile();
     hidFlags = { mouseOnline: hid.mouseOnline, keyboardOnline: hid.keyboardOnline };
-    hidUp = hid.mouseOnline || hid.keyboardOnline;
     lines.push(
       `Live HID profile: mouse=${hid.mouseOnline ? 'online' : 'offline'}/` +
       `${hid.mouseAbsolute ? 'absolute' : 'relative'}, ` +
@@ -140,14 +131,17 @@ export async function runHealthCheck(
   // flags as advisory, flag mismatches both directions, and drive the verdict off
   // the UDC state — not the flags. Falls back gracefully when the endpoint is
   // unconfigured/unreachable (never hard-fails the report).
-  const udc = opts.udcState;
+  const udc = opts.udcState ?? null;
+  // OR-semantics HID up/down resolution — see resolveHidUp's doc in
+  // hid-diagnosis.ts for why this now lives there (previously duplicated
+  // inline here AND in diagnoseHidFromClient).
+  const { hidUp, udcConfirmed } = resolveHidUp({ udc, hidFlags });
   if (udc == null) {
     lines.push(
       `USB HID gadget: unavailable (UDC-state endpoint not configured or unreachable; ` +
       `falling back to the kvmd HID flags above, which may lie). Set PIKVM_HID_RECOVERY_URL to enable.`,
     );
   } else {
-    hidUp = udc.online; // UDC ground truth overrides the advisory kvmd flags
     lines.push(
       `USB HID gadget (ground truth): ${udc.state}${udc.udc ? ` [${udc.udc}]` : ''} — ` +
       `this is THE HID up/down signal.`,
@@ -204,11 +198,12 @@ export async function runHealthCheck(
         lines.push(`Pointer localization: FAILED (${(err as Error).message}).`);
       }
     }
-    // udcConfirmed: a CONFIDENT/directive DOWN is allowed only when the verdict
-    // rests on UDC kernel state — with no reader wired (opts.udcState null) a
-    // flags-derived down is a NON-DIRECTIVE hedge, because the flags misreport DOWN
-    // on a working HID (live-observed both-offline while clicks landed).
-    lines.push(`  → ${describeHidDiagnosis(classifyHid({ hidUp, cursor, udcConfirmed: udc != null }))}`);
+    // udcConfirmed (from resolveHidUp above): a CONFIDENT/directive DOWN is
+    // allowed only when the verdict rests on UDC kernel state — with no reader
+    // wired (opts.udcState null) a flags-derived down is a NON-DIRECTIVE hedge,
+    // because the flags misreport DOWN on a working HID (live-observed
+    // both-offline while clicks landed).
+    lines.push(`  → ${describeHidDiagnosis(classifyHid({ hidUp, cursor, udcConfirmed }))}`);
   }
 
   // Attempt iPad bounds detection — informative on portrait/landscape,
