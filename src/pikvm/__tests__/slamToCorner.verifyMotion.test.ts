@@ -17,6 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { slamToCorner } from '../ballistics.js';
+import { clearOrientationCache, detectIpadBoundsFromBuffer } from '../orientation.js';
 import type { PiKVMClient, ScreenResolution } from '../client.js';
 
 /** Build a synthetic uniform-fill screenshot (same helper as cursor-detect.test.ts). */
@@ -48,6 +49,29 @@ async function stampSquare(base: Buffer, cx: number, cy: number, size: number, c
     }
   }
   return sharp(data, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
+}
+
+/** An iPad-portrait letterbox frame (same construction as
+ *  move-to.forbidSlamOnIpad.test.ts's makeIpadPortraitFrame): black bars
+ *  outside the content region, bright grey inside. The bounds detector
+ *  reads the content region's own corner, which is NOT (0,0) of the full
+ *  1920×1080 frame — the exact scenario the 2026-08-24 P0
+ *  cornerTargetFromBounds fix exists for. */
+async function makeIpadPortraitFrame(): Promise<Buffer> {
+  const w = 1920;
+  const h = 1080;
+  const data = Buffer.alloc(w * h * 3, 0);
+  const ipadX0 = 625;
+  const ipadX1 = 1295;
+  for (let y = 0; y < h; y++) {
+    for (let x = ipadX0; x <= ipadX1; x++) {
+      const i = (y * w + x) * 3;
+      data[i] = 200;
+      data[i + 1] = 200;
+      data[i + 2] = 200;
+    }
+  }
+  return sharp(data, { raw: { width: w, height: h, channels: 3 } }).jpeg({ quality: 90 }).toBuffer();
 }
 
 function mockClient(opts: { resolution?: ScreenResolution; screenshots?: Buffer[] } = {}) {
@@ -127,5 +151,44 @@ describe('slamToCorner verifyMotion', () => {
     const m2 = mockClient({ screenshots: [before, after] });
     const loose = await slamToCorner(m2.client, { paceMs: 0, verifyMotion: true, cornerTolerance: 100 });
     expect(loose!.verified).toBe(true);
+  });
+
+  // 2026-08-24 P0 fix regression pair: cornerTargetPx alone (raw-frame
+  // corner) was DETERMINISTICALLY wrong for any letterboxed iPad — live-
+  // confirmed via a screenshot-verified perfect corner landing that still
+  // failed verification (georgs-mac-mini's PR #68 gate). Positive control:
+  // a cluster at the iPad's OWN letterbox corner must verify true. Negative
+  // control: a cluster at the RAW FRAME corner (0,0) — which is NOT where
+  // the iPad's cursor can physically land, since (0,0) is inside the black
+  // letterbox bar — must verify false. Before this fix, the negative
+  // control would have wrongly passed (cornerTargetPx==(0,0) matched
+  // itself) and the positive control would have wrongly failed (real
+  // landing ~619px from the raw-frame corner, outside the 80px default
+  // tolerance) — exactly inverted from what a working check should do.
+  describe('cornerTargetFromBounds fix (letterboxed iPad target)', () => {
+    it('verified:true when the cluster lands at the iPad\'s own detected letterbox corner (not the raw frame corner)', async () => {
+      clearOrientationCache();
+      const before = await makeIpadPortraitFrame();
+      const bounds = await detectIpadBoundsFromBuffer(before);
+      // Sanity: this synthetic frame's content region is genuinely NOT at
+      // the raw frame's (0,0) — otherwise this test wouldn't distinguish
+      // the fix from the bug it fixes.
+      expect(bounds.x).toBeGreaterThan(100);
+      const after = await stampSquare(before, bounds.x + 5, bounds.y + 5, 10, [255, 255, 255]);
+      const m = mockClient({ resolution: { width: 1920, height: 1080 }, screenshots: [before, after] });
+      const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, corner: 'top-left' });
+      expect(result!.verified).toBe(true);
+    });
+
+    it('verified:false when the cluster lands at the raw frame corner (0,0) — inside the letterbox bar, not where the cursor can be', async () => {
+      clearOrientationCache();
+      const before = await makeIpadPortraitFrame();
+      const bounds = await detectIpadBoundsFromBuffer(before);
+      expect(bounds.x).toBeGreaterThan(100);
+      const after = await stampSquare(before, 5, 5, 10, [255, 255, 255]); // raw-frame (0,0) corner
+      const m = mockClient({ resolution: { width: 1920, height: 1080 }, screenshots: [before, after] });
+      const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, corner: 'top-left' });
+      expect(result!.verified).toBe(false);
+    });
   });
 });

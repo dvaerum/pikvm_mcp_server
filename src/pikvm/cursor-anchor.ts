@@ -19,6 +19,7 @@ import { PiKVMClient } from './client.js';
 import {
   Axis,
   Corner,
+  cornerTargetFromBounds,
   cornerTargetPx,
   cornerVector,
   nudgeFromEdge,
@@ -244,6 +245,7 @@ async function verifySlamLanded(
   req: AnchorRequest,
   before: Buffer,
   corner: Corner,
+  bounds: IpadBounds | null,
 ): Promise<{ verified: boolean; matchedClusters: Cluster[] }> {
   const client = req.client;
   // One more small nudge in-corner right before the verification
@@ -255,10 +257,16 @@ async function verifySlamLanded(
   await sleep(50);
   const after = await req.screenshot(client);
 
-  const resolution = await client.getResolution();
   const detection = { ...DEFAULT_DETECTION_CONFIG, ...req.detection };
   const tolerance = req.cornerTolerance ?? 80;
-  const expected = cornerTargetPx(corner, resolution);
+  // P0 fix (2026-08-24): use the iPad's own detected bounds corner, not
+  // the raw capture-frame corner — see cornerTargetFromBounds's doc in
+  // ballistics.ts. `bounds` is threaded from anchorCursor's own guard
+  // resolution when available (zero extra detection cost); falls back to
+  // the raw-frame corner only if bounds are genuinely unavailable.
+  const expected = bounds
+    ? cornerTargetFromBounds(corner, bounds)
+    : cornerTargetPx(corner, await client.getResolution());
 
   let clusters: Cluster[];
   try {
@@ -324,9 +332,20 @@ export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
   if (!captureVerification) {
     await runSlam(req, corner);
   } else {
+    // Bounds for the verification corner target: reuse whatever the guard
+    // resolution already detected (zero extra cost for bounds-guard/
+    // caller-asserted callers that didn't supply an explicit slamOriginPx).
+    // Otherwise best-effort cache-first/fresh-detect — measureCell's
+    // none-calibration guard never detects for origin purposes, but
+    // verification still needs real bounds when the target IS a real
+    // letterboxed iPad (see cornerTargetFromBounds's doc: the P0 bug this
+    // fixes was found via exactly this call path). Never throws.
+    const verificationBounds = resolved.bounds
+      ?? getLastGoodBounds()
+      ?? await detectBoundsOrNull(req.client, { verbose: req.verbose, logPrefix: 'cursor-anchor' });
     const before = await req.screenshot(req.client);
     await runSlam(req, corner);
-    const check = await verifySlamLanded(req, before, corner);
+    const check = await verifySlamLanded(req, before, corner, verificationBounds);
     verified = check.verified;
 
     if (!verified && selfGate) {
@@ -351,7 +370,7 @@ export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
         await sleep(400);
         const retryBefore = await req.screenshot(req.client);
         await runSlam(req, corner);
-        const retryCheck = await verifySlamLanded(req, retryBefore, corner);
+        const retryCheck = await verifySlamLanded(req, retryBefore, corner, verificationBounds);
         verified = retryCheck.verified;
       } else if (recovery.kind === 'defensive-keys') {
         // ipadGoHome's Phase-231 belt-and-suspenders: Esc + Enter, no

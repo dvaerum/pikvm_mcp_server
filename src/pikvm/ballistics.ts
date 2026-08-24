@@ -26,6 +26,7 @@ import {
   diffScreenshots,
   locateCursor,
 } from './cursor-detect.js';
+import { detectBoundsOrNull, getLastGoodBounds, IpadBounds } from './orientation.js';
 import { sleep, median } from './util.js';
 
 // ============================================================================
@@ -264,7 +265,10 @@ export interface SlamMotionCheck {
   matchedClusters: Cluster[];
 }
 
-/** Exported for cursor-anchor.ts, which reimplements slamToCorner's
+/** Corner of the RAW HDMI capture frame. Fallback only — see
+ *  cornerTargetFromBounds below, which is correct for any letterboxed
+ *  iPad target and should be preferred whenever bounds are available.
+ *  Exported for cursor-anchor.ts, which reimplements slamToCorner's
  *  verifyMotion diff/cluster-match against a caller-injected screenshot fn
  *  (ADR 0001 — slamToCorner's own verifyMotion is hardwired to this
  *  module's private non-nudging takeRawScreenshot, which isn't right for
@@ -275,6 +279,32 @@ export function cornerTargetPx(corner: Corner, resolution: ScreenResolution): { 
     case 'top-right': return { x: resolution.width, y: 0 };
     case 'bottom-left': return { x: 0, y: resolution.height };
     case 'bottom-right': return { x: resolution.width, y: resolution.height };
+  }
+}
+
+/**
+ * 2026-08-24 P0 fix: `cornerTargetPx` alone computes the expected slam
+ * landing point against the raw HDMI capture frame (e.g. top-left → (0,0)
+ * of a 1920×1080 frame). For a letterboxed iPad target, the relative-mouse
+ * cursor's actual top-left sits at the iPad's OWN content rectangle corner
+ * (bounds.x, bounds.y) — typically several hundred px away from (0,0) on a
+ * portrait letterbox. verifyMotion/captureVerification compared against
+ * the wrong corner was DETERMINISTICALLY false for every real iPad target
+ * (not probabilistic noise), live-confirmed via a screenshot-verified
+ * perfect corner landing that still failed verification (distance ≈619px
+ * vs the 80px default tolerance). Prefer this over cornerTargetPx whenever
+ * iPad bounds are available (detected or cached); fall back to
+ * cornerTargetPx only when bounds are genuinely undetectable (dark/uniform
+ * frame) or the target isn't an iPad (desktop/absolute-mouse — where the
+ * bounds detector's own landscape/full-frame result makes the two
+ * functions coincide anyway).
+ */
+export function cornerTargetFromBounds(corner: Corner, bounds: IpadBounds): { x: number; y: number } {
+  switch (corner) {
+    case 'top-left': return { x: bounds.x, y: bounds.y };
+    case 'top-right': return { x: bounds.x + bounds.width, y: bounds.y };
+    case 'bottom-left': return { x: bounds.x, y: bounds.y + bounds.height };
+    case 'bottom-right': return { x: bounds.x + bounds.width, y: bounds.y + bounds.height };
   }
 }
 
@@ -376,7 +406,17 @@ export async function slamToCorner(
 
   const detection = { ...DEFAULT_DETECTION_CONFIG, ...options.detection };
   const tolerance = options.cornerTolerance ?? 80;
-  const expected = cornerTargetPx(corner, resolution);
+  // P0 fix (2026-08-24): use the iPad's own detected bounds corner, not the
+  // raw capture-frame corner — see cornerTargetFromBounds's doc. Cache-first
+  // (reuses any earlier successful detection in this process) so this
+  // doesn't add a fresh detection round trip on every verifyMotion call;
+  // falls back to a fresh best-effort detect, then to the raw-frame corner
+  // only if bounds are genuinely undetectable.
+  const bounds = getLastGoodBounds() ?? await detectBoundsOrNull(client, {
+    verbose: options.verbose,
+    logPrefix: 'slam-verify',
+  });
+  const expected = bounds ? cornerTargetFromBounds(corner, bounds) : cornerTargetPx(corner, resolution);
 
   let clusters: Cluster[];
   try {
