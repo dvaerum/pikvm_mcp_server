@@ -878,8 +878,6 @@ function makeLocatorDeps(client: PiKVMClient): CursorLocatorDeps {
     buildMLHints,
     mlWiggleVerify: notWired('mlWiggleVerify'),
     wiggleVerifyCandidate: notWired('wiggleVerifyCandidate'),
-    shouldFireSecondOpinion: notWired('shouldFireSecondOpinion'),
-    shouldAdoptSecondOpinion: notWired('shouldAdoptSecondOpinion'),
     tautologyProxThreshold: TAUTOLOGY_PROX_THRESHOLD,
   };
 }

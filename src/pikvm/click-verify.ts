@@ -248,6 +248,18 @@ export function shouldFireDismissRecipe(args: {
 }
 
 /**
+ * KEPT DESPITE NO CURRENT CALLER (2026-08-24): the only real caller was
+ * cursor-locator.ts's `verify` profile, deleted in ADR 0003
+ * (docs/adr/0003-cursor-locator-is-the-front-door.md) because it was never
+ * wired to a real call site. These two predicates stay — they're pure
+ * regression-knowledge artifacts pinning a real, previously-observed bug
+ * (Phase 140 caught motion-diff picking an icon-LABEL feature 30px below
+ * the real cursor live; a Phase-296 report showed the same bug class
+ * recurring weeks later). Deleting them as "unused" would lose that
+ * record. If a future caller needs second-opinion arbitration again,
+ * these are ready; if you're looking at this thinking "dead code, remove
+ * it" — don't, without understanding what they protect first.
+ *
  * Phase 148 (v0.5.138) — pure helper: gate the Phase 137/140 wake-
  * nudge + second-opinion template-match. Extracted from the inline
  * predicate in clickAtWithRetry so the trigger conditions are

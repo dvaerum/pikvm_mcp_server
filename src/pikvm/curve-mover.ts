@@ -47,8 +47,6 @@ function makeCurveLocatorDeps(client: PiKVMClient): CursorLocatorDeps {
     buildMLHints: notWired('buildMLHints'),
     mlWiggleVerify: notWired('mlWiggleVerify'),
     wiggleVerifyCandidate: notWired('wiggleVerifyCandidate'),
-    shouldFireSecondOpinion: notWired('shouldFireSecondOpinion'),
-    shouldAdoptSecondOpinion: notWired('shouldAdoptSecondOpinion'),
     tautologyProxThreshold: 0,
   };
 }

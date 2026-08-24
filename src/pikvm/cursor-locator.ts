@@ -33,7 +33,7 @@ import type {
 import type { MLCursorOptions, MLCursorResult } from './cursor-ml-detect.js';
 import type { ShapeCandidate, ShapeOptions } from './cursor-shape-detect.js';
 
-export type LocateProfile = 'origin' | 'openLoopShape' | 'verify' | 'curve';
+export type LocateProfile = 'origin' | 'openLoopShape' | 'curve';
 
 export interface CursorFix {
   position: { x: number; y: number };
@@ -76,11 +76,11 @@ export interface CursorLocatorDeps {
   /** Decode a passed-in frame (openLoopShape receives an already-captured frame). */
   decode: (frame: Buffer) => Promise<DecodedScreenshot>;
 
-  /** Device nudge + settle (origin progressive-wake, verify second-opinion wake). */
+  /** Device nudge + settle (origin progressive-wake). */
   mouseMoveRelative: (dx: number, dy: number) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
 
-  /** Cached NCC template set (origin fallback, verify second-opinion). */
+  /** Cached NCC template set (origin fallback). */
   getCachedTemplates: () => Promise<CursorTemplate[]>;
 
   /** `origin` skips V8 when ML is disabled (settings.ml.disabled). Evaluated per
@@ -127,19 +127,6 @@ export interface CursorLocatorDeps {
     score: number,
   ) => Promise<{ pos: { x: number; y: number } } | null>;
 
-  // --- verify arbiters (pure predicates) ---
-  shouldFireSecondOpinion: (args: {
-    hasTemplates: boolean;
-    cursorVerified: boolean;
-    initialResidual: number;
-    secondOpinionResidualPx?: number;
-  }) => boolean;
-  shouldAdoptSecondOpinion: (args: {
-    cursorVerified: boolean;
-    wokenResidual: number;
-    initialResidual: number;
-  }) => boolean;
-
   /** Phase 317 tautology threshold — move-to.ts:671 = 30. */
   tautologyProxThreshold: number;
 }
@@ -177,8 +164,6 @@ export class CursorLocator {
         return this.locateOrigin();
       case 'openLoopShape':
         return this.locateOpenLoopShape(frame, hint);
-      case 'verify':
-        return this.locateVerify(hint);
       case 'curve':
         return this.locateCurve(frame, w, h, opts?.minPresence);
     }
@@ -336,80 +321,6 @@ export class CursorLocator {
     } catch {
       return null;
     }
-  }
-
-  /** click-verify.ts second-opinion (~809): template match arbitrated by
-   *  shouldFireSecondOpinion / shouldAdoptSecondOpinion → V8 full-frame fallback.
-   *
-   *  As a fresh detection front-door the locator has no prior mover fix, so the
-   *  arbiters are seeded with cursorVerified=false / initialResidual=Infinity
-   *  ("nothing found yet"): the template opinion fires whenever templates exist
-   *  and is adopted when found — exactly the not-yet-verified branch of the
-   *  current loop. Phase 3 threads the loop's real state in if it needs to. */
-  private async locateVerify(hint?: { x: number; y: number }): Promise<CursorFix | null> {
-    if (!hint) {
-      throw new Error("cursor-locator: 'verify' profile requires a hint (the click target)");
-    }
-    const d = this.deps;
-    const target = hint;
-    const SECOND_OPINION_RESIDUAL_PX = 25;
-    const cursorVerified = false;
-    const initialResidual = Infinity;
-
-    const templates = await d.getCachedTemplates();
-
-    if (
-      d.shouldFireSecondOpinion({
-        hasTemplates: templates.length > 0,
-        cursorVerified,
-        initialResidual,
-        secondOpinionResidualPx: SECOND_OPINION_RESIDUAL_PX,
-      })
-    ) {
-      try {
-        await d.mouseMoveRelative(1, 0);
-        await d.sleep(50);
-        await d.mouseMoveRelative(-1, 0);
-        await d.sleep(80);
-        const wakeShot = await d.screenshot();
-        const woken = d.findCursorByTemplateSet(wakeShot, templates, {
-          minScore: 0.7,
-          expectedNear: target,
-          expectedNearRadius: 200,
-        });
-        if (woken) {
-          const wokenResidual = Math.hypot(
-            woken.position.x - target.x,
-            woken.position.y - target.y,
-          );
-          if (d.shouldAdoptSecondOpinion({ cursorVerified, wokenResidual, initialResidual })) {
-            return {
-              position: { x: woken.position.x, y: woken.position.y },
-              source: 'template',
-              rawScore: woken.score,
-              confidence: null,
-            };
-          }
-        }
-      } catch {
-        // Fall through to the V8 fallback, as the current code does.
-      }
-    }
-
-    // V8 full-frame recovery (fresh frame, minPresence 0.5, heatmapPeak >= 0.3).
-    const shot = await d.screenshot();
-    const v8 = await d.findCursorByV8FullFrame(shot.buffer, shot.width, shot.height, {
-      minPresence: 0.5,
-    });
-    if (v8 !== null && v8.heatmapPeak >= 0.3) {
-      return {
-        position: { x: v8.x, y: v8.y },
-        source: 'cascade',
-        rawScore: v8.presence,
-        confidence: v8.presence,
-      };
-    }
-    return null;
   }
 
   /** curve-mover.ts detect(): V8 full-frame on the given frame. curve-mover's
