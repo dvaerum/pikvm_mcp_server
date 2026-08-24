@@ -134,7 +134,8 @@ After making the changes, run a quick test:
 1. Call `pikvm_health_check` (v0.5.19+) — verify:
    - Server version matches `main` (redeploy if stale; older servers
      lack the iPad safety guards).
-   - `mouseAbsoluteMode: false` (iPad is in relative-mouse mode).
+   - `Resolver mouse mode: false` (iPad is in relative-mouse mode; ADR-0002
+     Phase 1 renamed this line from `mouseAbsoluteMode:`).
    - HID profile reports mouse + keyboard online.
    - iPad bounds detected as `portrait`.
    - Screen brightness ≥ 80 with no `⚠ DIM` warning. If you see

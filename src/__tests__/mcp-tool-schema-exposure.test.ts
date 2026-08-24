@@ -181,7 +181,9 @@ describe('MCP tool schema and handler exposure', () => {
       const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
       expect(handler).toMatch(/validateBoolean\(args\.singleTap\)/);
       // singleTap defaults the brightness gate off so a dimmed PIN modal doesn't false-abort.
-      expect(handler).toMatch(/singleTap \|\| mouseAbsoluteMode \? 0/);
+      // ADR-0002 Phase 1: policy.dimThreshold already folds in the mode (0 on
+      // desktop/absolute), so singleTap is the only ternary left at the call site.
+      expect(handler).toMatch(/singleTap \? 0 : policy\.dimThreshold/);
       // Retry is gone, so there is no maxRetries variable to force to 0.
       expect(handler).not.toMatch(/const maxRetries =/);
     });
@@ -228,7 +230,10 @@ describe('MCP tool schema and handler exposure', () => {
       // (curve-one-shot relative emits on iPad), NOT raw pikvm.mouseMove —
       // iPadOS ignores absolute positioning so the raw move was a no-op.
       expect(handler).toMatch(/moveToPixel\(pikvm,/);
-      expect(handler).toMatch(/!mouseAbsoluteMode \? 'curve-one-shot' : 'detect-then-move'/);
+      // ADR-0002 Phase 1: strategy comes from hidModeResolver.policy() (which
+      // internally picks curve-one-shot on iPad / detect-then-move on desktop)
+      // instead of a re-derived ternary at each call site.
+      expect(handler).toMatch(/strategy:\s*policy\.strategy/);
       // The raw absolute mouseMove must NOT be used for pane targeting.
       expect(handler).not.toMatch(/pikvm\.mouseMove\(/);
       expect(handler).toMatch(/pikvm\.mouseScroll\(/);
@@ -418,7 +423,7 @@ describe('MCP tool schema and handler exposure', () => {
       const src = await readIndexTs();
       const handler = extractHandlerBlock(src, 'pikvm_mouse_click_at');
       // iPad-only gate: null finalDetectedPosition → NOT-LANDED before any click.
-      expect(handler).toMatch(/!mouseAbsoluteMode && result\.finalDetectedPosition === null/);
+      expect(handler).toMatch(/!policy\.mouseAbsolute && result\.finalDetectedPosition === null/);
       expect(handler).toMatch(/Click NOT performed/);
     });
 
@@ -457,7 +462,7 @@ describe('MCP tool schema and handler exposure', () => {
       expect(handler).toContain('LANDING IS NOT CONFIRMED');
       // ...and force must NOT touch the maxResidualPx (wrong-element) gate:
       // that gate only runs when finalDetectedPosition is non-null.
-      expect(handler).toMatch(/!mouseAbsoluteMode && result\.finalDetectedPosition\)/);
+      expect(handler).toMatch(/!policy\.mouseAbsolute && result\.finalDetectedPosition\)/);
     });
   });
 });

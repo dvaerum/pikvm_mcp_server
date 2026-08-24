@@ -5,10 +5,13 @@
  * (pikvm_mouse_move) when the target is in absolute/desktop mode — a documented silent
  * no-op (ADR 0002; live-confirmed by it-03400 2026-08-10, zero pixel change).
  *
- * Text-based (reads src/index.ts), same pattern as mcp-hidmode-gate.test.ts: mouseAbsoluteMode
- * and hidModeResolver are module-level singletons only populated by main()/a real device, so a
- * behavioral in-memory-client test can't drive mouseAbsoluteMode=true without a live target —
- * the same structural reason that file's dispatch-wiring test is source-based, not behavioral.
+ * Text-based (reads src/index.ts), same pattern as mcp-hidmode-gate.test.ts:
+ * hidModeResolver is a module-level singleton only populated by main()/a real
+ * device (currentMouseAbsolute is derived from it fresh per dispatch call, see
+ * hid-policy.test.ts for the policy() unit coverage), so a behavioral in-
+ * memory-client test can't drive mouseAbsolute=true without a live target —
+ * the same structural reason that file's dispatch-wiring test is source-based,
+ * not behavioral.
  */
 import { describe, expect, it } from 'vitest';
 import { promises as fs } from 'fs';
@@ -34,10 +37,13 @@ describe('#3 relative-into-absolute mover gate (symmetric with ABSOLUTE_MOUSE_GA
 
   it('wires the gate into the dispatch preamble, symmetric with the absolute-mode check', async () => {
     const src = await readIndexTs();
-    // The existing absolute-mode check: refuse when !mouseAbsoluteMode && requiresAbsoluteMouse.
-    expect(src).toMatch(/if \(!mouseAbsoluteMode\) \{\s*\n\s*if \(requiresAbsoluteMouse\(name, args as Record<string, unknown>\)\) \{/);
-    // The new mirror: refuse when mouseAbsoluteMode && requiresRelativeMouse.
-    expect(src).toMatch(/if \(mouseAbsoluteMode\) \{\s*\n\s*if \(requiresRelativeMouse\(name, args as Record<string, unknown>\)\) \{/);
+    // ADR-0002 Phase 1: currentMouseAbsolute is read once via hidModeResolver
+    // .policy() (see the const above these checks) instead of a module global,
+    // but the symmetric if/if shape is unchanged.
+    // The existing absolute-mode check: refuse when !currentMouseAbsolute && requiresAbsoluteMouse.
+    expect(src).toMatch(/if \(!currentMouseAbsolute\) \{\s*\n\s*if \(requiresAbsoluteMouse\(name, args as Record<string, unknown>\)\) \{/);
+    // The new mirror: refuse when currentMouseAbsolute && requiresRelativeMouse.
+    expect(src).toMatch(/if \(currentMouseAbsolute\) \{\s*\n\s*if \(requiresRelativeMouse\(name, args as Record<string, unknown>\)\) \{/);
   });
 
   it('the refusal text names the tool and points at absolute-pixel / move_to alternatives', async () => {
