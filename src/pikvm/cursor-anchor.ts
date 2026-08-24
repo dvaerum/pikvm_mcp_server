@@ -387,7 +387,13 @@ export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
     }
   }
 
-  if (req.nudge) {
+  // Skip the nudge when verification was attempted and ultimately failed
+  // (even after recovery, if any ran) — nudging the cursor away from an
+  // already-failed slam wastes real HID calls on a measurement/position
+  // the caller is about to reject anyway. measureCell relies on this: its
+  // pre-migration code only ever called nudgeFromEdge after its own early-
+  // return check passed.
+  if (req.nudge && verified !== false) {
     await nudgeFromEdge(req.client, {
       away: req.nudge.away,
       onlyAxis: req.nudge.onlyAxis,

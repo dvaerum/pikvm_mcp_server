@@ -28,6 +28,15 @@ import {
 } from './cursor-detect.js';
 import { detectBoundsOrNull, getLastGoodBounds, IpadBounds } from './orientation.js';
 import { sleep, median } from './util.js';
+// Deliberately circular with cursor-anchor.ts, which imports slamToCorner/
+// nudgeFromEdge/cornerTargetPx/cornerVector from THIS module. Safe here:
+// both sides only reference the other's exports inside async function
+// bodies (never at module-evaluation time), so ESM's live-binding hoisting
+// resolves it without a load-order issue. cursor-anchor.ts is the layer
+// built "over" this module's primitives (see its own header comment); this
+// import exists only because measureCell — one specific consumer inside
+// ballistics.ts — also happens to be one of anchorCursor's call sites.
+import { anchorCursor } from './cursor-anchor.js';
 
 // ============================================================================
 // Types
@@ -65,25 +74,15 @@ export interface MeasureBallisticsOptions {
   reps?: number;              // default 2
   callsPerCell?: number;      // default 5 (calls of `magnitude` per rep)
   slowPaceMs?: number;        // default 30 ms between calls in 'slow'
-  settleMs?: number;          // default 400 ms after deltas, before screenshot
-  slamCalls?: number;         // default: slamToCorner's own auto-computed
-                              // call count (based on screen resolution).
-                              // Leave unset so that default stays the single
-                              // source of truth — see slamPaceMs below for
-                              // why this class of drift matters.
-  slamPaceMs?: number;        // default: slamToCorner's own default pace
-                              // (currently 60ms). Leave unset so that default
-                              // stays the single source of truth rather than
-                              // drifting independently here — a controlled
-                              // retest (N=30 each) found the lock-screen risk
-                              // present at a non-trivial rate at BOTH 15ms and
-                              // 60ms, so don't treat overriding this as a fix
-                              // for that risk; see task tracking the
-                              // detect+recover defense for the actual mitigation.
-  nudgeCalls?: number;        // default 20 — away-from-edge calls after slam
-  nudgeCallPaceMs?: number;   // default 5 ms between nudge calls
-  cornerTolerance?: number;   // default 80 px — post-slam cluster must land
-                              // within this box from the expected corner
+  // settleMs, slamCalls, slamPaceMs, nudgeCalls, nudgeCallPaceMs, and
+  // cornerTolerance were removed 2026-08-24 (cursor-anchor.ts migration,
+  // Phase 3 PR 3/3): settleMs was dead code (computed, never read — the
+  // interface's own doc claimed a 400ms default while the actual code used
+  // 150, and neither value did anything); the other five are now owned
+  // entirely by anchorCursor()'s own parameters/defaults inside measureCell,
+  // the single source of truth this interface used to duplicate and drift
+  // out of sync with (see git history for the slamPaceMs/slamCalls
+  // drift-prevention doc that used to live here).
   noiseFrames?: number;       // default 4 — baseline frames for noise capture
   noiseIntervalMs?: number;   // default 500 — gap between baseline frames
   noiseExcludeRadius?: number; // default 50 px around a noise centroid
@@ -551,54 +550,54 @@ async function measureCell(
   pace: Pace,
   rep: number,
   noise: NoiseBaseline | null,
-  options: Omit<Required<Omit<MeasureBallisticsOptions, 'detection' | 'profilePath' | 'verbose' | 'axes' | 'magnitudes' | 'paces'>>, 'slamPaceMs' | 'slamCalls'> & {
+  options: Omit<Required<Omit<MeasureBallisticsOptions, 'detection' | 'profilePath' | 'verbose' | 'axes' | 'magnitudes' | 'paces'>>, never> & {
     detection: DetectionConfig;
     verbose: boolean;
     noiseExcludeRadius: number;
-    // Left as number|undefined (not defaulted) so an unset value falls through
-    // to slamToCorner's own default instead of being silently overridden by a
-    // value chosen here — see the slamPaceMs/slamCalls docs on
-    // MeasureBallisticsOptions.
-    slamPaceMs: number | undefined;
-    slamCalls: number | undefined;
   },
 ): Promise<BallisticsSample | null> {
   // Reset: slam to top-left, then nudge past the edge dead zone so the
   // cursor sits in open space where movement registers and detection is
-  // clean. verifyMotion:true (2026-08-24, live-confirmed by the #60 gate:
-  // the very first production-shape measureBallistics run hit a genuine
-  // iPad lock screen mid-sweep) — without this, a slam interrupted by a
-  // system-gesture reinterpretation reads as ordinary near-zero-displacement
-  // noise, silently poisoning the cell rather than failing loudly. On
-  // verified:false we reject the cell outright: no retry (unlike unlockIpad,
-  // which can't call itself to recover) — ballistics already resamples via
-  // `reps`, so a rejected cell is a cheap, no-new-risk response.
-  const slamCheck = await slamToCorner(client, {
-    calls: options.slamCalls,
-    paceMs: options.slamPaceMs,
+  // clean. captureVerification:true (2026-08-24, live-confirmed by the #60
+  // gate: the very first production-shape measureBallistics run hit a
+  // genuine iPad lock screen mid-sweep) — without this, a slam interrupted
+  // by a system-gesture reinterpretation reads as ordinary near-zero-
+  // displacement noise, silently poisoning the cell rather than failing
+  // loudly. selfGate:false: measureCell reads `verified` itself and rejects
+  // the cell outright on failure — no retry (unlike unlockIpad, which can't
+  // call itself to recover) — ballistics already resamples via `reps`, so a
+  // rejected cell is a cheap, no-new-risk response; #62's protection
+  // carries forward unchanged, just relocated into the shared primitive.
+  // guard:'none-calibration' — synthetic scene, no iPad-lock risk, no
+  // bounds detection. slamCalls/paceMs/cornerTolerance left undefined so
+  // anchorCursor's own defaults (== slamToCorner's own defaults) apply,
+  // same "leave unset, single source of truth" principle this file already
+  // used before the migration. The nudge-away-from-edge step is also owned
+  // by anchorCursor now (nudgeFromEdge's own built-in calls/pace, which is
+  // what this file's own default already matched pre-migration — see git
+  // history's nudgeCalls/nudgeCallPaceMs doc for the exact prior value).
+  const anchorResult = await anchorCursor({
+    client,
     corner: 'top-left',
+    guard: { kind: 'none-calibration' },
+    // ADR 0001: this module's own non-nudging capture — the same one
+    // slamToCorner's verifyMotion used before this migration, and the
+    // one measureCell's own before/after measurement pair below still
+    // uses directly (that pair is NOT verification, it's the actual
+    // ballistics measurement — kept entirely separate per ADR 0001's
+    // asymmetric-nudge rule, see the `before`/`after` capture further down).
+    screenshot: takeRawScreenshot,
+    captureVerification: true,
+    selfGate: false,
+    nudge: { away: 'top-left', onlyAxis: axis === 'x' ? 'y' : 'x' },
     verbose: false,
-    verifyMotion: true,
-    cornerTolerance: options.cornerTolerance,
-    detection: options.detection,
   });
-  if (slamCheck && !slamCheck.verified) {
+  if (anchorResult.verified === false) {
     if (options.verbose) {
       console.error(`[cell ${axis}/${magnitude}/${pace}/r${rep}] slam motion not verified — rejecting cell`);
     }
     return null;
   }
-  // Nudge PERPENDICULAR to the measurement axis so the cursor stays near
-  // the edge it will travel away from (maximising measurement headroom).
-  // For +x measurements: nudge down (onlyAxis=y), cursor lands at left-middle.
-  // For +y measurements: nudge right (onlyAxis=x), cursor lands at top-middle.
-  await nudgeFromEdge(client, {
-    calls: options.nudgeCalls,
-    paceMs: options.nudgeCallPaceMs,
-    away: 'top-left',
-    onlyAxis: axis === 'x' ? 'y' : 'x',
-    verbose: false,
-  });
 
   // Warm-up probe: a small move right before screenshot A so the cursor is
   // guaranteed visible (iPadOS fades the cursor ~300 ms after movement
@@ -701,22 +700,6 @@ export async function measureBallistics(
     reps: userOptions.reps ?? 2,
     callsPerCell: userOptions.callsPerCell ?? 5,
     slowPaceMs: userOptions.slowPaceMs ?? 30,
-    settleMs: userOptions.settleMs ?? 150,
-    // No ?? fallback here: an unset value must reach slamToCorner as
-    // `undefined` so ITS OWN auto-computed call count applies. (Previously
-    // defaulted to the literal 0, which slamToCorner's `options.calls ??
-    // auto` does NOT treat as "auto" — 0 is not nullish — so the slam loop
-    // silently ran zero times under default options. See slamPaceMs above
-    // for the same class of bug already fixed for pace.)
-    slamCalls: userOptions.slamCalls,
-    // No ?? fallback here: an unset value must reach slamToCorner as
-    // `undefined` so ITS OWN default applies, rather than drifting out of
-    // sync with it (see the doc comment on MeasureBallisticsOptions.slamPaceMs
-    // above).
-    slamPaceMs: userOptions.slamPaceMs,
-    nudgeCalls: userOptions.nudgeCalls ?? 5,
-    nudgeCallPaceMs: userOptions.nudgeCallPaceMs ?? 10,
-    cornerTolerance: userOptions.cornerTolerance ?? 80,
     noiseFrames: userOptions.noiseFrames ?? 4,
     noiseIntervalMs: userOptions.noiseIntervalMs ?? 500,
     noiseExcludeRadius: userOptions.noiseExcludeRadius ?? 30,
