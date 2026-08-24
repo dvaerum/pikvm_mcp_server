@@ -28,11 +28,6 @@ export type UdcState = string;
 /** The UDC state in which the emulated HID drives the target — a convenience for sources. */
 export const UDC_UP: UdcState = 'configured';
 
-/** Convenience predicate for state-based sources (e.g. the pikvm01 ssh-source). */
-export function isUdcUp(state: UdcState): boolean {
-  return state === UDC_UP;
-}
-
 /**
  * One reading from a sampler. The health decision is a pre-computed BOOLEAN so the
  * classifier is signal-agnostic; the source owns whatever composite produced it.

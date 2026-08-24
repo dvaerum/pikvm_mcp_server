@@ -16,12 +16,19 @@
 import { promises as fs } from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { PiKVMClient } from '../src/pikvm/client.js';
-import { clickAtWithRetry } from '../src/pikvm/click-verify.js';
+import { clickAt } from '../src/pikvm/click-at.js';
+import { loadProfile } from '../src/pikvm/ballistics.js';
+import { HidModeResolver } from '../src/pikvm/hid-mode.js';
 import { moveToPixel } from '../src/pikvm/move-to.js';
 import { ipadGoHome } from '../src/pikvm/ipad-unlock.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const client = new PiKVMClient(loadConfig().pikvm);
+// This rig is always the iPad target — declared mode mirrors index.ts's
+// `--target ipad` startup path (no /hidmode endpoint needed for a script).
+const hidModeResolver = new HidModeResolver({ declared: 'ipad' });
+await hidModeResolver.resolve();
+const profile = await loadProfile('./data/ballistics.json').catch(() => null);
 const [cmd, ...args] = process.argv.slice(2);
 async function shot(tag = 'shot') {
   const s = await client.screenshot();
@@ -46,8 +53,23 @@ switch (cmd) {
   case 'click': {
     const [x, y] = args.map(Number);
     await client.mouseMoveRelative(8, 8); await sleep(60); await client.mouseMoveRelative(-8, -8); await sleep(200);  // wake faded cursor (10-12s fade)
-    const r = await clickAtWithRetry(client, { x, y }, { moveToOptions: { strategy: 'curve-one-shot' }, maxRetries: 3 });
-    console.log(`click (${x},${y}) success=${r.success} resid=${r.finalMoveResult.finalResidualPx?.toFixed(1)}px outcome=${r.success ? 'OK' : (r.attemptHistory.at(-1)?.skippedClickReason ?? 'UNVERIFIED')}`);
+    // Single-attempt (retry removed 2026-07-28 — see click-at.ts's own header); outcome.kind
+    // is 'clicked' on success, else one of the pre-click abort kinds (mode-unknown/
+    // brightness-abort/cursor-unverified/residual-skip) — see ClickAtOutcome in click-at.ts.
+    const outcome = await clickAt({
+      client,
+      policy: hidModeResolver.policy(),
+      target: { x, y },
+      button: 'left',
+      strategy: 'curve-one-shot',
+      profile,
+      verifyClick: true,
+      verifySettleMs: 300,
+      singleTap: false,
+      force: false,
+    });
+    console.log(`click (${x},${y}) outcome=${outcome.kind}`);
+    console.log(outcome.message);
     await sleep(1300); await shot('click'); break;
   }
   case 'drag': {

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   HidLatchMonitor,
   DEFAULT_MONITOR_CONFIG,
-  isUdcUp,
+  UDC_UP,
   type HealthSample,
   type UdcState,
 } from '../hid-latch-monitor.js';
@@ -46,7 +46,7 @@ function sampleTimeline(segments: Array<[number, UdcState]>, intervalMs: number)
   let tCursor = 0;
   let reenum = 0;
   for (const [dur, state] of segments) {
-    if (!isUdcUp(state)) reenum += 1; // a drop event = one re-enumeration
+    if (state !== UDC_UP) reenum += 1; // a drop event = one re-enumeration
     bounds.push({ start: tCursor, end: tCursor + dur, state, reenum });
     tCursor += dur;
   }
@@ -59,15 +59,6 @@ function sampleTimeline(segments: Array<[number, UdcState]>, intervalMs: number)
   }
   return out;
 }
-
-describe('isUdcUp — only `configured` is up (HID usable)', () => {
-  it('maps configured→up, everything else→down', () => {
-    expect(isUdcUp('configured')).toBe(true);
-    for (const down of ['not attached', 'addressed', 'default', 'powered', 'suspended', '']) {
-      expect(isUdcUp(down)).toBe(false);
-    }
-  });
-});
 
 describe('HidLatchMonitor — quiet on the normal/recoverable cases (STAYS-QUIET leg)', () => {
   it('a long healthy run of `configured` never alerts', () => {
