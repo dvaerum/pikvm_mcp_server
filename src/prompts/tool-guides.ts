@@ -26,6 +26,8 @@ Capture the current screen of the remote machine as a JPEG image. This is your p
 | maxWidth | number | *(native)* | Maximum width in pixels — image is scaled down if the screen is wider |
 | maxHeight | number | *(native)* | Maximum height in pixels — image is scaled down if the screen is taller |
 | quality | number | 80 | JPEG quality (1-100) |
+| keepCursorAlive | boolean | false | Phase 202: emit a ±1 px net-zero mouse nudge just before the snapshot so the auto-fading iPad cursor stays visible. Set true when the screenshot is for cursor verification. |
+| savePath | string | *(none)* | ALSO write the JPEG to this file path (in addition to returning it inline). Parent dirs are created. |
 
 Scaling preserves aspect ratio. When you scale a screenshot, the server tracks the scale factor so that mouse coordinates you derive from the image are automatically mapped back to native resolution.
 
@@ -237,6 +239,9 @@ Move the mouse cursor to an absolute pixel position or by a relative delta.
 | x | number | *(required)* | X coordinate (absolute) or delta (relative) |
 | y | number | *(required)* | Y coordinate (absolute) or delta (relative) |
 | relative | boolean | false | If true, move relative to current position |
+| capture | string[] | [] | M8: advisory frame capture around this move. Any subset of \`["before","during","after"]\`; requires \`capturePrefix\`. Never alters the move outcome. |
+| capturePrefix | string | — | M8: path prefix for capture frames (required when \`capture\` is non-empty). Writes \\\${capturePrefix}-<phase>.jpg. |
+| captureRegion | object | *(full frame)* | M8: optional crop \`{ x, y, width, height }\` in HDMI px applied to every capture frame. |
 
 ## Coordinate Space
 - **Absolute mode** (default): (0, 0) is the top-left corner. Maximum values are (width-1, height-1) from \`pikvm_get_resolution\`.
@@ -336,6 +341,10 @@ Automatically calibrate mouse coordinates by detecting the cursor position via s
 | rounds | number | 5 | Number of sampling rounds to compute calibration factors |
 | verifyRounds | number | 5 | Number of verification rounds after calibration is computed |
 | moveDelayMs | number | 300 | Delay in ms after each mouse move (increase for slow PiKVM connections) |
+| mergeRadius | number | 30 | Radius in pixels for merging nearby clusters (e.g. cursor + drop shadow). |
+| minSamples | number | 3 | Minimum valid samples required for calibration to succeed. |
+| maxRatioDivergence | number | 0.5 | Maximum allowed divergence between X and Y ratios within a single round — rejects noisy rounds where ratios are incoherent. |
+| verbose | boolean | false | Log per-round debug data (centroid positions, accept/reject reasons). |
 
 ## Example Call
 \`\`\`json
@@ -376,6 +385,8 @@ Scroll the mouse wheel vertically or horizontally.
 |-----------|------|---------|-------------|
 | deltaY | number | *(required)* | Vertical scroll: negative = scroll up, positive = scroll down |
 | deltaX | number | 0 | Horizontal scroll: negative = scroll left, positive = scroll right |
+| x | number | — | M1: optional target X (screenshot px). Requires y — position the pointer here first, via the same platform-aware path as click_at, so the wheel event lands on the intended pane. |
+| y | number | — | M1: optional target Y (screenshot px). Requires x. |
 
 ## Example Calls
 \`\`\`json
@@ -553,6 +564,11 @@ Move the pointer to an approximate target pixel on a PiKVM target in relative mo
 | maxCorrectionPasses | number | 2 | Max correction passes (independent attempts to re-aim). |
 | minResidualPx | number | 25 | Early-exit threshold (px) for the correction loop. |
 | warmupMickeys | number | 8 | Tiny move emitted before screenshot A so the cursor renders. |
+| slamOriginX | number | 625 | HDMI X of post-slam origin (only relevant if strategy falls back to a slam). |
+| slamOriginY | number | 65 | HDMI Y of post-slam origin. |
+| capture | string[] | [] | M8: advisory frame capture around this move. Any subset of \`["before","during","after"]\`; requires \`capturePrefix\`. Never alters the move outcome. |
+| capturePrefix | string | — | M8: path prefix for capture frames (required when \`capture\` is non-empty). Writes \\\${capturePrefix}-<phase>.jpg. |
+| captureRegion | object | *(full frame)* | M8: optional crop \`{ x, y, width, height }\` in HDMI px applied to every capture frame. |
 
 ## Expected Accuracy
 
@@ -568,7 +584,7 @@ After Phases 65-77 (v0.5.68+):
 Single-digit residuals are achievable when motion-diff succeeds (Phase 69 measured 6-9 px hits).
 
 ## When to Use vs Closed-Loop Correction
-- For most click tasks: prefer \`pikvm_mouse_click_at\` (iPad default \`maxRetries: 3\` is auto-applied per Phase 142) — same algorithm, with retry-on-miss orchestration baked in.
+- For most click tasks: prefer \`pikvm_mouse_click_at\` — same positioning algorithm, plus the click itself, single-attempt (retry was removed 2026-07-28; positioning is single-shot-reliable and a faded cursor is recovered by the built-in wake).
 - For agent-driven closed-loop where you want screenshot inspection between move and click: this tool returns the screenshot and reported residual, suitable for an agent to compute a correction delta and issue follow-up \`pikvm_mouse_move\` calls.
 
 ## Example Calls
@@ -614,9 +630,7 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 
 **For ~70 px iPad app icons, USE \`pikvm_ipad_launch_app\` instead** — it's 100% reliable via Spotlight and avoids the ~95% skip / ~5% hit reality of small-icon clicks via cursor positioning. Phase 199 production-bench measured this.
 
-The earlier "~50-60% small-icon hit" figure was based on screen-changed checks that counted clicks landing on adjacent icons as hits. The MCP server's default safety gate (\`maxResidualPx: 35\`) properly refuses those, so the real correct-element rate is much lower. The user-side Pointer Animations toggle (Settings → Accessibility → Touch → Pointer Control) lifts small-icon hit rate to ≥ 90% — see \`docs/troubleshooting/2026-04-30-phase-194h-disable-pointer-animations.md\`.
-
-**Phase 94 / Phase 142 default**: \`maxRetries\` defaults to 3 on iPad (relative-mouse) targets. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
+The earlier "~50-60% small-icon hit" figure was based on screen-changed checks that counted clicks landing on adjacent icons as hits. The MCP server's default safety gate (\`maxResidualPx: 15\` on iPad, task #38) properly refuses those, so the real correct-element rate is much lower. The user-side Pointer Animations toggle (Settings → Accessibility → Touch → Pointer Control) lifts small-icon hit rate to ≥ 90% — see \`docs/troubleshooting/2026-04-30-phase-194h-disable-pointer-animations.md\`.
 
 **Silent failure remedy**: when click_at returns success but the post-click screenshot shows no UI change, the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating input. Call \`pikvm_dismiss_popup\` to fire the documented Escape → Enter recipe, then retry. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly with one Escape). **2026-06-03 escalation**: a stuck Low Battery 5% modal that had been sitting for hours (HDMI frame frozen) absorbed Escape with NO effect — the modal lost keyboard focus. \`pikvm_dismiss_popup\` with \`force: true\` appends Cmd+H (system Home shortcut) after Escape+Enter, which bypasses the focus problem. Cmd+H is destructive (exits any foreground app), so only use \`force: true\` when (a) the iPad is on or near the home screen, AND (b) the plain recipe already returned with no visible change.
 
@@ -627,34 +641,45 @@ The earlier "~50-60% small-icon hit" figure was based on screen-changed checks t
 2. Pass \`autoUnlockOnDetectFail: true\` (Phase 72) for opt-in self-recovery — note this calls \`ipadGoHome\` which exits any open app.
 3. Just call \`pikvm_ipad_unlock\` first if you know it might be locked.
 
-## Parameters (key ones)
+## Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | x | number | *(required)* | Target X in HDMI screenshot pixels |
 | y | number | *(required)* | Target Y in HDMI screenshot pixels |
 | button | string | left | left / right / middle / up / down |
-| maxRetries | number | 2 (iPad) / 0 (desktop) | Phase 94: auto-defaults to 2 on iPad (relative-mouse) / 0 on desktop. Pass 0 explicitly to opt out of retries on iPad. |
-| autoUnlockOnDetectFail | boolean | false | Phase 72 opt-in lock-screen recovery |
-| maxResidualPx | number | *(unset)* | Phase 88: skip the click if cursor lands more than N px from target. Set to 25 for strict icon-tolerance (refuses imprecise clicks that risk hitting adjacent UI elements); leave unset for permissive behaviour. |
-| verifyClick | boolean | true | Pre/post screenshot diff confirms click landed |
+| strategy | string | detect-then-move | Origin discovery. **DO NOT use \`"slam-then-move"\` on iPad** — slam to top-left triggers the iPadOS hot-corner gesture and re-locks the screen (Phase 32a). |
+| assumeCursorAtX/Y | number | — | With \`strategy="assume-at"\`, where the cursor currently is. |
+| autoUnlockOnDetectFail | boolean | false | Phase 72 opt-in lock-screen recovery. SIDE EFFECT: if the iPad is inside an app and detection fails for another reason, this exits the app to home. |
+| maxResidualPx | number | 15 (iPad) / unset (desktop) | Phase 88: skip the click if the verified cursor lands more than N px from target (task #38 tightened the iPad default 25→15). Override without redeploy via \`PIKVM_CLICK_MAX_RESIDUAL_PX\`. |
+| verifyClick | boolean | true | Pre/post screenshot diff confirms click landed (advisory — never blocks the click itself). Set false to skip the extra screenshot round-trip. |
+| verifySettleMs | number | 300 | Milliseconds to wait between click and post-click screenshot for the UI to render. |
+| verifyRegionHalfPx | number | *(full frame)* | Restrict the verification diff to a square window of ±N HDMI px around the click target — useful for a small/local UI change that a full-frame diff would dilute. |
+| expectRegion | object | *(unset)* | M6: explicit rectangular box \`{ x, y, width, height }\` where the click's effect is expected to appear (e.g. a keypad's PIN-dots field). Takes precedence over verifyRegionHalfPx. Advisory only. |
+| verifyMinChangeFraction | number | 0.005 | Minimum changed-pixel fraction for screenChanged=true. Raise on noisy backdrops (animated widgets); lower for tiny UI changes. |
+| singleTap | boolean | false | KEYPAD MODE (M6): defaults minBrightness=0 so a dimmed PIN-sheet modal doesn't false-abort the tap, and marks the result as a keypad tap. Verification stays advisory-only (never drives a re-tap — every click is single-attempt, the old tap-retry mechanism was removed 2026-07-28). |
+| force | boolean | false | ESCAPE HATCH: by default a click is NOT performed (returns not-landed) when the cursor can't be localized on iPad. Set true to click anyway at the predicted position — the result is flagged LOUD as UNVERIFIED. Does nothing on desktop (positions by coordinate, not detection). |
+| minBrightness | number | 35 (iPad) / 0 (desktop) | Brightness gate (0-255, Phase 48): aborts with a "wake the iPad" error only when the frame is uniformly dim (low mean AND low stddev) — dark-mode UI with high-contrast text/icons passes. Pass 0 to disable. |
+| capture | string[] | [] | M8: advisory frame capture around this click. Any subset of \`["before","during","after"]\`; requires \`capturePrefix\`. Never alters the click outcome. |
+| capturePrefix | string | — | M8: path prefix for capture frames (required when \`capture\` is non-empty). Writes \\\${capturePrefix}-<phase>.jpg. |
+| captureRegion | object | *(full frame)* | M8: optional crop \`{ x, y, width, height }\` in HDMI px applied to every capture frame. |
 
 ## Recommended call shapes
 
 **Reliable iPad click on a known-unlocked iPad:**
 \`\`\`json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2 } }
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700 } }
 \`\`\`
 
 **Self-recovering click (assumes iPad might be locked / faded):**
 \`\`\`json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2, "autoUnlockOnDetectFail": true } }
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "autoUnlockOnDetectFail": true } }
 \`\`\`
 
 **Strict-target click (refuse to click on the wrong adjacent element):**
 \`\`\`json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2, "maxResidualPx": 25 } }
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxResidualPx": 25 } }
 \`\`\`
-With \`maxResidualPx: 25\`, attempts that land more than 25 px from the target are skipped (counts as a retry). Trades absolute hit rate for "I clicked the right thing" confidence — useful when the target is near other clickable elements that could be accidentally hit.
+With \`maxResidualPx: 25\`, a click that lands more than 25 px from the target is skipped rather than fired (reported not-landed). Trades absolute hit rate for "I clicked the right thing" confidence — useful when the target is near other clickable elements that could be accidentally hit.
 
 ## When NOT to Use
 - **iPad app icons on the home screen**: use \`pikvm_ipad_launch_app\` (Spotlight + type) — 100% reliable vs ~5-15% for cursor-clicking 70 px icons. This is the dominant case where users reach for click_at and shouldn't.
