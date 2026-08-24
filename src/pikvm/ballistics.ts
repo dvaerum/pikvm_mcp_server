@@ -225,6 +225,46 @@ export interface SlamOptions {
   paceMs?: number;
   corner?: Corner;
   verbose?: boolean;
+  /** If true, screenshots before and after the slam and checks whether a
+   *  cursor-sized cluster appeared within `cornerTolerance` px of the
+   *  expected corner — reusing the same diff/cluster-detection primitives
+   *  measureCell already relies on for calibration. The result is returned,
+   *  not acted on: slamToCorner does not retry or throw on a failed check,
+   *  because the right recovery differs per caller (reject a sample, retry
+   *  a different way, just warn, etc).
+   *
+   *  This checks "did the expected motion register", which is deliberately
+   *  narrower than "is this a lock screen" — see ipad-unlock.ts's Phase 321
+   *  history for why a general lock-screen classifier was rejected (false
+   *  positives on legitimate non-home screens). Costs two extra screenshots
+   *  + one diff; opt-in, default false. */
+  verifyMotion?: boolean;
+  /** Tolerance (px) for the post-slam cluster-near-corner check. Default 80.
+   *  Only used when verifyMotion is true. */
+  cornerTolerance?: number;
+  detection?: Partial<DetectionConfig>;
+}
+
+/** Result of slamToCorner's optional post-slam motion check (verifyMotion). */
+export interface SlamMotionCheck {
+  /** True if a cursor-sized cluster was found within cornerTolerance px of
+   *  the expected corner after the slam. False means the expected motion
+   *  did not register — the slam may have been interrupted (e.g. a system
+   *  gesture reinterpretation) or something else is obscuring detection.
+   *  Deliberately doesn't diagnose the cause; see the verifyMotion doc on
+   *  SlamOptions. */
+  verified: boolean;
+  /** Clusters found within tolerance of the expected corner, for diagnostics. */
+  matchedClusters: Cluster[];
+}
+
+function cornerTargetPx(corner: Corner, resolution: ScreenResolution): { x: number; y: number } {
+  switch (corner) {
+    case 'top-left': return { x: 0, y: 0 };
+    case 'top-right': return { x: resolution.width, y: 0 };
+    case 'bottom-left': return { x: 0, y: resolution.height };
+    case 'bottom-right': return { x: resolution.width, y: resolution.height };
+  }
 }
 
 export interface NudgeOptions {
@@ -275,34 +315,81 @@ export async function nudgeFromEdge(
  * in that direction. iPadOS clamps the pointer at the screen edge regardless
  * of acceleration, so after enough calls we have a deterministic origin.
  *
- * No verification by cursor detection here — the caller (measureBallistics)
+ * No verification by cursor detection by default — the caller (measureBallistics)
  * validates "we actually hit the corner" implicitly: the first cell's diff
  * will show a cursor cluster starting near the corner. If slam failed, the
  * first cell's measurement will be garbage and will be rejected by the
  * outlier filter. That's cheaper than an explicit locateCursor per slam.
+ * Pass verifyMotion:true (see SlamOptions) to opt into an explicit check
+ * instead, for callers (like unlockIpad) that don't have their own
+ * downstream signal to fall back on.
  */
 export async function slamToCorner(
   client: PiKVMClient,
   options: SlamOptions = {},
-): Promise<void> {
+): Promise<SlamMotionCheck | undefined> {
   const corner = options.corner ?? 'top-left';
   // Pace matters on iPadOS: rapid slams to the edge appear to be interpreted
   // as a system gesture (observed: iPad went to lock screen after a 28x @ 15ms
   // slam from mid-screen to top-left). 60 ms between calls is slow enough for
-  // iPadOS to treat it as ordinary pointer movement.
+  // iPadOS to treat it as ordinary pointer movement. NOTE 2026-08-24: a later
+  // controlled retest (N=30 each) found the lock risk present at a
+  // non-trivial rate at BOTH 15ms and 60ms — pace alone isn't a reliable
+  // mitigation. See verifyMotion for a check that doesn't depend on pace.
   const paceMs = options.paceMs ?? 60;
   const resolution = await client.getResolution();
   const calls = options.calls ?? Math.ceil(Math.max(resolution.width, resolution.height) / 100) + 8;
   const vec = cornerVector(corner);
+  const verifyMotion = options.verifyMotion ?? false;
 
   if (options.verbose) {
     console.error(`[slam] ${corner} × ${calls} calls @ ${paceMs}ms`);
   }
 
+  const before = verifyMotion ? await takeRawScreenshot(client) : null;
+
   for (let i = 0; i < calls; i++) {
     await client.mouseMoveRelative(127 * vec.x, 127 * vec.y);
     if (paceMs > 0) await sleep(paceMs);
   }
+
+  if (!verifyMotion || !before) return undefined;
+
+  // One more small nudge in-corner right before the verification screenshot:
+  // iPadOS fades a static cursor after ~300ms, and the slam loop's last
+  // sleep may already have crossed that. Mirrors the warm-up-probe trick
+  // measureCell uses before its own before/after pair.
+  await client.mouseMoveRelative(3 * vec.x, 3 * vec.y);
+  await sleep(50);
+  const after = await takeRawScreenshot(client);
+
+  const detection = { ...DEFAULT_DETECTION_CONFIG, ...options.detection };
+  const tolerance = options.cornerTolerance ?? 80;
+  const expected = cornerTargetPx(corner, resolution);
+
+  let clusters: Cluster[];
+  try {
+    clusters = await diffScreenshots(before, after, detection);
+  } catch (err) {
+    if (options.verbose) {
+      console.error(`[slam] verifyMotion diff threw: ${(err as Error).message}`);
+    }
+    return { verified: false, matchedClusters: [] };
+  }
+
+  const matchedClusters = clusters.filter((c) => {
+    const dx = c.centroidX - expected.x;
+    const dy = c.centroidY - expected.y;
+    return Math.sqrt(dx * dx + dy * dy) <= tolerance;
+  });
+
+  if (options.verbose) {
+    console.error(
+      `[slam] verifyMotion: ${matchedClusters.length}/${clusters.length} cluster(s) within ${tolerance}px of expected (${expected.x},${expected.y})`,
+    );
+  }
+
+  return { verified: matchedClusters.length > 0, matchedClusters };
 }
 
 // ============================================================================

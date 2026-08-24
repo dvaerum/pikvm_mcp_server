@@ -90,6 +90,14 @@ export interface IpadUnlockResult {
   /** iPad bounds used for swipe positioning. Null if startX/startY were
    *  both passed explicitly (no detection performed). */
   bounds: IpadBounds | null;
+  /** Result of slamToCorner's post-slam motion check (see SlamOptions.
+   *  verifyMotion in ballistics.ts). true = the expected cursor motion
+   *  registered near the corner; false = it didn't (the slam may have
+   *  been reinterpreted as a system gesture — see the retry note on
+   *  slamFirst's handling below) and a key-sequence retry was attempted;
+   *  null = slamFirst was false, or the key-press-only path returned
+   *  before reaching the slam step, so no check was performed. */
+  slamVerified: boolean | null;
   message: string;
 }
 
@@ -133,6 +141,7 @@ export async function unlockIpad(
       chunkCount: 0,
       swipeDurationMs: 0,
       bounds: null,
+      slamVerified: null,
       message:
         'Sent Escape + Enter + Space (Phase 217). Swipe SKIPPED to avoid ' +
         'the home-screen-to-lock-screen gesture artifact (Phase 219). ' +
@@ -175,8 +184,35 @@ export async function unlockIpad(
   const startY = options.startY ?? detectedSwipeStart.y;
 
   // 1. Optionally slam so we know the starting position (top-left of iPad content).
+  //
+  // 2026-08-24: a controlled retest found the slam's lock-screen risk
+  // present at a non-trivial rate regardless of pace (see slamPaceMs's
+  // note in ballistics.ts) — and this is the one slamToCorner call site
+  // that's unguarded and reachable with zero special args (pikvm_ipad_launch_app's
+  // default unlockFirst=true calls unlockIpad() by default). verifyMotion
+  // checks whether the slam's expected motion actually registered; if not,
+  // we can't recover by calling unlockIpad() again (that's this function —
+  // would recurse), so fall back to retrying the key sequence once, then
+  // re-attempt the slam. If it still doesn't verify, continue anyway: the
+  // swipe below is still our best remaining attempt, and the caller
+  // inspects the returned screenshot either way.
+  let slamVerified: boolean | null = null;
   if (slamFirst) {
-    await slamToCorner(client, { corner: 'top-left', paceMs: slamPaceMs });
+    const check = await slamToCorner(client, { corner: 'top-left', paceMs: slamPaceMs, verifyMotion: true });
+    slamVerified = check?.verified ?? null;
+    if (check && !check.verified) {
+      if (options.verbose) {
+        console.error('[ipad-unlock] slam motion not verified — retrying via key sequence before re-slamming');
+      }
+      await client.sendKey('Escape');
+      await sleep(200);
+      await client.sendKey('Enter');
+      await sleep(600);
+      await client.sendKey('Space');
+      await sleep(400);
+      const retry = await slamToCorner(client, { corner: 'top-left', paceMs: slamPaceMs, verifyMotion: true });
+      slamVerified = retry?.verified ?? slamVerified;
+    }
   }
 
   // 2. Position the cursor at (startX, startY). Post-slam origin is the
@@ -216,10 +252,15 @@ export async function unlockIpad(
 
   const shot = await client.screenshot();
 
+  const slamWarning = slamVerified === false
+    ? ' WARNING: the pre-swipe slam-to-corner motion did not verify (even after a key-sequence retry) — ' +
+      'the cursor origin used for positioning may be wrong; inspect the screenshot carefully.'
+    : '';
   const message =
     `Unlock swipe: ${dragPx} px upward in ${chunkCount} chunks over ${swipeDurationMs} ms. ` +
     `Inspect the returned screenshot to confirm the iPad is now on the home screen ` +
-    `(if still lock screen, the swipe did not clear iPadOS's unlock threshold — retry with larger dragPx).`;
+    `(if still lock screen, the swipe did not clear iPadOS's unlock threshold — retry with larger dragPx).` +
+    slamWarning;
 
   return {
     screenshot: shot.buffer,
@@ -229,6 +270,7 @@ export async function unlockIpad(
     chunkCount,
     swipeDurationMs,
     bounds,
+    slamVerified,
     message,
   };
 }
