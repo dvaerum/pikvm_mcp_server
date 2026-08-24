@@ -215,6 +215,11 @@ describe('unlockIpad', () => {
     // tripping the retry path on the default mock's non-decodable
     // 'fake-jpeg' buffer. This test is about slam mechanics, not the retry
     // path — see the 'slam verifyMotion retry' describe block below for that.
+    //
+    // 30000ms timeout: this test also exercises verifyMotion, which (since
+    // 2026-08-24's P0 cornerTargetFromBounds fix, #69) pays a real
+    // bounds-detection round trip — same convention as the timeout bumps
+    // in the 'slam verifyMotion retry' describe block below.
     const before = await makeScreenshot(1920, 1080, [50, 50, 50]);
     const after = await stampSquare(before, 5, 5, 10, [255, 255, 255]);
     const m = mockClient({ screenshots: [before, after] });
@@ -243,7 +248,7 @@ describe('unlockIpad', () => {
         expect(c.dy).toBe(-127);
       }
     }
-  });
+  }, 30000);
 
   it('slamFirst:false skips slam (no -127, -127 calls)', async () => {
     const m = mockClient();
