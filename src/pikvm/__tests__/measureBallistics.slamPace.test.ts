@@ -20,14 +20,10 @@
  * it was called with, so the test runs fast while still observing exactly
  * what pace was requested.
  *
- * slamCalls is passed explicitly below (rather than left to default) to
- * sidestep a separate, pre-existing bug: measureBallistics defaults
- * slamCalls to `0` as an "auto" sentinel, but slamToCorner resolves it via
- * `options.calls ?? auto`, and `0 ?? auto` is `0`, not auto — so under
- * default options the slam loop never actually runs. That bug is
- * independent of slamPaceMs (unrelated sentinel, same options block) and
- * out of scope here; it's been flagged separately. An explicit slamCalls
- * makes this test exercise the slam loop regardless of that bug's status.
+ * Default options are used throughout (no slamCalls override): the separate
+ * slamCalls=0-sentinel bug that used to make the slam loop a no-op under
+ * default options is now fixed too (see measureBallistics.slamCalls.test.ts),
+ * so this test exercises the real default path end-to-end.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -83,7 +79,6 @@ describe('measureBallistics slam pace default', () => {
       axes: ['x'],
       reps: 1,
       noiseFrames: 1,
-      slamCalls: 12,
     });
 
     // slamToCorner's own default (used because measureBallistics no longer
@@ -103,7 +98,6 @@ describe('measureBallistics slam pace default', () => {
       axes: ['x'],
       reps: 1,
       noiseFrames: 1,
-      slamCalls: 12,
       slamPaceMs: 90,
     });
 
