@@ -65,7 +65,11 @@ export interface MeasureBallisticsOptions {
   callsPerCell?: number;      // default 5 (calls of `magnitude` per rep)
   slowPaceMs?: number;        // default 30 ms between calls in 'slow'
   settleMs?: number;          // default 400 ms after deltas, before screenshot
-  slamCalls?: number;         // default computed from resolution
+  slamCalls?: number;         // default: slamToCorner's own auto-computed
+                              // call count (based on screen resolution).
+                              // Leave unset so that default stays the single
+                              // source of truth — see slamPaceMs below for
+                              // why this class of drift matters.
   slamPaceMs?: number;        // default: slamToCorner's own default pace
                               // (currently 60ms). Leave unset so that default
                               // stays the single source of truth rather than
@@ -489,14 +493,16 @@ async function measureCell(
   pace: Pace,
   rep: number,
   noise: NoiseBaseline | null,
-  options: Omit<Required<Omit<MeasureBallisticsOptions, 'detection' | 'profilePath' | 'verbose' | 'axes' | 'magnitudes' | 'paces'>>, 'slamPaceMs'> & {
+  options: Omit<Required<Omit<MeasureBallisticsOptions, 'detection' | 'profilePath' | 'verbose' | 'axes' | 'magnitudes' | 'paces'>>, 'slamPaceMs' | 'slamCalls'> & {
     detection: DetectionConfig;
     verbose: boolean;
     noiseExcludeRadius: number;
     // Left as number|undefined (not defaulted) so an unset value falls through
     // to slamToCorner's own default instead of being silently overridden by a
-    // value chosen here — see the slamPaceMs doc on MeasureBallisticsOptions.
+    // value chosen here — see the slamPaceMs/slamCalls docs on
+    // MeasureBallisticsOptions.
     slamPaceMs: number | undefined;
+    slamCalls: number | undefined;
   },
 ): Promise<BallisticsSample | null> {
   // Reset: slam to top-left, then nudge past the edge dead zone so the
@@ -622,7 +628,13 @@ export async function measureBallistics(
     callsPerCell: userOptions.callsPerCell ?? 5,
     slowPaceMs: userOptions.slowPaceMs ?? 30,
     settleMs: userOptions.settleMs ?? 150,
-    slamCalls: userOptions.slamCalls ?? 0, // 0 = auto, resolved in slamToCorner
+    // No ?? fallback here: an unset value must reach slamToCorner as
+    // `undefined` so ITS OWN auto-computed call count applies. (Previously
+    // defaulted to the literal 0, which slamToCorner's `options.calls ??
+    // auto` does NOT treat as "auto" — 0 is not nullish — so the slam loop
+    // silently ran zero times under default options. See slamPaceMs above
+    // for the same class of bug already fixed for pace.)
+    slamCalls: userOptions.slamCalls,
     // No ?? fallback here: an unset value must reach slamToCorner as
     // `undefined` so ITS OWN default applies, rather than drifting out of
     // sync with it (see the doc comment on MeasureBallisticsOptions.slamPaceMs
