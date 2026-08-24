@@ -66,7 +66,15 @@ export interface MeasureBallisticsOptions {
   slowPaceMs?: number;        // default 30 ms between calls in 'slow'
   settleMs?: number;          // default 400 ms after deltas, before screenshot
   slamCalls?: number;         // default computed from resolution
-  slamPaceMs?: number;        // default 15 ms between slam calls
+  slamPaceMs?: number;        // default: slamToCorner's own default pace
+                              // (currently 60ms). Leave unset so that default
+                              // stays the single source of truth rather than
+                              // drifting independently here — a controlled
+                              // retest (N=30 each) found the lock-screen risk
+                              // present at a non-trivial rate at BOTH 15ms and
+                              // 60ms, so don't treat overriding this as a fix
+                              // for that risk; see task tracking the
+                              // detect+recover defense for the actual mitigation.
   nudgeCalls?: number;        // default 20 — away-from-edge calls after slam
   nudgeCallPaceMs?: number;   // default 5 ms between nudge calls
   cornerTolerance?: number;   // default 80 px — post-slam cluster must land
@@ -394,10 +402,14 @@ async function measureCell(
   pace: Pace,
   rep: number,
   noise: NoiseBaseline | null,
-  options: Required<Omit<MeasureBallisticsOptions, 'detection' | 'profilePath' | 'verbose' | 'axes' | 'magnitudes' | 'paces'>> & {
+  options: Omit<Required<Omit<MeasureBallisticsOptions, 'detection' | 'profilePath' | 'verbose' | 'axes' | 'magnitudes' | 'paces'>>, 'slamPaceMs'> & {
     detection: DetectionConfig;
     verbose: boolean;
     noiseExcludeRadius: number;
+    // Left as number|undefined (not defaulted) so an unset value falls through
+    // to slamToCorner's own default instead of being silently overridden by a
+    // value chosen here — see the slamPaceMs doc on MeasureBallisticsOptions.
+    slamPaceMs: number | undefined;
   },
 ): Promise<BallisticsSample | null> {
   // Reset: slam to top-left, then nudge past the edge dead zone so the
@@ -524,7 +536,11 @@ export async function measureBallistics(
     slowPaceMs: userOptions.slowPaceMs ?? 30,
     settleMs: userOptions.settleMs ?? 150,
     slamCalls: userOptions.slamCalls ?? 0, // 0 = auto, resolved in slamToCorner
-    slamPaceMs: userOptions.slamPaceMs ?? 15,
+    // No ?? fallback here: an unset value must reach slamToCorner as
+    // `undefined` so ITS OWN default applies, rather than drifting out of
+    // sync with it (see the doc comment on MeasureBallisticsOptions.slamPaceMs
+    // above).
+    slamPaceMs: userOptions.slamPaceMs,
     nudgeCalls: userOptions.nudgeCalls ?? 5,
     nudgeCallPaceMs: userOptions.nudgeCallPaceMs ?? 10,
     cornerTolerance: userOptions.cornerTolerance ?? 80,
