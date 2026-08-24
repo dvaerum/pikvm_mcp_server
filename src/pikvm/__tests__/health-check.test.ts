@@ -21,58 +21,72 @@ function stubClient(o: Overrides = {}): HealthCheckClient {
 }
 
 describe('runHealthCheck', () => {
-  it('reports version and the mouseAbsoluteMode-derived slam-guard implication', async () => {
-    const r = await runHealthCheck(stubClient(), { mouseAbsoluteMode: false });
+  it('reports version and the resolver-mode-derived slam-guard implication', async () => {
+    const r = await runHealthCheck(stubClient(), { resolverMouseAbsolute: false });
     expect(r.lines[0]).toMatch(/Server version: v/);
     expect(r.lines.join('\n')).toMatch(/forbidSlamFallback in click_at\/move_to defaults to true/);
+  });
+
+  it('reports UNKNOWN and skips the forbidSlamFallback line when the resolver mode is null', async () => {
+    const r = await runHealthCheck(stubClient(), { resolverMouseAbsolute: null });
+    expect(r.lines.join('\n')).toMatch(/Resolver mouse mode: UNKNOWN/);
+    expect(r.lines.join('\n')).not.toMatch(/forbidSlamFallback/);
   });
 
   it('surfaces an OFFLINE streamer source with the wake guidance', async () => {
     const r = await runHealthCheck(
       stubClient({ streamer: async () => ({ sourceOnline: false, resolution: { width: 0, height: 0 } }) }),
-      { mouseAbsoluteMode: false },
+      { resolverMouseAbsolute: false },
     );
     expect(r.lines.join('\n')).toMatch(/Streamer source: OFFLINE/);
   });
 
-  it('refreshes mouseAbsoluteMode and prints MISMATCH when the live HID profile disagrees', async () => {
+  it('READ-ONLY: prints MISMATCH when the live HID profile disagrees with the resolver, but returns no writable state', async () => {
     const r = await runHealthCheck(
       stubClient({ hid: async () => ({ mouseOnline: true, mouseAbsolute: true, keyboardOnline: true }) }),
-      { mouseAbsoluteMode: false },
+      { resolverMouseAbsolute: false },
     );
-    expect(r.mouseAbsoluteMode).toBe(true); // reconciled to the live value
+    expect(r).not.toHaveProperty('mouseAbsoluteMode'); // ADR-0002 Phase 1: nothing to write back
     expect(r.lines.join('\n')).toMatch(/MISMATCH/);
+    expect(r.lines.join('\n')).toMatch(/report-only; nothing here writes back/);
   });
 
-  it('leaves mouseAbsoluteMode unchanged and prints no MISMATCH when the profile agrees', async () => {
+  it('prints no MISMATCH when the profile agrees with the resolver', async () => {
     const r = await runHealthCheck(
       stubClient({ hid: async () => ({ mouseOnline: true, mouseAbsolute: false, keyboardOnline: true }) }),
-      { mouseAbsoluteMode: false },
+      { resolverMouseAbsolute: false },
     );
-    expect(r.mouseAbsoluteMode).toBe(false);
+    expect(r.lines.join('\n')).not.toMatch(/MISMATCH/);
+  });
+
+  it('skips the MISMATCH check entirely when the resolver mode is null (nothing to compare against)', async () => {
+    const r = await runHealthCheck(
+      stubClient({ hid: async () => ({ mouseOnline: true, mouseAbsolute: true, keyboardOnline: true }) }),
+      { resolverMouseAbsolute: null },
+    );
     expect(r.lines.join('\n')).not.toMatch(/MISMATCH/);
   });
 
   it('degrades gracefully when a probe throws (partial report, no crash)', async () => {
     const r = await runHealthCheck(
       stubClient({ hid: async () => { throw new Error('boom'); } }),
-      { mouseAbsoluteMode: true },
+      { resolverMouseAbsolute: true },
     );
     expect(r.lines.join('\n')).toMatch(/Live HID profile: FAILED to read \(boom\)/);
     expect(r.lines.join('\n')).toMatch(/Screenshot: FAILED \(no frame\)/);
-    expect(r.mouseAbsoluteMode).toBe(true); // unchanged on failure
+    expect(r.lines.join('\n')).toMatch(/resolver's mode stands \(currently true\)/);
   });
 
   describe('M4 — ground-truth UDC state', () => {
     it('falls back gracefully (no hard fail) when the UDC-state endpoint is unavailable', async () => {
-      const r = await runHealthCheck(stubClient(), { mouseAbsoluteMode: false, udcState: null });
+      const r = await runHealthCheck(stubClient(), { resolverMouseAbsolute: false, udcState: null });
       expect(r.lines.join('\n')).toMatch(/USB HID gadget: unavailable/);
       expect(r.lines.join('\n')).toMatch(/PIKVM_HID_RECOVERY_URL/);
     });
 
     it('shows the ground-truth line + UP verdict when configured, no FLAG-LIE when flags agree', async () => {
       const r = await runHealthCheck(stubClient(), {
-        mouseAbsoluteMode: false,
+        resolverMouseAbsolute: false,
         udcState: { udc: 'fe980000.usb', state: 'configured', online: true },
       });
       const out = r.lines.join('\n');
@@ -84,7 +98,7 @@ describe('runHealthCheck', () => {
     it('flags the DOWN lie: kvmd online but UDC not attached → run pikvm_usb_reconnect', async () => {
       // default stub: mouse=on, keyboard=on (flags say online)
       const r = await runHealthCheck(stubClient(), {
-        mouseAbsoluteMode: false,
+        resolverMouseAbsolute: false,
         udcState: { udc: 'fe980000.usb', state: 'not attached', online: false },
       });
       const out = r.lines.join('\n');
@@ -95,7 +109,7 @@ describe('runHealthCheck', () => {
     it('flags the UP lie: kvmd offline but UDC configured → confirm behaviorally', async () => {
       const r = await runHealthCheck(
         stubClient({ hid: async () => ({ mouseOnline: false, mouseAbsolute: false, keyboardOnline: false }) }),
-        { mouseAbsoluteMode: false, udcState: { udc: 'fe980000.usb', state: 'configured', online: true } },
+        { resolverMouseAbsolute: false, udcState: { udc: 'fe980000.usb', state: 'configured', online: true } },
       );
       const out = r.lines.join('\n');
       expect(out).toMatch(/FLAG-LIE: kvmd says HID offline but UDC is configured/);
@@ -104,7 +118,7 @@ describe('runHealthCheck', () => {
 
     it('drives a DOWN verdict off "absent" (no gadget bound)', async () => {
       const r = await runHealthCheck(stubClient(), {
-        mouseAbsoluteMode: false,
+        resolverMouseAbsolute: false,
         udcState: { udc: null, state: 'absent', online: false },
       });
       expect(r.lines.join('\n')).toMatch(/HID verdict: DOWN \(UDC absent\) → run pikvm_usb_reconnect/);
@@ -116,7 +130,7 @@ describe('runHealthCheck', () => {
 
     it('HID UP (UDC configured) + cursor localizable ⇒ healthy pointer line', async () => {
       const r = await runHealthCheck(withFrame(), {
-        mouseAbsoluteMode: false,
+        resolverMouseAbsolute: false,
         udcState: { udc: 'fe980000.usb', state: 'configured', online: true },
         locateCursor: async () => ({ x: 640, y: 360 }),
       });
@@ -126,7 +140,7 @@ describe('runHealthCheck', () => {
 
     it('HID UP but cursor NOT LOCALIZABLE ⇒ the distinct diagnosis, and does NOT tell the operator to usb_reconnect', async () => {
       const r = await runHealthCheck(withFrame(), {
-        mouseAbsoluteMode: false,
+        resolverMouseAbsolute: false,
         udcState: { udc: 'fe980000.usb', state: 'configured', online: true },
         locateCursor: async () => null,
       });
@@ -139,7 +153,7 @@ describe('runHealthCheck', () => {
     it('HID DOWN (UDC not attached) SKIPS the pointer probe but STILL prints the DOWN verdict', async () => {
       let located = false;
       const r = await runHealthCheck(withFrame(), {
-        mouseAbsoluteMode: false,
+        resolverMouseAbsolute: false,
         udcState: { udc: 'fe980000.usb', state: 'not attached', online: false },
         locateCursor: async () => { located = true; return { x: 1, y: 1 }; },
       });
@@ -163,7 +177,7 @@ describe('runHealthCheck', () => {
           hid: async () => ({ mouseOnline: false, mouseAbsolute: false, keyboardOnline: false }),
         }),
         {
-          mouseAbsoluteMode: false,
+          resolverMouseAbsolute: false,
           udcState: null,
           locateCursor: async () => { located = true; return { x: 1, y: 1 }; },
         },
@@ -188,7 +202,7 @@ describe('runHealthCheck', () => {
           hid: async () => ({ mouseOnline: true, mouseAbsolute: false, keyboardOnline: false }),
         }),
         {
-          mouseAbsoluteMode: false,
+          resolverMouseAbsolute: false,
           udcState: null,
           locateCursor: async () => null, // pointer faded on this staged frame
         },
@@ -207,7 +221,7 @@ describe('runHealthCheck', () => {
           screenshot: async () => ({ buffer: Buffer.from('frame') }),
           hid: async () => ({ mouseOnline: false, mouseAbsolute: false, keyboardOnline: true }),
         }),
-        { mouseAbsoluteMode: false, udcState: null, locateCursor: async () => ({ x: 5, y: 5 }) },
+        { resolverMouseAbsolute: false, udcState: null, locateCursor: async () => ({ x: 5, y: 5 }) },
       );
       const out = r.lines.join('\n');
       expect(out).not.toMatch(/HID DOWN/);
@@ -227,7 +241,7 @@ describe('runHealthCheck', () => {
             screenshot: async () => ({ buffer: Buffer.from('frame') }),
             hid: async () => ({ ...s, mouseAbsolute: false }),
           }),
-          { mouseAbsoluteMode: false, udcState: null, locateCursor: async () => null },
+          { resolverMouseAbsolute: false, udcState: null, locateCursor: async () => null },
         );
         expect(r.lines.join('\n')).not.toMatch(/Fix: run pikvm_usb_reconnect/);
       }
@@ -235,7 +249,7 @@ describe('runHealthCheck', () => {
 
     it('CONFIDENT directive IS allowed from UDC kernel state (not-attached ⇒ HID DOWN + reconnect)', async () => {
       const r = await runHealthCheck(withFrame(), {
-        mouseAbsoluteMode: false,
+        resolverMouseAbsolute: false,
         udcState: { udc: 'fe980000.usb', state: 'not attached', online: false },
         locateCursor: async () => null,
       });

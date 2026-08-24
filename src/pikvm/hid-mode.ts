@@ -12,10 +12,17 @@
  *    short-TTL cached, FAIL-CLOSED when unreachable (mover ops refuse rather than
  *    guess), with a settling gate over the post-switch USB re-enumeration window.
  *
- * `mouseAbsoluteMode` is derived from the resolved mode via {@link modeIsAbsolute}.
+ * ADR-0002 Phase 1: the full set of mode-derived defaults a mover-adjacent
+ * handler needs (mouseAbsolute, strategy, forbidSlamFallback/OnIpad,
+ * chunkPaceMs, maxResidualPx, dimThreshold, applyTapBias) is computed ONCE
+ * per resolve() via {@link HidModeResolver.policy}, rather than re-derived
+ * piecemeal at each call site (previously via a module-global in index.ts).
  */
 import { Agent, ProxyAgent, fetch as undiciFetch } from 'undici';
 import { basicAuthHeader } from '../session-auth.js';
+import { defaultChunkPaceMsFor, defaultMaxResidualPxFor } from './click-verify.js';
+import { VERY_DIM_THRESHOLD } from './brightness.js';
+import type { UdcState } from './hid-recovery.js';
 
 export type HidMode = 'ipad' | 'desktop';
 
@@ -60,6 +67,31 @@ export interface HidModeStatus {
   warnings: string[];
 }
 
+/**
+ * The full set of mode-derived defaults a mover-adjacent handler needs,
+ * computed ONCE per resolve() instead of re-derived piecemeal at each read
+ * site (the ADR-0002 violation Phase 1 fixes — see HidModeResolver.policy()).
+ * `mode`/`mouseAbsolute` are the resolved values; the rest mirror the
+ * per-mode defaults previously scattered across index.ts's handlers.
+ */
+export interface HidPolicy {
+  mode: HidMode;
+  mouseAbsolute: boolean;
+  strategy: 'curve-one-shot' | 'detect-then-move';
+  forbidSlamFallback: boolean;
+  forbidSlamOnIpad: boolean;
+  chunkPaceMs: number | undefined;
+  maxResidualPx: number | undefined;
+  /** Mode-only component of the dim-screen precheck threshold. Callers with
+   *  a singleTap-style override still apply it on top (e.g. `singleTap ?
+   *  0 : policy.dimThreshold`) — this is NOT the final per-call value. */
+  dimThreshold: number;
+  /** Whether the iPad tap-offset bias correction (biasCorrectedAimPoint)
+   *  should be applied to the aim point. Desktop/absolute clicks by
+   *  coordinate, no offset. */
+  applyTapBias: boolean;
+}
+
 export interface HidModeResolverOpts {
   /** Exactly one of `declared` / `endpoint` (enforced by the caller at startup). */
   declared?: HidMode;
@@ -79,6 +111,21 @@ const DEFAULT_TTL_MS = 5000;
 // cleared ONLY by health_check, so polling status left it stuck until an MCP restart).
 // 15s comfortably covers a real post-switch USB re-enumeration (a few seconds).
 const DEFAULT_SETTLE_WINDOW_MS = 15000;
+
+/**
+ * Whether a UDC-state reading is confident enough to clear the settling gate
+ * early (see HidModeResolver.clearSettling()). Only a CONFIRMED-online
+ * reading does — `null` (the UDC reader isn't wired) or `{online: false}`
+ * (confirmed still offline) both leave the gate as-is rather than guessing,
+ * relying on the resolver's own auto-expiry backstop (DEFAULT_SETTLE_WINDOW_MS)
+ * instead. Previously index.ts defaulted an absent reading to "clear anyway"
+ * (`udcState ? udcState.online : true`) — safe to tighten to this stricter
+ * form specifically BECAUSE the auto-expiry backstop already makes a
+ * never-cleared gate self-healing; this just stops guessing early.
+ */
+export function shouldClearSettlingFor(udcState: UdcState | null): boolean {
+  return udcState?.online === true;
+}
 
 /**
  * Resolves the HID mode the mover should use. Declared sources are trivial and
@@ -188,6 +235,36 @@ export class HidModeResolver {
       };
     }
     return { allowed: true, reason: null };
+  }
+
+  /**
+   * The mode-derived defaults a mover-adjacent handler needs, computed once.
+   * Returns **null** exactly when moverGate().allowed is false (mode unknown
+   * or settling) — mirrors moverGate's fail-closed contract so a caller can't
+   * accidentally read a stale/undefined mode by forgetting to check the gate
+   * separately. Handlers should already be refusing via the dispatch-level
+   * MODE_SENSITIVE_TOOLS gate before reaching a policy() call in practice.
+   */
+  policy(): HidPolicy | null {
+    const gate = this.moverGate();
+    if (!gate.allowed) return null;
+    const mode = this.resolvedMode();
+    // moverGate().allowed === true implies resolvedMode() !== null (see
+    // moverGate's own null check above) — this cast documents that invariant
+    // rather than re-deriving it.
+    const m = mode as HidMode;
+    const mouseAbsolute = modeIsAbsolute(m);
+    return {
+      mode: m,
+      mouseAbsolute,
+      strategy: mouseAbsolute ? 'detect-then-move' : 'curve-one-shot',
+      forbidSlamFallback: !mouseAbsolute,
+      forbidSlamOnIpad: !mouseAbsolute,
+      chunkPaceMs: defaultChunkPaceMsFor(mouseAbsolute),
+      maxResidualPx: defaultMaxResidualPxFor(mouseAbsolute),
+      dimThreshold: mouseAbsolute ? 0 : VERY_DIM_THRESHOLD,
+      applyTapBias: !mouseAbsolute,
+    };
   }
 
   status(): HidModeStatus {

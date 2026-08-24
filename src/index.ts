@@ -27,7 +27,7 @@ import { type LoginGate } from './session-auth.js';
 import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, makeSshUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { diagnoseHidFromClient, describeHidDiagnosis } from './pikvm/hid-diagnosis.js';
 import { scaleLearner, MOVER_SCALE_TOOL_NAMES, type MoverScaleToolName } from './pikvm/scale-learner.js';
-import { HidModeResolver, makeHttpHidModeEndpoint, modeIsAbsolute, type HidMode } from './pikvm/hid-mode.js';
+import { HidModeResolver, makeHttpHidModeEndpoint, shouldClearSettlingFor, type HidMode } from './pikvm/hid-mode.js';
 import { loadPersisted, savePersisted, deletePersisted } from './pikvm/scale-persist.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
 import {
@@ -51,11 +51,9 @@ import {
 import { moveToPixel } from './pikvm/move-to.js';
 import {
   verifyClickByDiff,
-  defaultMaxResidualPxFor,
   residualForSkip,
   biasCorrectedAimPoint,
   isScreenTooDimForCursorDetection,
-  defaultChunkPaceMsFor,
   runDismissRecipe,
   formatDismissResult,
 } from './pikvm/click-verify.js';
@@ -69,22 +67,19 @@ import {
   ipadOpenAppSwitcher,
 } from './pikvm/ipad-unlock.js';
 import { detectIpadBounds, ipadContentRegionFromBuffer } from './pikvm/orientation.js';
-import { analyzeBrightness, VERY_DIM_THRESHOLD } from './pikvm/brightness.js';
+import { analyzeBrightness } from './pikvm/brightness.js';
 import { runHealthCheck } from './pikvm/health-check.js';
 
 // Defer initialization to main() for proper error handling
 let pikvm: PiKVMClient;
 let calibrationConfig: { rounds: number; verifyRounds: number; moveDelayMs: number };
 let cachedProfile: BallisticsProfile | null = null;
-// Default to FALSE (relative mode = treat as iPad until proven otherwise) so
-// that forbidSlamFallback is automatically TRUE on startup-detection failure.
-// Phase 33: live-verified 2026-04-26 that defaulting to true caused
-// pikvm_mouse_click_at to slam on iPad and re-lock the screen when
-// getHidProfile() failed at startup (network blip, slow PiKVM, etc.).
-// Default-unsafe is unacceptable when the failure mode is "destroys the
-// test environment". Refresh on first successful startup detection; if
-// detection fails, the safe-for-iPad default stands.
-let mouseAbsoluteMode: boolean = false;
+// ADR-0002 Phase 1: there is no mouseAbsoluteMode module global anymore —
+// hidModeResolver (below) is the single source of truth for the mode; every
+// read site now calls hidModeResolver.policy() instead of a second, second-
+// hand copy. Phase 33's "an unsafe default is unacceptable" lesson (a `true`
+// default caused a slam-and-relock on startup-detection failure) lives on in
+// policy()'s own `?? false` fallbacks at each call site.
 const lock = new BusyLock();
 
 // Host recovery trigger for the HID-recovery ladder's rungs 2-3 (UDC rebind /
@@ -184,15 +179,15 @@ function hidModeEndpointConfig(
   };
 }
 /**
- * Resolve the current HID mode and reconcile the module-global mouseAbsoluteMode.
- * Cheap no-op for a declared target; a TTL-cached endpoint read otherwise. Leaves
- * mouseAbsoluteMode UNCHANGED when the mode is unknown (unreachable) — the mover
- * gate refuses in that state, so the last value is never acted on.
+ * Force the resolver to refresh (or reuse its TTL cache — a cheap no-op for a
+ * declared target). ADR-0002 Phase 1: there is no module-global to reconcile
+ * anymore — callers read the current mode via hidModeResolver.policy() /
+ * .moverGate() / .status() after calling this, all derived from the SAME
+ * resolver state, so there is only one source of truth.
  */
 async function refreshHidMode(): Promise<void> {
   if (!hidModeResolver) return;
-  const mode = await hidModeResolver.resolve();
-  if (mode) mouseAbsoluteMode = modeIsAbsolute(mode);
+  await hidModeResolver.resolve();
 }
 /** The set of pointer-driving tools whose correctness depends on the HID mode.
  *  In endpoint mode these are REFUSED while the mode is unknown (unreachable) or
@@ -1192,7 +1187,7 @@ const LOGIN_TOOL: Tool = {
 // transport can mint a fresh Server per session — concurrent clients must not
 // share one Server or they collide on JSON-RPC request IDs. The stdio path
 // calls it exactly once. All heavy shared state (the PiKVMClient, the busy
-// lock, mouseAbsoluteMode) stays in module globals, so per-session Servers are
+// lock, hidModeResolver) stays in module globals, so per-session Servers are
 // cheap wrappers over the same device connection.
 //
 // `gate` (Streamable HTTP + --allow-tool-login only): when present, this session
@@ -1214,21 +1209,27 @@ async function handle_pikvm_version(args: Record<string, unknown>): Promise<Call
 
 async function handle_pikvm_health_check(args: Record<string, unknown>): Promise<CallToolResult> {
         // Orchestration lives in pikvm/health-check.ts so it is unit-testable
-        // with a stub client. It reconciles the in-process mouseAbsoluteMode
-        // flag against the live HID profile and returns the refreshed value.
+        // with a stub client. ADR-0002 Phase 1: it is READ-ONLY — takes the
+        // resolver's currently-known mode and reports (never reconciles) any
+        // divergence from a live HID profile read. The resolver is the only
+        // place the mode is ever written.
         // M4: read the ground-truth UDC state (null if the endpoint isn't wired).
         const udcState = await getUdcStateReader()();
-        const health = await runHealthCheck(pikvm, { mouseAbsoluteMode, udcState });
-        mouseAbsoluteMode = health.mouseAbsoluteMode;
+        const health = await runHealthCheck(pikvm, {
+          resolverMouseAbsolute: hidModeResolver?.policy()?.mouseAbsolute ?? null,
+          udcState,
+        });
         // (#51) endpoint mode: the appliance /hidmode is authoritative, so re-derive
-        // (a health_check is a natural reconnect point) — this overrides the device
-        // reconcile above. The re-enumeration after a switch is complete once the HID
-        // is back online (UDC ground truth preferred; a successful health read is the
-        // fallback), so clear the settling gate then. See ADR 0002.
+        // (a health_check is a natural reconnect point). The re-enumeration after a
+        // switch is complete once the HID is back online — clear the settling gate
+        // then, but ONLY on a CONFIRMED-online UDC reading (shouldClearSettlingFor):
+        // a null reading (no UDC reader wired) or a confirmed-offline one both leave
+        // the gate as-is rather than guessing, relying on the resolver's own auto-
+        // expiry backstop instead. See ADR 0002.
         if (hidModeResolver?.isEndpoint) {
           hidModeResolver.markReconnect();
           await refreshHidMode();
-          if (udcState ? udcState.online : true) hidModeResolver.clearSettling();
+          if (shouldClearSettlingFor(udcState)) hidModeResolver.clearSettling();
         }
         return {
           content: [{ type: 'text', text: health.lines.join('\n') }],
@@ -1420,8 +1421,11 @@ async function handle_pikvm_hid_reset(args: Record<string, unknown>): Promise<Ca
             'Physically re-plug the USB-C data cable (not charge-only) or restart the target.',
           );
         }
-        // Keep the in-process absolute-mode flag consistent with what we just read.
-        mouseAbsoluteMode = after.mouseAbsolute;
+        // ADR-0002 Phase 1: no in-process flag to keep consistent anymore — force
+        // the resolver to re-derive on its next read instead of trusting its TTL
+        // cache (a HID reset is exactly the kind of event that invalidates it),
+        // the same invalidation hidModeResolver.set() uses after a mode switch.
+        hidModeResolver?.markReconnect();
         return { content: [{ type: 'text', text: lines.join('\n') }] };
 }
 
@@ -1649,13 +1653,21 @@ async function handle_pikvm_mouse_scroll(args: Record<string, unknown>): Promise
           // use: curve-one-shot (relative emits) on iPad, detect-then-move
           // (absolute honored) on desktop. The mover itself is untouched — we
           // just call it from here instead of raw mouseMove.
-          const chunkPace = defaultChunkPaceMsFor(mouseAbsoluteMode);
+          // ADR-0002 Phase 1: this handler is in MODE_SENSITIVE_TOOLS, so the
+          // dispatch preamble's moverGate() check already refused the call if
+          // the mode were unknown/settling — policy() is non-null here. Still
+          // checked explicitly (not asserted) so a future gate change can't
+          // silently let a null policy reach the mover.
+          const policy = hidModeResolver?.policy();
+          if (!policy) {
+            return { content: [{ type: 'text', text: 'Error: HID mode unknown or settling — refusing to position the pointer.' }], isError: true };
+          }
           await moveToPixel(pikvm, { x: cx, y: cy }, {
-            strategy: !mouseAbsoluteMode ? 'curve-one-shot' : 'detect-then-move',
-            forbidSlamFallback: !mouseAbsoluteMode,
-            forbidSlamOnIpad: !mouseAbsoluteMode,
+            strategy: policy.strategy,
+            forbidSlamFallback: policy.forbidSlamFallback,
+            forbidSlamOnIpad: policy.forbidSlamOnIpad,
             profile: cachedProfile,
-            ...(chunkPace !== undefined ? { chunkPaceMs: chunkPace } : {}),
+            ...(policy.chunkPaceMs !== undefined ? { chunkPaceMs: policy.chunkPaceMs } : {}),
           });
           movedNote = ` at (${cx}, ${cy})`;
         }
@@ -1819,6 +1831,15 @@ async function handle_pikvm_ipad_app_switcher(args: Record<string, unknown>): Pr
 }
 
 async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promise<CallToolResult> {
+        // ADR-0002 Phase 1: this handler is in MODE_SENSITIVE_TOOLS, so the
+        // dispatch preamble's moverGate() check already refused the call if
+        // the mode were unknown/settling — policy() is non-null here. Still
+        // checked explicitly (not asserted) so a future gate change can't
+        // silently let a null policy reach the mover.
+        const policy = hidModeResolver?.policy();
+        if (!policy) {
+          return { content: [{ type: 'text', text: 'Error: HID mode unknown or settling — refusing to move.' }], isError: true };
+        }
         const tx = requireNumber(args.x, 'x');
         const ty = requireNumber(args.y, 'y');
         // M8: parse+validate capture up front so a bad request errors before
@@ -1836,7 +1857,7 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
           // keeps detect-then-move. Failure mode is safe: the proximity gate
           // skips rather than wrong-clicks. Curve is calibrated for the current
           // iPad-in-HDMI geometry (see curve-mover.ts / calibrateFullReport).
-          !mouseAbsoluteMode ? 'curve-one-shot' : 'detect-then-move',
+          policy.strategy,
         );
         const assumeX = validateNumber(args.assumeCursorAtX);
         const assumeY = validateNumber(args.assumeCursorAtY);
@@ -1872,10 +1893,10 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
             // the hot-corner gesture and re-locks the screen. Refuse
             // the silent slam fallback; force the caller to handle
             // detection failure explicitly.
-            forbidSlamFallback: !mouseAbsoluteMode,
+            forbidSlamFallback: policy.forbidSlamFallback,
           },
         );
-        if (!mouseAbsoluteMode) recordMoveSample(result, mvLearnScaleX, mvLearnScaleY, false);
+        if (!policy.mouseAbsolute) recordMoveSample(result, mvLearnScaleX, mvLearnScaleY, false);
         if (capture) {
           // "during" = end-of-move cursor-alive frame (before the ~1-2s fade);
           // "after" = a post-move frame confirming the landed state.
@@ -1891,6 +1912,15 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
 }
 
 async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promise<CallToolResult> {
+        // ADR-0002 Phase 1: this handler is in MODE_SENSITIVE_TOOLS, so the
+        // dispatch preamble's moverGate() check already refused the call if
+        // the mode were unknown/settling — policy() is non-null here. Still
+        // checked explicitly (not asserted) so a future gate change can't
+        // silently let a null policy reach the mover.
+        const policy = hidModeResolver?.policy();
+        if (!policy) {
+          return { content: [{ type: 'text', text: 'Error: HID mode unknown or settling — refusing to click.' }], isError: true };
+        }
         const tx = requireNumber(args.x, 'x');
         const ty = requireNumber(args.y, 'y');
         const button = validateEnum(args.button, VALID_BUTTONS, 'left');
@@ -1911,7 +1941,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
           // keeps detect-then-move. Failure mode is safe: the proximity gate
           // skips rather than wrong-clicks. Curve is calibrated for the current
           // iPad-in-HDMI geometry (see curve-mover.ts / calibrateFullReport).
-          !mouseAbsoluteMode ? 'curve-one-shot' : 'detect-then-move',
+          policy.strategy,
         );
         const assumeX = validateNumber(args.assumeCursorAtX);
         const assumeY = validateNumber(args.assumeCursorAtY);
@@ -1952,12 +1982,12 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         const minBrightnessArg = validateNumber(args.minBrightness, 0, 255);
         const minBrightness = minBrightnessArg !== undefined
           ? minBrightnessArg
-          : (singleTap || mouseAbsoluteMode ? 0 : VERY_DIM_THRESHOLD);
+          : (singleTap ? 0 : policy.dimThreshold);
 
         // Phase 136 / Phase 156: iPad targets get chunkPaceMs=100ms
         // open-loop default; desktop uses caller's default. Helper is
         // regression-pinned by defaultChunkPaceMsFor.test.ts.
-        const chunkPace = defaultChunkPaceMsFor(mouseAbsoluteMode);
+        const chunkPace = policy.chunkPaceMs;
         // Compute the acceptance gate (maxResidualPx) ONCE, here, so the SAME value
         // both (a) threads into the mover — which derives its correction gate strictly
         // below it, re-shooting a residual in the dead band instead of skipping it —
@@ -1966,13 +1996,13 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // clicker's acceptance gate (25), stranding [25,30) residuals (2026-07-31).
         const effectiveMaxResidualPx = args.maxResidualPx !== undefined
           ? Number(args.maxResidualPx)
-          : defaultMaxResidualPxFor(mouseAbsoluteMode);
+          : policy.maxResidualPx;
         // (a) task #38: on iPad the tap lands ~5.9px ABOVE the detected pointer, so
         // aim the pointer that much LOWER to land the tap on the requested target.
         // The move AND the residual gate use this aim (cursor-near-aim ⟺ tap-near-
         // target); the verify region stays on the original target, where the tap's UI
         // effect actually appears. Desktop/absolute clicks by coordinates → no offset.
-        const aimPoint = mouseAbsoluteMode ? { x: tx, y: ty } : biasCorrectedAimPoint({ x: tx, y: ty });
+        const aimPoint = policy.applyTapBias ? biasCorrectedAimPoint({ x: tx, y: ty }) : { x: tx, y: ty };
         // (#41) apply the passive learner's current per-axis scale; capture the values
         // so the post-move sample is recorded against the scale that was actually in
         // force (impliedScale = achieved/planned × sApplied).
@@ -1985,7 +2015,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
           acceptGatePx: effectiveMaxResidualPx,
           curveScaleX: learnScaleX,
           curveScaleY: learnScaleY,
-          forbidSlamFallback: !mouseAbsoluteMode,
+          forbidSlamFallback: policy.forbidSlamFallback,
           // Desktop full-frame degrade: the Phase-32 slam guard exists ONLY to
           // avoid the iPadOS hot-corner re-lock, so it must be disarmed in
           // absolute/desktop mode. Otherwise a blank/uniform desktop frame
@@ -1993,7 +2023,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
           // type undetermined" — the guard presumes an undetermined target is an
           // iPad. `--target desktop` declares it is not, so opt out (safe: no
           // iPad hot-corners exist on a desktop). Mirrors forbidSlamFallback above.
-          forbidSlamOnIpad: !mouseAbsoluteMode,
+          forbidSlamOnIpad: policy.forbidSlamOnIpad,
           ...(chunkPace !== undefined ? { chunkPaceMs: chunkPace } : {}),
         };
         const verifyOpts = {
@@ -2063,7 +2093,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // (#41) feed the free first-shot sample to the passive scale learner. The
         // learner's own hygiene rejects a faded-cursor-wake start or a forced click;
         // its pre-filter + median absorb the rest. iPad/relative only.
-        if (!mouseAbsoluteMode) recordMoveSample(result, learnScaleX, learnScaleY, force);
+        if (!policy.mouseAbsolute) recordMoveSample(result, learnScaleX, learnScaleY, force);
         // False-success safety fix (2026-07-27): on a relative-mouse (iPad)
         // target a null finalDetectedPosition means the mover could NOT verify
         // where the cursor is — e.g. a fully-faded cursor makes curve-one-shot's
@@ -2076,8 +2106,8 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // detect fix restores real landings here; until then we skip truthfully.
         // force:true is the explicit escape hatch — it fires the click anyway
         // (below) at the predicted position and flags the result UNVERIFIED.
-        const forcedUnverified = !mouseAbsoluteMode && result.finalDetectedPosition === null && force;
-        if (!mouseAbsoluteMode && result.finalDetectedPosition === null && !force) {
+        const forcedUnverified = !policy.mouseAbsolute && result.finalDetectedPosition === null && force;
+        if (!policy.mouseAbsolute && result.finalDetectedPosition === null && !force) {
           return {
             content: [
               {
@@ -2104,7 +2134,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
         // the Apple Account row instead of Software Update). Skip rather than
         // click the wrong thing. iPad-only (desktop positions by coordinates);
         // maxResidualPx<=0/undefined disables the gate.
-        if (!mouseAbsoluteMode && result.finalDetectedPosition) {
+        if (!policy.mouseAbsolute && result.finalDetectedPosition) {
           const maxResidualPx = effectiveMaxResidualPx; // same value threaded into the mover above
           if (maxResidualPx !== undefined && maxResidualPx > 0) {
             const skipResidual = residualForSkip(
@@ -2396,9 +2426,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   // Gate absolute-mouse-only tools when the target reports mouse.absolute=false.
   // (#51) HID-mode mover gate: pointer-driving tools need the mode KNOWN and the HID
-  // settled before they move. Refreshing here also reconciles mouseAbsoluteMode for the
-  // gate below. Declared targets always pass; an endpoint source refuses when the mode
-  // is unknown (endpoint unreachable) or settling (post-switch re-enumeration). See ADR 0002.
+  // settled before they move. Refreshing here also gives the policy() read below a
+  // fresh resolve. Declared targets always pass; an endpoint source refuses when the
+  // mode is unknown (endpoint unreachable) or settling (post-switch re-enumeration).
+  // See ADR 0002.
   if (MODE_SENSITIVE_TOOLS.has(name)) {
     await refreshHidMode();
     const gate = hidModeResolver?.moverGate();
@@ -2407,9 +2438,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   }
 
+  // ADR-0002 Phase 1: read hidModeResolver.policy() once instead of a module
+  // global. Non-null for MODE_SENSITIVE_TOOLS (the gate above just confirmed
+  // it); for the handful of non-mover calibration CRUD tools outside that set
+  // (pikvm_set/get/clear_calibration) it falls back to `false` — the same
+  // safe default the old mouseAbsoluteMode global started at (Phase 33: an
+  // unsafe default is unacceptable, see the resolver construction below).
+  const currentMouseAbsolute = hidModeResolver?.policy()?.mouseAbsolute ?? false;
+
   // The relative-mode tools (pikvm_mouse_move with relative:true,
   // pikvm_mouse_click_at, etc.) remain available.
-  if (!mouseAbsoluteMode) {
+  if (!currentMouseAbsolute) {
     if (requiresAbsoluteMouse(name, args as Record<string, unknown>)) {
       return {
         content: [
@@ -2425,7 +2464,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   // Mirror of the above (#3): a FORCED relative emit into an absolute/desktop gadget is
   // a documented silent no-op (ADR 0002) — refuse rather than report a false success.
-  if (mouseAbsoluteMode) {
+  if (currentMouseAbsolute) {
     if (requiresRelativeMouse(name, args as Record<string, unknown>)) {
       return {
         content: [
@@ -2590,11 +2629,14 @@ async function main() {
     console.error(`Loaded ballistics profile (${cachedProfile.samples.length} samples).`);
   }
 
-  // Detect whether the target is in absolute or relative mouse mode so we
-  // can gate absolute-only tools (calibration, etc.) when running on iPad.
+  // Detect whether the target is in absolute or relative mouse mode — PURELY
+  // a diagnostic (compared below against the declared/resolved mode to warn
+  // on a mismatch). ADR-0002 Phase 1: the resolver constructed below, not
+  // this raw read, is the source of truth for what the mover actually uses.
+  let hidDetectedAbsolute = false; // Phase 33's safe default: relative/iPad on read failure
   try {
     const hid = await pikvm.getHidProfile();
-    mouseAbsoluteMode = hid.mouseAbsolute;
+    hidDetectedAbsolute = hid.mouseAbsolute;
     console.error(
       `HID: mouse=${hid.mouseOnline ? 'online' : 'offline'}/${hid.mouseAbsolute ? 'absolute' : 'relative'}, ` +
         `keyboard=${hid.keyboardOnline ? 'online' : 'offline'}.`,
@@ -2611,7 +2653,8 @@ async function main() {
   } catch (err) {
     console.error(
       `Warning: could not read HID profile (${(err as Error).message}). ` +
-        'Defaulting to absolute mode; relative-mode-only tools may surface confusing errors on this device.',
+        'Defaulting to relative/iPad mode for this diagnostic only (Phase 33\'s safe default); ' +
+        'the resolver below is the actual source of truth for the mover.',
     );
   }
 
@@ -2619,16 +2662,20 @@ async function main() {
   // is kept only for the mismatch warning). DECLARED (--target) = a fixed mode, exactly
   // as before. ENDPOINT (PIKVM_HIDMODE_URL) = derived from the appliance /hidmode, and
   // UNKNOWN when unreachable (mover ops then refuse rather than guess). See ADR 0002.
-  const hidDetectedAbsolute = mouseAbsoluteMode; // snapshot before the resolver overrides it
   hidModeResolver = hidModeSource.kind === 'endpoint'
     ? new HidModeResolver({ endpoint: makeHttpHidModeEndpoint(hidModeEndpointConfig(config.pikvm)) })
     : new HidModeResolver({ declared: hidModeSource.target });
   await refreshHidMode();
+  // ADR-0002 Phase 1: read the resolver's mode once via policy() for the log
+  // lines below, instead of a module-global. false when unresolved (endpoint
+  // unreachable at startup) — the "Control path: ... UNKNOWN" branch below
+  // covers that case explicitly, so this fallback is cosmetic only.
+  const resolvedAbsolute = hidModeResolver.policy()?.mouseAbsolute ?? false;
   if (hidModeSource.kind === 'endpoint') {
     const st = hidModeResolver.status();
     console.error(
       st.mode
-        ? `Control path: derived ${st.mode} → ${mouseAbsoluteMode ? 'desktop (absolute, detect-then-move)' : 'iPad (relative, curve-one-shot + cascade)'} from the appliance /hidmode endpoint.`
+        ? `Control path: derived ${st.mode} → ${resolvedAbsolute ? 'desktop (absolute, detect-then-move)' : 'iPad (relative, curve-one-shot + cascade)'} from the appliance /hidmode endpoint.`
         : `⚠ Control path: HID mode UNKNOWN — the appliance /hidmode endpoint is unreachable; pointer ops will REFUSE until it answers (keyboard / screenshot / recovery still work).`,
     );
   } else {
@@ -2640,7 +2687,7 @@ async function main() {
     }
     console.error(
       `Control path: ${cli.target} → ` +
-        `${mouseAbsoluteMode ? 'desktop (absolute, detect-then-move)' : 'iPad (relative, curve-one-shot + cascade)'} (declared).`,
+        `${resolvedAbsolute ? 'desktop (absolute, detect-then-move)' : 'iPad (relative, curve-one-shot + cascade)'} (declared).`,
     );
   }
 

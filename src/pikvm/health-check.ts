@@ -4,10 +4,15 @@
  * with a stub client (the switch case could only be exercised by standing up the
  * whole MCP server).
  *
- * Pure orchestration: takes the current in-process `mouseAbsoluteMode` flag and
- * returns the report lines PLUS the (possibly refreshed) flag — the handler
- * assigns it back. Each probe is independently guarded so one failure still
- * yields a useful partial report.
+ * ADR-0002 Phase 1: READ-ONLY. Takes the HidModeResolver's currently-known mode
+ * and reports (never reconciles/writes back) any divergence against a live HID
+ * profile read. The previous contract reconciled a caller-owned mutable flag and
+ * returned the (possibly refreshed) value for the caller to write back — that
+ * reconcile-and-return shape was itself the ADR violation (a second, health-
+ * check-owned copy of the mode, alongside the resolver): the resolver is the
+ * single source of truth, this function only diagnoses drift against it. Each
+ * probe is independently guarded so one failure still yields a useful partial
+ * report.
  */
 import { PiKVMClient } from './client.js';
 import { detectIpadBoundsFromBuffer, boundsToRegion } from './orientation.js';
@@ -25,14 +30,16 @@ export type HealthCheckClient = Pick<
 
 export interface HealthCheckResult {
   lines: string[];
-  /** The in-process flag after reconciliation with the live HID profile. */
-  mouseAbsoluteMode: boolean;
 }
 
 export async function runHealthCheck(
   pikvm: HealthCheckClient,
   opts: {
-    mouseAbsoluteMode: boolean;
+    /** HidModeResolver.policy()?.mouseAbsolute — the resolver's currently-known
+     *  mode, READ-ONLY ground truth. null = unknown (endpoint unreachable or
+     *  settling); this function reports that state, it never guesses a value
+     *  or writes one back. */
+    resolverMouseAbsolute: boolean | null;
     /**
      * M4: ground-truth UDC state (from GET {PIKVM_HID_RECOVERY_URL}/udc-state),
      * already resolved by the caller. `null` = endpoint unconfigured/unreachable
@@ -47,14 +54,18 @@ export async function runHealthCheck(
     locateCursor?: CursorLocator;
   },
 ): Promise<HealthCheckResult> {
-  let mouseAbsoluteMode = opts.mouseAbsoluteMode;
+  const resolverMouseAbsolute = opts.resolverMouseAbsolute;
   const lines: string[] = [];
   lines.push(`Server version: v${VERSION}`);
-  lines.push(`mouseAbsoluteMode (in-process flag): ${mouseAbsoluteMode}`);
   lines.push(
-    `  → forbidSlamFallback in click_at/move_to defaults to ${!mouseAbsoluteMode} ` +
-    `(true = slam-fallback BLOCKED, safe for iPad).`,
+    `Resolver mouse mode: ${resolverMouseAbsolute === null ? 'UNKNOWN (endpoint unreachable or settling — mover ops refuse)' : resolverMouseAbsolute}`,
   );
+  if (resolverMouseAbsolute !== null) {
+    lines.push(
+      `  → forbidSlamFallback in click_at/move_to defaults to ${!resolverMouseAbsolute} ` +
+      `(true = slam-fallback BLOCKED, safe for iPad).`,
+    );
+  }
 
   // Phase 189: report streamer source state up-front. When iPad is
   // off (battery dead, mid-reboot, HDMI cable unplugged), screenshot
@@ -105,20 +116,21 @@ export async function runHealthCheck(
       `${hid.mouseAbsolute ? 'absolute' : 'relative'}, ` +
       `keyboard=${hid.keyboardOnline ? 'online' : 'offline'}.`,
     );
-    if (hid.mouseAbsolute !== mouseAbsoluteMode) {
+    if (resolverMouseAbsolute !== null && hid.mouseAbsolute !== resolverMouseAbsolute) {
       lines.push(
-        `  ⚠ MISMATCH: in-process flag (${mouseAbsoluteMode}) differs from live profile ` +
-        `(${hid.mouseAbsolute}). Restart the MCP server to pick up the live value, ` +
-        `or use this call to refresh: the in-process flag is now updated.`,
+        `  ⚠ MISMATCH: resolver mode (${resolverMouseAbsolute}) differs from the live profile ` +
+        `(${hid.mouseAbsolute}) read just now. The resolver (not this diagnostic read) is what the ` +
+        `mover actually uses — this is report-only; nothing here writes back. See ADR 0002: for an ` +
+        `endpoint source the resolver re-derives from the appliance /hidmode on the next mode-` +
+        `sensitive call or health_check, so a real mismatch should self-correct shortly; a persistent ` +
+        `one means the appliance and the device disagree about the assembled gadget.`,
       );
-      mouseAbsoluteMode = hid.mouseAbsolute;
     }
   } catch (err) {
     lines.push(`Live HID profile: FAILED to read (${(err as Error).message}).`);
     lines.push(
-      `  → Cannot verify mouse mode from PiKVM. The in-process flag stands ` +
-      `(currently ${mouseAbsoluteMode}). If your target is iPad, the safe default ` +
-      `(false) protects against slam-on-startup-failure.`,
+      `  → Cannot verify mouse mode from PiKVM against this diagnostic read. The resolver's ` +
+      `mode stands (currently ${resolverMouseAbsolute === null ? 'UNKNOWN' : resolverMouseAbsolute}).`,
     );
   }
 
@@ -250,5 +262,5 @@ export async function runHealthCheck(
     }
   }
 
-  return { lines, mouseAbsoluteMode };
+  return { lines };
 }
