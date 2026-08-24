@@ -26,7 +26,7 @@ import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
 import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, makeSshUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { diagnoseHidFromClient, describeHidDiagnosis } from './pikvm/hid-diagnosis.js';
-import { scaleLearner, MOVER_SCALE_TOOL_NAMES, type MoverScaleToolName } from './pikvm/scale-learner.js';
+import { scaleLearner } from './pikvm/scale-learner.js';
 import { HidModeResolver, makeHttpHidModeEndpoint, shouldClearSettlingFor, type HidMode } from './pikvm/hid-mode.js';
 import { loadPersisted, savePersisted, deletePersisted } from './pikvm/scale-persist.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
@@ -189,21 +189,6 @@ async function refreshHidMode(): Promise<void> {
   if (!hidModeResolver) return;
   await hidModeResolver.resolve();
 }
-/** The set of pointer-driving tools whose correctness depends on the HID mode.
- *  In endpoint mode these are REFUSED while the mode is unknown (unreachable) or
- *  settling (post-switch re-enumeration). Keyboard / screenshot / health / recovery
- *  are deliberately excluded — they work regardless of mouse mode. Cross-checked
- *  against the tool list by mcp-hidmode-gate.test.ts so a new mover can't slip in. */
-const MODE_SENSITIVE_TOOLS = new Set<string>([
-  'pikvm_mouse_move', 'pikvm_mouse_click', 'pikvm_mouse_scroll',
-  'pikvm_mouse_move_to', 'pikvm_mouse_click_at',
-  'pikvm_calibrate', 'pikvm_auto_calibrate', 'pikvm_measure_ballistics',
-  'pikvm_seed_cursor_template',
-  'pikvm_ipad_unlock', 'pikvm_ipad_unlock_with_code', 'pikvm_ipad_lock',
-  'pikvm_ipad_home', 'pikvm_ipad_app_switcher', 'pikvm_ipad_launch_app',
-  'pikvm_dismiss_popup',
-]);
-
 // (#51) HID-mode tools. status reads the derived/declared mode; set switches the
 // appliance mode via POST /hidmode (georg's design: settable on kvmd API, web UI,
 // AND the MCP). See ADR 0002.
@@ -274,31 +259,6 @@ const ABSOLUTE_MOUSE_NOTE =
   'pikvm_mouse_click_at, pikvm_mouse_move_to, pikvm_mouse_click. See docs/skills/ipad-keyboard-workflow.md ' +
   'for the recommended pattern.';
 
-/**
- * The single source of truth for "which calls need mouse.absolute=true".
- * Each entry is a predicate over the call's args (a bare `() => true` for tools
- * that are always absolute-only). Previously this knowledge was split across a
- * name Set and a separate `callsAbsoluteMode` special-case function. When the
- * device reports relative mode, a matching call is gated with ABSOLUTE_MOUSE_NOTE.
- */
-const ABSOLUTE_MOUSE_GATE: Record<string, (args: Record<string, unknown>) => boolean> = {
-  // Calibration tools drive absolute positioning end-to-end.
-  pikvm_calibrate: () => true,
-  pikvm_set_calibration: () => true,
-  pikvm_get_calibration: () => true,
-  pikvm_clear_calibration: () => true,
-  pikvm_auto_calibrate: () => true,
-  // For move/click the SHAPE of the call decides: x/y mean absolute pixels.
-  pikvm_mouse_move: (args) => args.relative !== true, // absolute unless relative:true
-  pikvm_mouse_click: (args) => typeof args.x === 'number' && typeof args.y === 'number',
-};
-
-/** True when this call requires an absolute-mode mouse on the target. */
-function requiresAbsoluteMouse(name: string, args: Record<string, unknown>): boolean {
-  const gate = ABSOLUTE_MOUSE_GATE[name];
-  return gate ? gate(args) : false;
-}
-
 const RELATIVE_MOUSE_NOTE =
   'This target reports mouse.absolute=true (desktop, dual absolute+relative gadget). ' +
   'A forced relative:true emit here is a documented silent no-op (see ADR 0002: relative ' +
@@ -306,25 +266,6 @@ const RELATIVE_MOUSE_NOTE =
   'pass absolute pixel coordinates instead (omit relative, or pass relative:false), or use ' +
   'pikvm_mouse_move_to / pikvm_mouse_click_at, which already select the correct strategy ' +
   'for this mode.';
-
-/**
- * The mirror of ABSOLUTE_MOUSE_GATE: "which calls need mouse.absolute=false" (an explicit
- * FORCED relative emit). Currently only pikvm_mouse_move's relative:true path — the one
- * place a caller can force a relative HID report regardless of the assembled gadget.
- * (#3, it-03400 2026-08-10): on a desktop/absolute target this was a silent no-op — kvmd
- * accepted the event and the handler reported success, but nothing moved. Gated here
- * rather than let the caller believe a move landed that never did. Symmetric with the
- * ABSOLUTE_MOUSE_GATE check above (which catches the same mismatch in the other direction).
- */
-const RELATIVE_MOUSE_GATE: Record<string, (args: Record<string, unknown>) => boolean> = {
-  pikvm_mouse_move: (args) => args.relative === true,
-};
-
-/** True when this call requires a relative-mode mouse on the target (a forced relative emit). */
-function requiresRelativeMouse(name: string, args: Record<string, unknown>): boolean {
-  const gate = RELATIVE_MOUSE_GATE[name];
-  return gate ? gate(args) : false;
-}
 
 // ============================================================================
 // Input Validation Helpers
@@ -446,13 +387,43 @@ const CAPTURE_SCHEMA_PROPS = {
 
 // Define available tools
 type ToolHandler = (args: Record<string, unknown>) => Promise<CallToolResult>;
-interface ToolEntry extends Tool {
-  handler: ToolHandler;
+
+/**
+ * Per-tool policy declaration (F6, architecture review). Replaces 5 previously
+ * hand-maintained parallel lists (MODE_SENSITIVE_TOOLS, ABSOLUTE_MOUSE_GATE,
+ * RELATIVE_MOUSE_GATE, the busy-lock exclusion literal, MOVER_SCALE_TOOL_NAMES's
+ * registration filter) with one declaration living next to each tool's own
+ * entry, so a new tool can't slip through the dispatch gates by omission —
+ * `capabilities` is REQUIRED on ToolEntry below, not optional.
+ */
+interface ToolCapabilities {
+  /** Correctness depends on the HID mode (absolute/relative) — REFUSED while
+   *  the mode is unknown or settling. Derives MODE_SENSITIVE_TOOLS. */
+  modeSensitive: boolean;
+  /** True when this call (given its args) requires mouse.absolute=true on the
+   *  target. Derives ABSOLUTE_MOUSE_GATE / requiresAbsoluteMouse. */
+  requiresAbsolute?: (args: Record<string, unknown>) => boolean;
+  /** True when this call (given its args) requires mouse.absolute=false — an
+   *  explicit FORCED relative emit. Derives RELATIVE_MOUSE_GATE / requiresRelativeMouse. */
+  requiresRelative?: (args: Record<string, unknown>) => boolean;
+  /** This tool itself is the long-running op that holds `lock` — exempt it
+   *  from the generic busy-lock refusal so its own handler can return a more
+   *  specific error/status instead. Derives the busy-lock exclusion check. */
+  longRunning?: boolean;
+  /** Registered only when the named experimental feature is opted in (env
+   *  flag). Derives activeToolRegistry's filter (previously MOVER_SCALE_TOOL_NAMES). */
+  featureFlag?: 'moverScale';
 }
 
-const toolRegistry: ToolEntry[] = [
+interface ToolEntry extends Tool {
+  handler: ToolHandler;
+  capabilities: ToolCapabilities;
+}
+
+export const toolRegistry: ToolEntry[] = [
   {
     name: 'pikvm_version',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_version,
     description: `Return the running pikvm-mcp-server version. Useful for detecting whether a deployed server is current with main — if the version doesn't match the latest commit's version, the server needs a redeploy. Currently embedded version: ${VERSION}.`,
     inputSchema: {
@@ -462,6 +433,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_health_check',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_health_check,
     description: 'One-call diagnostic: server version, HID mouse/keyboard online + absolute/relative mode, streamer HDMI-source online, and detected iPad bounds/orientation. Run first after deploy or when click_at misbehaves.',
     inputSchema: {
@@ -471,36 +443,42 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_mover_scale_status',
+    capabilities: { modeSensitive: false, featureFlag: 'moverScale' },
     handler: handle_pikvm_mover_scale_status,
     description: 'EXPERIMENTAL (#41, opt-in via PIKVM_MOVER_LEARN=1; registered only when opted in). Report the passive curve-scale learner: per-axis applied scale, the UNCLAMPED estimate, shipped defaults, divergence, sample counters, window SE, last update, and warnings (constant landing offset ⇒ detector/pacing fault; >2% estimate divergence ⇒ re-bake candidate). NOTE: auto-adaptation does not reliably converge on real traffic (median ~1% biased) — the drift DETECTION here is the more trustworthy half. Read-only.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'pikvm_mover_scale_control',
+    capabilities: { modeSensitive: false, featureFlag: 'moverScale' },
     handler: handle_pikvm_mover_scale_control,
     description: 'EXPERIMENTAL (#41). Enable or disable the passive curve-scale learner within this opted-in session. disable FREEZES it at the shipped default — stops adapting AND persisting — without reverting the applied value; enable resumes. (The feature itself is OFF by default and opted into per-process with PIKVM_MOVER_LEARN=1; this tool only toggles a session that already opted in.)',
     inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['enable', 'disable'], description: 'enable to resume adapting, disable to freeze at the current scales.' } }, required: ['action'] },
   },
   {
     name: 'pikvm_mover_scale_reset',
+    capabilities: { modeSensitive: false, featureFlag: 'moverScale' },
     handler: handle_pikvm_mover_scale_reset,
     description: 'EXPERIMENTAL (#41). Reset the passive curve-scale learner to the shipped defaults: clears the learned state AND deletes the persisted file (so a restart will not restore the old value). Use after a deliberate geometry change or if a bad scale was learned.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'pikvm_hidmode_status',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_hidmode_status,
     description: 'Report the HID-mode source and current mode (#51). source: "declared" (a fixed --target, e.g. stock pikvm01) or "endpoint" (derived from the appliance /hidmode). Fields: mode ("ipad"=relative / "desktop"=absolute, or null=UNKNOWN when the endpoint is unreachable), reachable, settling (HID mid-switch/re-enumerating), and moverAllowed + moverBlockReason (pointer ops refuse when the mode is unknown or settling). Read-only.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'pikvm_hidmode_set',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_hidmode_set,
     description: 'Switch the appliance HID mode (#51): POSTs to the appliance /hidmode endpoint. Only works when the mode is endpoint-derived (PIKVM_HIDMODE_URL set); a declared --target is fixed and cannot be switched. The switch physically re-assembles the USB gadget — THE SESSION WILL DROP and the new mode is NOT live immediately; reconnect and re-read (pikvm_hidmode_status) before driving input. desktop = absolute dual mouse; ipad = single relative mouse.',
     inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['ipad', 'desktop'], description: 'The HID mode to switch the appliance to.' } }, required: ['mode'] },
   },
   {
     name: 'pikvm_screenshot',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_screenshot,
     description: 'Capture a JPEG from the PiKVM video stream. On iPad pass keepCursorAlive:true to emit a net-zero ±1px nudge just before the snapshot so the auto-fading cursor stays visible for verification.',
     inputSchema: {
@@ -531,6 +509,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_snapshot',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_snapshot,
     description:
       'Save a JPEG video frame to a FILE (no inline image) — the file-only counterpart to ' +
@@ -564,6 +543,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_get_resolution',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_get_resolution,
     description: 'Get the current screen resolution of the remote machine. Useful for knowing valid coordinate ranges for mouse operations.',
     inputSchema: {
@@ -573,6 +553,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_type',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_type,
     description: 'Type text on the remote machine using PiKVM. Handles special characters correctly via keymap conversion.',
     inputSchema: {
@@ -600,6 +581,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_key',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_key,
     description: 'Send a key or key combination to the remote machine. Use JavaScript key codes (e.g., KeyA, Enter, ControlLeft).',
     inputSchema: {
@@ -625,6 +607,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_shortcut',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_shortcut,
     description: 'Send a keyboard shortcut (multiple keys pressed simultaneously). Example: Ctrl+Alt+Delete',
     inputSchema: {
@@ -641,6 +624,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_screen_state',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_screen_state,
     description: 'Fast "is the screen on?" check via the streamer API; returns { on, resolution }. on:false means no HDMI signal (iPad locked/asleep/off) and pikvm_screenshot 503s. Cheaper than pikvm_health_check — one API call.',
     inputSchema: {
@@ -650,6 +634,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_hid_reset',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_hid_reset,
     description: 'Recovery when HID mouse/keyboard shows online:false: soft-reinits the emulated HID and returns online state after settleMs. A soft reset cannot force host re-enumeration — the target may need a physical cable replug.',
     inputSchema: {
@@ -668,6 +653,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_hid_recover',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_hid_recover,
     description:
       'Escalating recovery for a broken HID (mouse/keyboard not driving the target while video is fine). ' +
@@ -699,6 +685,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_usb_reconnect',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_usb_reconnect,
     description:
       'The standard "my mouse/keyboard died — reconnect the USB" recovery. Verifies the target is present, ' +
@@ -721,6 +708,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_ipad_unlock_with_code',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_ipad_unlock_with_code,
     description: 'Keyboard-only unlock for a passcode-protected iPad: wakes the screen, types the digits, presses Enter. Code is sent to HID but never logged, stored, or echoed. Use instead of pikvm_ipad_unlock when a passcode is set.',
     inputSchema: {
@@ -736,6 +724,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_ipad_lock',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_ipad_lock,
     description: 'Lock the iPad via Ctrl+Cmd+Q. DESTRUCTIVE: turns the screen off, so HDMI goes offline and pikvm_screenshot 503s until wake. Verify with pikvm_screen_state (on:false). Unlock a passcode-free iPad with sendKey Enter.',
     inputSchema: {
@@ -745,6 +734,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_dismiss_popup',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_dismiss_popup,
     description: 'Runs the hidden-popup dismiss recipe (Escape then Enter) when a click lands right but nothing happens (an iOS security popup ate it). Best-effort. force:true also sends Cmd+H — DESTRUCTIVE: exits the foreground app.',
     inputSchema: {
@@ -759,6 +749,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_mouse_move',
+    capabilities: { modeSensitive: true, requiresAbsolute: (args) => args.relative !== true, requiresRelative: (args) => args.relative === true },
     handler: handle_pikvm_mouse_move,
     description: 'Move the mouse cursor to a position on the remote machine. For absolute moves, coordinates are in screen pixels (0,0 = top-left). For relative moves, deltas are clamped to -127 to 127. `relative` must match the target\'s actual HID mode (pikvm_hidmode_status) — a mismatched emit is refused rather than silently no-op\'d.',
     inputSchema: {
@@ -783,6 +774,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_mouse_click',
+    capabilities: { modeSensitive: true, requiresAbsolute: (args) => typeof args.x === 'number' && typeof args.y === 'number' },
     handler: handle_pikvm_mouse_click,
     description: 'Click a mouse button on the remote machine. Optionally move to a pixel position first.',
     inputSchema: {
@@ -811,6 +803,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_mouse_scroll',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_mouse_scroll,
     description:
       'Scroll the mouse wheel on the remote machine. Optionally target a pane first: pass x,y ' +
@@ -844,6 +837,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_calibrate',
+    capabilities: { modeSensitive: true, requiresAbsolute: () => true },
     handler: handle_pikvm_calibrate,
     description: 'Start mouse coordinate calibration. Moves cursor to screen center and returns expected position. Take a screenshot after calling this to visually verify actual cursor position, then call pikvm_set_calibration with calculated factors.',
     inputSchema: {
@@ -853,6 +847,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_set_calibration',
+    capabilities: { modeSensitive: false, requiresAbsolute: () => true },
     handler: handle_pikvm_set_calibration,
     description: 'Set mouse coordinate calibration factors. Calculate factors as: factorX = expected_x / actual_x, factorY = expected_y / actual_y. For example, if calibration moved cursor to expected (960, 540) but it landed at (720, 405), factors would be 960/720=1.33 and 540/405=1.33.',
     inputSchema: {
@@ -872,6 +867,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_get_calibration',
+    capabilities: { modeSensitive: false, requiresAbsolute: () => true },
     handler: handle_pikvm_get_calibration,
     description: 'Get current mouse calibration state. Returns null if not calibrated.',
     inputSchema: {
@@ -881,6 +877,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_clear_calibration',
+    capabilities: { modeSensitive: false, requiresAbsolute: () => true },
     handler: handle_pikvm_clear_calibration,
     description: 'Clear mouse calibration, reverting to uncalibrated mode.',
     inputSchema: {
@@ -890,6 +887,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_ipad_unlock',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_ipad_unlock,
     description: 'Unlock an iPad from the lock screen: tries Escape/Enter/Space keys first (Enter unlocks iPadOS), then falls back to a USB-HID swipe-up. Idempotent on an already-unlocked iPad. Returns a post-unlock screenshot.',
     inputSchema: {
@@ -907,6 +905,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_detect_orientation',
+    capabilities: { modeSensitive: false },
     handler: handle_pikvm_detect_orientation,
     description: 'Detect the iPad content bounds in the HDMI frame: returns rect (x/y/w/h), centre, orientation (portrait/landscape), and HDMI resolution. Rarely needed directly — unlock and move_to invoke it automatically.',
     inputSchema: {
@@ -918,6 +917,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_ipad_home',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_ipad_home,
     description: 'Return the iPad to the home screen via Cmd+H; idempotent there. Cmd+H does NOT dismiss the App Switcher — pass forceHomeViaSwipe:true for that. Does NOT unlock the lock screen — use pikvm_ipad_unlock.',
     inputSchema: {
@@ -931,6 +931,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_ipad_app_switcher',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_ipad_app_switcher,
     description: 'Open the iPad App Switcher (Cmd+Tab) and capture a screenshot of available apps. Cmd is held while screenshotting (so the switcher stays visible) then released, which selects the currently-focused app in the switcher. For multi-step switching, drive Cmd manually via pikvm_key.',
     inputSchema: {
@@ -942,6 +943,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_ipad_launch_app',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_ipad_launch_app,
     description: 'Launch an iPad app keyboard-first: unlock (optional) then Spotlight (Cmd+Space), type appName, Enter. More reliable than clicking an icon. If the app is not found the iPad returns home. Returns a post-launch screenshot.',
     inputSchema: {
@@ -958,6 +960,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_mouse_move_to',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_mouse_move_to,
     description: 'Move the pointer to a target HDMI pixel on a relative-mouse target (iPad). Default strategy on iPad is curve-one-shot: one detect + one deterministic curve emit (~11px). Use pikvm_mouse_click_at to move+click.',
     inputSchema: {
@@ -988,6 +991,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_mouse_click_at',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_mouse_click_at,
     description: 'Move to a target HDMI pixel via pikvm_mouse_move_to then click (single attempt — no retry). verifyClick (default) reports whether the click changed the screen (advisory); the click is skipped (reported not-landed) if the cursor cannot be verified or lands beyond maxResidualPx of target; a brightness gate aborts on a dim iPad. If a click reports no change and you suspect an occluding popup, run pikvm_dismiss_popup then re-click.',
     inputSchema: {
@@ -1030,6 +1034,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_measure_ballistics',
+    capabilities: { modeSensitive: true, longRunning: true },
     handler: handle_pikvm_measure_ballistics,
     description: 'Characterise a relative-mouse target acceleration curve: slams to top-left, sweeps axis x magnitude x pace, and writes a ballistics profile used by move_to/click_at. One-off per device; takes minutes; blocks other tools.',
     inputSchema: {
@@ -1079,6 +1084,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_auto_calibrate',
+    capabilities: { modeSensitive: true, requiresAbsolute: () => true, longRunning: true },
     handler: handle_pikvm_auto_calibrate,
     description: 'Auto-calibrate mouse coordinates by moving the cursor and diffing screenshots to locate it, then computing calibration factors. More accurate than manual pikvm_calibrate. Blocks other tools while running.',
     inputSchema: {
@@ -1117,6 +1123,7 @@ const toolRegistry: ToolEntry[] = [
   },
   {
     name: 'pikvm_seed_cursor_template',
+    capabilities: { modeSensitive: true },
     handler: handle_pikvm_seed_cursor_template,
     description: 'Bootstrap cursor detection: emit a small relative move, diff before/after to find the cursor, save a 24×24 template to data/cursor-templates/. Run once after a fresh deploy or when that dir is cleared. Safe on iPad.',
     inputSchema: {
@@ -1139,25 +1146,52 @@ const toolRegistry: ToolEntry[] = [
   },
 ];
 
-// Descriptors for ListTools = the registry's descriptors (handler stripped) +
-// the skill tools (which route via isSkillTool/handleSkillToolCall in the
-// CallTool preamble, not through toolsByName). Dispatch map covers the 32
+// Descriptors for ListTools = the registry's descriptors (handler + capabilities
+// stripped — capabilities carries function values, not JSON-safe for the MCP
+// wire format) + the skill tools (which route via isSkillTool/handleSkillToolCall
+// in the CallTool preamble, not through toolsByName). Dispatch map covers the
 // registry tools only; skill tools are handled before the lookup.
 // (#41) The passive scale learner is EXPERIMENTAL and OFF by default. When the process
 // has not opted in (PIKVM_MOVER_LEARN=1), its 3 control tools are NOT registered — they
 // vanish from tools/list AND from dispatch — so the default tool surface is a true
 // no-op, identical to before the feature existed. (They remain in the toolRegistry
-// literal so the doc-freshness/schema tests still see & document them.)
+// literal so the doc-freshness/schema tests still see & document them.) F6: this
+// filter now reads capabilities.featureFlag off each entry instead of checking
+// membership in the separate MOVER_SCALE_TOOL_NAMES array — same intent, one
+// fewer parallel list. MOVER_SCALE_TOOL_NAMES itself stays in scale-learner.ts
+// for that module's own internal use.
 const activeToolRegistry = toolRegistry.filter(
-  (entry) => scaleLearner.isFeatureEnabled() || !MOVER_SCALE_TOOL_NAMES.includes(entry.name as MoverScaleToolName),
+  (entry) => scaleLearner.isFeatureEnabled() || entry.capabilities.featureFlag !== 'moverScale',
 );
 const tools: Tool[] = [
-  ...activeToolRegistry.map(({ handler: _h, ...descriptor }) => descriptor),
+  ...activeToolRegistry.map(({ handler: _h, capabilities: _c, ...descriptor }) => descriptor),
   ...skillTools,
 ];
-const toolsByName = new Map<string, ToolEntry>(
+export const toolsByName = new Map<string, ToolEntry>(
   activeToolRegistry.map((entry) => [entry.name, entry]),
 );
+
+// F6 (architecture review): derive the mode-sensitivity / absolute-relative-
+// requirement gates from each tool's own `capabilities` declaration instead of
+// separate hand-maintained lists (MODE_SENSITIVE_TOOLS / ABSOLUTE_MOUSE_GATE /
+// RELATIVE_MOUSE_GATE previously lived here as literals — a new tool could
+// silently omit itself from all three). Derived from the FULL toolRegistry
+// (not activeToolRegistry) so a feature-flagged-off tool's policy is still
+// well-defined if the flag flips at runtime — none of the current members are
+// feature-flagged, so this is a robustness choice, not a behavior change.
+export const MODE_SENSITIVE_TOOLS = new Set<string>(
+  toolRegistry.filter((entry) => entry.capabilities.modeSensitive).map((entry) => entry.name),
+);
+
+/** True when this call requires an absolute-mode mouse on the target. */
+export function requiresAbsoluteMouse(name: string, args: Record<string, unknown>): boolean {
+  return toolsByName.get(name)?.capabilities.requiresAbsolute?.(args) ?? false;
+}
+
+/** True when this call requires a relative-mode mouse on the target (a forced relative emit). */
+export function requiresRelativeMouse(name: string, args: Record<string, unknown>): boolean {
+  return toolsByName.get(name)?.capabilities.requiresRelative?.(args) ?? false;
+}
 
 // The in-band auth tool (opt-in, --allow-tool-login). Exposed ONLY when a login
 // gate is present AND the session is not yet authenticated; on success the full
@@ -2415,9 +2449,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   // Block other tools while a long-running op (auto-calibration or
-  // ballistics measurement) is in progress. The excluded tools are allowed
-  // through so their own handlers can return a more specific error.
-  if (lock.isBusy && name !== 'pikvm_auto_calibrate' && name !== 'pikvm_measure_ballistics') {
+  // ballistics measurement) is in progress. Tools declaring
+  // capabilities.longRunning are allowed through so their own handlers can
+  // return a more specific error (F6: previously a two-name literal here).
+  if (lock.isBusy && !toolsByName.get(name)?.capabilities.longRunning) {
     return {
       content: [{ type: 'text', text: `Error: ${lock.holder} in progress, please wait.` }],
       isError: true,

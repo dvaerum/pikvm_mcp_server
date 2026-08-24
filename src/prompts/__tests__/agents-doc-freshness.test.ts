@@ -71,6 +71,15 @@ async function listPikvmToolNames(): Promise<string[]> {
  * the spread of typical tool descriptions). It anchors to the
  * specific pattern at top-of-tool-array-entry so multi-line nested
  * descriptions inside inputSchema are NOT matched.
+ *
+ * F6 (architecture review) added a `capabilities: {...}` line between
+ * `name:` and `handler:`/`description:` on each entry — for the 3
+ * moverScale-flagged tools that line itself contains a quoted string
+ * (`featureFlag: 'moverScale'`), which used to false-match as "the
+ * description" under the old "first quote within N lines of name"
+ * scan. Anchor to an actual `description:`-prefixed line first, THEN
+ * grab the first quote from there, so the number and shape of fields
+ * between `name:` and `description:` no longer matters.
  */
 async function listPikvmToolNameDesc(): Promise<Array<{ name: string; description: string }>> {
   const indexPath = path.join(repoRoot(), 'src', 'index.ts');
@@ -80,24 +89,27 @@ async function listPikvmToolNameDesc(): Promise<Array<{ name: string; descriptio
   for (let i = 0; i < lines.length; i++) {
     const nameMatch = /^\s+name: '(pikvm_[a-z_]+)',?$/.exec(lines[i]);
     if (!nameMatch) continue;
-    // Description follows on the next line. Two layouts tolerated:
+    // Find the `description:` line itself first (within a few lines of
+    // `name:` — tolerates capabilities/handler in between), THEN grab the
+    // first quoted string from that point on. Two layouts tolerated:
     //   description: 'single-line value'
     //   description:
     //     'multi-line concat ' +
     //     'value continues...',
-    // Both cases: scan up to 3 lines after the name and grab the first
-    // quoted string. We don't need the FULL description, just proof of
-    // a non-trivial body.
     let description = '';
-    for (let j = i + 1; j <= i + 3 && j < lines.length; j++) {
-      // Greedy from the first quote to the LAST quote on the line, so a valid
-      // description containing embedded quotes (e.g. `'Quick "is the screen
-      // on?" check ...'`) isn't truncated at the first inner quote.
-      const onLine = /['"`](.+)['"`]/.exec(lines[j]);
-      if (onLine) {
-        description = onLine[1];
-        break;
+    for (let j = i + 1; j <= i + 5 && j < lines.length; j++) {
+      if (!/^\s*description:/.test(lines[j])) continue;
+      for (let k = j; k <= j + 3 && k < lines.length; k++) {
+        // Greedy from the first quote to the LAST quote on the line, so a valid
+        // description containing embedded quotes (e.g. `'Quick "is the screen
+        // on?" check ...'`) isn't truncated at the first inner quote.
+        const onLine = /['"`](.+)['"`]/.exec(lines[k]);
+        if (onLine) {
+          description = onLine[1];
+          break;
+        }
       }
+      break;
     }
     out.push({ name: nameMatch[1], description });
   }
