@@ -5,14 +5,13 @@ re-locking an iPad mid-session via the iPadOS hot-corner gesture.
 If you're touching `move-to.ts` or designing a new high-level tool
 that uses `moveToPixel`, read this first.
 
-**2026-08-24 update:** Layers 1-3 (the guard logic itself) now live in
-`src/pikvm/cursor-anchor.ts`'s `bounds-guard` `AnchorGuard`, migrated
-verbatim out of `move-to.ts`'s `discoverOrigin`. The descriptions below
-still describe the behavior accurately — only where the code lives
-changed. `ipad-unlock.ts`'s `unlockIpad`/`ipadGoHome` (Layer 5) are
-being migrated to the same primitive's `caller-asserted` guard in a
-follow-up; until that lands they still call `slamToCorner` directly as
-described below.
+**2026-08-24 update:** all four slam call sites (move-to.ts's
+`discoverOrigin`, ipad-unlock.ts's `unlockIpad`/`ipadGoHome`,
+ballistics.ts's `measureCell`) now go through `src/pikvm/cursor-
+anchor.ts`'s `anchorCursor`, migrated verbatim from what's described
+below. The descriptions in this doc still describe the behavior
+accurately — only where the code lives changed (see "How to extend
+the safety surface" for the primitive itself).
 
 ## Why the iPad-lock failure mode exists
 
@@ -103,16 +102,22 @@ locking the iPad.
 
 ### Layer 5 (intentionally absent): `pikvm_ipad_unlock`
 
-`ipad-unlock.ts` calls `slamToCorner(top-left)` directly. This
-bypasses all the above layers BY DESIGN: when the iPad is locked,
-the hot-corner gesture is inactive (no home screen to dismiss to),
-so slamming is safe. The unlock flow then immediately drags upward
-which dismisses any in-progress gesture state.
+`ipad-unlock.ts`'s `unlockIpad` and `ipadGoHome` both call
+`anchorCursor` with `guard: { kind: 'caller-asserted' }` — cursor-
+anchor.ts's equivalent of "intentionally absent": the primitive never
+refuses on this guard kind. This bypasses Layers 1-3 BY DESIGN: when
+the iPad is locked, the hot-corner gesture is inactive (no home
+screen to dismiss to), so slamming is safe. The unlock flow then
+immediately drags upward which dismisses any in-progress gesture
+state.
 
 If `pikvm_ipad_unlock` is called when the iPad is already
 unlocked, the slam may briefly trigger the hot-corner state but the
 following swipe-up dismisses it before the lock fires. Empirically
-verified safe across many iterations.
+verified safe across many iterations. Both call sites now also carry
+their own verification + recovery (unlockIpad: `key-sequence-retry`,
+pre-existing; ipadGoHome: `defensive-keys`, added 2026-08-24) — see
+cursor-anchor.ts's `AnchorRecovery` doc.
 
 ## How to write a tool that drives `moveToPixel` safely on iPad
 
@@ -130,10 +135,17 @@ verified safe across many iterations.
 
 ## How to extend the safety surface
 
-If a future change introduces a new code path that emits
-`mouseMoveRelative(-127, -127)` >5 times in a row on an iPad, that
-path needs its own version of the guard. Search for `slamToCorner`
-to find all current call sites.
+If a future change introduces a new code path that needs to slam to
+a corner, call `anchorCursor` (src/pikvm/cursor-anchor.ts) — don't
+hand-roll a new `mouseMoveRelative(±127, ±127)` loop. Choose an
+`AnchorGuard` explicitly (`bounds-guard` for anything that might be
+driven against a general on-screen target, `caller-asserted` if
+you've independently established slamming is safe, `none-calibration`
+only for synthetic/non-real-device scenes) — the type won't let you
+skip this choice. `src/__tests__/no-fifth-slam-copy.test.ts` greps
+for the hand-rolled pattern outside `ballistics.ts`/`cursor-anchor.ts`
+and fails the build if one shows up, so this isn't just a convention —
+it's enforced.
 
 ## Related docs
 

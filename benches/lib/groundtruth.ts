@@ -167,8 +167,18 @@ export function standardTargets(tight: Geometry['tight']): GtTarget[] {
   ];
 }
 
-/** Slam the relative-mouse cursor to the top-left corner as a known start. */
-export async function slamToCorner(client: PiKVMClient): Promise<void> {
+/** Slam the relative-mouse cursor to the top-left corner as a known start.
+ *  Deliberately NOT the production `slamToCorner` (src/pikvm/ballistics.ts,
+ *  also reused by cursor-anchor.ts's anchorCursor): benches want a fast,
+ *  fixed 2-call slam, not the resolution-derived auto-computed call count
+ *  and configurable pace the production version needs for safety-guarded
+ *  real-device use. Named distinctly (found as an accidental same-name
+ *  shadow during the 2026-08-24 cursor-anchor.ts migration) so a future
+ *  reader doesn't mistake this for, or merge it with, the real one — see
+ *  docs/adr/0001-do-not-merge-cursor-detection-and-calibration-sampling-
+ *  lookalikes.md for the same "unify the interface, not the
+ *  implementation" reasoning applied here. */
+export async function benchQuickSlam(client: PiKVMClient): Promise<void> {
   await client.mouseMoveRelative(-2000, -2000);
   await sleep(200);
   await client.mouseMoveRelative(-2000, -2000);

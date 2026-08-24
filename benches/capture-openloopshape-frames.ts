@@ -22,7 +22,7 @@ import { moveToPixel } from '../src/pikvm/move-to.js';
 import { loadProfile } from '../src/pikvm/ballistics.js';
 import { detectIpadRegion, NATIVE_MARGIN } from '../src/pikvm/ipad-region-detect.js';
 import {
-  connectIpadSession, setupGreyScene, standardTargets, slamToCorner, readCursorHdmi, sleep,
+  connectIpadSession, setupGreyScene, standardTargets, benchQuickSlam, readCursorHdmi, sleep,
 } from './lib/groundtruth.js';
 
 const arg = (k: string, d: number) => {
@@ -67,7 +67,7 @@ async function main() {
 
   for (const name of plan) {
     const target = targets[name];
-    await slamToCorner(client);
+    await benchQuickSlam(client);
     try {
       await moveToPixel(client, target, { profile: profile ?? undefined, strategy: 'curve-one-shot', forbidSlamFallback: true });
     } catch (e) {

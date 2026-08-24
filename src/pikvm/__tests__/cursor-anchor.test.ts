@@ -437,6 +437,57 @@ describe('anchorCursor guard: none-calibration', () => {
     expect(nudgeMoves.length).toBe(0);
   });
 
+  // Regression: found live during PR 3/3's measureCell migration — the
+  // nudge used to run unconditionally after the verify/recovery block,
+  // even when verification had just failed. That wastes real HID calls
+  // nudging the cursor away from a slam the caller is about to reject
+  // anyway, and changed measureCell's exact move count from its
+  // pre-migration behavior (which only ever nudged after its own early-
+  // return check passed) — caught by measureBallistics.slamVerify.test.ts's
+  // move-count pin failing unexpectedly.
+  it('skips the nudge when captureVerification fails, even with selfGate:false (measureCell\'s exact combo)', async () => {
+    clearOrientationCache();
+    const frozen = await makeScreenshot(400, 300, [50, 50, 50]);
+    const m = mockClientAndScreenshot({
+      resolution: { width: 400, height: 300 },
+      verifyFrames: [frozen, frozen],
+    });
+    const result = await anchorCursor({
+      client: m.client,
+      guard: { kind: 'none-calibration' },
+      screenshot: m.screenshot,
+      captureVerification: true,
+      selfGate: false,
+      paceMs: 0,
+      nudge: { away: 'top-left', onlyAxis: 'y' },
+    });
+    expect(result.verified).toBe(false);
+    const nudgeMoves = m.moves.filter((mv) => mv.dx === 0 && mv.dy > 0);
+    expect(nudgeMoves.length).toBe(0);
+  });
+
+  it('still runs the nudge when captureVerification succeeds', async () => {
+    clearOrientationCache();
+    const before = await makeScreenshot(400, 300, [50, 50, 50]);
+    const after = await stampSquare(before, 5, 5, 10, [255, 255, 255]);
+    const m = mockClientAndScreenshot({
+      resolution: { width: 400, height: 300 },
+      verifyFrames: [before, after],
+    });
+    const result = await anchorCursor({
+      client: m.client,
+      guard: { kind: 'none-calibration' },
+      screenshot: m.screenshot,
+      captureVerification: true,
+      selfGate: false,
+      paceMs: 0,
+      nudge: { away: 'top-left', onlyAxis: 'y' },
+    });
+    expect(result.verified).toBe(true);
+    const nudgeMoves = m.moves.filter((mv) => mv.dx === 0 && mv.dy > 0);
+    expect(nudgeMoves.length).toBe(5);
+  });
+
   // 2026-08-24 P0 fix regression pair (georgs-mac-mini's PR #68 gate,
   // live-confirmed on real hardware): the exact combo that broke —
   // guard:'none-calibration' skips bounds detection for ORIGIN purposes,

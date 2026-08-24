@@ -27,7 +27,7 @@ import { moveToPixel, tryOpenLoopShapeDetect } from '../src/pikvm/move-to.js';
 import { decodeScreenshot } from '../src/pikvm/cursor-detect.js';
 import { loadProfile } from '../src/pikvm/ballistics.js';
 import {
-  connectIpadSession, setupGreyScene, standardTargets, slamToCorner, readCursorHdmi, sleep,
+  connectIpadSession, setupGreyScene, standardTargets, benchQuickSlam, readCursorHdmi, sleep,
 } from './lib/groundtruth.js';
 
 const TRIALS = Number(process.argv[process.argv.indexOf('--trials') + 1] || 10);
@@ -55,7 +55,7 @@ async function main() {
 
   for (const target of targets) {
     for (let trial = 1; trial <= TRIALS; trial++) {
-      await slamToCorner(client);
+      await benchQuickSlam(client);
       // Land the cursor near target so there's a real cursor on-screen to detect.
       try {
         await moveToPixel(client, target, {
