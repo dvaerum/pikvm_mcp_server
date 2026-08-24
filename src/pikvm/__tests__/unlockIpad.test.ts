@@ -389,6 +389,11 @@ describe('unlockIpad', () => {
   // at a non-trivial rate regardless of pace. Since unlockIpad can't call
   // itself to recover, the fallback is a bounded one-shot key-sequence
   // retry + re-slam.
+  // Tests below that exercise verifyMotion use 30000ms timeouts (not the
+  // 5000ms default): 2026-08-24's P0 cornerTargetFromBounds fix added a
+  // real bounds-detection round trip inside verifyMotion's corner check
+  // (cache-first, but the FIRST call in a test still pays it) — same
+  // convention move-to.ts's/ipadGoHome's other slam-adjacent tests use.
   describe('slam verifyMotion retry (unguarded-slam lock-risk mitigation)', () => {
     it('retries the key sequence once and re-slams when the first slam does not verify', async () => {
       // Two IDENTICAL frames for the first slamToCorner(verifyMotion) call:
@@ -419,7 +424,7 @@ describe('unlockIpad', () => {
       // Execution still completes the swipe rather than aborting.
       expect(m.calls.some((c) => c.type === 'mouseDown')).toBe(true);
       expect(m.calls.some((c) => c.type === 'mouseUp')).toBe(true);
-    });
+    }, 30000);
 
     it('does not retry when the first slam verifies', async () => {
       const before = await makeScreenshot(1920, 1080, [50, 50, 50]);
@@ -439,7 +444,7 @@ describe('unlockIpad', () => {
       expect(m.calls.filter((c) => c.type === 'sendKey')).toHaveLength(0);
       expect(result.slamVerified).toBe(true);
       expect(result.message).not.toContain('WARNING');
-    });
+    }, 30000);
 
     it('recovers when the retry succeeds — only one key-retry, no second retry', async () => {
       const before1 = await makeScreenshot(1920, 1080, [50, 50, 50]);
@@ -463,7 +468,7 @@ describe('unlockIpad', () => {
       expect(keyCalls).toEqual(['Escape', 'Enter', 'Space']); // exactly one retry, not looping
       expect(result.slamVerified).toBe(true);
       expect(result.message).not.toContain('WARNING');
-    });
+    }, 30000);
 
     it('slamFirst:false never performs the verifyMotion check (slamVerified: null)', async () => {
       const m = mockClient();

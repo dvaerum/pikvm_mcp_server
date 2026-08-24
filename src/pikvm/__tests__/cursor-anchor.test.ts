@@ -436,4 +436,53 @@ describe('anchorCursor guard: none-calibration', () => {
     const nudgeMoves = m.moves.filter((mv) => mv.dx === 0 && mv.dy > 0);
     expect(nudgeMoves.length).toBe(0);
   });
+
+  // 2026-08-24 P0 fix regression pair (georgs-mac-mini's PR #68 gate,
+  // live-confirmed on real hardware): the exact combo that broke —
+  // guard:'none-calibration' skips bounds detection for ORIGIN purposes,
+  // but verification still needs the iPad's real bounds when the target
+  // IS a letterboxed iPad. Before the fix, anchorCursor compared against
+  // the raw capture-frame corner (0,0) regardless, which is inside the
+  // black letterbox bar — never where the cursor can physically land.
+  describe('cornerTargetFromBounds fix (letterboxed iPad target)', () => {
+    it('verified:true when the cluster lands at the iPad\'s own detected letterbox corner', async () => {
+      clearOrientationCache();
+      const portrait = await makeIpadPortraitFrame();
+      const after = await stampSquare(portrait, 630, 5, 10, [255, 255, 255]); // near bounds.x≈625, not raw (0,0)
+      const m = mockClientAndScreenshot({
+        resolution: { width: 1920, height: 1080 },
+        boundsFrames: [portrait], // consumed by the verification-only detection fallback
+        verifyFrames: [portrait, after],
+      });
+      const result = await anchorCursor({
+        client: m.client,
+        guard: { kind: 'none-calibration' },
+        screenshot: m.screenshot,
+        captureVerification: true,
+        selfGate: false,
+        paceMs: 0,
+      });
+      expect(result.verified).toBe(true);
+    });
+
+    it('verified:false when the cluster lands at the raw frame corner (0,0) — inside the letterbox bar', async () => {
+      clearOrientationCache();
+      const portrait = await makeIpadPortraitFrame();
+      const after = await stampSquare(portrait, 5, 5, 10, [255, 255, 255]); // raw-frame corner
+      const m = mockClientAndScreenshot({
+        resolution: { width: 1920, height: 1080 },
+        boundsFrames: [portrait],
+        verifyFrames: [portrait, after],
+      });
+      const result = await anchorCursor({
+        client: m.client,
+        guard: { kind: 'none-calibration' },
+        screenshot: m.screenshot,
+        captureVerification: true,
+        selfGate: false,
+        paceMs: 0,
+      });
+      expect(result.verified).toBe(false);
+    });
+  });
 });
