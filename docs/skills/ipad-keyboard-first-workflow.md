@@ -9,12 +9,13 @@ type app name → Enter) succeed 100% of the time across Settings,
 Files, App Store. By contrast, `pikvm_mouse_click_at` on iPad has a
 per-attempt hit rate of ~50% at icon tolerance (≤25 px residual) for
 tiny targets and ~70-80% for large rows/buttons (Phase 70 bench,
-post-Phase 65/68/69 improvements). The Phase 94/142 iPad default
-`maxRetries: 3` (4 attempts — bumped from 2 to 3 in Phase 142 for
-Phase 141's hidden-popup-dismiss-recipe headroom; auto-applied) gets
-cumulative hit rate ~88% for tiny targets and ~99% for large ones.
-iPadOS pointer-acceleration variance (~6× run-to-run) and motion-diff
-noise on animated UI are the underlying limits — see
+post-Phase 65/68/69 improvements). **Retry removed 2026-07-28**: the
+old Phase 94/142 auto-retry (up to 4 attempts) was double-firing
+keypads, and positioning turned out to be single-shot-reliable (a
+faded cursor is recovered by the built-in wake), so every click is
+now single-attempt — the per-attempt rates above are the real
+end-to-end rates. iPadOS pointer-acceleration variance (~6× run-to-run)
+and motion-diff noise on animated UI are the underlying limits — see
 `docs/troubleshooting/ipad-cursor-detection.md` § "Current state".
 
 > **HONESTY NOTE (Phase 214/244/248-249, 2026-05-11, v0.5.214):** the Phase 70
@@ -31,8 +32,8 @@ noise on animated UI are the underlying limits — see
 
 **Prefer this pattern over `pikvm_mouse_click_at` for any iPad
 target where a keyboard equivalent exists.** Reach for cursor clicks
-only when no keyboard equivalent exists; the iPad-default
-`maxRetries: 3` is auto-applied and post-click screenshot inspection
+only when no keyboard equivalent exists; every click is single-attempt
+(no retry — removed 2026-07-28), so post-click screenshot inspection
 is mandatory.
 
 ## Primitives (live-validated)
@@ -92,8 +93,8 @@ screen clicks.
    - Back: `Cmd+[` (in stock apps)
    - Home: `pikvm_ipad_home`
 4. Only cursor click? → `pikvm_mouse_click_at` with
-   `verifyClick: true` and `maxRetries: 3`. Inspect post-click
-   screenshot.
+   `verifyClick: true` (default). Inspect the post-click
+   screenshot — single-attempt, no retry.
 
 ## What this skill does NOT do
 
