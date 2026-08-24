@@ -500,6 +500,42 @@ describe('MCP tool schema and handler exposure', () => {
   });
 });
 
+describe('pikvm_ipad_unlock_with_code — useStoredCode opt-in (2026-08-24)', () => {
+  it('code is no longer schema-required (useStoredCode can supply it instead)', async () => {
+    const src = await readIndexTs();
+    const tool = extractToolBlock(src, 'pikvm_ipad_unlock_with_code');
+    expect(tool).toMatch(/useStoredCode:\s*\{[^}]*type:\s*'boolean'/);
+    // `required: ['code']` must be gone — code is conditionally required now,
+    // which a JSON-Schema `required` array can't express; the handler
+    // enforces it at runtime instead.
+    expect(tool).not.toMatch(/required:\s*\['code'\]/);
+  });
+
+  it('default (no useStoredCode) behavior is unchanged: explicit code still required, env var never read', async () => {
+    const src = await readIndexTs();
+    const handler = extractHandlerBlock(src, 'pikvm_ipad_unlock_with_code');
+    expect(handler).toMatch(/const useStoredCode = validateBoolean\(args\.useStoredCode\) \?\? false/);
+    // The env var read is gated behind the useStoredCode branch, not
+    // unconditional — "nothing happens by accident."
+    expect(handler).toMatch(/if \(useStoredCode\)/);
+    expect(handler).toContain('process.env.PIKVM_IPAD_PASSCODE');
+    // Explicit code path still uses the same requireString validation as
+    // before this change.
+    expect(handler).toMatch(/requireString\(args\.code, 'code'\)/);
+  });
+
+  it('errors loudly (not a silent fallback) when useStoredCode is true but the env var is unset', async () => {
+    const src = await readIndexTs();
+    const handler = extractHandlerBlock(src, 'pikvm_ipad_unlock_with_code');
+    expect(handler).toContain('PIKVM_IPAD_PASSCODE is not set');
+  });
+
+  it('.env.example documents PIKVM_IPAD_PASSCODE without a real value', async () => {
+    const envExample = await fs.readFile(path.join(repoRoot(), '.env.example'), 'utf8');
+    expect(envExample).toMatch(/^#PIKVM_IPAD_PASSCODE=\s*$/m);
+  });
+});
+
 describe('(#41) passive scale learner — tools + mover wiring', () => {
   it('registers the three learner tools', async () => {
     const src = await readIndexTs();

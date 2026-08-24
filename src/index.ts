@@ -724,10 +724,13 @@ const toolRegistry: ToolEntry[] = [
       properties: {
         code: {
           type: 'string',
-          description: 'iPad passcode (digits only). Stored only in the in-memory request payload for the duration of this call; not persisted or logged.',
+          description: 'iPad passcode (digits only). Stored only in the in-memory request payload for the duration of this call; not persisted or logged. Required unless useStoredCode is true.',
+        },
+        useStoredCode: {
+          type: 'boolean',
+          description: 'When true and code is omitted, reads the passcode from the PIKVM_IPAD_PASSCODE environment variable instead of requiring the caller to pass it. Explicit opt-in only — default false, so nothing reads the env var unless a caller specifically asks for it. Errors if the env var is unset. Convenience for a single trusted test rig, not a fleet-wide secret store.',
         },
       },
-      required: ['code'],
     },
   },
   {
@@ -1520,7 +1523,35 @@ async function handle_pikvm_ipad_unlock_with_code(args: Record<string, unknown>)
         // unlockIpadWithCode validates code shape BEFORE any HID
         // activity so a malformed code doesn't half-type and trip
         // iPadOS's wrong-passcode counter.
-        const code = requireString(args.code, 'code');
+        //
+        // 2026-08-24: useStoredCode is an explicit opt-in fallback to
+        // PIKVM_IPAD_PASSCODE (single test-rig credential, plain env var
+        // per georg's authorization — not sops, doesn't need to generalize
+        // across a fleet). Default behavior (no useStoredCode) is
+        // UNCHANGED: code is still required, nothing reads the env var
+        // unless a caller specifically asks for it — "nothing happens by
+        // accident."
+        const useStoredCode = validateBoolean(args.useStoredCode) ?? false;
+        let code: string;
+        if (args.code !== undefined) {
+          code = requireString(args.code, 'code');
+        } else if (useStoredCode) {
+          const stored = process.env.PIKVM_IPAD_PASSCODE;
+          if (!stored) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'Error: useStoredCode=true but PIKVM_IPAD_PASSCODE is not set in the environment. Set it in .env (see .env.example) or pass code explicitly.',
+              }],
+              isError: true,
+            };
+          }
+          code = stored;
+        } else {
+          // Preserves the pre-2026-08-24 error exactly: requireString's own
+          // "field is required" message.
+          code = requireString(args.code, 'code');
+        }
         const result = await unlockIpadWithCode(pikvm, code);
         return {
           content: [{
