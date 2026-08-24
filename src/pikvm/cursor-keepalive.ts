@@ -8,7 +8,8 @@
  * pauses long enough for the cursor to fade, the next detection
  * frame is cursor-less and detection fails.
  *
- * `wakeupCursor` (move-to.ts) wakes the cursor at origin discovery,
+ * cursor-anchor.ts's `screenshot` wake-nudge (via cursor-detect.ts's
+ * takeRawScreenshot, see ADR 0001) wakes the cursor at origin discovery,
  * but later screenshots — post-moveToPixel pre-click verification,
  * micro-correction iterations after a long settle, the
  * `minPreClickTemplateScore` re-check — happen well after that wake
@@ -40,10 +41,8 @@
  *   - The implementation keeps `lastEmitMs` module-scoped (no class
  *     instance). The 30 ms inter-pause and configurable settle let
  *     the streamer + iPadOS render pipeline catch up before the
- *     caller reads the next frame; matches the latency timing in
- *     wakeupCursor (Phase 13) and confirmed by the same Phase 13
- *     latency-probe research (150–235 ms streamer + iPadOS render
- *     latency).
+ *     caller reads the next frame; matches the Phase 13 latency-probe
+ *     research (150–235 ms streamer + iPadOS render latency).
  *
  * The contract is pinned by `__tests__/cursor-keepalive.test.ts`.
  */

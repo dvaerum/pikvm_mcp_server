@@ -1856,7 +1856,7 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
           // oscillates/goes blind on textured backgrounds). Desktop (absolute)
           // keeps detect-then-move. Failure mode is safe: the proximity gate
           // skips rather than wrong-clicks. Curve is calibrated for the current
-          // iPad-in-HDMI geometry (see curve-mover.ts / calibrateFullReport).
+          // iPad-in-HDMI geometry (see curve-mover.ts's emit-curve scale logic).
           policy.strategy,
         );
         const assumeX = validateNumber(args.assumeCursorAtX);
@@ -1940,7 +1940,7 @@ async function handle_pikvm_mouse_click_at(args: Record<string, unknown>): Promi
           // oscillates/goes blind on textured backgrounds). Desktop (absolute)
           // keeps detect-then-move. Failure mode is safe: the proximity gate
           // skips rather than wrong-clicks. Curve is calibrated for the current
-          // iPad-in-HDMI geometry (see curve-mover.ts / calibrateFullReport).
+          // iPad-in-HDMI geometry (see curve-mover.ts's emit-curve scale logic).
           policy.strategy,
         );
         const assumeX = validateNumber(args.assumeCursorAtX);

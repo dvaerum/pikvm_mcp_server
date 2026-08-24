@@ -5,6 +5,15 @@ re-locking an iPad mid-session via the iPadOS hot-corner gesture.
 If you're touching `move-to.ts` or designing a new high-level tool
 that uses `moveToPixel`, read this first.
 
+**2026-08-24 update:** Layers 1-3 (the guard logic itself) now live in
+`src/pikvm/cursor-anchor.ts`'s `bounds-guard` `AnchorGuard`, migrated
+verbatim out of `move-to.ts`'s `discoverOrigin`. The descriptions below
+still describe the behavior accurately — only where the code lives
+changed. `ipad-unlock.ts`'s `unlockIpad`/`ipadGoHome` (Layer 5) are
+being migrated to the same primitive's `caller-asserted` guard in a
+follow-up; until that lands they still call `slamToCorner` directly as
+described below.
+
 ## Why the iPad-lock failure mode exists
 
 PiKVM in `mouse.absolute=false` (relative-mouse mode, required for
