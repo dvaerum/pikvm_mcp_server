@@ -4,12 +4,18 @@
  * So hit = post-click frame (cropped to iPad region) differs substantially from
  * the home baseline. Not "did the RIGHT app open" (residual+visual spot-checks
  * cover that) but "did SOMETHING open vs stayed home" — the miss signal.
+ *
+ * Filename retains "-retry3" for its dated bench-run history — the retry loop
+ * itself was removed from the shipped path 2026-07-28 (PR #34) and this bench
+ * now drives the same single-attempt clickAt() production code exercises.
  */
 import { promises as fs } from 'node:fs';
 import sharp from 'sharp';
 import { loadConfig } from '../src/config.js';
 import { PiKVMClient } from '../src/pikvm/client.js';
-import { clickAtWithRetry } from '../src/pikvm/click-verify.js';
+import { clickAt } from '../src/pikvm/click-at.js';
+import { loadProfile } from '../src/pikvm/ballistics.js';
+import { HidModeResolver } from '../src/pikvm/hid-mode.js';
 import { ipadGoHome } from '../src/pikvm/ipad-unlock.js';
 import { detectIpadRegion, NATIVE_MARGIN } from '../src/pikvm/ipad-region-detect.js';
 
@@ -34,6 +40,11 @@ function changedFraction(a: Buffer, b: Buffer): number {
 
 async function main() {
   const client = new PiKVMClient(loadConfig().pikvm);
+  // This rig is always the iPad target — declared mode mirrors index.ts's
+  // `--target ipad` startup path (no /hidmode endpoint needed for a script).
+  const hidModeResolver = new HidModeResolver({ declared: 'ipad' });
+  await hidModeResolver.resolve();
+  const profile = await loadProfile('./data/ballistics.json').catch(() => null);
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
   const dir = `scratch/click-bench80-${ts}`; await fs.mkdir(dir, { recursive: true });
   await ipadGoHome(client); await sleep(1800);
@@ -59,9 +70,27 @@ async function main() {
       if (preFrac > HIT_THRESHOLD) { badPre++; await ipadGoHome(client); await sleep(1500); }
       let resid = 'NA', outcome = 'threw';
       try {
-        const r = await clickAtWithRetry(client, target, { moveToOptions: { strategy: 'curve-one-shot' }, maxRetries: 3 });
-        resid = r.finalMoveResult.finalResidualPx != null ? r.finalMoveResult.finalResidualPx.toFixed(1) : 'null';
-        outcome = r.success ? 'SUCCESS' : (r.attemptHistory.at(-1)?.skippedClickReason ?? 'UNVERIFIED');
+        // Single-attempt (retry removed 2026-07-28 — see click-at.ts's own header);
+        // outcome.kind is 'clicked' on success, else a pre-click abort kind.
+        const r = await clickAt({
+          client,
+          policy: hidModeResolver.policy(),
+          target,
+          button: 'left',
+          strategy: 'curve-one-shot',
+          profile,
+          verifyClick: true,
+          verifySettleMs: 300,
+          singleTap: false,
+          force: false,
+        });
+        outcome = r.kind === 'clicked' ? 'SUCCESS' : r.kind.toUpperCase();
+        // ClickAtOutcome doesn't surface the mover's raw finalResidualPx (only
+        // 'residual-skip' carries a numeric residualPx) — every outcome's message
+        // still embeds the mover's own "residual (dx,dy) = N.Npx" line, so pull
+        // it from there rather than losing this bench's per-target residual stat.
+        const m = r.message.match(/residual \([^)]*\) = ([\d.]+)px/);
+        if (m) resid = m[1];
       } catch (e) { outcome = `threw:${(e as Error).message.slice(0, 30)}`; }
       await sleep(1400);
       const postShot = await client.screenshot({ quality: 80 });

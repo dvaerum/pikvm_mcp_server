@@ -99,12 +99,48 @@ arbitration logic again, they're ready as-is. Signpost comment (with the full re
 lives above `isRateLimited` in `click-verify.ts` — this entry exists so the decision is
 also discoverable from the backlog, not just in-code.
 
-## isUdcUp — genuinely dead, unlike the click-verify.ts group  [CANDIDATE, 2026-08-24]
-`isUdcUp` (`src/pikvm/hid-latch-monitor.ts`) — a trivial `state === UDC_UP` wrapper — has
-zero real callers; its own sibling constant `UDC_UP` is used directly by
+## isUdcUp — deleted, unlike the click-verify.ts group  [RESOLVED, 2026-08-25]
+`isUdcUp` (`src/pikvm/hid-latch-monitor.ts`) — a trivial `state === UDC_UP` wrapper — had
+zero real callers; its own sibling constant `UDC_UP` was already used directly by
 `hid-latch-ssh-source.ts` instead of going through the wrapper. Unlike the click-verify.ts
-group above, it carries no historical-bug narrative — its doc comment reads as
-"convenience predicate for state-based sources," i.e. written for an intended caller that
-ended up inlining the comparison itself instead. Candidate for deletion (same bar as ADR
-0003's `verify` profile: confirmed zero real callers, no bug-history reason to keep) —
-flagged here pending confirmation rather than deleted unilaterally.
+group above, it carried no historical-bug narrative — its doc comment read as "convenience
+predicate for state-based sources," i.e. written for an intended caller that ended up
+inlining the comparison itself instead. Deleted (same bar as ADR 0003's `verify` profile:
+confirmed zero real callers, no bug-history reason to keep), confirmed by the manager —
+`hid-latch-monitor.test.ts`'s one internal use (a test-helper reenum counter) switched to
+the equivalent inline `state !== UDC_UP`, and the dedicated `describe('isUdcUp...', ...)`
+block was removed along with it.
+
+## Stale scratch/benches scripts — broken since PR #34, not individually fixed  [TRACKED, 2026-08-25]
+PR #34 (`1b900df`, 2026-07-28) deleted `clickAtWithRetry` and `defaultMaxRetriesFor` from
+`click-verify.ts` (retry removed — clicks are single-attempt, see that commit's own
+rationale). None of the production call sites broke (they'd already moved to `moveToPixel` +
+inline click, later consolidated into `clickAt()` — Phase 4/F5, `click-at.ts`), but 28
+one-off `scratch/`/`benches/` scripts that imported the deleted exports directly did, and
+have sat broken since. Phase 6 architecture-review audit (2026-08-25) confirmed: none of
+these 28 are wired into `flake.nix` `apps` or `package.json` scripts, so nothing a real user
+runs is affected — this is backlog housekeeping, not a production gap.
+
+Two flake-wired scripts that hit the SAME breakage (`nix run .#explore`, `nix run
+.#live-bench` → `scratch/explore.ts`, `scratch/click-bench80-retry3.ts`) were fixed as part
+of this same Phase 6 pass — ported to `clickAt()` from `src/pikvm/click-at.ts` with
+single-attempt semantics (no retry loop reintroduced, matching PR #34's own rationale). Use
+that pair as the reference pattern (`HidModeResolver({ declared: 'ipad' })` for a standalone
+script's `HidPolicy`, `loadProfile('./data/ballistics.json')` for the `BallisticsProfile`,
+`ClickAtOutcome`'s discriminated `kind` for result handling) if any of the 28 below are ever
+needed again — port on demand, don't pre-fix speculatively.
+
+The 28, left as-is (broken, not deleted — each still holds real bench methodology / trace
+data worth keeping as reference even while non-runnable):
+- `benches/`: bench-alpha-trace-books.ts, bench-approach-ab.ts, bench-clickable.ts,
+  bench-click-extensive.ts, bench-click-production.ts, bench-clickretry.ts,
+  bench-click-timing.ts, bench-files-only.ts, bench-ground-truth-clickflow.ts,
+  bench-jitter-ab.ts, bench-ml-v0-vs-v1.ts, bench-ml-v1-vs-v4.ts, bench-ml-v5gate-vs-v1.ts,
+  bench-toggle-pointer-animations.ts, bench-v10-live.ts, bench-v11-live.ts,
+  bench-v8-calibrate-ab.ts.
+- `scratch/`: _capture-settings-via-bench.ts, click-bench80.ts, _click-continue.ts,
+  click-test-oneshot.ts, tap-by-text.ts, test-click-newest.ts,
+  test-phase248-n20-with-blocklist.ts (also imports the now-nonexistent
+  `src/pikvm/cursor-fp-blocklist.js`), test-phase305-slam-unstick.ts,
+  test-phase307-bench-with-unlock.ts, test-v238-books-verify.ts, test-v241-settings-verify.ts,
+  test-v241-short-bench.ts.
