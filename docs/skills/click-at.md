@@ -37,7 +37,7 @@ On a PiKVM target in relative mouse mode (iPad), move the pointer to an approxim
 | 50-100 px | ~60% | **~50-60%** | Standard buttons, page tabs, ~70 px iPad icons (Phase 111 measured — pre-Phase-214; re-bench needed) |
 | < 50 px | ~50% | ~88% | Back arrows, X buttons, toggles |
 
-**Phase 94 / Phase 142 default**: `maxRetries` defaults to **3 on iPad (relative-mouse) targets** (Phase 142 bumped from 2 → 3 for Phase 141's hidden-popup-dismiss-recipe headroom) — turns ~50% per-attempt into ~88% reliable end-to-end for tiny targets. Pass `maxRetries: 0` explicitly to opt out (single-shot, e.g. for a quick one-off toggle).
+**Retry removed (2026-07-28)**: every click is now single-attempt — the old Phase 94/142 `maxRetries` auto-default was double-firing keypads, and positioning turned out to be single-shot-reliable (faded cursors are recovered by the built-in wake) so the retry loop's only remaining effect was harm. `maxRetries` is no longer accepted; the per-attempt rates in the table above are the actual end-to-end rates now.
 
 **Silent failure remedy**: when click_at returns success but the post-click screenshot shows no UI change, the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating input. iPadOS deliberately blanks these from HDMI capture but keyboard input still reaches them. Call **`pikvm_dismiss_popup`** to fire the documented Escape → Enter recipe, then retry the click. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly with one Escape).
 
@@ -55,39 +55,31 @@ The iPad MUST be unlocked. Detect-then-move can't find the cursor against the lo
 | x | number | *(required)* | Target X in HDMI screenshot pixels |
 | y | number | *(required)* | Target Y in HDMI screenshot pixels |
 | button | string | left | left / right / middle / up / down |
-| maxRetries | number | 3 (iPad) / 0 (desktop) | Phase 94/142: auto-defaults to 3 on iPad (relative-mouse, bumped from 2 → 3 in Phase 142 for Phase 141 dismiss-recipe headroom) / 0 on desktop. Pass 0 explicitly to opt out of retries on iPad. |
 | autoUnlockOnDetectFail | boolean | false | Phase 72 opt-in lock-screen recovery |
-| maxResidualPx | number | *(unset)* | Phase 88: skip the click if cursor lands more than N px from target. Set to 25 for strict icon-tolerance (refuses imprecise clicks that risk hitting adjacent UI elements). Leave unset for permissive behaviour. |
-| useKnownFpBlocklist | boolean | false | Phase 248/249 (v0.5.213/v0.5.214): when true, reject template-match cursor positions in 50 px of known UI false-positive locations on the reference iPad (1680×1050 portrait, default wallpaper). **Honest data:** N=60 blocklist = 26.7% vs N=40 baseline = 30% — blocklist actually slightly WORSE in aggregate, within Phase 237 per-run variance (runs swing 5%→40% on identical protocol). Motion-diff bypasses the filter. **Only enable if your iPad layout matches the reference** — different wallpaper/layout has different FPs. |
-| verifyClick | boolean | true | Pre/post screenshot diff confirms click landed |
+| maxResidualPx | number | 15 (iPad) / unset (desktop) | Phase 88 (task #38 tightened the iPad default 25→15): skip the click if cursor lands more than N px from target — refuses imprecise clicks that risk hitting adjacent UI elements. Override via `PIKVM_CLICK_MAX_RESIDUAL_PX`. |
+| verifyClick | boolean | true | Pre/post screenshot diff confirms click landed (advisory — never blocks the click itself) |
 | strategy | string | detect-then-move | DO NOT use slam-then-move on iPad — re-locks via hot corner |
 
 ## Recommended call shapes
 
 **Reliable iPad click on a known-unlocked iPad:**
 ```json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2 } }
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700 } }
 ```
 
 **Self-recovering click (assumes iPad might be locked / faded):**
 ```json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2, "autoUnlockOnDetectFail": true } }
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "autoUnlockOnDetectFail": true } }
 ```
 
 **Strict-target click (refuse to click on the wrong adjacent element):**
 ```json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2, "maxResidualPx": 25 } }
+{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxResidualPx": 25 } }
 ```
-With `maxResidualPx: 25`, attempts that land more than 25 px from the target are skipped (counts as a retry). Trades absolute hit rate for "I clicked the right thing" confidence — useful when the target is near other clickable elements that could be accidentally hit.
-
-**Click on the reference iPad with known-FP rejection (caveat: see honesty note):**
-```json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 905, "y": 800, "useKnownFpBlocklist": true } }
-```
-Phase 248/249 opt-in. Rejects template matches at 3 known iPad-UI false-positive locations (wallpaper-gradient FP at (852,941), TV icon glyph at (773,769), dock area at (782,958)). **N=60 blocklist = 26.7% vs N=40 baseline = 30% within 35 px — blocklist slightly WORSE in cumulative aggregate, both within Phase 237 variance.** Semantically correct rejection without measurable hit-rate lift at this N. May still be useful when callers specifically want to avoid landing at known-bad positions. Don't enable on a different iPad layout / wallpaper — the FPs may not be the same.
+With `maxResidualPx: 25`, a click that lands more than 25 px from the target is skipped rather than fired (reported not-landed). Trades absolute hit rate for "I clicked the right thing" confidence — useful when the target is near other clickable elements that could be accidentally hit.
 
 ## When NOT to Use
-- Tiny targets (< 30 px): even with retries, hit rate drops below 80%. Use keyboard navigation if available — see [ipad-keyboard-workflow.md](ipad-keyboard-workflow.md).
+- Tiny targets (< 30 px): hit rate drops below 80% and there's no retry to fall back on. Use keyboard navigation if available — see [ipad-keyboard-workflow.md](ipad-keyboard-workflow.md).
 - Anywhere a keyboard shortcut exists: keyboard input is 100% reliable vs cursor's 80-99%.
 
 ## Tips

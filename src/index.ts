@@ -1003,8 +1003,12 @@ const toolRegistry: ToolEntry[] = [
         button: { type: 'string', enum: ['left', 'right', 'middle', 'up', 'down'], description: 'Mouse button. Default left.' },
         strategy: {
           type: 'string',
-          enum: ['detect-then-move', 'slam-then-move', 'assume-at'],
-          description: 'Origin discovery. Default "detect-then-move". DO NOT use "slam-then-move" on iPad targets — slam-to-corner triggers iPadOS hot-corner gesture and re-locks the screen mid-session (live-verified 2026-04-26). The Phase 32 guard refuses slam on detected iPad-portrait letterbox by default; pass forbidSlamOnIpad=false to override (only safe if iPad hot-corners are disabled).',
+          // 'curve-one-shot' was missing here even though the handler's own
+          // validateEnum call (and the actual iPad default) has accepted it
+          // since the curve-one-shot mover shipped — schema/handler drift,
+          // found while auditing tool-guides.ts against the schema for F6.
+          enum: ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'],
+          description: 'Origin discovery. Default "detect-then-move" on desktop (absolute), "curve-one-shot" on iPad (relative) — see pikvm_mouse_move_to\'s guide for why. DO NOT use "slam-then-move" on iPad targets — slam-to-corner triggers iPadOS hot-corner gesture and re-locks the screen mid-session (live-verified 2026-04-26). The Phase 32 guard refuses slam on detected iPad-portrait letterbox by default; pass forbidSlamOnIpad=false to override (only safe if iPad hot-corners are disabled).',
         },
         assumeCursorAtX: { type: 'number', description: 'With strategy="assume-at", HDMI X where cursor currently is.' },
         assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
