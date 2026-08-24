@@ -24,7 +24,7 @@ import { PiKVMClient } from '../src/pikvm/client.js';
 import { moveToPixel } from '../src/pikvm/move-to.js';
 import { loadProfile } from '../src/pikvm/ballistics.js';
 import {
-  connectIpadSession, setupGreyScene, standardTargets, slamToCorner, measureResidual, sleep,
+  connectIpadSession, setupGreyScene, standardTargets, benchQuickSlam, measureResidual, sleep,
 } from './lib/groundtruth.js';
 
 const ARM = (() => {
@@ -61,7 +61,7 @@ async function main() {
 
   for (const target of targets) {
     for (let trial = 1; trial <= TRIALS; trial++) {
-      await slamToCorner(client);
+      await benchQuickSlam(client);
 
       let prevIpadHdmi: { x: number; y: number } | null = null;
       let prevResidualHdmi: number | null = null;

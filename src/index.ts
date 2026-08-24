@@ -1062,10 +1062,6 @@ const toolRegistry: ToolEntry[] = [
           type: 'number',
           description: 'Milliseconds between calls in "slow" pace. Default: 30.',
         },
-        settleMs: {
-          type: 'number',
-          description: 'Milliseconds to wait after moving, before capturing. Default: 400.',
-        },
         profilePath: {
           type: 'string',
           description: 'Where to write the JSON profile. Default: ./data/ballistics.json.',
@@ -2238,7 +2234,6 @@ async function handle_pikvm_measure_ballistics(args: Record<string, unknown>): P
             reps: validateNumber(args.reps, 1, 10),
             callsPerCell: validateNumber(args.callsPerCell, 1, 50),
             slowPaceMs: validateNumber(args.slowPaceMs, 0, 1000),
-            settleMs: validateNumber(args.settleMs, 50, 3000),
             profilePath: validateString(args.profilePath),
             verbose: validateBoolean(args.verbose),
           });
