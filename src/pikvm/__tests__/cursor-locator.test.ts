@@ -59,8 +59,6 @@ function makeDeps(overrides: Partial<CursorLocatorDeps> = {}): CursorLocatorDeps
     buildMLHints: vi.fn((predicted) => [predicted]),
     mlWiggleVerify: vi.fn(async () => null),
     wiggleVerifyCandidate: vi.fn(async () => null),
-    shouldFireSecondOpinion: vi.fn(() => false),
-    shouldAdoptSecondOpinion: vi.fn(() => false),
     tautologyProxThreshold: 30,
   };
   return { ...base, ...overrides };
@@ -318,94 +316,6 @@ describe('locate(profile: openLoopShape)', () => {
   it('requires a hint', async () => {
     const loc = new CursorLocator(makeDeps());
     await expect(loc.locate(FRAME, 200, 100, 'openLoopShape')).rejects.toThrow(/hint/);
-  });
-});
-
-// --- verify -----------------------------------------------------------------
-
-describe('locate(profile: verify)', () => {
-  const TARGET = { x: 300, y: 300 };
-
-  it('adopts the template second-opinion and does NOT run V8', async () => {
-    const deps = makeDeps({
-      getCachedTemplates: vi.fn(async () => [{ t: 1 }] as never),
-      shouldFireSecondOpinion: vi.fn(() => true),
-      findCursorByTemplateSet: vi.fn(() => ({
-        position: { x: 305, y: 298 },
-        score: 0.82,
-        templateIndex: 0,
-      })),
-      shouldAdoptSecondOpinion: vi.fn(() => true),
-    });
-    const loc = new CursorLocator(deps);
-
-    const fix = await loc.locate(FRAME, 200, 100, 'verify', TARGET);
-
-    expect(fix).toEqual({
-      position: { x: 305, y: 298 },
-      source: 'template',
-      rawScore: 0.82,
-      confidence: null,
-    });
-    expect(deps.shouldFireSecondOpinion).toHaveBeenCalledTimes(1);
-    expect(deps.shouldAdoptSecondOpinion).toHaveBeenCalledTimes(1);
-    expect(deps.findCursorByV8FullFrame).not.toHaveBeenCalled();
-    // template match ran with the 0.7 floor + target locality.
-    const tCall = (deps.findCursorByTemplateSet as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(tCall[2]).toMatchObject({ minScore: 0.7, expectedNear: TARGET, expectedNearRadius: 200 });
-  });
-
-  it('falls to the V8 cascade when the second opinion does not fire', async () => {
-    const deps = makeDeps({
-      shouldFireSecondOpinion: vi.fn(() => false),
-      findCursorByV8FullFrame: vi.fn(async () => v8({ x: 301, y: 302, presence: 0.75, heatmapPeak: 0.6 })),
-    });
-    const loc = new CursorLocator(deps);
-
-    const fix = await loc.locate(FRAME, 200, 100, 'verify', TARGET);
-
-    expect(fix).toEqual({
-      position: { x: 301, y: 302 },
-      source: 'cascade',
-      rawScore: 0.75,
-      confidence: 0.75,
-    });
-    expect(deps.findCursorByTemplateSet).not.toHaveBeenCalled();
-  });
-
-  it('falls to V8 when the template is found but not adopted', async () => {
-    const deps = makeDeps({
-      getCachedTemplates: vi.fn(async () => [{ t: 1 }] as never),
-      shouldFireSecondOpinion: vi.fn(() => true),
-      findCursorByTemplateSet: vi.fn(() => ({
-        position: { x: 999, y: 999 },
-        score: 0.71,
-        templateIndex: 0,
-      })),
-      shouldAdoptSecondOpinion: vi.fn(() => false),
-      findCursorByV8FullFrame: vi.fn(async () => v8({ heatmapPeak: 0.5 })),
-    });
-    const loc = new CursorLocator(deps);
-
-    const fix = await loc.locate(FRAME, 200, 100, 'verify', TARGET);
-
-    expect(fix?.source).toBe('cascade');
-    expect(deps.findCursorByV8FullFrame).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects a low-heatmap V8 detection (heatmapPeak < 0.3) as null', async () => {
-    const deps = makeDeps({
-      findCursorByV8FullFrame: vi.fn(async () => v8({ heatmapPeak: 0.2 })),
-    });
-    const loc = new CursorLocator(deps);
-
-    const fix = await loc.locate(FRAME, 200, 100, 'verify', TARGET);
-    expect(fix).toBeNull();
-  });
-
-  it('requires a hint', async () => {
-    const loc = new CursorLocator(makeDeps());
-    await expect(loc.locate(FRAME, 200, 100, 'verify')).rejects.toThrow(/hint/);
   });
 });
 
