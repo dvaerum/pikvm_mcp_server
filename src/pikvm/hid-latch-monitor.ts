@@ -22,14 +22,19 @@
  * v1 is REPORT-ONLY — the alert only RECOMMENDS a rung.
  */
 
-/** Raw value of `/sys/class/udc/<udc>/state`, when a source deals in UDC states. */
-export type UdcState = string;
+/** Raw value of `/sys/class/udc/<udc>/state`, when a source deals in UDC states.
+ *  Phase 2 (architecture review): renamed from `UdcState` to disambiguate from
+ *  hid-recovery.ts's richer `interface UdcState {udc, state, online}` — same
+ *  name, unrelated shape (bare string vs. a structured reading), previously
+ *  distinguishable only by which module you imported from. That one keeps the
+ *  `UdcState` name; it's the more-consumed of the two. */
+export type UdcKernelState = string;
 
 /** The UDC state in which the emulated HID drives the target — a convenience for sources. */
-export const UDC_UP: UdcState = 'configured';
+export const UDC_UP: UdcKernelState = 'configured';
 
 /** Convenience predicate for state-based sources (e.g. the pikvm01 ssh-source). */
-export function isUdcUp(state: UdcState): boolean {
+export function isUdcUp(state: UdcKernelState): boolean {
   return state === UDC_UP;
 }
 

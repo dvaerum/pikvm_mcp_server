@@ -29,8 +29,9 @@
  *
  * VERIFY BEHAVIORALLY: the mouseOnline/keyboardOnline flags have lied, so after
  * each rung recovery is confirmed by emitting a mouse move and checking the
- * screen actually changed — not by the flags. `isHidBroken` on the flags stays
- * only as the CHEAP TRIGGER for whether to start the ladder at all.
+ * screen actually changed — not by the flags. `flagsSuggestPartialHidLoss` on
+ * the flags stays only as the CHEAP TRIGGER for whether to start the ladder
+ * at all.
  *
  * MCP-side scaffolding; the R2/R3a/R3b HOST mechanisms are provided by
  * pikvm-nixos against the {@link RecoveryTrigger} contract (see runbook). Until
@@ -51,8 +52,20 @@ export interface HidOnlineState {
 /**
  * Cheap TRIGGER only: the flags say the HID isn't fully usable. NB the flags are
  * known to lie both ways — use {@link HidVerifier} for authoritative "recovered".
+ *
+ * AND-semantics (broken if EITHER mouse or keyboard is offline) is DELIBERATE
+ * and DIFFERENT from hid-diagnosis.ts's resolveHidUp, which uses OR-semantics
+ * (up if EITHER is online). They answer different questions: this one decides
+ * "is it worth STARTING the recovery ladder at all" — a cheap, trigger-happy
+ * check that's fine to over-fire (the ladder's own behavioral verification
+ * catches a false trigger cheaply); resolveHidUp decides "should the operator
+ * be told HID is confidently DOWN" — where a false positive (crying HID-down on
+ * a healthy box, live-observed 2026-07-30 with one flag stuck offline) is the
+ * expensive mistake, so it deliberately relaxes to OR. Do NOT unify these into
+ * one semantic thinking the divergence is a bug — it's two different risk
+ * tolerances for two different callers.
  */
-export function isHidBroken(s: HidOnlineState): boolean {
+export function flagsSuggestPartialHidLoss(s: HidOnlineState): boolean {
   return !(s.mouseOnline && s.keyboardOnline);
 }
 
@@ -288,7 +301,7 @@ export async function recoverHid(
     };
   }
 
-  const initiallyBroken = isHidBroken(await client.getHidProfile());
+  const initiallyBroken = flagsSuggestPartialHidLoss(await client.getHidProfile());
   // Cheap trigger says fine → confirm behaviorally (flags lie); if truly healthy, done.
   if (!initiallyBroken) {
     const v = await verifier.verify();

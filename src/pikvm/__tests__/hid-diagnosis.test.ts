@@ -3,9 +3,37 @@ import {
   classifyHid,
   describeHidDiagnosis,
   diagnoseHidFromClient,
+  resolveHidUp,
   type CursorLocator,
   type HidDiagnosisClient,
 } from '../hid-diagnosis.js';
+
+describe('resolveHidUp — OR-semantics, pure (Phase 2 extraction of the previously-duplicated logic)', () => {
+  it('UDC present ⇒ authoritative, confirmed, ignores hidFlags entirely', () => {
+    expect(resolveHidUp({
+      udc: { udc: 'usb-udc', state: 'configured', online: true },
+      hidFlags: { mouseOnline: false, keyboardOnline: false }, // flags disagree — UDC wins
+    })).toEqual({ hidUp: true, udcConfirmed: true });
+
+    expect(resolveHidUp({
+      udc: { udc: 'usb-udc', state: 'not attached', online: false },
+      hidFlags: { mouseOnline: true, keyboardOnline: true }, // flags disagree — UDC still wins
+    })).toEqual({ hidUp: false, udcConfirmed: true });
+  });
+
+  it('no UDC, flags present ⇒ EITHER online counts (not AND), unconfirmed', () => {
+    expect(resolveHidUp({ udc: null, hidFlags: { mouseOnline: true, keyboardOnline: false } }))
+      .toEqual({ hidUp: true, udcConfirmed: false });
+    expect(resolveHidUp({ udc: null, hidFlags: { mouseOnline: false, keyboardOnline: true } }))
+      .toEqual({ hidUp: true, udcConfirmed: false });
+    expect(resolveHidUp({ udc: null, hidFlags: { mouseOnline: false, keyboardOnline: false } }))
+      .toEqual({ hidUp: false, udcConfirmed: false });
+  });
+
+  it('neither UDC nor flags available ⇒ unknown, never a false verdict', () => {
+    expect(resolveHidUp({ udc: null, hidFlags: null })).toEqual({ hidUp: null, udcConfirmed: false });
+  });
+});
 
 describe('classifyHid — provenance-aware DOWN (confident vs suspected)', () => {
   it('hidUp=false + UDC-confirmed ⇒ CONFIDENT hid-down, regardless of cursor', () => {
