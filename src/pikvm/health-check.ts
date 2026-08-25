@@ -28,10 +28,6 @@ export type HealthCheckClient = Pick<
   'getStreamerStatus' | 'getHidProfile' | 'screenshot'
 >;
 
-export interface HealthCheckResult {
-  lines: string[];
-}
-
 export async function runHealthCheck(
   pikvm: HealthCheckClient,
   opts: {
@@ -53,7 +49,7 @@ export async function runHealthCheck(
      */
     locateCursor?: CursorLocator;
   },
-): Promise<HealthCheckResult> {
+): Promise<string[]> {
   const resolverMouseAbsolute = opts.resolverMouseAbsolute;
   const lines: string[] = [];
   lines.push(`Server version: v${VERSION}`);
@@ -262,5 +258,5 @@ export async function runHealthCheck(
     }
   }
 
-  return { lines };
+  return lines;
 }

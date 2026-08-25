@@ -1227,7 +1227,7 @@ async function handle_pikvm_health_check(args: Record<string, unknown>): Promise
           if (shouldClearSettlingFor(udcState)) hidModeResolver.clearSettling();
         }
         return {
-          content: [{ type: 'text', text: health.lines.join('\n') }],
+          content: [{ type: 'text', text: health.join('\n') }],
         };
 }
 
