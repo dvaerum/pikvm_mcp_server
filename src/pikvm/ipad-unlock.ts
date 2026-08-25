@@ -36,6 +36,10 @@ import {
 } from './orientation.js';
 import { sleep } from './util.js';
 import { emitChunked } from './gesture.js';
+// F7 (Round 2 Phase 4): the Phase-217 unlock triad / Phase-231 defensive
+// pair moved out to a shared mechanism module — see its own header comment
+// for why not into either consuming module directly.
+import { ipadUnlockKeySequence, ipadDefensiveKeys } from './ipad-keys.js';
 
 export interface IpadUnlockOptions {
   /** Whether to slam to top-left first to establish a known cursor position
@@ -109,18 +113,13 @@ export async function unlockIpad(
   client: PiKVMClient,
   options: IpadUnlockOptions = {},
 ): Promise<IpadUnlockResult> {
-  // Esc → Enter → Space: Enter unlocks iPadOS 26; Space is the
-  // working key on older revisions; Esc closes any Control/Notification
-  // overlay a prior failed gesture may have opened.
+  // Esc → Enter → Space (see ipad-keys.ts's ipadUnlockKeySequence for the
+  // full per-key rationale). The try/catch is caller-specific fallthrough
+  // logic — stays here, not in the extracted function.
   let keyPressAttempted = false;
   if (options.tryKeyPressFirst !== false) {
     try {
-      await client.sendKey('Escape');
-      await sleep(200);
-      await client.sendKey('Enter');
-      await sleep(600);
-      await client.sendKey('Space');
-      await sleep(400);
+      await ipadUnlockKeySequence(client);
       keyPressAttempted = true;
     } catch {
       // If sendKey fails, fall through to swipe-based unlock
@@ -425,9 +424,9 @@ export async function ipadGoHome(
     const dragPx = options.swipeDragPx ?? 1500;
     // 2026-08-24: the ONE intentional behavior change in the cursor-anchor.ts
     // migration. Before: hardcoded slamToCorner call, no verification, no
-    // recovery — the Phase-231 comment below documents this exact slam
-    // occasionally re-locking an unlocked iPad, with nothing to catch it
-    // until the unconditional defensive Esc+Enter after the swipe. Now:
+    // recovery — ipad-keys.ts's ipadDefensiveKeys doc documents this exact
+    // slam occasionally re-locking an unlocked iPad, with nothing to catch
+    // it until the unconditional defensive Esc+Enter after the swipe. Now:
     // captureVerification checks whether the slam's motion actually
     // registered near the corner; on failure, defensive-keys recovery
     // (Esc+Enter, matching Phase 231's own sequence) runs immediately,
@@ -463,15 +462,9 @@ export async function ipadGoHome(
     await emitChunked(client, 0, -dragPx, 30, 0);
     await client.mouseClick('left', { state: false });
     await sleep(1000);
-    // Phase 231 (v0.5.207): defensive Esc + Enter after the swipe.
-    // The swipe-up gesture sometimes re-locks an already-unlocked iPad
-    // (live-verified 2026-05-10) — same hazard Phase 219 fixed for
-    // unlockIpad. Esc + Enter is a no-op on home but unlocks if we
-    // accidentally locked. Cheap (~800 ms) belt-and-suspenders.
-    await client.sendKey('Escape');
-    await sleep(200);
-    await client.sendKey('Enter');
-    await sleep(600);
+    // Phase 231 (v0.5.207) defensive pair — see ipad-keys.ts's
+    // ipadDefensiveKeys for the full rationale.
+    await ipadDefensiveKeys(client);
     // Phase 235 (v0.5.208): the swipe leaves cursor pinned at the
     // top edge (drag terminates at y≈0). Live N=5 diagnostic
     // 2026-05-10: target-region clicks fail (residual 438 px) when
