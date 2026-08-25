@@ -26,7 +26,7 @@ import { makeKvmdAuthorizer } from './kvmd-auth.js';
 import { type LoginGate } from './session-auth.js';
 import { recoverHid, makeBehavioralVerifier, makeHttpRecoveryTrigger, makeSshRecoveryTrigger, makeUdcStateReader, makeSshUdcStateReader, type RecoveryTrigger, type HidVerifier, type UdcState } from './pikvm/hid-recovery.js';
 import { diagnoseHidFromClient, describeHidDiagnosis } from './pikvm/hid-diagnosis.js';
-import { scaleLearner, MOVER_SCALE_TOOL_NAMES, type MoverScaleToolName } from './pikvm/scale-learner.js';
+import { scaleLearner, recordMoveSample, MOVER_SCALE_TOOL_NAMES, type MoverScaleToolName } from './pikvm/scale-learner.js';
 import { HidModeResolver, makeHttpHidModeEndpoint, shouldClearSettlingFor, type HidMode } from './pikvm/hid-mode.js';
 import { loadPersisted, savePersisted, deletePersisted } from './pikvm/scale-persist.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
@@ -83,22 +83,8 @@ const lock = new BusyLock();
 // do itself, so it POSTs to a pikvm-nixos-provided helper. Configured via
 // PIKVM_HID_RECOVERY_URL (+ optional bearer token); unset ⇒ rungs 2-3 report
 // unavailable. See docs/runbooks/hid-recovery.md ("Trigger interface").
-// (#41) feed a completed curve-one-shot's free first-shot sample to the passive
-// scale learner. The learner's own hygiene rejects a faded-cursor-wake start / a
-// forced click; pre-filter + median absorb the rest. No-op when the mover produced
-// no sample (start or first landing undetected → learnSample null).
-function recordMoveSample(
-  result: { learnSample?: { plannedX: number; plannedY: number; achievedX: number; achievedY: number; woken: boolean } | null },
-  appliedX: number,
-  appliedY: number,
-  forced: boolean,
-): void {
-  const ls = result.learnSample;
-  if (!ls) return;
-  const meta = { woken: ls.woken, forced };
-  scaleLearner.recordSample('x', ls.plannedX, ls.achievedX, appliedX, meta);
-  scaleLearner.recordSample('y', ls.plannedY, ls.achievedY, appliedY, meta);
-}
+// F2 (Round 2 Phase 2): recordMoveSample moved to scale-learner.js — this was
+// one of two verbatim copies (the other lived in click-at.ts).
 
 // (#41) Persistence lifecycle: warm-start from the last-known-good scales on boot,
 // then flush PERIODICALLY (only when dirty, never per-move). Fail-safe — an
@@ -1941,7 +1927,7 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
             forbidSlamOnIpad: policy.forbidSlamOnIpad,
           },
         );
-        if (!policy.mouseAbsolute) recordMoveSample(result, mvLearnScaleX, mvLearnScaleY, false);
+        if (!policy.mouseAbsolute) recordMoveSample(scaleLearner, result, mvLearnScaleX, mvLearnScaleY, false);
         if (capture) {
           // "during" = end-of-move cursor-alive frame (before the ~1-2s fade);
           // "after" = a post-move frame confirming the landed state.

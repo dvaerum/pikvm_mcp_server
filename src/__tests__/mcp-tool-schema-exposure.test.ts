@@ -546,10 +546,12 @@ describe('(#41) passive scale learner — tools + mover wiring', () => {
 
   it('click_at applies the learned per-axis scale and records the first-shot sample', async () => {
     // Moved into click-at.ts (Phase 4/F5, 2026-08-24).
+    // F2 (Round 2 Phase 2): recordMoveSample's call shape gained a leading
+    // `scaleLearner` param when the function itself moved to scale-learner.ts.
     const clickAt = await readClickAtTs();
     expect(clickAt).toMatch(/curveScaleX:\s*learnScaleX/);
     expect(clickAt).toMatch(/curveScaleY:\s*learnScaleY/);
-    expect(clickAt).toMatch(/recordMoveSample\(result, learnScaleX, learnScaleY, force\)/);
+    expect(clickAt).toMatch(/recordMoveSample\(scaleLearner, result, learnScaleX, learnScaleY, force\)/);
   });
 
   it('control tool exposes enable/disable; reset deletes the persisted file', async () => {
