@@ -258,9 +258,38 @@ export interface SlamOptions {
    *  positives on legitimate non-home screens). Costs two extra screenshots
    *  + one diff; opt-in, default false. */
   verifyMotion?: boolean;
+  /**
+   * F1 (Round 2 Phase 3): the screenshot fn verifyMotion uses for its
+   * before/after pair. REQUIRED when verifyMotion is true (throws
+   * otherwise) — no default, because the choice of capture function is a
+   * correctness question, not a convenience one:
+   *
+   * ADR 0001 (docs/adr/0001-do-not-merge-cursor-detection-and-calibration-
+   * sampling-lookalikes.md): three real takeRawScreenshot variants exist on
+   * purpose and must not be merged — cursor-detect.ts's exported version
+   * wake-nudges before capture (±1 px, keeps the auto-fading iPad cursor
+   * visible), this module's and auto-calibrate.ts's own versions
+   * deliberately don't (a nudge right before a calibration/ballistics
+   * capture would contaminate the very displacement being measured).
+   *
+   * An optional param defaulting to this module's own takeRawScreenshot
+   * (the "natural" default for a ballistics.ts function) would silently be
+   * wrong for a non-calibration caller like unlockIpad, which wants the
+   * wake-nudging variant. Pass the non-nudging capture for
+   * calibration-adjacent call sites; read ADR 0001 before relaxing this.
+   */
+  screenshot?: (client: PiKVMClient) => Promise<Buffer>;
   /** Tolerance (px) for the post-slam cluster-near-corner check. Default 80.
    *  Only used when verifyMotion is true. */
   cornerTolerance?: number;
+  /**
+   * F1: caller-supplied bounds, when already resolved (e.g. anchorCursor's
+   * guard-resolution step). `undefined` (the default) means "no hint, do
+   * the normal cache-first/fresh-detect fallback"; an explicit `null` means
+   * "I already tried and there's genuinely no bounds" — skips a redundant
+   * detection round trip. Only used when verifyMotion is true.
+   */
+  boundsHint?: IpadBounds | null;
   detection?: Partial<DetectionConfig>;
 }
 
@@ -280,12 +309,9 @@ export interface SlamMotionCheck {
 /** Corner of the RAW HDMI capture frame. Fallback only — see
  *  cornerTargetFromBounds below, which is correct for any letterboxed
  *  iPad target and should be preferred whenever bounds are available.
- *  Exported for cursor-anchor.ts, which reimplements slamToCorner's
- *  verifyMotion diff/cluster-match against a caller-injected screenshot fn
- *  (ADR 0001 — slamToCorner's own verifyMotion is hardwired to this
- *  module's own non-nudging takeRawScreenshot (exported, not private —
- *  see ADR 0001's amendment), which isn't right for every anchorCursor
- *  call site). */
+ *  Exported for cursor-anchor.ts's own fallback use (its bounds-guard
+ *  resolution needs the same raw-frame corner when bounds are
+ *  undetectable). */
 export function cornerTargetPx(corner: Corner, resolution: ScreenResolution): { x: number; y: number } {
   switch (corner) {
     case 'top-left': return { x: 0, y: 0 };
@@ -395,12 +421,17 @@ export async function slamToCorner(
   const calls = options.calls ?? Math.ceil(Math.max(resolution.width, resolution.height) / 100) + 8;
   const vec = cornerVector(corner);
   const verifyMotion = options.verifyMotion ?? false;
+  // F1: no default screenshot fn — see SlamOptions.screenshot's ADR-0001 doc
+  // for why silently picking one would be a correctness bug, not a convenience.
+  if (verifyMotion && !options.screenshot) {
+    throw new Error('slamToCorner: verifyMotion:true requires options.screenshot (no default — see SlamOptions.screenshot doc).');
+  }
 
   if (options.verbose) {
     console.error(`[slam] ${corner} × ${calls} calls @ ${paceMs}ms`);
   }
 
-  const before = verifyMotion ? await takeRawScreenshot(client) : null;
+  const before = verifyMotion ? await options.screenshot!(client) : null;
 
   for (let i = 0; i < calls; i++) {
     await client.mouseMoveRelative(127 * vec.x, 127 * vec.y);
@@ -415,20 +446,22 @@ export async function slamToCorner(
   // measureCell uses before its own before/after pair.
   await client.mouseMoveRelative(3 * vec.x, 3 * vec.y);
   await sleep(50);
-  const after = await takeRawScreenshot(client);
+  const after = await options.screenshot!(client);
 
   const detection = { ...DEFAULT_DETECTION_CONFIG, ...options.detection };
   const tolerance = options.cornerTolerance ?? 80;
   // P0 fix (2026-08-24): use the iPad's own detected bounds corner, not the
-  // raw capture-frame corner — see cornerTargetFromBounds's doc. Cache-first
-  // (reuses any earlier successful detection in this process) so this
-  // doesn't add a fresh detection round trip on every verifyMotion call;
-  // falls back to a fresh best-effort detect, then to the raw-frame corner
+  // raw capture-frame corner — see cornerTargetFromBounds's doc. F1: an
+  // explicit boundsHint (including null — "I already tried, no bounds")
+  // skips a redundant detection round trip; undefined falls back to the
+  // original cache-first/fresh-detect chain, then to the raw-frame corner
   // only if bounds are genuinely undetectable.
-  const bounds = getLastGoodBounds() ?? await detectBoundsOrNull(client, {
-    verbose: options.verbose,
-    logPrefix: 'slam-verify',
-  });
+  const bounds = options.boundsHint !== undefined
+    ? options.boundsHint
+    : getLastGoodBounds() ?? await detectBoundsOrNull(client, {
+      verbose: options.verbose,
+      logPrefix: 'slam-verify',
+    });
   const expected = bounds ? cornerTargetFromBounds(corner, bounds) : cornerTargetPx(corner, resolution);
 
   let clusters: Cluster[];
