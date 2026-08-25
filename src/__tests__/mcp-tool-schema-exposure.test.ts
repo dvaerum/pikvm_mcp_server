@@ -560,3 +560,60 @@ describe('(#41) passive scale learner — tools + mover wiring', () => {
     expect(reset).toMatch(/deletePersisted\(\)/);
   });
 });
+
+/**
+ * F8 (Round 2 Phase 1): pikvm_mouse_move_to's handler previously ALWAYS
+ * constructed a slamOriginPx object (defaulting to {x:625,y:65}), which
+ * made cursor-anchor.ts's bounds-guard `callerProvidedOrigin` check
+ * structurally always-true — the Layer-3 iPad-letterbox slam refusal
+ * (docs/troubleshooting/ipad-safety-guards.md) could never fire through
+ * this tool. Grep-pin against the regression pattern reappearing (someone
+ * "simplifying" the conditional construction back to an unconditional
+ * object literal), complementing move-to.forbidSlamOnIpad.test.ts's
+ * behavioral coverage of the same fix.
+ */
+describe('F8: pikvm_mouse_move_to only builds slamOriginPx when a coordinate was supplied', () => {
+  it('the handler does NOT unconditionally build {x: ... ?? 625, y: ... ?? 65}', async () => {
+    const src = await readIndexTs();
+    const handler = extractHandlerBlock(src, 'pikvm_mouse_move_to');
+    // The old buggy shape: an object literal built straight from validateNumber(...)
+    // ?? default, with no gate on whether either coordinate was actually supplied.
+    expect(handler).not.toMatch(/slamOriginPx:\s*\{\s*x:\s*validateNumber\(args\.slamOriginX\)\s*\?\?\s*625,\s*y:\s*validateNumber\(args\.slamOriginY\)\s*\?\?\s*65,?\s*\}/);
+  });
+
+  it('the handler reads slamOriginX/Y separately and only builds an origin when at least one is defined', async () => {
+    const src = await readIndexTs();
+    const handler = extractHandlerBlock(src, 'pikvm_mouse_move_to');
+    expect(handler).toMatch(/validateNumber\(args\.slamOriginX\)/);
+    expect(handler).toMatch(/validateNumber\(args\.slamOriginY\)/);
+    expect(handler).toMatch(/sx\s*!==\s*undefined\s*\|\|\s*sy\s*!==\s*undefined/);
+    // undefined (not a default-populated object) is what lets cursor-anchor.ts's
+    // bounds-guard see "no origin supplied" and actually evaluate the guard.
+    expect(handler).toMatch(/:\s*undefined\s*;/);
+  });
+
+  it('schema descriptions document the Layer-3 opt-out, not a bare "Default 625/65"', async () => {
+    const src = await readIndexTs();
+    const tool = extractToolBlock(src, 'pikvm_mouse_move_to');
+    expect(tool).toMatch(/Layer-3/);
+    expect(tool).toMatch(/ipad-safety-guards\.md/);
+  });
+});
+
+/**
+ * F8 follow-up (live-gate finding, PR #77, georgs-mac-mini 2026-08-25):
+ * handle_pikvm_mouse_move_to threaded forbidSlamFallback into moveToPixel's
+ * options but never forbidSlamOnIpad — so the Layer-3 guard's
+ * allowOnUndetermined (`options.forbidSlamOnIpad === false`) could never be
+ * satisfied through this call site, and a desktop/absolute target with
+ * undetermined bounds incorrectly refused a slam. click-at.ts and the
+ * assume-at handler both already wire this correctly (grep-pinned below as
+ * the reference pattern); move_to was the one outlier.
+ */
+describe('F8 follow-up: pikvm_mouse_move_to threads forbidSlamOnIpad into moveToPixel', () => {
+  it('the handler passes forbidSlamOnIpad: policy.forbidSlamOnIpad', async () => {
+    const src = await readIndexTs();
+    const handler = extractHandlerBlock(src, 'pikvm_mouse_move_to');
+    expect(handler).toMatch(/forbidSlamOnIpad:\s*policy\.forbidSlamOnIpad/);
+  });
+});

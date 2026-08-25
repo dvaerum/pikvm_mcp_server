@@ -967,12 +967,12 @@ const toolRegistry: ToolEntry[] = [
         strategy: {
           type: 'string',
           enum: ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'],
-          description: 'Movement strategy. "curve-one-shot" (DEFAULT on iPad/relative-mode): detect cursor once with V8 + one deterministic curve-based emit — no iterative correction; validated N=80 ≈11px + 8/8 correct-app-open vs the iterative path\'s ~73px on a real home screen. "detect-then-move" (default on desktop/absolute): probes+diffs to find the cursor then iteratively corrects. "slam-then-move" pins cursor to top-left (risky on iPad: hot-corner re-lock). "assume-at" requires assumeCursorAtX/Y.',
+          description: 'Movement strategy. "curve-one-shot" (DEFAULT on iPad/relative-mode): detect cursor once with V8 + one deterministic curve-based emit — no iterative correction; validated N=80 ≈11px + 8/8 correct-app-open vs the iterative path\'s ~73px on a real home screen. "detect-then-move" (default on desktop/absolute): probes+diffs to find the cursor then iteratively corrects. "slam-then-move" pins cursor to top-left (risky on iPad: hot-corner re-lock). The Layer-3 guard (docs/troubleshooting/ipad-safety-guards.md) refuses an ambiguous slam by default — it is not caller-overridable through this tool (forbidSlamOnIpad is derived from the resolved HID mode, not an input parameter here); pass slamOriginX/Y to take responsibility for the origin instead. "assume-at" requires assumeCursorAtX/Y.',
         },
         assumeCursorAtX: { type: 'number', description: 'With strategy="assume-at", HDMI X where cursor currently is.' },
         assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
-        slamOriginX: { type: 'number', description: 'HDMI X of post-slam origin. Default 625.' },
-        slamOriginY: { type: 'number', description: 'HDMI Y of post-slam origin. Default 65.' },
+        slamOriginX: { type: 'number', description: 'HDMI X of post-slam origin. Supplying either slamOriginX or slamOriginY opts out of the Layer-3 iPad-letterbox slam refusal (docs/troubleshooting/ipad-safety-guards.md) and makes the caller responsible for the origin — leave both unset to keep the safety guard active. Default 625 when opted in and unset.' },
+        slamOriginY: { type: 'number', description: 'HDMI Y of post-slam origin. Supplying either slamOriginX or slamOriginY opts out of the Layer-3 iPad-letterbox slam refusal (docs/troubleshooting/ipad-safety-guards.md) and makes the caller responsible for the origin — leave both unset to keep the safety guard active. Default 65 when opted in and unset.' },
         fallbackPxPerMickey: { type: 'number', description: 'px/mickey used when no profile. Default 1.3 (empirical iPad with mag=60 chunks).' },
         chunkMagnitude: { type: 'number', description: 'Per-call delta magnitude for chunking. Default 60.' },
         chunkPaceMs: { type: 'number', description: 'Milliseconds between chunked calls. Default 20.' },
@@ -1900,10 +1900,22 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
             assumeCursorAt,
             curveScaleX: mvLearnScaleX,
             curveScaleY: mvLearnScaleY,
-            slamOriginPx: {
-              x: validateNumber(args.slamOriginX) ?? 625,
-              y: validateNumber(args.slamOriginY) ?? 65,
-            },
+            // F8 (Round 2 Phase 1): only construct slamOriginPx when the
+            // caller actually supplied at least one coordinate. Layer 3
+            // (docs/troubleshooting/ipad-safety-guards.md) refuses an
+            // ambiguous slam UNLESS the caller explicitly passed
+            // slamOriginPx — but this tool previously always built one
+            // (defaulting to 625/65), so the guard structurally could
+            // never see "no origin supplied" through this call site.
+            // Passing either coordinate now opts out of the Layer-3
+            // refusal and makes the caller responsible for the origin.
+            slamOriginPx: (() => {
+              const sx = validateNumber(args.slamOriginX);
+              const sy = validateNumber(args.slamOriginY);
+              return sx !== undefined || sy !== undefined
+                ? { x: sx ?? 625, y: sy ?? 65 }
+                : undefined;
+            })(),
             fallbackPxPerMickey: validateNumber(args.fallbackPxPerMickey, 0.01, 10),
             chunkMagnitude: validateNumber(args.chunkMagnitude, 1, 127),
             chunkPaceMs: validateNumber(args.chunkPaceMs, 0, 500),
@@ -1917,6 +1929,16 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
             // the silent slam fallback; force the caller to handle
             // detection failure explicitly.
             forbidSlamFallback: policy.forbidSlamFallback,
+            // F8 follow-up (live-gate finding, PR #77): this was the ONE
+            // handler missing forbidSlamOnIpad — moveToPixel's Layer-3
+            // guard computes allowOnUndetermined: options.forbidSlamOnIpad
+            // === false, so an always-undefined value here meant the guard
+            // could never auto-disarm on a desktop/absolute target (fails
+            // closed — over-conservative, not unsafe — but the desktop
+            // no-args slam-then-move case incorrectly refused). click-at.ts
+            // and the assume-at handler above both already wire this
+            // correctly; move_to was the outlier.
+            forbidSlamOnIpad: policy.forbidSlamOnIpad,
           },
         );
         if (!policy.mouseAbsolute) recordMoveSample(result, mvLearnScaleX, mvLearnScaleY, false);
