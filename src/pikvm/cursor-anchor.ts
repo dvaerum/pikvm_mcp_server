@@ -16,13 +16,18 @@
  */
 
 import { PiKVMClient } from './client.js';
+// F9 (Round 2 Phase 3, 2/2): the slam vocabulary moved out of ballistics.ts
+// into its own mechanism file — this module now imports it from there
+// instead, breaking the prior documented-deliberate ballistics.ts↔
+// cursor-anchor.ts import cycle. ballistics.ts, in turn, no longer imports
+// anything from this module except anchorCursor itself.
 import {
   Axis,
   Corner,
   nudgeFromEdge,
   slamToCorner,
   SlamMotionCheck,
-} from './ballistics.js';
+} from './slam.js';
 import { DetectionConfig } from './cursor-detect.js';
 import {
   detectBoundsOrNull,
