@@ -143,7 +143,7 @@ driven against a general on-screen target, `caller-asserted` if
 you've independently established slamming is safe, `none-calibration`
 only for synthetic/non-real-device scenes) — the type won't let you
 skip this choice. `src/__tests__/no-fifth-slam-copy.test.ts` greps
-for the hand-rolled pattern outside `ballistics.ts`/`cursor-anchor.ts`
+for the hand-rolled pattern outside `slam.ts`/`cursor-anchor.ts`
 and fails the build if one shows up, so this isn't just a convention —
 it's enforced.
 

@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { slamToCorner } from '../ballistics.js';
+import { slamToCorner } from '../slam.js';
 import { clearOrientationCache, detectIpadBoundsFromBuffer } from '../orientation.js';
 import type { PiKVMClient, ScreenResolution } from '../client.js';
 

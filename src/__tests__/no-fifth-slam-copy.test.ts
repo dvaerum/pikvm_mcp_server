@@ -18,7 +18,11 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 const SRC_ROOT = path.resolve(__dirname, '..');
-const ALLOWED_FILES = new Set(['ballistics.ts', 'cursor-anchor.ts']);
+// F9 (Round 2 Phase 3, 2/2): the slam-to-corner emit loop moved out of
+// ballistics.ts into slam.ts — ballistics.ts no longer contains a slam
+// loop at all (a real tightening: the allowlist now only covers files
+// that genuinely need to hardcode this pattern, not a stale grandfather).
+const ALLOWED_FILES = new Set(['slam.ts', 'cursor-anchor.ts']);
 // Hardcoded literal magnitude, the shape a copy-pasted/hand-rolled slam
 // loop takes. slamToCorner's own parameterised `127 * vec.x` form is
 // deliberately NOT matched — it's the one real implementation.
@@ -48,7 +52,7 @@ async function collectTsFiles(dir: string): Promise<string[]> {
 }
 
 describe('no fifth copy of the slam-to-corner pattern', () => {
-  it('no production .ts file outside ballistics.ts/cursor-anchor.ts hardcodes a mouseMoveRelative(±127, ±127) slam loop', async () => {
+  it('no production .ts file outside slam.ts/cursor-anchor.ts hardcodes a mouseMoveRelative(±127, ±127) slam loop', async () => {
     const files = await collectTsFiles(SRC_ROOT);
     const offenders: string[] = [];
     for (const file of files) {
