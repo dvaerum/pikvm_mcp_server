@@ -19,13 +19,11 @@ import { PiKVMClient } from './client.js';
 import {
   Axis,
   Corner,
-  cornerTargetFromBounds,
-  cornerTargetPx,
-  cornerVector,
   nudgeFromEdge,
   slamToCorner,
+  SlamMotionCheck,
 } from './ballistics.js';
-import { Cluster, DEFAULT_DETECTION_CONFIG, DetectionConfig, diffScreenshots } from './cursor-detect.js';
+import { DetectionConfig } from './cursor-detect.js';
 import {
   detectBoundsOrNull,
   getLastGoodBounds,
@@ -234,76 +232,32 @@ function resolveCalibrationOrigin(
 }
 
 /**
- * Post-slam "did the expected motion land near the corner" check —
- * mirrors slamToCorner's own verifyMotion (ballistics.ts), reimplemented
- * against a caller-injected screenshot fn (ADR 0001: slamToCorner's own
- * verifyMotion is hardwired to ballistics.ts's private non-nudging
- * takeRawScreenshot, which isn't right for every anchorCursor call site —
- * e.g. move-to.ts wants the wake-nudging variant when it opts in at all).
+ * F1 (Round 2 Phase 3): the single call into slamToCorner's own
+ * verifyMotion — previously anchorCursor reimplemented that whole
+ * before/nudge/after/diff/match sequence itself (verifySlamLanded, now
+ * deleted) because slamToCorner's verifyMotion was hardwired to
+ * ballistics.ts's own non-nudging takeRawScreenshot, which wasn't right
+ * for every anchorCursor call site. slamToCorner now takes an injected
+ * `screenshot` fn (see SlamOptions.screenshot's ADR-0001 doc) and an
+ * optional `boundsHint` to skip a redundant detection round trip — so
+ * there's nothing left for anchorCursor to reimplement.
  */
-async function verifySlamLanded(
+async function runSlam(
   req: AnchorRequest,
-  before: Buffer,
   corner: Corner,
-  bounds: IpadBounds | null,
-): Promise<{ verified: boolean; matchedClusters: Cluster[] }> {
-  const client = req.client;
-  // One more small nudge in-corner right before the verification
-  // screenshot: iPadOS fades a static cursor after ~300ms, and the slam
-  // loop's last pace-sleep may already have crossed that. Mirrors
-  // slamToCorner's own verifyMotion trick.
-  const vec = cornerVector(corner);
-  await client.mouseMoveRelative(3 * vec.x, 3 * vec.y);
-  await sleep(50);
-  const after = await req.screenshot(client);
-
-  const detection = { ...DEFAULT_DETECTION_CONFIG, ...req.detection };
-  const tolerance = req.cornerTolerance ?? 80;
-  // P0 fix (2026-08-24): use the iPad's own detected bounds corner, not
-  // the raw capture-frame corner — see cornerTargetFromBounds's doc in
-  // ballistics.ts. `bounds` is threaded from anchorCursor's own guard
-  // resolution when available (zero extra detection cost); falls back to
-  // the raw-frame corner only if bounds are genuinely unavailable.
-  const expected = bounds
-    ? cornerTargetFromBounds(corner, bounds)
-    : cornerTargetPx(corner, await client.getResolution());
-
-  let clusters: Cluster[];
-  try {
-    clusters = await diffScreenshots(before, after, detection);
-  } catch (err) {
-    if (req.verbose) {
-      console.error(`[cursor-anchor] verify diff threw: ${(err as Error).message}`);
-    }
-    return { verified: false, matchedClusters: [] };
-  }
-
-  const matchedClusters = clusters.filter((c) => {
-    const dx = c.centroidX - expected.x;
-    const dy = c.centroidY - expected.y;
-    return Math.sqrt(dx * dx + dy * dy) <= tolerance;
-  });
-
-  if (req.verbose) {
-    console.error(
-      `[cursor-anchor] verify: ${matchedClusters.length}/${clusters.length} cluster(s) within ${tolerance}px of expected (${expected.x},${expected.y})`,
-    );
-  }
-
-  return { verified: matchedClusters.length > 0, matchedClusters };
-}
-
-async function runSlam(req: AnchorRequest, corner: Corner): Promise<void> {
-  await slamToCorner(req.client, {
+  verifyMotion: boolean,
+  boundsHint: IpadBounds | null,
+): Promise<SlamMotionCheck | undefined> {
+  return slamToCorner(req.client, {
     calls: req.slamCalls,
     paceMs: req.paceMs,
     corner,
     verbose: req.verbose,
-    // anchorCursor owns verification itself (against the injected
-    // screenshot fn) rather than delegating to slamToCorner's own
-    // verifyMotion, which is hardwired to ballistics.ts's private
-    // non-nudging capture. See verifySlamLanded's doc.
-    verifyMotion: false,
+    verifyMotion,
+    screenshot: req.screenshot,
+    cornerTolerance: req.cornerTolerance,
+    detection: req.detection,
+    boundsHint,
   });
 }
 
@@ -330,7 +284,7 @@ export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
   let recoveryAttempted = false;
 
   if (!captureVerification) {
-    await runSlam(req, corner);
+    await runSlam(req, corner, false, null);
   } else {
     // Bounds for the verification corner target: reuse whatever the guard
     // resolution already detected (zero extra cost for bounds-guard/
@@ -343,10 +297,8 @@ export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
     const verificationBounds = resolved.bounds
       ?? getLastGoodBounds()
       ?? await detectBoundsOrNull(req.client, { verbose: req.verbose, logPrefix: 'cursor-anchor' });
-    const before = await req.screenshot(req.client);
-    await runSlam(req, corner);
-    const check = await verifySlamLanded(req, before, corner, verificationBounds);
-    verified = check.verified;
+    const check = await runSlam(req, corner, true, verificationBounds);
+    verified = check?.verified ?? false;
 
     if (!verified && selfGate) {
       if (recovery.kind === 'none') {
@@ -368,10 +320,8 @@ export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
         await sleep(600);
         await req.client.sendKey('Space');
         await sleep(400);
-        const retryBefore = await req.screenshot(req.client);
-        await runSlam(req, corner);
-        const retryCheck = await verifySlamLanded(req, retryBefore, corner, verificationBounds);
-        verified = retryCheck.verified;
+        const retryCheck = await runSlam(req, corner, true, verificationBounds);
+        verified = retryCheck?.verified ?? false;
       } else if (recovery.kind === 'defensive-keys') {
         // ipadGoHome's Phase-231 belt-and-suspenders: Esc + Enter, no
         // re-attempt — caller inspects the returned screenshot itself,

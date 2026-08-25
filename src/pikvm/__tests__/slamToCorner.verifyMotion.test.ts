@@ -20,6 +20,16 @@ import { slamToCorner } from '../ballistics.js';
 import { clearOrientationCache, detectIpadBoundsFromBuffer } from '../orientation.js';
 import type { PiKVMClient, ScreenResolution } from '../client.js';
 
+/** F1 (Round 2 Phase 3): screenshot is now a required (no-default)
+ *  SlamOptions field when verifyMotion:true — this test file becomes the
+ *  only remaining coverage of the unified verifyMotion path (cursor-anchor's
+ *  own reimplementation, verifySlamLanded, was deleted; anchorCursor calls
+ *  slamToCorner directly now). A plain non-nudging capture, matching what
+ *  this module's own takeRawScreenshot used to do implicitly. */
+async function rawScreenshot(client: PiKVMClient): Promise<Buffer> {
+  return (await client.screenshot()).buffer;
+}
+
 /** Build a synthetic uniform-fill screenshot (same helper as cursor-detect.test.ts). */
 async function makeScreenshot(width: number, height: number, fill: [number, number, number]): Promise<Buffer> {
   const buf = Buffer.alloc(width * height * 3);
@@ -109,7 +119,7 @@ describe('slamToCorner verifyMotion', () => {
     const before = await makeScreenshot(400, 300, [50, 50, 50]);
     const after = await stampSquare(before, 5, 5, 10, [255, 255, 255]);
     const m = mockClient({ screenshots: [before, after] });
-    const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true });
+    const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, screenshot: rawScreenshot });
     expect(result).toBeDefined();
     expect(result!.verified).toBe(true);
     expect(result!.matchedClusters.length).toBeGreaterThan(0);
@@ -119,7 +129,7 @@ describe('slamToCorner verifyMotion', () => {
   it('verified:false when nothing changed between before/after (frozen screen)', async () => {
     const before = await makeScreenshot(400, 300, [50, 50, 50]);
     const m = mockClient({ screenshots: [before, before] });
-    const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true });
+    const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, screenshot: rawScreenshot });
     expect(result).toBeDefined();
     expect(result!.verified).toBe(false);
     expect(result!.matchedClusters).toHaveLength(0);
@@ -129,7 +139,7 @@ describe('slamToCorner verifyMotion', () => {
     const before = await makeScreenshot(400, 300, [50, 50, 50]);
     const after = await stampSquare(before, 350, 250, 10, [255, 255, 255]); // near bottom-right
     const m = mockClient({ screenshots: [before, after] });
-    const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, corner: 'top-left' });
+    const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, screenshot: rawScreenshot, corner: 'top-left' });
     expect(result!.verified).toBe(false);
   });
 
@@ -138,7 +148,7 @@ describe('slamToCorner verifyMotion', () => {
     // Near bottom-right (400,300) — matches corner:'bottom-right', not top-left.
     const after = await stampSquare(before, 395, 295, 10, [255, 255, 255]);
     const m = mockClient({ screenshots: [before, after] });
-    const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, corner: 'bottom-right' });
+    const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, screenshot: rawScreenshot, corner: 'bottom-right' });
     expect(result!.verified).toBe(true);
   });
 
@@ -146,10 +156,10 @@ describe('slamToCorner verifyMotion', () => {
     const before = await makeScreenshot(400, 300, [50, 50, 50]);
     const after = await stampSquare(before, 50, 50, 10, [255, 255, 255]); // ~70px from (0,0)
     const m = mockClient({ screenshots: [before, after] });
-    const tight = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, cornerTolerance: 10 });
+    const tight = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, screenshot: rawScreenshot, cornerTolerance: 10 });
     expect(tight!.verified).toBe(false);
     const m2 = mockClient({ screenshots: [before, after] });
-    const loose = await slamToCorner(m2.client, { paceMs: 0, verifyMotion: true, cornerTolerance: 100 });
+    const loose = await slamToCorner(m2.client, { paceMs: 0, verifyMotion: true, screenshot: rawScreenshot, cornerTolerance: 100 });
     expect(loose!.verified).toBe(true);
   });
 
@@ -176,7 +186,7 @@ describe('slamToCorner verifyMotion', () => {
       expect(bounds.x).toBeGreaterThan(100);
       const after = await stampSquare(before, bounds.x + 5, bounds.y + 5, 10, [255, 255, 255]);
       const m = mockClient({ resolution: { width: 1920, height: 1080 }, screenshots: [before, after] });
-      const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, corner: 'top-left' });
+      const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, screenshot: rawScreenshot, corner: 'top-left' });
       expect(result!.verified).toBe(true);
     });
 
@@ -187,7 +197,7 @@ describe('slamToCorner verifyMotion', () => {
       expect(bounds.x).toBeGreaterThan(100);
       const after = await stampSquare(before, 5, 5, 10, [255, 255, 255]); // raw-frame (0,0) corner
       const m = mockClient({ resolution: { width: 1920, height: 1080 }, screenshots: [before, after] });
-      const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, corner: 'top-left' });
+      const result = await slamToCorner(m.client, { paceMs: 0, verifyMotion: true, screenshot: rawScreenshot, corner: 'top-left' });
       expect(result!.verified).toBe(false);
     });
   });
