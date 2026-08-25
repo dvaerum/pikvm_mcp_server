@@ -144,3 +144,27 @@ data worth keeping as reference even while non-runnable):
   `src/pikvm/cursor-fp-blocklist.js`), test-phase305-slam-unstick.ts,
   test-phase307-bench-with-unlock.ts, test-v238-books-verify.ts, test-v241-settings-verify.ts,
   test-v241-short-bench.ts.
+
+## measureCell pairing false-negative — spurious large-blob artifact  [OPEN, 2026-08-25]
+During PR #78's (F1, slamToCorner/anchorCursor verifyMotion unification) live hardware
+gate, georgs-mac-mini ran a short `measureBallistics` sweep (2 magnitudes × 2 reps) as
+case (d). Traced each "mass rejected" result individually rather than taking the summary
+at face value: two were genuine real hot-corner locks (screenshot-confirmed, correctly
+rejected by the F1-consolidated slam-verification check — not a regression, the same
+compounding-slam risk PR #62's gate hit months earlier). One intermediate cell and a final
+minimal single-cell run both passed slam-verification CLEANLY (zero "not verified"
+rejections) — proof the consolidated check accepts a real good landing, not just rejects
+failures. That last cell then failed a **separate, unrelated** downstream check:
+`measureCell`'s own cluster-pairing logic (`orderClustersByDirection` /
+`PairSelectionOptions` in `ballistics.ts`, the `"no cluster pair aligned"` log line) — not
+touched by PR #78's diff. georgs-mac-mini's read: a spurious large-blob detection artifact
+in the diff, unrelated to the real (much smaller) cursor visible in the final screenshot,
+prevented a valid before/after pair from being selected.
+
+Not reproduced/investigated further yet — `orderClustersByDirection`'s existing
+`cursorMaxPixels` filter (default 150px) should already exclude an oversized blob from the
+candidate pool, so if the artifact still caused a mispairing it's either (a) under the
+150px ceiling despite being much larger than the real cursor, or (b) the artifact excluded
+a *different* valid candidate some other way. Whoever picks this up should start by
+capturing the actual clusters (sizes + positions) from a repro run before theorizing
+further — this entry only records what was observed live, not a diagnosis.
