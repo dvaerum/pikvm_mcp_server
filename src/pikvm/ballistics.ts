@@ -13,7 +13,9 @@
  *   4. Exposes a lookup function that consumers (move-to, click-at) use to
  *      convert a desired pixel distance into a sequence of relative deltas.
  *
- * See /Users/georg/.claude/plans/we-have-not-have-vivid-stallman.md
+ * See docs/adr/0001-do-not-merge-cursor-detection-and-calibration-sampling-lookalikes.md
+ * and docs/troubleshooting/ipad-safety-guards.md for the design rationale and
+ * the safety guards this profile feeds into.
  */
 
 import { promises as fs } from 'fs';
@@ -281,8 +283,9 @@ export interface SlamMotionCheck {
  *  Exported for cursor-anchor.ts, which reimplements slamToCorner's
  *  verifyMotion diff/cluster-match against a caller-injected screenshot fn
  *  (ADR 0001 — slamToCorner's own verifyMotion is hardwired to this
- *  module's private non-nudging takeRawScreenshot, which isn't right for
- *  every anchorCursor call site). */
+ *  module's own non-nudging takeRawScreenshot (exported, not private —
+ *  see ADR 0001's amendment), which isn't right for every anchorCursor
+ *  call site). */
 export function cornerTargetPx(corner: Corner, resolution: ScreenResolution): { x: number; y: number } {
   switch (corner) {
     case 'top-left': return { x: 0, y: 0 };

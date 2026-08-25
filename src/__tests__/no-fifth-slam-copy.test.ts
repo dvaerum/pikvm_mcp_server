@@ -22,7 +22,15 @@ const ALLOWED_FILES = new Set(['ballistics.ts', 'cursor-anchor.ts']);
 // Hardcoded literal magnitude, the shape a copy-pasted/hand-rolled slam
 // loop takes. slamToCorner's own parameterised `127 * vec.x` form is
 // deliberately NOT matched — it's the one real implementation.
-const SLAM_SHAPED_PATTERN = /mouseMoveRelative\(\s*-?127\s*,\s*-?127\s*\)/;
+//
+// Round 2 Phase 0 / F11: widened from BOTH-axes-±127 to EITHER-axis-±127.
+// A hand-rolled slam loop that only reproduces one axis of the pattern
+// (e.g. a vertical-only or horizontal-only corner nudge —
+// `mouseMoveRelative(-127, 0)`) carries the exact same undocumented,
+// unguarded, unverified hot-corner hazard this test exists to catch; the
+// original both-axes-literal regex let it through.
+const SLAM_SHAPED_PATTERN =
+  /mouseMoveRelative\(\s*-?127\s*,\s*[^)]*\)|mouseMoveRelative\(\s*[^,]*,\s*-?127\s*\)/;
 
 async function collectTsFiles(dir: string): Promise<string[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true });

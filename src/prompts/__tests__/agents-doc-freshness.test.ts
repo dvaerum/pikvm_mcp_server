@@ -24,6 +24,10 @@ async function readReadmeMd(): Promise<string> {
   return fs.readFile(path.join(repoRoot(), 'README.md'), 'utf8');
 }
 
+async function readContextMd(): Promise<string> {
+  return fs.readFile(path.join(repoRoot(), 'CONTEXT.md'), 'utf8');
+}
+
 /**
  * Phase 171 (v0.5.161): count `pikvm_*` tool definitions in
  * src/index.ts dynamically rather than hardcoding the count in the
@@ -169,11 +173,41 @@ describe('AGENTS.md freshness', () => {
   });
 });
 
+/**
+ * Round 2 Phase 0 / F11: docs/skills/ companion files were only checked
+ * prompt→doc (every prompt has a doc). The reverse direction — every doc has
+ * a prompt — had silent drift: 3 files are real operator runbooks with no
+ * MCP prompt behind them (disable-ipad-pointer-animations, ipad-keyboard-workflow,
+ * ipad-setup), which is fine, but an UNLISTED extra doc would go unnoticed
+ * forever without this allowlist forcing a deliberate decision each time one
+ * shows up.
+ */
+const INTENTIONAL_EXTRAS = new Set([
+  'disable-ipad-pointer-animations',
+  'ipad-keyboard-workflow',
+  'ipad-setup',
+  'README',
+]);
+
 describe('docs/skills/ companion files', () => {
   it('every prompt has a matching docs/skills/<name>.md file', async () => {
     for (const p of [...toolGuidePrompts, ...workflowPrompts]) {
       const skillFile = path.join(repoRoot(), 'docs', 'skills', `${p.name}.md`);
       await expect(fs.access(skillFile)).resolves.toBeUndefined();
+    }
+  });
+
+  it('every docs/skills/*.md file has a matching prompt, unless intentionally an operator runbook', async () => {
+    const skillsDir = path.join(repoRoot(), 'docs', 'skills');
+    const files = await fs.readdir(skillsDir);
+    const promptNames = new Set([...toolGuidePrompts, ...workflowPrompts].map((p) => p.name));
+    for (const file of files) {
+      if (!file.endsWith('.md')) continue;
+      const name = file.slice(0, -3);
+      if (INTENTIONAL_EXTRAS.has(name)) continue;
+      expect(promptNames.has(name), `docs/skills/${file} has no matching prompt — add it to ` +
+        `toolGuidePrompts/workflowPrompts, or to INTENTIONAL_EXTRAS if it's a deliberate ` +
+        `operator runbook with no MCP prompt behind it`).toBe(true);
     }
   });
 
@@ -236,5 +270,24 @@ describe('README.md freshness', () => {
     for (const t of tools) {
       expect(doc, `README.md should mention ${t}`).toContain(t);
     }
+  });
+});
+
+/**
+ * Round 2 Phase 0 / F11: CONTEXT.md had drifted into a stale 6-tool/2024-era
+ * "Implemented Tools" enumeration (the project has since grown to 25+ tools).
+ * Rewritten to point at AGENTS.md as the exhaustive, test-anchored list
+ * instead of re-enumerating — these tests pin BOTH halves of that fix: the
+ * pointer exists, and the stale enumeration doesn't silently come back.
+ */
+describe('CONTEXT.md freshness', () => {
+  it('points at AGENTS.md for the exhaustive tool/prompt list rather than re-enumerating', async () => {
+    const doc = await readContextMd();
+    expect(doc).toContain('AGENTS.md');
+  });
+
+  it('does not re-introduce the stale numbered "Implemented Tools" tool catalog', async () => {
+    const doc = await readContextMd();
+    expect(doc).not.toContain('### Implemented Tools');
   });
 });

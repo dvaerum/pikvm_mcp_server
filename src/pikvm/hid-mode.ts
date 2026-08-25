@@ -78,6 +78,15 @@ export interface HidPolicy {
   mode: HidMode;
   mouseAbsolute: boolean;
   strategy: 'curve-one-shot' | 'detect-then-move';
+  // Round 2 Phase 0 / F11: do not collapse these two — both derive to
+  // `!mouseAbsolute` today, but forbidSlamFallback gates the AUTOMATIC
+  // fallback path (detect-then-move failed, refuse to silently slam
+  // instead of throwing), while forbidSlamOnIpad gates even an EXPLICIT
+  // caller request (strategy='slam-then-move' on iPad-portrait letterbox,
+  // regardless of why the caller chose slam). A future mode/policy could
+  // need one true and the other false (e.g. an iPad with hot-corners
+  // disabled — safe to slam on request, still unsafe to silently
+  // fall back to).
   forbidSlamFallback: boolean;
   forbidSlamOnIpad: boolean;
   chunkPaceMs: number | undefined;

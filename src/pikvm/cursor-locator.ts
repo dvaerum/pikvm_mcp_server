@@ -1,12 +1,12 @@
 /**
  * CursorLocator — one front door for "where is the cursor?".
  *
- * Candidate 1 / Phase 1 of docs/plans/cursor-locator-and-mover-collapse.md.
- * This is the OFFLINE-ONLY skeleton: nothing calls it yet, so it changes NO
- * existing behaviour. Each named profile reproduces TODAY's detector cascade
- * **call-for-call, same order, same thresholds**; Phase 3 reroutes the real
- * callers (discoverOrigin / tryOpenLoopShapeDetect / click-verify / curve-mover)
- * through it and proves byte-identical detector call sequences on hardware.
+ * See docs/adr/0003-cursor-locator-is-the-front-door.md for which profiles are
+ * live and why. Each named profile reproduces the target call site's detector
+ * cascade **call-for-call, same order, same thresholds**. All three profiles
+ * in {@link LocateProfile} are wired to real callers today: `origin` —
+ * move-to.ts's `discoverOrigin`; `openLoopShape` — move-to.ts's
+ * `tryOpenLoopShapeDetect`; `curve` — curve-mover.ts's `detect`.
  *
  * Design decisions (already settled with the repo owner — see the plan):
  *  - A: the locator OWNS the CursorBelief instance (folds in candidate 5).
@@ -69,9 +69,9 @@ export interface CursorLocatorDeps {
   /** The belief this locator OWNS (candidate 5: belief moves out of PiKVMClient). */
   belief: CursorBelief;
 
-  /** Fresh capture + decode. `origin` and `verify` take their OWN screenshots
-   *  (probe wake-nudges / second-opinion wake), matching the current code which
-   *  re-decodes a fresh frame rather than reusing a passed-in one. */
+  /** Fresh capture + decode. `origin` takes its OWN screenshot (probe
+   *  wake-nudges), matching the current code which re-decodes a fresh frame
+   *  rather than reusing a passed-in one. */
   screenshot: () => Promise<DecodedScreenshot>;
   /** Decode a passed-in frame (openLoopShape receives an already-captured frame). */
   decode: (frame: Buffer) => Promise<DecodedScreenshot>;

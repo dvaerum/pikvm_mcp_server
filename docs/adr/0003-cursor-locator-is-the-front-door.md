@@ -6,9 +6,10 @@ accepted (2026-08-24)
 
 ## Context
 
-`src/pikvm/cursor-locator.ts`'s `CursorLocator` was built (see its own header
-comment, "Candidate 1 / Phase 1 of docs/plans/cursor-locator-and-mover-collapse.md")
-as one front door for cursor detection: a single class, named **profiles**
+`src/pikvm/cursor-locator.ts`'s `CursorLocator` was built (originally as
+"Candidate 1 / Phase 1" of a since-deleted planning doc — see its own header
+comment for the current pointer, this ADR) as one front door for cursor
+detection: a single class, named **profiles**
 (not one merged cascade), each reproducing an existing call site's detector
 sequence call-for-call so a caller could be rerouted through it with a
 byte-identical-on-hardware guarantee. Every detector/device function a
