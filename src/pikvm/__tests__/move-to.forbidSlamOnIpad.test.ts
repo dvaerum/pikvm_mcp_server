@@ -192,3 +192,83 @@ describe('moveToPixel forbidSlamOnIpad', () => {
     expect(client.slamCalls).toBeGreaterThan(0);
   }, 30000);
 });
+
+/**
+ * F8 (Round 2 Phase 1): pikvm_mouse_move_to's index.ts handler previously
+ * ALWAYS constructed a slamOriginPx object (defaulting to {x:625,y:65}) even
+ * when the caller supplied neither slamOriginX nor slamOriginY — so
+ * `callerProvidedOrigin` (cursor-anchor.ts's bounds-guard) was structurally
+ * always true through this call site, meaning the guard could NEVER refuse
+ * a slam requested through pikvm_mouse_move_to, regardless of what bounds
+ * detection found. Live-verified 2026-04-26's lock incident went through
+ * click_at (which never builds slamOriginPx), not move_to — so this gap sat
+ * open the entire time Layers 1-3 existed, never exercised through this tool.
+ *
+ * `buildSlamOriginPx` below mirrors index.ts's ACTUAL arg-parsing (fixed
+ * version): only construct an origin when the caller supplied at least one
+ * coordinate. The paired negative control proves the OLD (buggy) shape was
+ * genuinely unsafe on the exact same frame.
+ */
+describe('handler-shaped slamOriginPx construction (index.ts pikvm_mouse_move_to)', () => {
+  /** Mirrors index.ts's fixed handler logic exactly. */
+  function buildSlamOriginPx(args: { slamOriginX?: number; slamOriginY?: number }): { x: number; y: number } | undefined {
+    const sx = args.slamOriginX;
+    const sy = args.slamOriginY;
+    return sx !== undefined || sy !== undefined ? { x: sx ?? 625, y: sy ?? 65 } : undefined;
+  }
+
+  /** The OLD (buggy, pre-F8) handler logic — always builds an origin. */
+  function buildSlamOriginPxOldBuggy(args: { slamOriginX?: number; slamOriginY?: number }): { x: number; y: number } {
+    return { x: args.slamOriginX ?? 625, y: args.slamOriginY ?? 65 };
+  }
+
+  it('F8 fix: no slamOriginX/Y supplied ⇒ the Layer-3 guard refuses on a portrait-letterbox frame', async () => {
+    clearOrientationCache();
+    const client = new IpadPortraitClient();
+    const slamOriginPx = buildSlamOriginPx({}); // no args supplied, matching a bare pikvm_mouse_move_to call
+    expect(slamOriginPx).toBeUndefined();
+    await expect(
+      moveToPixel(client as unknown as PiKVMClient, { x: 1000, y: 800 }, {
+        strategy: 'slam-then-move',
+        slamOriginPx,
+        warmupMickeys: 0,
+        calibrationProbeMickeys: 0,
+      }),
+    ).rejects.toThrow(/iPad-portrait letterbox detected|hot-corner gesture/i);
+    expect(client.slamCalls).toBe(0);
+  }, 30000);
+
+  it('negative control: the OLD unconditional-origin shape defeats the guard on the SAME frame', async () => {
+    clearOrientationCache();
+    const client = new IpadPortraitClient();
+    const slamOriginPx = buildSlamOriginPxOldBuggy({}); // the pre-F8 behavior: always {x:625,y:65}
+    expect(slamOriginPx).toEqual({ x: 625, y: 65 });
+    // No throw — this is the exact gap F8 closes: the guard sees
+    // callerProvidedOrigin=true unconditionally and yields.
+    const result = await moveToPixel(client as unknown as PiKVMClient, { x: 1000, y: 800 }, {
+      strategy: 'slam-then-move',
+      slamOriginPx,
+      warmupMickeys: 0,
+      calibrationProbeMickeys: 0,
+      postMoveSettleMs: 0,
+    });
+    expect(result.strategy).toBe('slam-then-move');
+    expect(client.slamCalls).toBeGreaterThan(0);
+  }, 30000);
+
+  it('explicit slamOriginX/Y still opts out of the guard as documented (unchanged behavior)', async () => {
+    clearOrientationCache();
+    const client = new IpadPortraitClient();
+    const slamOriginPx = buildSlamOriginPx({ slamOriginX: 50, slamOriginY: 50 });
+    expect(slamOriginPx).toEqual({ x: 50, y: 50 });
+    const result = await moveToPixel(client as unknown as PiKVMClient, { x: 1000, y: 800 }, {
+      strategy: 'slam-then-move',
+      slamOriginPx,
+      warmupMickeys: 0,
+      calibrationProbeMickeys: 0,
+      postMoveSettleMs: 0,
+    });
+    expect(result.strategy).toBe('slam-then-move');
+    expect(client.slamCalls).toBeGreaterThan(0);
+  }, 30000);
+});

@@ -971,8 +971,8 @@ const toolRegistry: ToolEntry[] = [
         },
         assumeCursorAtX: { type: 'number', description: 'With strategy="assume-at", HDMI X where cursor currently is.' },
         assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
-        slamOriginX: { type: 'number', description: 'HDMI X of post-slam origin. Default 625.' },
-        slamOriginY: { type: 'number', description: 'HDMI Y of post-slam origin. Default 65.' },
+        slamOriginX: { type: 'number', description: 'HDMI X of post-slam origin. Supplying either slamOriginX or slamOriginY opts out of the Layer-3 iPad-letterbox slam refusal (docs/troubleshooting/ipad-safety-guards.md) and makes the caller responsible for the origin — leave both unset to keep the safety guard active. Default 625 when opted in and unset.' },
+        slamOriginY: { type: 'number', description: 'HDMI Y of post-slam origin. Supplying either slamOriginX or slamOriginY opts out of the Layer-3 iPad-letterbox slam refusal (docs/troubleshooting/ipad-safety-guards.md) and makes the caller responsible for the origin — leave both unset to keep the safety guard active. Default 65 when opted in and unset.' },
         fallbackPxPerMickey: { type: 'number', description: 'px/mickey used when no profile. Default 1.3 (empirical iPad with mag=60 chunks).' },
         chunkMagnitude: { type: 'number', description: 'Per-call delta magnitude for chunking. Default 60.' },
         chunkPaceMs: { type: 'number', description: 'Milliseconds between chunked calls. Default 20.' },
@@ -1900,10 +1900,22 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
             assumeCursorAt,
             curveScaleX: mvLearnScaleX,
             curveScaleY: mvLearnScaleY,
-            slamOriginPx: {
-              x: validateNumber(args.slamOriginX) ?? 625,
-              y: validateNumber(args.slamOriginY) ?? 65,
-            },
+            // F8 (Round 2 Phase 1): only construct slamOriginPx when the
+            // caller actually supplied at least one coordinate. Layer 3
+            // (docs/troubleshooting/ipad-safety-guards.md) refuses an
+            // ambiguous slam UNLESS the caller explicitly passed
+            // slamOriginPx — but this tool previously always built one
+            // (defaulting to 625/65), so the guard structurally could
+            // never see "no origin supplied" through this call site.
+            // Passing either coordinate now opts out of the Layer-3
+            // refusal and makes the caller responsible for the origin.
+            slamOriginPx: (() => {
+              const sx = validateNumber(args.slamOriginX);
+              const sy = validateNumber(args.slamOriginY);
+              return sx !== undefined || sy !== undefined
+                ? { x: sx ?? 625, y: sy ?? 65 }
+                : undefined;
+            })(),
             fallbackPxPerMickey: validateNumber(args.fallbackPxPerMickey, 0.01, 10),
             chunkMagnitude: validateNumber(args.chunkMagnitude, 1, 127),
             chunkPaceMs: validateNumber(args.chunkPaceMs, 0, 500),
