@@ -967,7 +967,7 @@ const toolRegistry: ToolEntry[] = [
         strategy: {
           type: 'string',
           enum: ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'],
-          description: 'Movement strategy. "curve-one-shot" (DEFAULT on iPad/relative-mode): detect cursor once with V8 + one deterministic curve-based emit — no iterative correction; validated N=80 ≈11px + 8/8 correct-app-open vs the iterative path\'s ~73px on a real home screen. "detect-then-move" (default on desktop/absolute): probes+diffs to find the cursor then iteratively corrects. "slam-then-move" pins cursor to top-left (risky on iPad: hot-corner re-lock). "assume-at" requires assumeCursorAtX/Y.',
+          description: 'Movement strategy. "curve-one-shot" (DEFAULT on iPad/relative-mode): detect cursor once with V8 + one deterministic curve-based emit — no iterative correction; validated N=80 ≈11px + 8/8 correct-app-open vs the iterative path\'s ~73px on a real home screen. "detect-then-move" (default on desktop/absolute): probes+diffs to find the cursor then iteratively corrects. "slam-then-move" pins cursor to top-left (risky on iPad: hot-corner re-lock). The Layer-3 guard (docs/troubleshooting/ipad-safety-guards.md) refuses an ambiguous slam by default — it is not caller-overridable through this tool (forbidSlamOnIpad is derived from the resolved HID mode, not an input parameter here); pass slamOriginX/Y to take responsibility for the origin instead. "assume-at" requires assumeCursorAtX/Y.',
         },
         assumeCursorAtX: { type: 'number', description: 'With strategy="assume-at", HDMI X where cursor currently is.' },
         assumeCursorAtY: { type: 'number', description: 'With strategy="assume-at", HDMI Y where cursor currently is.' },
@@ -1929,6 +1929,16 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
             // the silent slam fallback; force the caller to handle
             // detection failure explicitly.
             forbidSlamFallback: policy.forbidSlamFallback,
+            // F8 follow-up (live-gate finding, PR #77): this was the ONE
+            // handler missing forbidSlamOnIpad — moveToPixel's Layer-3
+            // guard computes allowOnUndetermined: options.forbidSlamOnIpad
+            // === false, so an always-undefined value here meant the guard
+            // could never auto-disarm on a desktop/absolute target (fails
+            // closed — over-conservative, not unsafe — but the desktop
+            // no-args slam-then-move case incorrectly refused). click-at.ts
+            // and the assume-at handler above both already wire this
+            // correctly; move_to was the outlier.
+            forbidSlamOnIpad: policy.forbidSlamOnIpad,
           },
         );
         if (!policy.mouseAbsolute) recordMoveSample(result, mvLearnScaleX, mvLearnScaleY, false);

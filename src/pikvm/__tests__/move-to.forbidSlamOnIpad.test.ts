@@ -272,3 +272,65 @@ describe('handler-shaped slamOriginPx construction (index.ts pikvm_mouse_move_to
     expect(client.slamCalls).toBeGreaterThan(0);
   }, 30000);
 });
+
+/**
+ * F8 follow-up (live-gate finding, PR #77, georgs-mac-mini 2026-08-25):
+ * handle_pikvm_mouse_move_to never threaded forbidSlamOnIpad into
+ * moveToPixel's options at all — only forbidSlamFallback was. Since the
+ * bounds-guard computes `allowOnUndetermined: options.forbidSlamOnIpad
+ * === false`, an always-undefined value can never satisfy that — so on a
+ * DESKTOP/absolute target (policy.forbidSlamOnIpad === false) where bounds
+ * detection fails (target type undetermined), the tool incorrectly
+ * refused a slam that should have been allowed. Confirmed live: spawning
+ * with --target desktop and running a no-origin slam-then-move still hit
+ * the iPad-letterbox refusal. Fails closed (over-conservative, not
+ * unsafe), but the tool's own promised desktop-mode behavior was unmet.
+ */
+describe('handler-shaped forbidSlamOnIpad wiring (index.ts pikvm_mouse_move_to)', () => {
+  class BlackFrameClient {
+    resolution: ScreenResolution = { width: 1920, height: 1080 };
+    slamCalls = 0;
+    async getResolution() { return this.resolution; }
+    async screenshot() {
+      const buf = await sharp(
+        Buffer.alloc(1920 * 1080 * 3, 0),
+        { raw: { width: 1920, height: 1080, channels: 3 } },
+      ).jpeg().toBuffer();
+      return { buffer: buf, screenshotWidth: 1920, screenshotHeight: 1080 };
+    }
+    async mouseMoveRelative(dx: number, _dy: number) {
+      if (dx <= -100) this.slamCalls++;
+    }
+  }
+
+  it('negative control: NOT threading forbidSlamOnIpad refuses even in desktop mode (target type undetermined)', async () => {
+    clearOrientationCache();
+    const client = new BlackFrameClient();
+    // The pre-follow-up bug: forbidSlamOnIpad simply never passed, so it's
+    // always undefined regardless of policy — desktop mode couldn't disarm it.
+    await expect(
+      moveToPixel(client as unknown as PiKVMClient, { x: 1000, y: 800 }, {
+        strategy: 'slam-then-move',
+        warmupMickeys: 0,
+        calibrationProbeMickeys: 0,
+      }),
+    ).rejects.toThrow(/target type undetermined|hot-corner|iPad/i);
+    expect(client.slamCalls).toBe(0);
+  }, 30000);
+
+  it('follow-up fix: forbidSlamOnIpad: policy.forbidSlamOnIpad (false on desktop) allows the slam through', async () => {
+    clearOrientationCache();
+    const client = new BlackFrameClient();
+    // Mirrors HidPolicy.forbidSlamOnIpad for a desktop/absolute target: !mouseAbsolute === false.
+    const desktopForbidSlamOnIpad = false;
+    const result = await moveToPixel(client as unknown as PiKVMClient, { x: 1000, y: 800 }, {
+      strategy: 'slam-then-move',
+      forbidSlamOnIpad: desktopForbidSlamOnIpad,
+      warmupMickeys: 0,
+      calibrationProbeMickeys: 0,
+      postMoveSettleMs: 0,
+    });
+    expect(result.strategy).toBe('slam-then-move');
+    expect(client.slamCalls).toBeGreaterThan(0);
+  }, 30000);
+});

@@ -599,3 +599,21 @@ describe('F8: pikvm_mouse_move_to only builds slamOriginPx when a coordinate was
     expect(tool).toMatch(/ipad-safety-guards\.md/);
   });
 });
+
+/**
+ * F8 follow-up (live-gate finding, PR #77, georgs-mac-mini 2026-08-25):
+ * handle_pikvm_mouse_move_to threaded forbidSlamFallback into moveToPixel's
+ * options but never forbidSlamOnIpad — so the Layer-3 guard's
+ * allowOnUndetermined (`options.forbidSlamOnIpad === false`) could never be
+ * satisfied through this call site, and a desktop/absolute target with
+ * undetermined bounds incorrectly refused a slam. click-at.ts and the
+ * assume-at handler both already wire this correctly (grep-pinned below as
+ * the reference pattern); move_to was the one outlier.
+ */
+describe('F8 follow-up: pikvm_mouse_move_to threads forbidSlamOnIpad into moveToPixel', () => {
+  it('the handler passes forbidSlamOnIpad: policy.forbidSlamOnIpad', async () => {
+    const src = await readIndexTs();
+    const handler = extractHandlerBlock(src, 'pikvm_mouse_move_to');
+    expect(handler).toMatch(/forbidSlamOnIpad:\s*policy\.forbidSlamOnIpad/);
+  });
+});
