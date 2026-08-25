@@ -425,7 +425,7 @@ export async function ipadGoHome(
     const dragPx = options.swipeDragPx ?? 1500;
     // 2026-08-24: the ONE intentional behavior change in the cursor-anchor.ts
     // migration. Before: hardcoded slamToCorner call, no verification, no
-    // recovery — Phase-231's own comment below documents this exact slam
+    // recovery — the Phase-231 comment below documents this exact slam
     // occasionally re-locking an unlocked iPad, with nothing to catch it
     // until the unconditional defensive Esc+Enter after the swipe. Now:
     // captureVerification checks whether the slam's motion actually
@@ -433,7 +433,12 @@ export async function ipadGoHome(
     // (Esc+Enter, matching Phase 231's own sequence) runs immediately,
     // closing a real, previously-unguarded gap rather than relying solely
     // on the post-swipe belt-and-suspenders below.
-    const slamResult = await anchorCursor({
+    // F3 (Round 2 Phase 4): anchorCursor already ran a full bounds
+    // detection internally to resolve the slam origin (resolveCallerAssertedOrigin,
+    // cursor-anchor.ts) and returns it as `.origin`/`.bounds` — destructure
+    // those instead of re-detecting + recomputing slamOriginFromBounds(bounds)
+    // a second time 14 lines later, which is what this code used to do.
+    const { verified, origin: slamOrigin, bounds } = await anchorCursor({
       client,
       corner: 'top-left',
       guard: { kind: 'caller-asserted', reason: 'Layer 5 — safe on lock screen and home screen, idempotent' },
@@ -442,17 +447,13 @@ export async function ipadGoHome(
       recovery: { kind: 'defensive-keys' },
       verbose: options.verbose,
     });
-    if (slamResult.verified === false) {
+    if (verified === false) {
       messagePart += ' WARNING: the pre-swipe slam-to-corner motion did not verify (defensive Esc+Enter sent) — inspect the screenshot carefully.';
     }
     // Move down to the bottom-centre area so the swipe starts from
-    // a region where iPadOS expects the home gesture.
-    const bounds = await detectBoundsOrNull(client, {
-      verbose: options.verbose,
-      logPrefix: 'ipad-home',
-    });
+    // a region where iPadOS expects the home gesture. `bounds`/`slamOrigin`
+    // came from anchorCursor above — no second detection round trip.
     const start = bounds ? unlockStartFromBounds(bounds) : LEGACY_PORTRAIT_UNLOCK_START;
-    const slamOrigin = bounds ? slamOriginFromBounds(bounds) : LEGACY_PORTRAIT_SLAM_ORIGIN;
     const posX = Math.round(start.x - slamOrigin.x);
     const posY = Math.round(start.y - slamOrigin.y);
     const posChunks = await emitChunked(client, posX, posY, 127, 20);
