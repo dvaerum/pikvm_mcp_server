@@ -211,15 +211,29 @@ async function resolveBoundsGuardOrigin(
   return { origin: slamOrigin, bounds: detectedBounds };
 }
 
-/** Layer 5: caller has already decided slamming is safe. Best-effort bounds
- *  detection purely to compute a sane origin — never throws. */
+/**
+ * Layer 5: caller has already decided slamming is safe. Best-effort bounds
+ * detection purely to compute a sane origin — never throws.
+ *
+ * F3 (Round 2 Phase 4): cache-first, matching resolveBoundsGuardOrigin's own
+ * pattern (this function was the one guard-resolver that always paid a
+ * fresh detection round trip). REAL BEHAVIOR CHANGE, called out explicitly
+ * (not a pure no-op refactor like the ipad-unlock.ts double-detection
+ * removal in the same PR): a stale cached bounds reading can now be
+ * returned here instead of a fresh detect, on the same trade-off
+ * resolveBoundsGuardOrigin already accepts elsewhere — cheaper, but a
+ * genuine orientation/bounds change between calls won't be picked up until
+ * the cache is next invalidated. Both this guard's real call sites
+ * (unlockIpad, ipadGoHome) run once per user-initiated action, not in a
+ * tight loop, so the staleness window in practice is short.
+ */
 async function resolveCallerAssertedOrigin(
   req: AnchorRequest,
 ): Promise<{ origin: { x: number; y: number }; bounds: IpadBounds | null }> {
   if (req.slamOriginPx) {
     return { origin: req.slamOriginPx, bounds: null };
   }
-  const bounds = await detectBoundsOrNull(req.client, {
+  const bounds = getLastGoodBounds() ?? await detectBoundsOrNull(req.client, {
     verbose: req.verbose,
     logPrefix: 'cursor-anchor',
   });
