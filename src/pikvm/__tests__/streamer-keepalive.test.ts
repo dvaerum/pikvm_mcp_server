@@ -66,7 +66,7 @@ describe('StreamerKeepalive', () => {
     sockets[0].open();
     await p;
 
-    expect(capturedUrl).toBe('wss://192.168.1.50/api/ws');
+    expect(capturedUrl).toBe('wss://192.168.1.50/api/ws?stream=1');
     expect(capturedOpts).toEqual({
       headers: { 'X-KVMD-User': 'admin', 'X-KVMD-Passwd': 'pw' },
       rejectUnauthorized: false,
@@ -84,7 +84,7 @@ describe('StreamerKeepalive', () => {
     };
     const ka = new StreamerKeepalive({ ...makeConfig(), host: 'http://192.168.1.50' }, factory);
     await ka.ensureStarted();
-    expect(capturedUrl).toBe('ws://192.168.1.50/api/ws');
+    expect(capturedUrl).toBe('ws://192.168.1.50/api/ws?stream=1');
   });
 
   it('is idempotent: a second ensureStarted() while connected is a true no-op (no new socket)', async () => {
