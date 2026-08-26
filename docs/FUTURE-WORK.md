@@ -208,3 +208,20 @@ slam-heavy operations (measureBallistics, ipadGoHome swipes) specifically, or oc
 plain elapsed-time basis regardless of activity — that would distinguish "our own hot-
 corner risk accumulating" from "iOS's own auto-lock timer," which point to very different
 fixes.
+
+## StreamerKeepalive doesn't support proxyUrl (macOS loopback-proxy deployment)  [DEFERRED, 2026-08-26]
+The streamer idle-stop fix (`src/pikvm/streamer-keepalive.ts`, closes the "screenshot/streamer
+503 when kvmd idle-stops ustreamer" task) holds a persistent `/api/ws` WebSocket connection via
+the `ws` package to keep kvmd's stream-client count above zero. `PiKVMConfig.proxyUrl` (the
+macOS Local Network privacy workaround — routes REST traffic through a loopback HTTP CONNECT
+proxy via undici's `ProxyAgent`) has no equivalent wired up for this WS connection: `ws`'s
+`ClientOptions` takes a classic Node `http(s).Agent`, not undici's `Dispatcher` interface, so
+undici's `ProxyAgent` can't be reused as-is. `PiKVMClient` explicitly skips constructing a
+`StreamerKeepalive` when `proxyUrl` is set (falls back to the retry-once-on-503 safety net
+alone — real fix, just without the steady-state "never race the idle-stop at all" benefit).
+
+Not implemented because it's out of scope for the current task (headless nixos-developer-system
+usage is unproxied) and would need a new proxy-agent dependency (e.g. `https-proxy-agent`) or a
+hand-rolled CONNECT-tunnelling `http.Agent` for the `ws` transport. Pick this up if the proxied
+macOS deployment (`pikvm-mcp-server@georgs-mac-mini`) ever hits screenshot 503s from idle-stop
+in practice — until then the retry-once mitigates the worst of it without added complexity.
