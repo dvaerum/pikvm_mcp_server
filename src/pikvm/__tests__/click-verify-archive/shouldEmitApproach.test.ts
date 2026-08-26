@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { shouldEmitApproach } from '../click-verify.js';
+import { shouldEmitApproach } from '../../click-verify-archive.js';
 
 describe('shouldEmitApproach', () => {
   it('does NOT fire when preClickApproachMickeys is 0 (feature disabled)', () => {
