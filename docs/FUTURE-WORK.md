@@ -209,19 +209,37 @@ plain elapsed-time basis regardless of activity — that would distinguish "our 
 corner risk accumulating" from "iOS's own auto-lock timer," which point to very different
 fixes.
 
-## StreamerKeepalive doesn't support proxyUrl (macOS loopback-proxy deployment)  [DEFERRED, 2026-08-26]
-The streamer idle-stop fix (`src/pikvm/streamer-keepalive.ts`, closes the "screenshot/streamer
-503 when kvmd idle-stops ustreamer" task) holds a persistent `/api/ws` WebSocket connection via
-the `ws` package to keep kvmd's stream-client count above zero. `PiKVMConfig.proxyUrl` (the
-macOS Local Network privacy workaround — routes REST traffic through a loopback HTTP CONNECT
-proxy via undici's `ProxyAgent`) has no equivalent wired up for this WS connection: `ws`'s
-`ClientOptions` takes a classic Node `http(s).Agent`, not undici's `Dispatcher` interface, so
-undici's `ProxyAgent` can't be reused as-is. `PiKVMClient` explicitly skips constructing a
-`StreamerKeepalive` when `proxyUrl` is set (falls back to the retry-once-on-503 safety net
-alone — real fix, just without the steady-state "never race the idle-stop at all" benefit).
+## StreamerKeepalive doesn't support proxyUrl (macOS loopback-proxy deployment)  [RESOLVED, 2026-08-26]
+Originally deferred (see below) on the assumption the proxied macOS path was a secondary,
+retry-once-covers-it-well-enough concern. georgs-mac-mini's hardware gate on the streamer
+idle-stop fix's first PR (#90) found this wrong: the gap was LIVE on their node — the exact
+node that reported the original bug — because retry-once has nothing to retry against when no
+code path on that node ever opens `/api/ws` at all (StreamerKeepalive was unconditionally
+`null` there). Confirmed three independent ways (15s of pure REST polling never self-recovers;
+a bare WS connect-then-close DOES wake ustreamer in ~1.8s; StreamerKeepalive is the only `/api/ws`
+caller in the codebase) plus a real `moveToPixel` failure end-to-end. Promoted to active/high
+priority the same session.
 
-Not implemented because it's out of scope for the current task (headless nixos-developer-system
-usage is unproxied) and would need a new proxy-agent dependency (e.g. `https-proxy-agent`) or a
-hand-rolled CONNECT-tunnelling `http.Agent` for the `ws` transport. Pick this up if the proxied
-macOS deployment (`pikvm-mcp-server@georgs-mac-mini`) ever hits screenshot 503s from idle-stop
-in practice — until then the retry-once mitigates the worst of it without added complexity.
+Fixed via `ConnectTunnelAgent` in `streamer-keepalive.ts`: a hand-rolled `https.Agent` subclass
+(raw TCP connect to the proxy, hand-written `CONNECT host:port HTTP/1.1`, then `tls.connect()`
+on the same socket once the `200` arrives) rather than a new `https-proxy-agent` dependency —
+`ws`'s `ClientOptions.agent` wants a classic Node `Agent`, which this satisfies directly. Pattern
+reused verbatim from georgs-mac-mini's own hardware-verified `scratch/ws-holder.mjs`
+(tinyproxy-based) rather than re-derived from scratch, per their PR follow-up message with the
+full working code + gotchas (double `rejectUnauthorized`, HTTP Basic vs X-KVMD header auth
+through the tunnel, `?stream=1` explicitness). Tested against a real loopback CONNECT proxy +
+real self-signed-cert TLS `ws` server (`streamer-keepalive-proxy.test.ts`), not just DI'd fakes —
+the raw-socket/TLS-handoff mechanics are the one genuinely new, risky piece this added.
+
+---
+
+Original deferral (2026-08-26, superseded above): the streamer idle-stop fix
+(`src/pikvm/streamer-keepalive.ts`, closes the "screenshot/streamer 503 when kvmd idle-stops
+ustreamer" task) holds a persistent `/api/ws` WebSocket connection via the `ws` package to keep
+kvmd's stream-client count above zero. `PiKVMConfig.proxyUrl` (the macOS Local Network privacy
+workaround — routes REST traffic through a loopback HTTP CONNECT proxy via undici's
+`ProxyAgent`) had no equivalent wired up for this WS connection: `ws`'s `ClientOptions` takes a
+classic Node `http(s).Agent`, not undici's `Dispatcher` interface, so undici's `ProxyAgent`
+couldn't be reused as-is. Not implemented in the first PR because it looked out of scope
+(headless nixos-developer-system usage is unproxied) and would need a new proxy-agent dependency
+or a hand-rolled CONNECT-tunnelling `http.Agent` — turned out to be needed after all, see above.

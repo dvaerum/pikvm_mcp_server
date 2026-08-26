@@ -35,17 +35,28 @@
  * exist — capture must never become LESS reliable than the pre-fix
  * baseline, only more.
  *
- * Scope note: does NOT support `PiKVMConfig.proxyUrl` (the macOS
- * loopback-CONNECT-proxy workaround, see client.ts's PiKVMConfig doc).
- * `ws`'s ClientOptions takes a classic Node `http(s).Agent`, not
- * undici's `Dispatcher` — proxying it would mean a second proxy-agent
- * implementation (e.g. a new `https-proxy-agent` dependency) for a
- * narrow, already-separately-workaround-able deployment. Out of scope
- * for this fix; the retry-once-on-503 mechanic still applies on that
- * path. Tracked in FUTURE-WORK.md if the proxied deployment ever hits
- * this in practice.
+ * PROXY: when `PiKVMConfig.proxyUrl` is set (the macOS Local Network
+ * loopback-CONNECT-proxy workaround), this connects through it via
+ * `ConnectTunnelAgent` below — a hand-rolled classic `http(s).Agent`
+ * subclass, NOT undici's `ProxyAgent` (client.ts's REST dispatcher uses
+ * that, but it implements undici's `Dispatcher` interface, which `ws`
+ * cannot consume — `ws`'s `ClientOptions.agent` wants a classic Node
+ * `Agent`). Originally scoped OUT of this module entirely; restored
+ * after georgs-mac-mini's PR #90 hardware gate found the gap was live on
+ * their node — the exact node that reported this bug in the first
+ * place — not hypothetical. Pattern reused verbatim from their own
+ * working `scratch/ws-holder.mjs` (tinyproxy-based) rather than
+ * re-derived, per their PR #90 gate follow-up message: raw TCP connect
+ * to the proxy, write a `CONNECT host:port HTTP/1.1` line by hand, wait
+ * for the `200`, then hand the same socket to `tls.connect()` and give
+ * `ws` the resulting TLS socket. `ws` treats a custom Agent exactly like
+ * any other — it just calls `agent.createConnection()`.
  */
 import { WebSocket } from 'ws';
+import { Agent as HttpsAgent, type RequestOptions } from 'node:https';
+import net from 'node:net';
+import tls from 'node:tls';
+import type { Duplex } from 'node:stream';
 
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
@@ -56,6 +67,58 @@ export interface StreamerKeepaliveConfig {
   username: string;
   password: string;
   verifySsl: boolean;
+  /** Same shape as PiKVMConfig.proxyUrl, e.g. "http://127.0.0.1:8888".
+   *  Empty/undefined = connect directly, matching PiKVMConfig's own
+   *  convention (empty string, not undefined, is this codebase's usual
+   *  "off" sentinel after the `Required<PiKVMConfig>` merge in
+   *  client.ts's constructor — both are treated as falsy here). */
+  proxyUrl?: string;
+}
+
+/**
+ * CONNECT-tunnels every connection through an HTTP(S) proxy before
+ * handing `ws` a live TLS socket. See this file's header for the
+ * provenance (georgs-mac-mini's ws-holder.mjs, hardware-verified).
+ *
+ * `rejectUnauthorized` is applied INSIDE the `tls.connect()` call here —
+ * distinct from (and in addition to) the `rejectUnauthorized` passed at
+ * the outer `ws` ClientOptions level in `connectOnce()` below. Both are
+ * required: the outer one is a `ws`-level check, but the self-signed
+ * cert is actually negotiated by the raw `tls.connect()` here, before
+ * `ws` ever sees a socket — georgs-mac-mini's gate-follow-up message
+ * called this out explicitly as a easy-to-miss gotcha.
+ */
+class ConnectTunnelAgent extends HttpsAgent {
+  constructor(
+    private readonly proxyHost: string,
+    private readonly proxyPort: number,
+    private readonly rejectUnauthorized: boolean,
+  ) {
+    super();
+  }
+
+  override createConnection(
+    options: RequestOptions,
+    callback?: (err: Error | null, socket: Duplex) => void,
+  ): undefined {
+    const targetHost = (options.host ?? '') as string;
+    const targetPort = options.port ? Number(options.port) : 443;
+    const sock = net.connect(this.proxyPort, this.proxyHost, () => {
+      sock.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n\r\n`);
+    });
+    sock.once('data', (data: Buffer) => {
+      if (!/^HTTP\/1\.[01] 200/.test(data.toString())) {
+        callback?.(new Error(`ConnectTunnelAgent: CONNECT failed: ${data.toString().split('\r\n')[0]}`), sock);
+        return;
+      }
+      const tlsSock = tls.connect(
+        { socket: sock, servername: targetHost, rejectUnauthorized: this.rejectUnauthorized },
+        () => callback?.(null, tlsSock),
+      );
+      tlsSock.once('error', (err: Error) => callback?.(err, tlsSock));
+    });
+    sock.once('error', (err: Error) => callback?.(err, sock));
+  }
 }
 
 /** The minimal `ws`-shaped surface this module drives — structural so
@@ -68,7 +131,7 @@ export interface MinimalWebSocket {
 
 export type WebSocketFactory = (
   url: string,
-  options: { headers: Record<string, string>; rejectUnauthorized: boolean },
+  options: { headers: Record<string, string>; rejectUnauthorized: boolean; agent?: HttpsAgent },
 ) => MinimalWebSocket;
 
 const defaultFactory: WebSocketFactory = (url, options) =>
@@ -89,7 +152,20 @@ export class StreamerKeepalive {
   private wsUrl(): string {
     const u = new URL('/api/ws', this.config.host);
     u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    // Explicit rather than relying on kvmd's own `stream` default (true)
+    // — georgs-mac-mini's ws-holder.mjs does the same; harmless either
+    // way, removes any doubt for a future reader.
+    u.searchParams.set('stream', '1');
     return u.toString();
+  }
+
+  /** Builds the CONNECT-tunnel agent when proxyUrl is set, else undefined
+   *  (direct connection — `ws` behaves normally with no `agent` option). */
+  private buildProxyAgent(): ConnectTunnelAgent | undefined {
+    if (!this.config.proxyUrl) return undefined;
+    const u = new URL(this.config.proxyUrl);
+    const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80);
+    return new ConnectTunnelAgent(u.hostname, port, this.config.verifySsl);
   }
 
   /** OPEN = 1 in both the browser WebSocket spec and the `ws` package —
@@ -127,12 +203,14 @@ export class StreamerKeepalive {
 
       let ws: MinimalWebSocket;
       try {
+        const agent = this.buildProxyAgent();
         ws = this.createSocket(this.wsUrl(), {
           headers: {
             'X-KVMD-User': this.config.username,
             'X-KVMD-Passwd': this.config.password,
           },
           rejectUnauthorized: this.config.verifySsl,
+          ...(agent ? { agent } : {}),
         });
       } catch {
         // Synchronous construction failure (bad URL etc.) — best-effort,

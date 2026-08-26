@@ -225,11 +225,7 @@ export class PiKVMClient {
     scaleY: number;
   } | null = null;
   private calibration: CalibrationState | null = null;
-  /** Null when proxyUrl is set — StreamerKeepalive doesn't support
-   *  proxying (see its own header doc for why); fetchStreamerStateWithRetry
-   *  and screenshot() both treat a null keepalive as "skip, fall through
-   *  to the retry-once-on-503 safety net alone", never as an error. */
-  private streamerKeepalive: StreamerKeepalive | null = null;
+  private streamerKeepalive: StreamerKeepalive;
 
   /**
    * Phase 192-B (v0.5.182): single source of truth for the cursor's
@@ -287,19 +283,16 @@ export class PiKVMClient {
     // Streamer idle-stop workaround (see streamer-keepalive.ts's header):
     // hold one persistent /api/ws connection for the client's whole
     // lifetime so kvmd never idle-stops ustreamer after the first
-    // screenshot of a session. Skipped when proxyUrl is set — out of
-    // scope for this module, see its header doc; screenshot()'s
-    // retry-once-on-503 still covers that path, just without the
-    // steady-state benefit of never racing the idle-stop in the first
-    // place.
-    this.streamerKeepalive = this.config.proxyUrl
-      ? null
-      : new StreamerKeepalive({
-          host: this.config.host,
-          username: this.config.username,
-          password: this.config.password,
-          verifySsl: this.config.verifySsl,
-        });
+    // screenshot of a session. Routes through proxyUrl too when set
+    // (StreamerKeepalive's own ConnectTunnelAgent) — same proxied
+    // deployment the REST dispatcher above handles.
+    this.streamerKeepalive = new StreamerKeepalive({
+      host: this.config.host,
+      username: this.config.username,
+      password: this.config.password,
+      verifySsl: this.config.verifySsl,
+      proxyUrl: this.config.proxyUrl,
+    });
   }
 
   /** Phase 192-B: callers (orientation detection, etc.) push the iPad
@@ -352,7 +345,7 @@ export class PiKVMClient {
    * reconnect timer don't leak across them.
    */
   close(): void {
-    this.streamerKeepalive?.stop();
+    this.streamerKeepalive.stop();
   }
 
   /**
@@ -434,7 +427,7 @@ export class PiKVMClient {
    * live — a race the held WS connection narrows but cannot fully close.
    */
   private async fetchSnapshotWithRetry(path: string): Promise<ArrayBuffer> {
-    await this.streamerKeepalive?.ensureStarted();
+    await this.streamerKeepalive.ensureStarted();
     try {
       return await this.request<ArrayBuffer>('GET', path);
     } catch (err) {
@@ -467,7 +460,7 @@ export class PiKVMClient {
    * was never a bare unexplained 503 to begin with.
    */
   private async fetchStreamerStateWithRetry(): Promise<StreamerStateResponse> {
-    await this.streamerKeepalive?.ensureStarted();
+    await this.streamerKeepalive.ensureStarted();
     const first = await this.request<StreamerStateResponse>('GET', '/streamer');
     if (first?.result?.streamer) return first;
     await new Promise((r) => setTimeout(r, STREAMER_RESTART_GRACE_MS));
