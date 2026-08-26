@@ -421,9 +421,19 @@ export interface MoveToResult {
    *  learner. null when it can't be measured (start or first landing undetected).
    *  `woken` marks a faded-cursor-wake start (a garbage sample, excluded from
    *  learning). curve-one-shot only; other strategies leave it undefined. */
-  learnSample?: {
-    plannedX: number; plannedY: number; achievedX: number; achievedY: number; woken: boolean;
-  } | null;
+  learnSample?: MoveLearnSample | null;
+}
+
+/** F2 (Round 2 Phase 2): named type for MoveToResult.learnSample, replacing
+ *  the inline structural type both index.ts's and click-at.ts's own
+ *  recordMoveSample() duplicated in their own function signatures before
+ *  this consolidation. See scale-learner.ts's recordMoveSample. */
+export interface MoveLearnSample {
+  plannedX: number;
+  plannedY: number;
+  achievedX: number;
+  achievedY: number;
+  woken: boolean;
 }
 
 function clamp(v: number, lo: number, hi: number): number {

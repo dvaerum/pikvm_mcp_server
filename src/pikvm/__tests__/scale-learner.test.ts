@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { ScaleLearner } from '../scale-learner.js';
+import { describe, it, expect, vi } from 'vitest';
+import { ScaleLearner, recordMoveSample } from '../scale-learner.js';
 import { DEFAULT_CURVE_SCALE_Y } from '../curve-mover.js';
 
 /** Feed N clean long-move samples on axis y that imply a target scale, ALTERNATING
@@ -280,5 +280,47 @@ describe('ScaleLearner — fault discrimination (slope vs intercept)', () => {
       l.recordSample('y', P, P * 1.01, l.currentScale('y'));
     }
     expect(l.status().y.warnings.join(' ')).not.toMatch(/detector/i);
+  });
+});
+
+/**
+ * F2 (Round 2 Phase 2): recordMoveSample was previously duplicated verbatim
+ * in index.ts's move_to handler and click-at.ts's clickAt(), both reaching
+ * directly into the module-singleton `scaleLearner`. Consolidated here,
+ * taking the learner as a param — these tests exercise it standalone
+ * against a real ScaleLearner instance, not the process-wide singleton.
+ */
+describe('recordMoveSample', () => {
+  it('null learnSample → zero recordSample calls (no-op when the mover produced no sample)', () => {
+    const l = new ScaleLearner({ enabled: true });
+    const spy = vi.spyOn(l, 'recordSample');
+    recordMoveSample(l, { learnSample: null }, 10, 20, false);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('undefined learnSample (field entirely absent) → zero recordSample calls', () => {
+    const l = new ScaleLearner({ enabled: true });
+    const spy = vi.spyOn(l, 'recordSample');
+    recordMoveSample(l, {}, 10, 20, false);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('populated learnSample → exactly two recordSample calls (x and y), {woken,forced} meta threaded through both', () => {
+    const l = new ScaleLearner({ enabled: true });
+    const spy = vi.spyOn(l, 'recordSample');
+    const learnSample = { plannedX: 800, plannedY: -500, achievedX: 820, achievedY: -480, woken: true };
+    recordMoveSample(l, { learnSample }, 1.05, 0.98, true);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenNthCalledWith(1, 'x', 800, 820, 1.05, { woken: true, forced: true });
+    expect(spy).toHaveBeenNthCalledWith(2, 'y', -500, -480, 0.98, { woken: true, forced: true });
+  });
+
+  it('woken:false / forced:false are threaded through as literal false, not dropped', () => {
+    const l = new ScaleLearner({ enabled: true });
+    const spy = vi.spyOn(l, 'recordSample');
+    const learnSample = { plannedX: 300, plannedY: 300, achievedX: 300, achievedY: 300, woken: false };
+    recordMoveSample(l, { learnSample }, 1.0, 1.0, false);
+    expect(spy).toHaveBeenNthCalledWith(1, 'x', 300, 300, 1.0, { woken: false, forced: false });
+    expect(spy).toHaveBeenNthCalledWith(2, 'y', 300, 300, 1.0, { woken: false, forced: false });
   });
 });

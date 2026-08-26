@@ -35,6 +35,7 @@
  * shot) → rejected before it can move the scale.
  */
 import { DEFAULT_CURVE_SCALE_Y } from './curve-mover.js';
+import type { MoveLearnSample } from './move-to.js';
 
 export type Axis = 'x' | 'y';
 
@@ -357,3 +358,31 @@ export class ScaleLearner {
 
 /** Process-wide singleton the mover reads and records into. */
 export const scaleLearner = new ScaleLearner();
+
+/**
+ * F2 (Round 2 Phase 2): the one recordMoveSample — previously duplicated
+ * verbatim in index.ts's move_to handler and click-at.ts's clickAt(), both
+ * reaching directly into the module-singleton `scaleLearner`. Takes the
+ * learner as a param instead (not the singleton directly) so this stays
+ * unit-testable without a process-wide global — pass `scaleLearner` at the
+ * real call sites, a fresh `new ScaleLearner()` in tests.
+ *
+ * (#41) feeds a completed curve-one-shot's free first-shot sample to the
+ * passive scale learner. The learner's own hygiene rejects a
+ * faded-cursor-wake start or a forced click; its pre-filter + median absorb
+ * the rest. No-op when the mover produced no sample (start or first
+ * landing undetected → learnSample null).
+ */
+export function recordMoveSample(
+  learner: ScaleLearner,
+  result: { learnSample?: MoveLearnSample | null },
+  appliedX: number,
+  appliedY: number,
+  forced: boolean,
+): void {
+  const ls = result.learnSample;
+  if (!ls) return;
+  const meta = { woken: ls.woken, forced };
+  learner.recordSample('x', ls.plannedX, ls.achievedX, appliedX, meta);
+  learner.recordSample('y', ls.plannedY, ls.achievedY, appliedY, meta);
+}

@@ -22,7 +22,7 @@ import { PiKVMClient } from './client.js';
 import { BallisticsProfile } from './ballistics.js';
 import { HidPolicy } from './hid-mode.js';
 import { MoveStrategy, moveToPixel } from './move-to.js';
-import { scaleLearner } from './scale-learner.js';
+import { scaleLearner, recordMoveSample } from './scale-learner.js';
 import {
   biasCorrectedAimPoint,
   isScreenTooDimForCursorDetection,
@@ -97,20 +97,8 @@ export type ClickAtOutcome =
       captured: (CaptureSaved | null)[];
     };
 
-/** (#41) feed the free first-shot sample to the passive scale learner. The
- *  learner's own hygiene rejects a faded-cursor-wake start or a forced
- *  click; its pre-filter + median absorb the rest. iPad/relative only. */
-function recordMoveSample(
-  result: { learnSample?: { plannedX: number; plannedY: number; achievedX: number; achievedY: number; woken: boolean } | null },
-  appliedX: number,
-  appliedY: number,
-  forced: boolean,
-): void {
-  if (!result.learnSample) return;
-  const { plannedX, plannedY, achievedX, achievedY, woken } = result.learnSample;
-  scaleLearner.recordSample('x', plannedX, achievedX, appliedX, { woken, forced });
-  scaleLearner.recordSample('y', plannedY, achievedY, appliedY, { woken, forced });
-}
+// F2 (Round 2 Phase 2): recordMoveSample moved to scale-learner.js — this
+// was one of two verbatim copies (the other lived in index.ts).
 
 export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
   // ADR-0002 Phase 1: the dispatch preamble's moverGate() check already
@@ -232,7 +220,7 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
   // the M2 wake (#33), and the retry loop's only remaining effect was the
   // keypad double-fire / dismiss-escape harm.
   const result = await moveToPixel(client, aimPoint, moveOpts);
-  if (!policy.mouseAbsolute) recordMoveSample(result, learnScaleX, learnScaleY, force);
+  if (!policy.mouseAbsolute) recordMoveSample(scaleLearner, result, learnScaleX, learnScaleY, force);
 
   // False-success safety fix (2026-07-27): on a relative-mouse (iPad)
   // target a null finalDetectedPosition means the mover could NOT verify
