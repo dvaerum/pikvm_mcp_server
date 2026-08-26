@@ -2379,7 +2379,21 @@ export async function moveToPixel(
                   `[move-to] correction pass ${totalPasses + 1}: ML recovered cursor at (${currentPos.x},${currentPos.y}) conf=${mlCorrection.confidence.toFixed(3)} prox=${prox.toFixed(0)}`,
                 );
               }
-              break;
+              // N1 (Round 2 Phase 5): this `break` used to exit the ENTIRE
+              // outer correction loop (`while (true)` above) immediately,
+              // skipping the pass-completion bookkeeping below
+              // (corrections.push/diagnostics.push/totalPasses++, the
+              // blind-pass circuit breaker, the oscillation guard) for
+              // every ML-recovered pass. `templated = true` already
+              // guards the `if (!templated)` fall-through correctly — no
+              // break needed here. The sibling shape-success branch
+              // ~45 lines below does the equivalent recovery correctly:
+              // its own `break` is scoped to the INNER candidate loop,
+              // not this outer one, so it already fell through to the
+              // shared completion code. Confirmed a genuine bug via git
+              // archaeology (0456943, "wire ML detector as PRIMARY" —
+              // landed atomically with zero rationale, never exercised by
+              // any test) — see move-to.correctionCascade.test.ts.
             }
 
             // Phase 299 (v0.5.231): try BOTH dark and bright shape
