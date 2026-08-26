@@ -54,7 +54,16 @@ buildNpmPackage {
         || (topLevel == "ml" && rel != "ml" && rel != "ml/crop-heatmap.onnx")
         || topLevel == "scratch"
         || topLevel == "tools"
-        || topLevel == "docs"
+        # F11 (Round 2 Phase 2d): exclude docs/ EXCEPT docs/skills — the MCP
+        # prompts (tool-guides.ts/workflows.ts) load their served text directly
+        # from docs/skills/*.md at runtime now (docs are the source of truth,
+        # no more separately-maintained embedded copy), so those files must be
+        # in the install tree the same way ml/crop-heatmap.onnx is (see
+        # postInstall). The rest of docs/ (troubleshooting/, ADRs, decisions,
+        # learnings, plans) is dev-only reference material — nothing at
+        # runtime reads it — so keeping it out of the filtered source (and
+        # off the postInstall copy) avoids bloating the store path with it.
+        || (topLevel == "docs" && rel != "docs" && rel != "docs/skills" && !(lib.hasPrefix "docs/skills/" rel))
         || topLevel == "flake.nix"
         || topLevel == "flake.lock"
         || topLevel == "test-client.ts"
@@ -97,6 +106,16 @@ buildNpmPackage {
   postInstall = ''
     for d in "$out"/lib/node_modules/*/dist; do
       install -Dm444 ml/crop-heatmap.onnx "$(dirname "$d")/ml/crop-heatmap.onnx"
+    done
+
+    # F11 (Round 2 Phase 2d): bundle docs/skills/ next to dist/ the same way,
+    # so the MCP prompts (which now load their served text directly from
+    # these files — resolveSkillDoc in src/prompts/) resolve relative to
+    # their own module, not process.cwd().
+    for d in "$out"/lib/node_modules/*/dist; do
+      mkdir -p "$(dirname "$d")/docs"
+      cp -r docs/skills "$(dirname "$d")/docs/skills"
+      chmod -R a-w "$(dirname "$d")/docs/skills"
     done
 
     # sharp is built from source against nixpkgs vips, so its musl prebuilts are

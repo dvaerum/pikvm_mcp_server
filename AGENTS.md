@@ -202,7 +202,7 @@ The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) a
 | `navigate-desktop-workflow` | `skill_navigate_desktop_workflow` | goal (required) | Navigate desktop with Observe-Plan-Act-Verify loop |
 | `desktop-workflow` | `skill_desktop_workflow` | none | Set up a desktop for reliable mouse control (--target desktop, auto-calibrate, absolute positioning) |
 
-Implementation: `src/prompts/` (types.ts, tool-guides.ts, workflows.ts, skill-tools.ts, index.ts). Human-readable guides: `docs/skills/`.
+Implementation: `src/prompts/` (types.ts, tool-guides.ts, workflows.ts, skill-tools.ts, index.ts, skill-docs.ts). `docs/skills/` is the source of truth for every guide's served text (F11, Round 2 Phase 2d) — tool-guides.ts/workflows.ts load it at runtime via skill-docs.ts rather than embedding a separately-maintained copy.
 
 ## Key Implementation Notes
 

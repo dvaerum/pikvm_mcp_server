@@ -10,6 +10,8 @@ Step-by-step procedure for finding and clicking a UI element.
 |----------|----------|-------------|
 | `element_description` | Yes | Description of the UI element to click (e.g., "the Save button", "the File menu") |
 
+Target: **{{element_description}}**
+
 ## Workflow Steps
 
 ### Step 1 — Observe
@@ -18,7 +20,7 @@ Take a screenshot with `pikvm_screenshot` to see the current screen state.
 
 ### Step 2 — Analyze
 
-Examine the screenshot and locate the target element. Identify its approximate center coordinates in pixels.
+Examine the screenshot and locate **{{element_description}}**. Identify its approximate center coordinates in pixels.
 
 If the element is **not visible**:
 
