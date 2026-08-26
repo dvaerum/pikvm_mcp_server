@@ -221,7 +221,6 @@ export interface MoveToOptions {
   postWindow?: number;
 
   /** Forwarded to slamToCorner when slam strategy is used. */
-  slamCalls?: number;
   slamPaceMs?: number;
   verbose?: boolean;
 
@@ -981,7 +980,18 @@ async function discoverOrigin(
     // preserving that (zero new screenshots, zero new throw paths) is
     // this migration's explicit non-goal-to-change.
     screenshot: takeRawScreenshot,
-    slamCalls: options.slamCalls,
+    // F6 (Round 2 Phase 5c): recovery is inert here (captureVerification is
+    // false, so nothing is ever computed to gate on) — but the field is
+    // REQUIRED (no default, same discipline as `guard`), so 'inspect-only'
+    // is named explicitly as the closest honest description: if
+    // verification were ever turned on for this call site, this mover's
+    // own downstream correction loop already handles imprecision, so an
+    // autonomous corner-recovery here would be redundant.
+    recovery: 'inspect-only',
+    // AnchorRequest.slamCalls deleted (structurally unreachable — never
+    // wired to the MCP schema, so options.slamCalls was always undefined
+    // here in production). MoveToOptions.slamCalls itself removed below as
+    // the same finding's direct consequence.
     paceMs: options.slamPaceMs,
     slamOriginPx: options.slamOriginPx,
     verbose: options.verbose,

@@ -212,7 +212,7 @@ export async function unlockIpad(
       guard: { kind: 'caller-asserted', reason: 'Layer 5 — lock screen has no active hot corner' },
       screenshot: takeRawScreenshot,
       captureVerification: true,
-      recovery: { kind: 'key-sequence-retry' },
+      recovery: 'key-sequence-retry',
       paceMs: options.slamPaceMs,
       slamOriginPx: bounds ? slamOriginFromBounds(bounds) : LEGACY_PORTRAIT_SLAM_ORIGIN,
       verbose: options.verbose,
@@ -443,7 +443,7 @@ export async function ipadGoHome(
       guard: { kind: 'caller-asserted', reason: 'Layer 5 — safe on lock screen and home screen, idempotent' },
       screenshot: takeRawScreenshot,
       captureVerification: true,
-      recovery: { kind: 'defensive-keys' },
+      recovery: 'defensive-keys',
       verbose: options.verbose,
     });
     if (verified === false) {

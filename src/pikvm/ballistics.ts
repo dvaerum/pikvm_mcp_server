@@ -343,7 +343,7 @@ async function measureCell(
   // genuine iPad lock screen mid-sweep) — without this, a slam interrupted
   // by a system-gesture reinterpretation reads as ordinary near-zero-
   // displacement noise, silently poisoning the cell rather than failing
-  // loudly. selfGate:false: measureCell reads `verified` itself and rejects
+  // loudly. recovery:'inspect-only': measureCell reads `verified` itself and rejects
   // the cell outright on failure — no retry (unlike unlockIpad, which can't
   // call itself to recover) — ballistics already resamples via `reps`, so a
   // rejected cell is a cheap, no-new-risk response; #62's protection
@@ -368,7 +368,8 @@ async function measureCell(
     // asymmetric-nudge rule, see the `before`/`after` capture further down).
     screenshot: takeRawScreenshot,
     captureVerification: true,
-    selfGate: false,
+    // F6 (Round 2 Phase 5c): selfGate:false collapsed into 'inspect-only'.
+    recovery: 'inspect-only',
     nudge: { away: 'top-left', onlyAxis: axis === 'x' ? 'y' : 'x' },
     verbose: false,
   });

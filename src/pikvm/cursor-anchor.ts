@@ -28,7 +28,6 @@ import {
   slamToCorner,
   SlamMotionCheck,
 } from './slam.js';
-import { DetectionConfig } from './cursor-detect.js';
 import {
   detectBoundsOrNull,
   getLastGoodBounds,
@@ -67,13 +66,33 @@ export type AnchorGuard =
   // measureCell: synthetic calibration scene, no iPad-lock risk, no guard.
   | { kind: 'none-calibration' };
 
-export type AnchorRecovery =
-  | { kind: 'none' }
-  // unlockIpad's Esc→Enter→Space, then re-attempt the slam+verify once.
-  | { kind: 'key-sequence-retry' }
-  // ipadGoHome's Phase-231 Esc+Enter. No re-attempt — caller inspects the
-  // returned screenshot itself, matching ipadGoHome's existing messaging.
-  | { kind: 'defensive-keys' };
+/**
+ * F6 (Round 2 Phase 5c): collapses what used to be two separate fields
+ * (`selfGate: boolean` + `recovery: {kind: 'none'|'key-sequence-retry'|
+ * 'defensive-keys'}`) into one enum — 1:1 with the four behaviors the four
+ * real call sites actually use today, verified against move-to.ts:966,
+ * ipad-unlock.ts:209 (unlockIpad), ipad-unlock.ts:436 (ipadGoHome), and
+ * ballistics.ts:359 (measureCell). Only meaningful when
+ * `captureVerification` is true — irrelevant otherwise (nothing computed to
+ * gate on), same as the old selfGate/recovery pair.
+ *
+ *  - 'inspect-only' — was selfGate:false: verified is still computed and
+ *    returned, but anchorCursor never throws or acts on failure; the caller
+ *    reads `AnchorResult.verified` itself (measureCell's exact combo: reject
+ *    the cell, no retry — ballistics already resamples via `reps`).
+ *  - 'throw' — was the old default (selfGate:true + recovery:{kind:'none'}):
+ *    a failed verification throws. `recovery` itself has NO default now
+ *    (same discipline as `guard` — a new call site must name its posture
+ *    explicitly), so this is just an ordinary variant, not a fallback. Not
+ *    exercised by any of the four real call sites today — each of the
+ *    three that verify explicitly picks one of the other three variants.
+ *  - 'key-sequence-retry' — unlockIpad's Esc→Enter→Space, then re-attempt
+ *    the slam+verify once.
+ *  - 'defensive-keys' — ipadGoHome's Phase-231 Esc+Enter. No re-attempt —
+ *    caller inspects the returned screenshot itself, matching ipadGoHome's
+ *    existing messaging.
+ */
+export type AnchorRecoveryPosture = 'inspect-only' | 'throw' | 'key-sequence-retry' | 'defensive-keys';
 
 export interface AnchorRequest {
   client: PiKVMClient;
@@ -102,41 +121,33 @@ export interface AnchorRequest {
   screenshot: (client: PiKVMClient) => Promise<Buffer>;
   /** Whether anchorCursor takes a before/after screenshot pair (via
    *  `screenshot`) to compute `verified` at all. Default false: `verified`
-   *  stays null, `screenshot` is never called for this purpose, `selfGate`
+   *  stays null, `screenshot` is never called for this purpose, `recovery`
    *  is irrelevant (nothing to gate on). This is the zero-cost path —
    *  move-to.ts's bounds-guard migration relies on the default to stay
    *  byte-for-byte behavior-identical to today (no new round trips). */
   captureVerification?: boolean;
   /**
-   * Whether anchorCursor itself acts on a failed verification — throws (no
-   * `recovery` configured) or runs `recovery`. NOT whether verification is
-   * computed: when `captureVerification` is true, `verified` is always
-   * populated regardless of this flag. Callers that want to read the
-   * result and decide for themselves (measureCell, matching #62's
-   * existing reject-the-cell-no-retry behavior) set this false and inspect
-   * `AnchorResult.verified` on their own. Default true. Irrelevant when
-   * `captureVerification` is false (nothing computed to gate on).
+   * What anchorCursor does when captureVerification is true and the slam
+   * fails to verify — see AnchorRecoveryPosture's doc for the 4 variants
+   * and their mapping to the 4 real call sites. Irrelevant when
+   * captureVerification is false (nothing computed to gate on) — but still
+   * REQUIRED, no default, same discipline as `guard`: a new call site can't
+   * compile without naming a posture, even an inert one, rather than
+   * silently inheriting a failure mode it never consciously chose. Pass
+   * 'inspect-only' for the inert case (captureVerification false).
    */
-  selfGate?: boolean;
-  /** Default { kind: 'none' }. */
-  recovery?: AnchorRecovery;
+  recovery: AnchorRecoveryPosture;
   /** Post-slam nudge away from the slammed corner, past iPadOS's edge dead
    *  zone, so the cursor sits in open space (measureCell's use case — the
    *  ballistics sweep needs room to travel). Runs after verification/
    *  recovery, using nudgeFromEdge's own built-in call-count/pace. Pass
    *  false or omit to skip. */
   nudge?: { away?: Corner; onlyAxis?: Axis } | false;
-  slamCalls?: number;
   paceMs?: number;
-  /** Tolerance (px) for the post-slam "landed near corner" check. Only
-   *  used when `captureVerification` is true. Default 80 (matches
-   *  slamToCorner's own SlamOptions.cornerTolerance default). */
-  cornerTolerance?: number;
   /** Caller-supplied slam origin. Also the bounds-guard escape hatch: an
    *  explicit slamOriginPx means the caller has taken responsibility for
    *  where the slam lands, so the iPad-letterbox refusal doesn't apply. */
   slamOriginPx?: { x: number; y: number };
-  detection?: Partial<DetectionConfig>;
   verbose?: boolean;
 }
 
@@ -146,7 +157,7 @@ export interface AnchorResult {
   /** Result of the post-slam "landed near corner" check. null when
    *  `captureVerification` was false (or defaulted false) — no check ran. */
   verified: boolean | null;
-  /** Whether `recovery` ran (verification failed and selfGate was true). */
+  /** Whether recovery ran (verification failed and recovery wasn't 'inspect-only'). */
   recoveryAttempted: boolean;
   /** iPad bounds used to compute `origin`, when detection ran. Null for
    *  guard:'none-calibration' (no detection) or when the caller supplied
@@ -272,14 +283,16 @@ async function runSlam(
   boundsHint: IpadBounds | null,
 ): Promise<SlamMotionCheck | undefined> {
   return slamToCorner(req.client, {
-    calls: req.slamCalls,
+    // F6 (Round 2 Phase 5c): calls/cornerTolerance/detection deleted from
+    // AnchorRequest — zero of the 4 real call sites ever supplied them, so
+    // they're left unset here too, falling through to slamToCorner's own
+    // defaults (matching what ballistics.ts's pre-migration comment already
+    // documented as the single-source-of-truth intent).
     paceMs: req.paceMs,
     corner,
     verbose: req.verbose,
     verifyMotion,
     screenshot: req.screenshot,
-    cornerTolerance: req.cornerTolerance,
-    detection: req.detection,
     boundsHint,
   });
 }
@@ -287,8 +300,10 @@ async function runSlam(
 export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
   const corner = req.corner ?? 'top-left';
   const captureVerification = req.captureVerification ?? false;
-  const selfGate = req.selfGate ?? true;
-  const recovery = req.recovery ?? { kind: 'none' };
+  // F6 (Round 2 Phase 5c): selfGate + the old {kind:...} recovery object
+  // collapsed into one posture enum — see AnchorRecoveryPosture's doc.
+  // REQUIRED, no default, same discipline as `guard`.
+  const recovery = req.recovery;
 
   let resolved: { origin: { x: number; y: number }; bounds: IpadBounds | null };
   switch (req.guard.kind) {
@@ -323,15 +338,16 @@ export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
     const check = await runSlam(req, corner, true, verificationBounds);
     verified = check?.verified ?? false;
 
-    if (!verified && selfGate) {
-      if (recovery.kind === 'none') {
+    if (!verified && recovery !== 'inspect-only') {
+      if (recovery === 'throw') {
         throw new Error(
-          `anchorCursor: slam motion did not verify (guard=${req.guard.kind}) and no recovery configured. ` +
-          `Pass a recovery (key-sequence-retry / defensive-keys) or set selfGate:false to handle this yourself.`,
+          `anchorCursor: slam motion did not verify (guard=${req.guard.kind}) and recovery:'throw' ` +
+          `(the default). Pass recovery:'key-sequence-retry' / 'defensive-keys', or 'inspect-only' ` +
+          `to handle this yourself.`,
         );
       }
       recoveryAttempted = true;
-      if (recovery.kind === 'key-sequence-retry') {
+      if (recovery === 'key-sequence-retry') {
         // unlockIpad's existing retry (see ipad-keys.ts's
         // ipadUnlockKeySequence for the full rationale), then re-attempt
         // the slam+verify once.
@@ -341,7 +357,7 @@ export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
         await ipadUnlockKeySequence(req.client);
         const retryCheck = await runSlam(req, corner, true, verificationBounds);
         verified = retryCheck?.verified ?? false;
-      } else if (recovery.kind === 'defensive-keys') {
+      } else if (recovery === 'defensive-keys') {
         // ipadGoHome's Phase-231 belt-and-suspenders (see ipad-keys.ts's
         // ipadDefensiveKeys for the full rationale) — no re-attempt, caller
         // inspects the returned screenshot itself, matching ipadGoHome's

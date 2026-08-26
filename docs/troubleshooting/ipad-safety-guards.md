@@ -117,7 +117,7 @@ following swipe-up dismisses it before the lock fires. Empirically
 verified safe across many iterations. Both call sites now also carry
 their own verification + recovery (unlockIpad: `key-sequence-retry`,
 pre-existing; ipadGoHome: `defensive-keys`, added 2026-08-24) — see
-cursor-anchor.ts's `AnchorRecovery` doc.
+cursor-anchor.ts's `AnchorRecoveryPosture` doc.
 
 ## How to write a tool that drives `moveToPixel` safely on iPad
 
