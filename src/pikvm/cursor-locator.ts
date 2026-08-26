@@ -31,7 +31,6 @@ import type {
   LocateCursorResult,
 } from './cursor-detect.js';
 import type { MLCursorOptions, MLCursorResult } from './cursor-ml-detect.js';
-import type { ShapeCandidate, ShapeOptions } from './cursor-shape-detect.js';
 
 export type LocateProfile = 'origin' | 'openLoopShape' | 'curve';
 
@@ -107,12 +106,6 @@ export interface CursorLocatorDeps {
     hints: Array<{ x: number; y: number }>,
     options?: Omit<MLCursorOptions, 'hint'>,
   ) => Promise<MLCursorResult | null>;
-  findCursorByShape: (
-    rgb: Buffer,
-    width: number,
-    height: number,
-    options?: ShapeOptions,
-  ) => ShapeCandidate | null;
   buildMLHints: (
     predicted: { x: number; y: number },
     frameWidth: number,
@@ -122,10 +115,6 @@ export interface CursorLocatorDeps {
 
   // --- openLoopShape wiggle-verify helpers ---
   mlWiggleVerify: (initial: MLCursorResult) => Promise<MLCursorResult | null>;
-  wiggleVerifyCandidate: (
-    pos: { x: number; y: number },
-    score: number,
-  ) => Promise<{ pos: { x: number; y: number } } | null>;
 
   /** Phase 317 tautology threshold — move-to.ts:671 = 30. */
   tautologyProxThreshold: number;
