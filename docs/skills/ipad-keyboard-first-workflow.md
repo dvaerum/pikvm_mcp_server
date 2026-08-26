@@ -2,6 +2,14 @@
 
 Reliable keyboard-first iPad workflow that bypasses cursor positioning.
 
+## Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `goal` | Yes | What you want to accomplish on the iPad (e.g., "open Settings and find Wi-Fi", "search Files for a document") |
+
+Goal: **{{goal}}**
+
 ## Why this skill exists
 
 Live-validated 2026-04-26: app launches via Spotlight (`Cmd+Space` →
@@ -104,3 +112,11 @@ screen clicks.
 
 For these, the calling agent must accept some unreliability and
 verify outcomes via post-action screenshots.
+
+## Plan for "{{goal}}"
+
+Decompose the goal into the smallest sequence of these primitives that
+achieves it. Take a screenshot after each step to verify before moving
+on. If a keyboard primitive doesn't work for a step, document what
+failed in your response — the user is iterating on the patterns
+documented above.
