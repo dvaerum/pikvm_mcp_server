@@ -36,7 +36,11 @@ import {
   LEGACY_PORTRAIT_SLAM_ORIGIN,
   slamOriginFromBounds,
 } from './orientation.js';
-import { sleep } from './util.js';
+// F7 (Round 2 Phase 4): the Phase-217 unlock triad / Phase-231 defensive
+// pair moved out to a shared mechanism module (ipad-keys.ts) — NOT
+// imported from ipad-unlock.ts, which already imports anchorCursor from
+// this module; that would recreate the exact cycle F9 broke.
+import { ipadUnlockKeySequence, ipadDefensiveKeys } from './ipad-keys.js';
 
 export type AnchorGuard =
   // Layers 1/2/3 (docs/troubleshooting/ipad-safety-guards.md): refuses to
@@ -211,15 +215,29 @@ async function resolveBoundsGuardOrigin(
   return { origin: slamOrigin, bounds: detectedBounds };
 }
 
-/** Layer 5: caller has already decided slamming is safe. Best-effort bounds
- *  detection purely to compute a sane origin — never throws. */
+/**
+ * Layer 5: caller has already decided slamming is safe. Best-effort bounds
+ * detection purely to compute a sane origin — never throws.
+ *
+ * F3 (Round 2 Phase 4): cache-first, matching resolveBoundsGuardOrigin's own
+ * pattern (this function was the one guard-resolver that always paid a
+ * fresh detection round trip). REAL BEHAVIOR CHANGE, called out explicitly
+ * (not a pure no-op refactor like the ipad-unlock.ts double-detection
+ * removal in the same PR): a stale cached bounds reading can now be
+ * returned here instead of a fresh detect, on the same trade-off
+ * resolveBoundsGuardOrigin already accepts elsewhere — cheaper, but a
+ * genuine orientation/bounds change between calls won't be picked up until
+ * the cache is next invalidated. Both this guard's real call sites
+ * (unlockIpad, ipadGoHome) run once per user-initiated action, not in a
+ * tight loop, so the staleness window in practice is short.
+ */
 async function resolveCallerAssertedOrigin(
   req: AnchorRequest,
 ): Promise<{ origin: { x: number; y: number }; bounds: IpadBounds | null }> {
   if (req.slamOriginPx) {
     return { origin: req.slamOriginPx, bounds: null };
   }
-  const bounds = await detectBoundsOrNull(req.client, {
+  const bounds = getLastGoodBounds() ?? await detectBoundsOrNull(req.client, {
     verbose: req.verbose,
     logPrefix: 'cursor-anchor',
   });
@@ -314,30 +332,24 @@ export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
       }
       recoveryAttempted = true;
       if (recovery.kind === 'key-sequence-retry') {
-        // unlockIpad's existing retry: Esc → Enter → Space, then
-        // re-attempt the slam+verify once.
+        // unlockIpad's existing retry (see ipad-keys.ts's
+        // ipadUnlockKeySequence for the full rationale), then re-attempt
+        // the slam+verify once.
         if (req.verbose) {
           console.error('[cursor-anchor] slam motion not verified — retrying via key sequence before re-slamming');
         }
-        await req.client.sendKey('Escape');
-        await sleep(200);
-        await req.client.sendKey('Enter');
-        await sleep(600);
-        await req.client.sendKey('Space');
-        await sleep(400);
+        await ipadUnlockKeySequence(req.client);
         const retryCheck = await runSlam(req, corner, true, verificationBounds);
         verified = retryCheck?.verified ?? false;
       } else if (recovery.kind === 'defensive-keys') {
-        // ipadGoHome's Phase-231 belt-and-suspenders: Esc + Enter, no
-        // re-attempt — caller inspects the returned screenshot itself,
-        // matching ipadGoHome's existing messaging pattern.
+        // ipadGoHome's Phase-231 belt-and-suspenders (see ipad-keys.ts's
+        // ipadDefensiveKeys for the full rationale) — no re-attempt, caller
+        // inspects the returned screenshot itself, matching ipadGoHome's
+        // existing messaging pattern.
         if (req.verbose) {
           console.error('[cursor-anchor] slam motion not verified — sending defensive Esc+Enter');
         }
-        await req.client.sendKey('Escape');
-        await sleep(200);
-        await req.client.sendKey('Enter');
-        await sleep(600);
+        await ipadDefensiveKeys(req.client);
       }
     }
   }
