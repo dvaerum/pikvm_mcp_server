@@ -13,10 +13,12 @@
  * (`ClickAtOutcome` → `CallToolResult`); this module owns the actual
  * decision logic and HID/screenshot orchestration. `outcome.message` is
  * the complete, final human-readable text for each outcome — including
- * capture-advisory lines where the pre-extraction code included them.
- * That inclusion is NOT uniform across outcomes (see the `brightness-abort`
- * doc below) — preserved exactly as it was, not "fixed" as part of this
- * extraction; flag to the manager separately if that gap should close.
+ * capture-advisory lines, via the CaptureSession from capture.ts (F12,
+ * Round 2 Phase 5b). Capture lines now appear on EVERY outcome including
+ * `brightness-abort` — pre-F12 that one path omitted them (a preserved gap
+ * from the original inline extraction); closed here since a session makes
+ * `.lines()` trivially available at every return, not worth leaving as a
+ * standing inconsistency once the fix is this cheap.
  */
 import { PiKVMClient } from './client.js';
 import { BallisticsProfile } from './ballistics.js';
@@ -33,8 +35,7 @@ import {
 import { analyzeBrightness } from './brightness.js';
 import { ipadContentRegionFromBuffer } from './orientation.js';
 import {
-  capturePhaseAdvisory,
-  formatCaptureLines,
+  beginCapture,
   type CaptureConfig,
   type CaptureSaved,
 } from './capture.js';
@@ -112,8 +113,8 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
   }
 
   const { client, target, button } = req;
-  const captured: (CaptureSaved | null)[] = [];
-  if (req.capture) captured.push(await capturePhaseAdvisory(client, req.capture, 'before'));
+  const session = beginCapture(client, req.capture);
+  await session.before();
 
   const strategyStr = req.strategy ?? policy.strategy;
   const singleTap = req.singleTap;
@@ -180,12 +181,6 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
   // Phase 38b (v0.5.27): scope the brightness measurement to detected
   // iPad bounds so letterbox bars don't trigger false-positive dim
   // verdicts on a bright iPad-portrait screen.
-  //
-  // NOTE (preserved pre-extraction behavior, not fixed here): unlike the
-  // other three abort paths below, this one does NOT append
-  // formatCaptureLines(captured) to its message — the pre-extraction
-  // handler never did either. Flag to the manager if this inconsistency
-  // should close; out of scope for a pure extraction.
   if (minBrightness > 0) {
     try {
       const shot0 = await client.screenshot();
@@ -207,7 +202,11 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
             `iPad auto-brightness does NOT affect HDMI — dim HDMI means an ` +
             `iOS modal/security prompt is dimming the screen. Try ` +
             `pikvm_key Escape, Enter, or Cmd+Period to dismiss blindly; ` +
-            `if none work, a human must dismiss the prompt physically on the iPad.`,
+            `if none work, a human must dismiss the prompt physically on the iPad.` +
+            // F12: previously this outcome omitted capture lines (the one
+            // gap among the four abort/success paths) — closed now that a
+            // session makes .lines() available at every return for free.
+            session.lines(),
         };
       }
     } catch {
@@ -236,7 +235,7 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
     return {
       kind: 'cursor-unverified',
       screenshot: result.screenshot,
-      captured,
+      captured: session.entries,
       message:
         result.message +
         `\nClick NOT performed: the cursor position could not be verified ` +
@@ -244,7 +243,7 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
         `Wake the cursor first (a small pikvm_mouse_move) or retry once the screen is active` +
         `, or pass force:true to click anyway at the predicted position (returns an ` +
         `UNVERIFIED result — landing not confirmed).` +
-        formatCaptureLines(captured),
+        session.lines(),
     };
   }
 
@@ -265,7 +264,7 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
           residualPx: skipResidual,
           maxResidualPx,
           screenshot: result.screenshot,
-          captured,
+          captured: session.entries,
           message:
             result.message +
             `\nClick NOT performed: the cursor landed ${skipResidual.toFixed(1)}px from ` +
@@ -273,7 +272,7 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
             `adjacent element, so no ${button} click was sent. Loosen maxResidualPx if a ` +
             `near-target click is acceptable; if a popup may be occluding the target, run ` +
             `pikvm_dismiss_popup then re-click.` +
-            formatCaptureLines(captured),
+            session.lines(),
         };
       }
     }
@@ -286,13 +285,13 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
   const preShot = req.verifyClick ? await client.screenshot() : null;
   // M8: "during" = pre-button-down cursor-alive frame, same point as the
   // predown proof-shot.
-  if (req.capture) captured.push(await capturePhaseAdvisory(client, req.capture, 'during'));
+  await session.during();
   await client.mouseClick(button);
   // Wait for the UI to render before capturing the post-click frame.
   await new Promise((r) => setTimeout(r, req.verifySettleMs));
   const shot = await client.screenshot();
   // M8: "after" reuses the post-click frame (no extra screenshot).
-  if (req.capture) captured.push(await capturePhaseAdvisory(client, req.capture, 'after', shot.buffer));
+  await session.after(shot.buffer);
 
   let verificationText = '';
   if (req.verifyClick && preShot) {
@@ -315,7 +314,7 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
     kind: 'clicked',
     forcedUnverified,
     screenshot: shot.buffer,
-    captured,
-    message: result.message + clickLine + singleTapNote + verificationText + formatCaptureLines(captured),
+    captured: session.entries,
+    message: result.message + clickLine + singleTapNote + verificationText + session.lines(),
   };
 }

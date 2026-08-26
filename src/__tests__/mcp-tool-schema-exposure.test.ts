@@ -355,14 +355,19 @@ describe('MCP tool schema and handler exposure', () => {
         const handler = extractHandlerBlock(src, tool);
         expect(handler).toMatch(/parseCaptureConfig\(args\)/);
         if (tool === 'pikvm_mouse_click_at') {
-          // Phase 4/F5 (2026-08-24): click_at's capturePhaseAdvisory calls
-          // moved into click-at.ts along with the rest of the click
-          // orchestration — index.ts's shrunk handler only parses the
-          // config and passes it through.
+          // Phase 4/F5 (2026-08-24): click_at's capture calls moved into
+          // click-at.ts along with the rest of the click orchestration —
+          // index.ts's shrunk handler only parses the config and passes it
+          // through.
           const clickAt = await readClickAtTs();
-          expect(clickAt).toMatch(/capturePhaseAdvisory\(/);
+          expect(clickAt).toMatch(/beginCapture\(/);
         } else {
-          expect(handler).toMatch(/capturePhaseAdvisory\(/);
+          // F12 (Round 2 Phase 5b): capturePhaseAdvisory calls are now
+          // encapsulated inside capture.ts's CaptureSession — call sites
+          // drive it via beginCapture(...)/session.before()/etc instead of
+          // calling capturePhaseAdvisory directly.
+          expect(handler).toMatch(/beginCapture\(pikvm, parseCaptureConfig\(args\)\)/);
+          expect(handler).toMatch(/session\.before\(\)/);
         }
       });
     }
@@ -370,11 +375,20 @@ describe('MCP tool schema and handler exposure', () => {
     it('click_at (single-attempt path) captures during pre-click and after post-click', async () => {
       // "during" = pre-button-down cursor-alive frame; "after" reuses the
       // post-click screenshot buffer (no retry orchestrator involved).
-      // Moved into click-at.ts (Phase 4/F5, 2026-08-24) — its own client
-      // param is named `client`, not `pikvm`.
+      // Moved into click-at.ts (Phase 4/F5, 2026-08-24; sessionized in F12).
       const clickAt = await readClickAtTs();
-      expect(clickAt).toMatch(/capturePhaseAdvisory\(client, req\.capture, 'during'\)/);
-      expect(clickAt).toMatch(/capturePhaseAdvisory\(client, req\.capture, 'after', shot\.buffer\)/);
+      expect(clickAt).toMatch(/await session\.during\(\);/);
+      expect(clickAt).toMatch(/await session\.after\(shot\.buffer\);/);
+    });
+
+    it('mouse_move_to reuses moveToPixel\'s own result.screenshot for "after" (F12)', async () => {
+      // Round 2 Phase 5b: previously this handler paid for a second,
+      // redundant screenshot in the "after" phase despite already holding
+      // moveToPixel's final frame — click-at.ts's "after" phase already
+      // reused its post-click buffer the same way.
+      const src = await readIndexTs();
+      const handler = extractHandlerBlock(src, 'pikvm_mouse_move_to');
+      expect(handler).toMatch(/await session\.after\(result\.screenshot\);/);
     });
   });
 
