@@ -184,3 +184,27 @@ candidate pool, so if the artifact still caused a mispairing it's either (a) und
 a *different* valid candidate some other way. Whoever picks this up should start by
 capturing the actual clusters (sizes + positions) from a repro run before theorizing
 further — this entry only records what was observed live, not a diagnosis.
+
+## iPad rig re-locking repeatedly during long back-to-back test sessions  [OPEN, 2026-08-26]
+During PR #88's (F6, shrink `AnchorRequest`) live hardware gate, georgs-mac-mini's 4th
+case (a short `measureBallistics` sweep, 2 magnitudes × 2 reps, exercising the
+`recovery: 'inspect-only'` path) got 0/8 cells accepted — all 8 rejected. Rather than
+taking that at face value, they re-ran the identical call against a clean pre-F6
+`origin/main` worktree under the same live conditions and got the exact same 0/8,
+proving F6 itself introduced no regression here. Tracing further via screenshots: the
+iPad kept independently re-locking mid-session (Touch-ID lock screen, confirmed visually
+3 separate times across the session) — unrelated to any of that night's 3 PRs. The
+`'inspect-only'` rejection path itself behaved exactly as designed even under this
+adverse condition (no crash, no false-accept, no mass-throw) on both branches; the gate
+still passed on that basis, but nobody got a clean "cells accepted" demo that session.
+
+Not investigated further yet — this is a rig/hardware observation, not a code defect
+attributable to any specific PR. Worth a look if it recurs: is this ordinary hot-corner
+risk compounding over a long session of repeated slam activity (the same category PR #62's
+and PR #78's gates both hit before), or something rig-specific (e.g. an actual Touch-ID/
+passcode-timeout policy on the physical iPad tightening over session length)? Whoever
+picks this up should start by checking whether the re-locks cluster right after
+slam-heavy operations (measureBallistics, ipadGoHome swipes) specifically, or occur on a
+plain elapsed-time basis regardless of activity — that would distinguish "our own hot-
+corner risk accumulating" from "iOS's own auto-lock timer," which point to very different
+fixes.
