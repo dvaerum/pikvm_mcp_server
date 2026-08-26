@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  beginCapture,
   capturePhase,
   capturePhaseAdvisory,
   cursorAliveGrab,
@@ -199,5 +200,53 @@ describe('parseCaptureConfig', () => {
         captureRegion: { x: 0, y: 0, width: 'wide', height: 4 },
       }),
     ).toThrow(/captureRegion\.width/);
+  });
+});
+
+describe('beginCapture / CaptureSession (F12, Round 2 Phase 5b)', () => {
+  it('is a true no-op when config is undefined (capture off): zero screenshots, empty lines', async () => {
+    const client = makeClient();
+    const session = beginCapture(client, undefined);
+    await session.before();
+    await session.during();
+    await session.after();
+    expect(client.screenshot).not.toHaveBeenCalled();
+    expect(client.screenshotKeepingCursorAlive).not.toHaveBeenCalled();
+    expect(session.entries).toEqual([]);
+    expect(session.lines()).toBe('');
+  });
+
+  it('accumulates before/during/after into entries and formats them via lines()', async () => {
+    const client = makeClient();
+    const config: CaptureConfig = { phases: ['before', 'during', 'after'], prefix: path.join(tmpDir, 's') };
+    const session = beginCapture(client, config);
+    await session.before();
+    await session.during();
+    await session.after();
+    expect(session.entries).toHaveLength(3);
+    expect(session.entries.every((e) => e !== null)).toBe(true);
+    expect(session.lines()).toContain('Capture:');
+    expect(session.lines()).toContain('before:');
+    expect(session.lines()).toContain('during:');
+    expect(session.lines()).toContain('after:');
+  });
+
+  it('after(providedBuffer) reuses the given buffer instead of grabbing a new frame', async () => {
+    const client = makeClient();
+    const config: CaptureConfig = { phases: ['after'], prefix: path.join(tmpDir, 's') };
+    const session = beginCapture(client, config);
+    await session.after(jpeg);
+    expect(client.screenshot).not.toHaveBeenCalled();
+    expect(client.screenshotKeepingCursorAlive).not.toHaveBeenCalled();
+    expect(session.entries).toHaveLength(1);
+  });
+
+  it('a phase not in config.phases records a null entry (matches capturePhase\'s own contract)', async () => {
+    const client = makeClient();
+    const config: CaptureConfig = { phases: ['before'], prefix: path.join(tmpDir, 's') };
+    const session = beginCapture(client, config);
+    await session.after(); // 'after' not requested
+    expect(session.entries).toEqual([null]);
+    expect(session.lines()).toBe('');
   });
 });

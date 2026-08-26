@@ -30,12 +30,7 @@ import { scaleLearner, recordMoveSample, MOVER_SCALE_TOOL_NAMES, type MoverScale
 import { HidModeResolver, makeHttpHidModeEndpoint, shouldClearSettlingFor, type HidMode } from './pikvm/hid-mode.js';
 import { loadPersisted, savePersisted, deletePersisted } from './pikvm/scale-persist.js';
 import { saveSnapshot, type SnapshotRegion } from './pikvm/snapshot.js';
-import {
-  parseCaptureConfig,
-  capturePhaseAdvisory,
-  formatCaptureLines,
-  type CaptureSaved,
-} from './pikvm/capture.js';
+import { parseCaptureConfig, beginCapture } from './pikvm/capture.js';
 import { appendOperatorHint } from './operator-hints.js';
 import { allPrompts, getPromptByName } from './prompts/index.js';
 import { skillTools, isSkillTool, handleSkillToolCall } from './prompts/skill-tools.js';
@@ -1578,9 +1573,10 @@ async function handle_pikvm_mouse_move(args: Record<string, unknown>): Promise<C
         const y = requireNumber(args.y, 'y');
         const relative = validateBoolean(args.relative) ?? false;
         // M8: parse capture before any emit (throws on a bad request).
-        const capture = parseCaptureConfig(args);
-        const captured: (CaptureSaved | null)[] = [];
-        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'before'));
+        // F12 (Round 2 Phase 5b): CaptureSession no-ops entirely when
+        // capture is off — no per-call `if (capture)` guard needed here.
+        const session = beginCapture(pikvm, parseCaptureConfig(args));
+        await session.before();
         let calibrationWarning = '';
         if (relative) {
           // Relative moves are clamped to -127 to 127 in the client
@@ -1594,17 +1590,17 @@ async function handle_pikvm_mouse_move(args: Record<string, unknown>): Promise<C
             calibrationWarning = '\n⚠️ Resolution changed - calibration has been cleared. Recalibrate with pikvm_auto_calibrate (preferred) or pikvm_calibrate.';
           }
         }
-        if (capture) {
-          captured.push(await capturePhaseAdvisory(pikvm, capture, 'during'));
-          captured.push(await capturePhaseAdvisory(pikvm, capture, 'after'));
-        }
+        await session.during();
+        // mouseMove()'s result carries no screenshot (unlike moveToPixel's),
+        // so unlike move_to below there's no buffer in hand to reuse here.
+        await session.after();
         return {
           content: [
             {
               type: 'text',
               text: (relative
                 ? `Moved mouse by (${x}, ${y})`
-                : `Moved mouse to pixel (${Math.max(0, Math.round(x))}, ${Math.max(0, Math.round(y))})`) + calibrationWarning + formatCaptureLines(captured),
+                : `Moved mouse to pixel (${Math.max(0, Math.round(x))}, ${Math.max(0, Math.round(y))})`) + calibrationWarning + session.lines(),
             },
           ],
         };
@@ -1853,9 +1849,10 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
         const ty = requireNumber(args.y, 'y');
         // M8: parse+validate capture up front so a bad request errors before
         // any emit (throws → caught by the handler's error wrapper).
-        const capture = parseCaptureConfig(args);
-        const captured: (CaptureSaved | null)[] = [];
-        if (capture) captured.push(await capturePhaseAdvisory(pikvm, capture, 'before'));
+        // F12 (Round 2 Phase 5b): CaptureSession no-ops entirely when
+        // capture is off — no per-call `if (capture)` guard needed here.
+        const session = beginCapture(pikvm, parseCaptureConfig(args));
+        await session.before();
         const strategyStr = validateEnum(
           args.strategy,
           ['detect-then-move', 'slam-then-move', 'assume-at', 'curve-one-shot'] as const,
@@ -1928,15 +1925,16 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
           },
         );
         if (!policy.mouseAbsolute) recordMoveSample(scaleLearner, result, mvLearnScaleX, mvLearnScaleY, false);
-        if (capture) {
-          // "during" = end-of-move cursor-alive frame (before the ~1-2s fade);
-          // "after" = a post-move frame confirming the landed state.
-          captured.push(await capturePhaseAdvisory(pikvm, capture, 'during'));
-          captured.push(await capturePhaseAdvisory(pikvm, capture, 'after'));
-        }
+        // "during" = end-of-move cursor-alive frame (before the ~1-2s fade);
+        // "after" = a post-move frame confirming the landed state — F12:
+        // reuse result.screenshot (moveToPixel's own already-fetched final
+        // frame) instead of paying a second screenshot, matching what
+        // click-at.ts's "after" phase already did for its post-click shot.
+        await session.during();
+        await session.after(result.screenshot);
         return {
           content: [
-            { type: 'text', text: result.message + formatCaptureLines(captured) },
+            { type: 'text', text: result.message + session.lines() },
             { type: 'image', data: result.screenshot.toString('base64'), mimeType: 'image/jpeg' },
           ],
         };
