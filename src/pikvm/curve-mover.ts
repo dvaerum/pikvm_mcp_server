@@ -43,10 +43,8 @@ function makeCurveLocatorDeps(client: PiKVMClient): CursorLocatorDeps {
     locateCursor: notWired('locateCursor'),
     findCursorByTemplateSet: notWired('findCursorByTemplateSet'),
     findCursorByMLMultiHint: notWired('findCursorByMLMultiHint'),
-    findCursorByShape: notWired('findCursorByShape'),
     buildMLHints: notWired('buildMLHints'),
     mlWiggleVerify: notWired('mlWiggleVerify'),
-    wiggleVerifyCandidate: notWired('wiggleVerifyCandidate'),
     tautologyProxThreshold: 0,
   };
 }

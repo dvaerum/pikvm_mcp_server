@@ -26,8 +26,9 @@ sites were rerouted through them:
 
 - `origin` — `move-to.ts`'s `discoverOrigin` (V8 → motion-diff probe →
   template-set progressive wake).
-- `openLoopShape` — `move-to.ts`'s open-loop correction path (ML wiggle-verify
-  → shape fallback).
+- `openLoopShape` — `move-to.ts`'s open-loop correction path (ML wiggle-verify;
+  see the F4 follow-on note below — the shape fallback this profile once had
+  is gone).
 - `curve` — `curve-mover.ts`'s `detect()` (V8 full-frame, parameterised by
   `minPresence`).
 
@@ -66,6 +67,33 @@ Deleting them as "unused" would lose that record. See the signpost
 comment at their declaration in `click-verify.ts` for the full context —
 if a future caller needs second-opinion arbitration again, they're ready;
 if not, they still document a bug class worth remembering.
+
+## Follow-on: F4 (Round 2 Phase 2b, 2026-08-26) — deleted 2 more dead deps members
+
+`findCursorByShape` and `wiggleVerifyCandidate` were two more `CursorLocatorDeps`
+members in the same shape as `verify`'s stranded scaffolding above: wired/stubbed
+by all 3 deps builders (`move-to.ts`'s two, `curve-mover.ts`'s one), but never
+once referenced inside `CursorLocator`'s own class body — `locateOpenLoopShape`
+had already dropped the shape-fallback branch entirely (see the "shape fallback
+RETIRED" comment at its `return null` — `bench-shape-vs-cascade-backgrounds`
+proved it dead+harmful, 2026-07-23, tracked in `docs/FUTURE-WORK.md`), so these
+two deps became orphaned scaffolding the same way `verify`'s predicates did:
+wired for a caller that no longer calls them.
+
+Deleted: both members from `CursorLocatorDeps`; the real wiring
+(`findCursorByShape` at `move-to.ts`'s `makeLocatorDeps`, `wiggleVerifyCandidate`
+at `tryOpenLoopShapeDetect`'s deps override); the `notWired(...)` stubs in
+`curve-mover.ts`'s `makeCurveLocatorDeps`. `move-to.ts`'s own import of the
+`findCursorByShape` *detector function* (from `cursor-shape-detect.ts`) stays —
+it's still called directly by `wiggleVerifyCandidate`'s own module-level
+implementation (a separate mechanism from the deleted deps member, per the
+"intentionally left untouched" comment already in `cursor-locator.ts`).
+
+Stranded 7 `not.toHaveBeenCalled()` assertions in `cursor-locator.test.ts`
+that used to pin "the retired shape fallback stayed retired" — replaced with
+one source-grep test (style of `no-fifth-slam-copy.test.ts`) asserting
+`cursor-locator.ts` contains no `findCursorByShape(` call, so the retirement
+decision survives losing its old enforcement vehicle.
 
 ## Consequences
 

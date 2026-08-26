@@ -884,10 +884,8 @@ function makeLocatorDeps(client: PiKVMClient): CursorLocatorDeps {
     locateCursor: (opts) => locateCursor(client, opts),
     findCursorByTemplateSet,
     findCursorByMLMultiHint,
-    findCursorByShape,
     buildMLHints,
     mlWiggleVerify: notWired('mlWiggleVerify'),
-    wiggleVerifyCandidate: notWired('wiggleVerifyCandidate'),
     tautologyProxThreshold: TAUTOLOGY_PROX_THRESHOLD,
   };
 }
@@ -1409,17 +1407,25 @@ export async function wiggleVerifyCandidate(
 }
 
 /** Open-loop shape/ML fallback (C1 P3 openLoopShape). Thin wrapper over the single
- *  CursorLocator front door: ML-multihint -> wiggle -> dark/bright shape -> wiggle
- *  (that cascade lives in locateOpenLoopShape; unit-tested with mock deps). Deps
- *  reuse makeLocatorDeps with a `decode` passthrough over the already-decoded shot
- *  and the module-level mlWiggleVerify/wiggleVerifyCandidate wired real. `prox` is
- *  reconstructed faithfully (hypot(fix.position - predicted); the wiggle helpers
- *  return unchanged positions) and fix.rawScore === the original score.
+ *  CursorLocator front door: ML-multihint -> wiggle (that cascade lives in
+ *  locateOpenLoopShape; unit-tested with mock deps). Deps reuse makeLocatorDeps
+ *  with a `decode` passthrough over the already-decoded shot and the
+ *  module-level mlWiggleVerify wired real. `prox` is reconstructed faithfully
+ *  (hypot(fix.position - predicted); the wiggle helper returns unchanged
+ *  positions) and fix.rawScore === the original score.
  *
  *  Extracted from moveToPixel (was a nested closure over client + observedRatioX/Y)
  *  so it is callable STANDALONE — which is what makes the openLoopShape path
  *  live-verifiable: a bench can call this directly on a real frame + real wiggle
- *  (see bench-openloopshape-groundtruth), closing the earlier "offline-only" TODO. */
+ *  (see bench-openloopshape-groundtruth), closing the earlier "offline-only" TODO.
+ *
+ *  F4 (Round 2 Phase 2b): findCursorByShape/wiggleVerifyCandidate deleted from
+ *  CursorLocatorDeps (dead — the openLoopShape profile never called them; see
+ *  ADR-0003's follow-on note). observedRatioX/Y are now VESTIGIAL params (only
+ *  ever fed the deleted wiggleVerifyCandidate closure) — left in place rather
+ *  than changing this exported function's signature across its 3 call sites
+ *  (2 internal + benches/bench-openloopshape-groundtruth.ts) as a separate,
+ *  broader cleanup than this phase's scope. */
 export async function tryOpenLoopShapeDetect(
   client: PiKVMClient,
   observedRatioX: number,
@@ -1432,8 +1438,6 @@ export async function tryOpenLoopShapeDetect(
       ...makeLocatorDeps(client),
       decode: async () => shot,
       mlWiggleVerify: (ml) => mlWiggleVerify(client, ml),
-      wiggleVerifyCandidate: (pos, score) =>
-        wiggleVerifyCandidate(client, observedRatioX, observedRatioY, pos, score),
     };
     const fix = await new CursorLocator(deps).locate(
       shot.buffer, shot.width, shot.height, 'openLoopShape', predicted,
