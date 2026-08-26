@@ -10,6 +10,7 @@ import sharp from 'sharp';
 import { recordEmit } from './cursor-keepalive.js';
 import { CursorBelief, type Bounds as BeliefBounds } from './cursor-belief.js';
 import { loadSettings } from '../settings.js';
+import { StreamerKeepalive } from './streamer-keepalive.js';
 
 /**
  * The client's default CursorBelief (wide initial variance + wide bounds so
@@ -76,6 +77,73 @@ export interface ScreenshotResult {
   scaleX: number;
   scaleY: number;
 }
+
+/**
+ * Thrown by `request()` instead of a bare `Error` so callers that need to
+ * distinguish "the server said no" (and specifically which status) from
+ * any other failure (network error, bad response body) don't have to
+ * parse `.message`. `.message` itself is UNCHANGED from the pre-existing
+ * "PiKVM API error N: ..." text — operator-hints.ts's pattern matching
+ * and its test suite both key off that exact string, and this is
+ * additive (a `.status` property), not a format change.
+ */
+export class PiKVMApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'PiKVMApiError';
+  }
+}
+
+/**
+ * Thrown when the streamer idle-stop retry (see
+ * `fetchStreamerStateWithRetry` / `screenshot`'s doc) is exhausted — the
+ * held keepalive WS didn't prevent it, AND one retry after a grace
+ * window didn't recover it either. At that point the remaining, far more
+ * likely explanation is the ORIGINAL one operator-hints.ts already
+ * describes (source-side outage — HDMI cable / iPad off), not the
+ * idle-stop race this retry exists to rule out — so the message embeds
+ * the underlying PiKVMApiError text verbatim (preserving the
+ * "UnavailableError"/"503" tokens operator-hints.ts's regex matches on)
+ * plus retry-specific context explaining what was already tried.
+ */
+export class StreamerUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StreamerUnavailableError';
+  }
+}
+
+/** Shared shape of `GET /streamer`'s JSON body. `streamer` is genuinely
+ *  `null` (not just an absent/optional key) when ustreamer isn't
+ *  running — kvmd's own `__get_streamer_state()` returns `None` in that
+ *  case rather than omitting the key or 503ing (unlike
+ *  `/streamer/snapshot`, which does 503). Both getResolution and
+ *  getStreamerStatus read through this same shape. */
+interface StreamerStateResponse {
+  ok: boolean;
+  result: {
+    streamer: {
+      source: {
+        online: boolean;
+        resolution: { width: number; height: number };
+      };
+    } | null;
+  };
+}
+
+/**
+ * Grace window for the streamer idle-stop retry-once (see
+ * fetchSnapshotWithRetry / fetchStreamerStateWithRetry): how long to wait
+ * between the initial 503/null-streamer response and the single retry,
+ * giving kvmd's own stream-controller loop + ustreamer's fork+exec+bind
+ * time to finish after the held keepalive WS's connection triggered a
+ * (re)start. Not empirically tuned against real hardware yet — chosen as
+ * a reasonable middle ground (long enough to matter, short enough not to
+ * meaningfully add to worst-case latency on the rare cold-start path);
+ * flag for adjustment if the hardware gate finds the real observed
+ * startup time differs meaningfully.
+ */
+const STREAMER_RESTART_GRACE_MS = 1500;
 
 // PiKVM uses signed 16-bit integers for absolute mouse coordinates
 const MOUSE_COORD_MIN = -32768;
@@ -157,6 +225,11 @@ export class PiKVMClient {
     scaleY: number;
   } | null = null;
   private calibration: CalibrationState | null = null;
+  /** Null when proxyUrl is set — StreamerKeepalive doesn't support
+   *  proxying (see its own header doc for why); fetchStreamerStateWithRetry
+   *  and screenshot() both treat a null keepalive as "skip, fall through
+   *  to the retry-once-on-503 safety net alone", never as an error. */
+  private streamerKeepalive: StreamerKeepalive | null = null;
 
   /**
    * Phase 192-B (v0.5.182): single source of truth for the cursor's
@@ -210,6 +283,23 @@ export class PiKVMClient {
     }
 
     this.belief = belief ?? createDefaultBelief();
+
+    // Streamer idle-stop workaround (see streamer-keepalive.ts's header):
+    // hold one persistent /api/ws connection for the client's whole
+    // lifetime so kvmd never idle-stops ustreamer after the first
+    // screenshot of a session. Skipped when proxyUrl is set — out of
+    // scope for this module, see its header doc; screenshot()'s
+    // retry-once-on-503 still covers that path, just without the
+    // steady-state benefit of never racing the idle-stop in the first
+    // place.
+    this.streamerKeepalive = this.config.proxyUrl
+      ? null
+      : new StreamerKeepalive({
+          host: this.config.host,
+          username: this.config.username,
+          password: this.config.password,
+          verifySsl: this.config.verifySsl,
+        });
   }
 
   /** Phase 192-B: callers (orientation detection, etc.) push the iPad
@@ -254,10 +344,15 @@ export class PiKVMClient {
   }
 
   /**
-   * Close any resources (no-op for REST-only client, kept for API compatibility)
+   * Close any held resources. Was a pure no-op ("REST API only") before
+   * StreamerKeepalive — now also tears down the held /api/ws connection
+   * and cancels any pending reconnect. A long-lived MCP server process
+   * never calls this in practice; it exists for tests/benches that
+   * construct and discard many clients, so the keepalive's socket +
+   * reconnect timer don't leak across them.
    */
   close(): void {
-    // No resources to close when using REST API only
+    this.streamerKeepalive?.stop();
   }
 
   /**
@@ -300,7 +395,7 @@ export class PiKVMClient {
         .replace(/password[=:][^\s,"]*/gi, 'password=[REDACTED]')
         .replace(/X-KVMD-Passwd[^,\s"]*/gi, 'X-KVMD-Passwd=[REDACTED]')
         .substring(0, 200); // Limit error message length
-      throw new Error(`PiKVM API error ${response.status}: ${sanitizedError}`);
+      throw new PiKVMApiError(response.status, `PiKVM API error ${response.status}: ${sanitizedError}`);
     }
 
     // Check content type for response handling
@@ -325,6 +420,58 @@ export class PiKVMClient {
       // If not JSON, return as-is wrapped in an object
       return { result: text } as T;
     }
+  }
+
+  /**
+   * Fetch `/streamer/snapshot` bytes, absorbing the ustreamer idle-stop
+   * race (see streamer-keepalive.ts's header for the full mechanism).
+   * `ensureStarted()` makes this a true no-op after the first call in a
+   * session (steady state: ustreamer is already up, ensureStarted()
+   * resolves immediately, no retry ever needed). The retry-once exists
+   * specifically for the FIRST snapshot of a cold session, where the
+   * stream-client count going 0→1 still has to propagate through kvmd's
+   * own poll loop and ustreamer's fork+exec+bind before the socket is
+   * live — a race the held WS connection narrows but cannot fully close.
+   */
+  private async fetchSnapshotWithRetry(path: string): Promise<ArrayBuffer> {
+    await this.streamerKeepalive?.ensureStarted();
+    try {
+      return await this.request<ArrayBuffer>('GET', path);
+    } catch (err) {
+      if (!(err instanceof PiKVMApiError) || err.status !== 503) throw err;
+      await new Promise((r) => setTimeout(r, STREAMER_RESTART_GRACE_MS));
+      try {
+        return await this.request<ArrayBuffer>('GET', path);
+      } catch (err2) {
+        if (!(err2 instanceof PiKVMApiError) || err2.status !== 503) throw err2;
+        throw new StreamerUnavailableError(
+          `Streamer unavailable even after a held /api/ws stream client and one retry ` +
+          `(${STREAMER_RESTART_GRACE_MS}ms grace window): ${err2.message} ` +
+          `This retry exists specifically to rule out ustreamer's idle-stop race — surviving ` +
+          `it means the more likely explanation is a genuine source-side outage. Check ` +
+          `pikvm_health_check's streamer.source.online (HDMI cable / iPad off / mid-reboot).`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Fetch `GET /streamer`'s state, with the SAME idle-stop retry as
+   * `fetchSnapshotWithRetry` — but note the failure signature is
+   * different: this endpoint never 503s (kvmd's `__get_streamer_state()`
+   * always returns 200), it just reports `result.streamer: null` while
+   * ustreamer isn't running yet. Callers (getResolution,
+   * getStreamerStatus) keep their own existing "Invalid or missing ..."
+   * error messages unchanged on exhausted retry — only the snapshot path
+   * gets the new StreamerUnavailableError, since `/streamer`'s failure
+   * was never a bare unexplained 503 to begin with.
+   */
+  private async fetchStreamerStateWithRetry(): Promise<StreamerStateResponse> {
+    await this.streamerKeepalive?.ensureStarted();
+    const first = await this.request<StreamerStateResponse>('GET', '/streamer');
+    if (first?.result?.streamer) return first;
+    await new Promise((r) => setTimeout(r, STREAMER_RESTART_GRACE_MS));
+    return await this.request<StreamerStateResponse>('GET', '/streamer');
   }
 
   /**
@@ -369,7 +516,7 @@ export class PiKVMClient {
     }
 
     const path = `/streamer/snapshot${params.toString() ? '?' + params : ''}`;
-    const arrayBuffer = await this.request<ArrayBuffer>('GET', path);
+    const arrayBuffer = await this.fetchSnapshotWithRetry(path);
     const buffer = Buffer.from(arrayBuffer);
 
     // Get actual screen resolution (force refresh to ensure accuracy)
@@ -406,23 +553,11 @@ export class PiKVMClient {
       return this.cachedResolution;
     }
 
-    interface StreamerResponse {
-      ok: boolean;
-      result: {
-        streamer: {
-          source: {
-            resolution: {
-              width: number;
-              height: number;
-            };
-          };
-        };
-      };
-    }
+    const response = await this.fetchStreamerStateWithRetry();
 
-    const response = await this.request<StreamerResponse>('GET', '/streamer');
-
-    // Defensive null checks for nested API response structure
+    // Defensive null checks for nested API response structure. `streamer`
+    // is genuinely null (not just absent) when ustreamer isn't running —
+    // see fetchStreamerStateWithRetry's doc.
     const resolution = response?.result?.streamer?.source?.resolution;
     if (!resolution || typeof resolution.width !== 'number' || typeof resolution.height !== 'number') {
       throw new Error('Invalid or missing resolution data from PiKVM streamer API');
@@ -449,22 +584,7 @@ export class PiKVMClient {
    * differentiate "PiKVM down" from "iPad off" at a glance.
    */
   async getStreamerStatus(): Promise<{ sourceOnline: boolean; resolution: ScreenResolution }> {
-    interface StreamerResponse {
-      ok: boolean;
-      result: {
-        streamer: {
-          source: {
-            online: boolean;
-            resolution: {
-              width: number;
-              height: number;
-            };
-          };
-        };
-      };
-    }
-
-    const response = await this.request<StreamerResponse>('GET', '/streamer');
+    const response = await this.fetchStreamerStateWithRetry();
     const source = response?.result?.streamer?.source;
     if (!source || typeof source.online !== 'boolean') {
       throw new Error('Invalid or missing streamer.source data from PiKVM API');
