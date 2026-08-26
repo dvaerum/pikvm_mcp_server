@@ -79,25 +79,41 @@ How to store all created/collected data + trained models so we can (a) fully rep
 from scratch AND (b) have models ready-to-go without rerunning the pipeline. See the design being
 added to docs/ (data-and-model-storage plan).
 
-## click-verify.ts orphaned predicates — kept, not dead code  [RESOLVED 2026-08-24]
+## click-verify.ts orphaned predicates — kept, not dead code  [RESOLVED 2026-08-24; moved to click-verify-archive.ts 2026-08-26]
 Phase 6 architecture-review audit: `isRateLimited`, `shouldFireDismissRecipe`,
 `shouldFireSecondOpinion`, `shouldAdoptSecondOpinion`, `shouldEmitApproach`,
-`isLockScreenRecoveryError`, `evaluatePreClickAgreement` (all `src/pikvm/click-verify.ts`)
-have zero real callers anywhere in `src/`/`benches/`/`scratch/` — only their own test
-files exercise them. Root cause: PR #34 (`1b900df`, 2026-07-28, "remove tap-retry —
-single-attempt clicks") deleted `clickAtWithRetry`, their only real caller, and its own
-commit message says they were kept deliberately even then. The second-opinion pair
-briefly regained a caller (`cursor-locator.ts`'s offline `'verify'` profile) before that
-too was deleted as dead scaffolding in ADR 0003
-(`docs/adr/0003-cursor-locator-is-the-front-door.md`).
+`isLockScreenRecoveryError`, `evaluatePreClickAgreement` (originally all
+`src/pikvm/click-verify.ts`) have zero real callers anywhere in
+`src/`/`benches/`/`scratch/` — only their own test files exercise them. Root cause:
+PR #34 (`1b900df`, 2026-07-28, "remove tap-retry — single-attempt clicks") deleted
+`clickAtWithRetry`, their only real caller, and its own commit message says they were
+kept deliberately even then. The second-opinion pair briefly regained a caller
+(`cursor-locator.ts`'s offline `'verify'` profile) before that too was deleted as dead
+scaffolding in ADR 0003 (`docs/adr/0003-cursor-locator-is-the-front-door.md`).
 
 **Decision: keep all seven.** Each is a pure, deterministic, well-tested predicate pinning
 a specific real historical bug (see each function's own doc comment for its bug history —
 `evaluatePreClickAgreement`'s is the densest in the file, narrating Phase 41→42→51→52→
 PA19-c). Deleting them as "unused" would lose that record; if a future caller needs this
-arbitration logic again, they're ready as-is. Signpost comment (with the full reasoning)
-lives above `isRateLimited` in `click-verify.ts` — this entry exists so the decision is
-also discoverable from the backlog, not just in-code.
+arbitration logic again, they're ready as-is.
+
+**F13/N2 (Round 2 Phase 2c, 2026-08-26): moved to a new `src/pikvm/click-verify-archive.ts`.**
+Rather than leave 7 zero-caller exports mixed into the active `click-verify.ts` module
+(the file real production code imports from), split them into a dedicated archive file
+with a group signpost explaining the "kept deliberately" decision — `click-verify.ts`
+now contains only functions with real callers. Their 6 test files (the second-opinion
+pair shares one file) moved alongside into `src/pikvm/__tests__/click-verify-archive/`,
+import paths updated. No re-export back into `click-verify.ts` — nothing imports these
+today.
+
+**Also added, NOT part of the original 7 — flagged here explicitly since it wasn't
+previously ruled on:** `clampPxPerMickeyRatio` (`click-verify.ts:49`) was found to be an
+EIGHTH zero-caller orphan during this same sweep — same bar (zero real callers, only its
+own test exercises it), but NOT orphaned by PR #34 (it was never wired to
+`clickAtWithRetry` in the first place, per its own doc comment — a "sanity-clamp" helper
+for a live px/mickey ratio that no caller ever fed it). Moved into the same
+`click-verify-archive.ts` alongside the documented 7, its test file moved to the same
+`__tests__/click-verify-archive/` directory. 7→8.
 
 ## isUdcUp — deleted, unlike the click-verify.ts group  [RESOLVED, 2026-08-25]
 `isUdcUp` (`src/pikvm/hid-latch-monitor.ts`) — a trivial `state === UDC_UP` wrapper — had

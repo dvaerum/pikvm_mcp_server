@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isRateLimited } from '../click-verify.js';
+import { isRateLimited } from '../../click-verify-archive.js';
 
 describe('isRateLimited', () => {
   it('returns true when both axes are below threshold', () => {
