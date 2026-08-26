@@ -129,6 +129,7 @@ describe('anchorCursor guard: bounds-guard', () => {
         client: m.client,
         guard: { kind: 'bounds-guard' },
         screenshot: m.screenshot,
+        recovery: 'inspect-only', // inert: captureVerification unset
         paceMs: 0,
       }),
     ).rejects.toThrow(
@@ -154,6 +155,7 @@ describe('anchorCursor guard: bounds-guard', () => {
         client: m.client,
         guard: { kind: 'bounds-guard' },
         screenshot: m.screenshot,
+        recovery: 'inspect-only', // inert: captureVerification unset
         paceMs: 0,
       }),
     ).rejects.toThrow(/iPad-portrait letterbox detected/);
@@ -168,6 +170,7 @@ describe('anchorCursor guard: bounds-guard', () => {
       client: m.client,
       guard: { kind: 'bounds-guard' },
       screenshot: m.screenshot,
+      recovery: 'inspect-only', // inert: captureVerification unset
       paceMs: 0,
     });
     expect(m.moves.length).toBeGreaterThan(0);
@@ -182,6 +185,7 @@ describe('anchorCursor guard: bounds-guard', () => {
       client: m.client,
       guard: { kind: 'bounds-guard' },
       screenshot: m.screenshot,
+      recovery: 'inspect-only', // inert: captureVerification unset
       slamOriginPx: { x: 50, y: 50 },
       paceMs: 0,
     });
@@ -197,6 +201,7 @@ describe('anchorCursor guard: bounds-guard', () => {
       client: m.client,
       guard: { kind: 'bounds-guard', allowOnUndetermined: true },
       screenshot: m.screenshot,
+      recovery: 'inspect-only', // inert: captureVerification unset
       paceMs: 0,
     });
     // Bounds detection failed → falls back to LEGACY_PORTRAIT_SLAM_ORIGIN,
@@ -213,6 +218,7 @@ describe('anchorCursor guard: bounds-guard', () => {
       client: m.client,
       guard: { kind: 'bounds-guard' },
       screenshot: m.screenshot,
+      recovery: 'inspect-only', // inert: captureVerification unset
       paceMs: 0,
     });
     expect(m.verifyCalled).toBe(false);
@@ -221,7 +227,7 @@ describe('anchorCursor guard: bounds-guard', () => {
   });
 });
 
-describe('anchorCursor guard: caller-asserted, recovery: none', () => {
+describe('anchorCursor guard: caller-asserted (captureVerification unset — recovery moot)', () => {
   it('never throws even against an undetermined/black frame', async () => {
     clearOrientationCache();
     const blackFrame = await makeScreenshot(1920, 1080, [0, 0, 0]);
@@ -230,10 +236,61 @@ describe('anchorCursor guard: caller-asserted, recovery: none', () => {
       client: m.client,
       guard: { kind: 'caller-asserted', reason: 'lock screen has no active hot corner' },
       screenshot: m.screenshot,
+      recovery: 'inspect-only', // inert: captureVerification unset
       paceMs: 0,
     });
     expect(result.verified).toBeNull();
     expect(m.moves.length).toBeGreaterThan(0);
+  });
+});
+
+describe("anchorCursor guard: caller-asserted, recovery: 'throw'", () => {
+  // F6 (Round 2 Phase 5c): 'throw' matches the pre-F6 default failure mode
+  // (selfGate:true + recovery:{kind:'none'}) exactly, but `recovery` itself
+  // has NO default now (required, same discipline as `guard`) — so this is
+  // an explicitly-chosen variant here, not a fallback. Not exercised by any
+  // of the 4 real call sites (each names one of the other three variants),
+  // so this is the only test that actually hits it.
+  it('throws when verification fails and recovery is explicitly \'throw\'', async () => {
+    clearOrientationCache();
+    const frozen = await makeScreenshot(400, 300, [50, 50, 50]);
+    const m = mockClientAndScreenshot({
+      resolution: { width: 400, height: 300 },
+      boundsFrames: [await makeScreenshot(400, 300, [0, 0, 0])],
+      verifyFrames: [frozen, frozen],
+    });
+    await expect(
+      anchorCursor({
+        client: m.client,
+        guard: { kind: 'caller-asserted', reason: 'test' },
+        screenshot: m.screenshot,
+        captureVerification: true,
+        recovery: 'throw',
+        paceMs: 0,
+      }),
+    ).rejects.toThrow(/slam motion did not verify.*recovery:'throw'/);
+    expect(m.keys).toHaveLength(0);
+  });
+
+  it('does not throw when verification succeeds', async () => {
+    clearOrientationCache();
+    const before = await makeScreenshot(400, 300, [50, 50, 50]);
+    const after = await stampSquare(before, 5, 5, 10, [255, 255, 255]);
+    const m = mockClientAndScreenshot({
+      resolution: { width: 400, height: 300 },
+      boundsFrames: [await makeScreenshot(400, 300, [0, 0, 0])],
+      verifyFrames: [before, after],
+    });
+    const result = await anchorCursor({
+      client: m.client,
+      guard: { kind: 'caller-asserted', reason: 'test' },
+      screenshot: m.screenshot,
+      captureVerification: true,
+      recovery: 'throw',
+      paceMs: 0,
+    });
+    expect(result.verified).toBe(true);
+    expect(result.recoveryAttempted).toBe(false);
   });
 });
 
@@ -252,7 +309,7 @@ describe('anchorCursor guard: caller-asserted, recovery: key-sequence-retry', ()
       guard: { kind: 'caller-asserted', reason: 'test' },
       screenshot: m.screenshot,
       captureVerification: true,
-      recovery: { kind: 'key-sequence-retry' },
+      recovery: 'key-sequence-retry',
       paceMs: 0,
     });
     expect(result.verified).toBe(true);
@@ -276,7 +333,7 @@ describe('anchorCursor guard: caller-asserted, recovery: key-sequence-retry', ()
       guard: { kind: 'caller-asserted', reason: 'test' },
       screenshot: m.screenshot,
       captureVerification: true,
-      recovery: { kind: 'key-sequence-retry' },
+      recovery: 'key-sequence-retry',
       paceMs: 0,
     });
     expect(result.verified).toBe(true);
@@ -297,7 +354,7 @@ describe('anchorCursor guard: caller-asserted, recovery: key-sequence-retry', ()
       guard: { kind: 'caller-asserted', reason: 'test' },
       screenshot: m.screenshot,
       captureVerification: true,
-      recovery: { kind: 'key-sequence-retry' },
+      recovery: 'key-sequence-retry',
       paceMs: 0,
     });
     expect(result.verified).toBe(false);
@@ -320,7 +377,7 @@ describe('anchorCursor guard: caller-asserted, recovery: defensive-keys', () => 
       guard: { kind: 'caller-asserted', reason: 'test' },
       screenshot: m.screenshot,
       captureVerification: true,
-      recovery: { kind: 'defensive-keys' },
+      recovery: 'defensive-keys',
       paceMs: 0,
     });
     expect(result.verified).toBe(false);
@@ -344,7 +401,7 @@ describe('anchorCursor guard: caller-asserted, recovery: defensive-keys', () => 
       guard: { kind: 'caller-asserted', reason: 'test' },
       screenshot: m.screenshot,
       captureVerification: true,
-      recovery: { kind: 'defensive-keys' },
+      recovery: 'defensive-keys',
       paceMs: 0,
     });
     expect(result.verified).toBe(true);
@@ -353,7 +410,12 @@ describe('anchorCursor guard: caller-asserted, recovery: defensive-keys', () => 
   });
 });
 
-describe('anchorCursor selfGate:false — computes but never gates', () => {
+describe('anchorCursor guard: caller-asserted, recovery: inspect-only', () => {
+  // F6 (Round 2 Phase 5c): pre-collapse this was selfGate:false with a
+  // recovery:{kind:'key-sequence-retry'} ALSO present, proving selfGate
+  // overrode it. The collapsed AnchorRecoveryPosture enum makes that combo
+  // structurally unrepresentable now — 'inspect-only' IS the single value,
+  // so there's no second posture left to accidentally override.
   it('verified is still populated on failure, but no recovery runs and no throw', async () => {
     clearOrientationCache();
     const frozen = await makeScreenshot(400, 300, [50, 50, 50]);
@@ -367,8 +429,7 @@ describe('anchorCursor selfGate:false — computes but never gates', () => {
       guard: { kind: 'caller-asserted', reason: 'test' },
       screenshot: m.screenshot,
       captureVerification: true,
-      selfGate: false,
-      recovery: { kind: 'key-sequence-retry' }, // present but must not fire
+      recovery: 'inspect-only',
       paceMs: 0,
     });
     expect(result.verified).toBe(false);
@@ -385,6 +446,7 @@ describe('anchorCursor guard: none-calibration', () => {
       client: m.client,
       guard: { kind: 'none-calibration' },
       screenshot: m.screenshot,
+      recovery: 'inspect-only', // inert: captureVerification unset
       paceMs: 0,
     });
     expect(m.verifyCalled).toBe(false);
@@ -403,6 +465,7 @@ describe('anchorCursor guard: none-calibration', () => {
         client: m.client,
         guard: { kind: 'none-calibration' },
         screenshot: m.screenshot,
+        recovery: 'inspect-only', // inert: captureVerification unset
         paceMs: 0,
       }),
     ).resolves.toBeDefined();
@@ -415,6 +478,7 @@ describe('anchorCursor guard: none-calibration', () => {
       client: m.client,
       guard: { kind: 'none-calibration' },
       screenshot: m.screenshot,
+      recovery: 'inspect-only', // inert: captureVerification unset
       paceMs: 0,
       nudge: { away: 'top-left', onlyAxis: 'y' },
     });
@@ -431,6 +495,7 @@ describe('anchorCursor guard: none-calibration', () => {
       client: m.client,
       guard: { kind: 'none-calibration' },
       screenshot: m.screenshot,
+      recovery: 'inspect-only', // inert: captureVerification unset
       paceMs: 0,
     });
     const nudgeMoves = m.moves.filter((mv) => mv.dx === 0 && mv.dy > 0);
@@ -445,7 +510,7 @@ describe('anchorCursor guard: none-calibration', () => {
   // pre-migration behavior (which only ever nudged after its own early-
   // return check passed) — caught by measureBallistics.slamVerify.test.ts's
   // move-count pin failing unexpectedly.
-  it('skips the nudge when captureVerification fails, even with selfGate:false (measureCell\'s exact combo)', async () => {
+  it('skips the nudge when captureVerification fails, even with recovery:\'inspect-only\' (measureCell\'s exact combo)', async () => {
     clearOrientationCache();
     const frozen = await makeScreenshot(400, 300, [50, 50, 50]);
     const m = mockClientAndScreenshot({
@@ -457,7 +522,7 @@ describe('anchorCursor guard: none-calibration', () => {
       guard: { kind: 'none-calibration' },
       screenshot: m.screenshot,
       captureVerification: true,
-      selfGate: false,
+      recovery: 'inspect-only',
       paceMs: 0,
       nudge: { away: 'top-left', onlyAxis: 'y' },
     });
@@ -479,7 +544,7 @@ describe('anchorCursor guard: none-calibration', () => {
       guard: { kind: 'none-calibration' },
       screenshot: m.screenshot,
       captureVerification: true,
-      selfGate: false,
+      recovery: 'inspect-only',
       paceMs: 0,
       nudge: { away: 'top-left', onlyAxis: 'y' },
     });
@@ -510,7 +575,7 @@ describe('anchorCursor guard: none-calibration', () => {
         guard: { kind: 'none-calibration' },
         screenshot: m.screenshot,
         captureVerification: true,
-        selfGate: false,
+        recovery: 'inspect-only',
         paceMs: 0,
       });
       expect(result.verified).toBe(true);
@@ -530,7 +595,7 @@ describe('anchorCursor guard: none-calibration', () => {
         guard: { kind: 'none-calibration' },
         screenshot: m.screenshot,
         captureVerification: true,
-        selfGate: false,
+        recovery: 'inspect-only',
         paceMs: 0,
       });
       expect(result.verified).toBe(false);
