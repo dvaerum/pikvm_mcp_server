@@ -86,6 +86,93 @@ much bigger lift than XNNPACK, for what was already the lower-priority
 stretch goal. Recommendation (accepted): skip entirely, XNNPACK is the
 only candidate with a real path forward.
 
+## 4. Full-request-path profiling + thread-config check (task_78184455df4e, 2026-08-27)
+
+Follow-up to candidate 1's XNNPACK-hold decision: georg wants to know
+whether there's real non-native (JS-side) overhead in the actual
+request pipeline worth targeting before considering anything as big as
+a native rewrite, and whether ONNX Runtime is actually using all 4 of
+the Pi4's cores.
+
+**Important correction to the mental model going into this:** all
+prior timing numbers in this doc (the `bench_node.mjs` fp32/int8
+comparison, "71ms/inference") measured a SINGLE 96×96 crop (`N=1`) —
+useful for a controlled apples-to-apples fp32-vs-int8 comparison, but
+NOT representative of what the production code path actually does.
+`runCascade()` (`src/pikvm/cursor-ml-detect.ts`, the canonical detector
+behind `findCursorByV8FullFrame`) builds a grid of crops covering the
+whole detected iPad region (default `GRID_STRIDE=48`px, 50% overlap
+with the 96px crop) and batches ALL of them into a SINGLE
+`session.run()` call. `grid-size-check.mts` confirms this against real
+captured frames: on a real 1920×1080 frame, **N=352 crops per
+inference call**, not N=1. The "71ms" number is real and useful as a
+quantization/backend comparison baseline, but understates the real
+per-request inference cost by roughly two orders of magnitude of work
+(N=352 vs N=1), and — more importantly — makes any thread-count
+comparison drawn from N=1 timing unsafe to generalize from (see below).
+
+`full-path-profile.mts` reproduces `runCascade()`'s real phases —
+region-detect, JPEG decode, grid-build + preprocess (the JS loop that
+fills the `Float32Array` batch tensor), the batched inference call,
+and heatmap/presence postprocessing — each individually timed, with a
+sweep over `intraOpNumThreads` (unset/default, 1, 2, 4).
+
+**x86_64 dev-host result (16 cores, NOT predictive of absolute Pi4
+timing, but the *shape* is the finding — real Pi4 numbers still
+needed):**
+
+| intraOpNumThreads | inference (median) | TOTAL (median) | inference share |
+|---|---|---|---|
+| 1 | 1729-1857ms | 1787-1857ms | 96-97% |
+| 2 | 642-1013ms | 705-1077ms | 91-94% |
+| 4 | 433-458ms | 514-554ms | 82-84% |
+| unset (default) | 229-424ms | 353-424ms | 65% |
+
+Two things this shows clearly, independent of the absolute numbers:
+
+1. **Threading matters a lot for the real batched (N=352) workload** —
+   roughly linear scaling from 1→4 threads (~4x), unlike the N=1 case
+   this task's predecessor investigated (single-crop inference is
+   dominated by fixed per-call dispatch overhead, which is why GPU and
+   INT8 both came back NO-GO there). Batch-of-352 is large enough that
+   per-call overhead is amortized and real parallel compute matters —
+   a fundamentally different regime from the N=1 comparisons the GPU
+   and INT8 investigations ran. This does NOT contradict those NO-GOs
+   (they measured something real and different); it means the
+   "backend dispatch overhead dominates" conclusion from that
+   investigation doesn't automatically transfer to the thread-count
+   question for the real workload.
+2. **`gridBuildPreprocess` (pure JS, no native call) is genuinely
+   non-trivial** — 43-92ms depending on run, i.e. the same order of
+   magnitude as an entire single-crop inference call from the earlier
+   investigation. This is real, nameable, non-native overhead: a
+   double-nested loop over 352×96×96×3 ≈ 9.7M float writes with
+   per-element normalization math, done in JS on every request. On a
+   weaker ARM core (vs. this 16-core x86_64 devbox) this fraction
+   could matter proportionally more, not less — needs a real Pi4
+   number to know for sure.
+
+**What's still open, and needs it-03400 (real Pi4, only place that can
+answer it):**
+- Whether `intraOpNumThreads` left unset actually resolves to 4
+  (all cores) on the Pi4's Cortex-A72, or silently under-utilizes
+  (e.g. resolves to 1) — the x86_64 "default is fastest" result here
+  is consistent with default correctly using more cores than any
+  explicit setting tested, but does NOT prove what default resolves to
+  on a 4-core ARM target specifically. If default is NOT already using
+  all 4 cores there, forcing `intraOpNumThreads: 4` explicitly could be
+  a genuine free win — no retrain, no rewrite, one line.
+- Real ARM absolute numbers for each phase, especially
+  `gridBuildPreprocess`'s share of total wall-clock — to answer
+  georg's actual question (is there real JS-side cost worth a scoped
+  native-module fix, or does inference genuinely dominate end to end).
+
+Run via (repo root, same real-package-binaries pattern as `bench_node.mjs`):
+```
+npx tsx scratch/cpu-inference-speedup/grid-size-check.mts
+npx tsx scratch/cpu-inference-speedup/full-path-profile.mts [path/to/frame.jpg]
+```
+
 ## Model I/O contract
 
 Same as `scratch/ncnn-phase0/README.md`'s (this is the same model,
