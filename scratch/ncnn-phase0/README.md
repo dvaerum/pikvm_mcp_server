@@ -23,10 +23,29 @@ experimental-GPU-path artifacts, not shipped product code.
 - `compare_gt.py` — the strongest evidence: 12 crops centered on real
   ground-truth cursor positions (`data/openloopshape-real/analysis.json`),
   0/12 argmax mismatches, 0/12 presence-decision mismatches between
-  onnxruntime and ncnn.
+  onnxruntime and ncnn. NOTE: `analysis.json` isn't tracked in this repo
+  (was a transient local artifact of the original spike) — the same
+  ground-truth `gt_x`/`gt_y` fields live directly in the tracked
+  `data/openloopshape-real/manifest.jsonl`; `vulkan_cpu_bench.cpp` below
+  reads from there instead, same 12 crops, same crop/normalize logic.
+- `vulkan_cpu_bench.cpp` / `build_vulkan_cpu_bench.sh` — Phase 2's
+  CPU-vs-Vulkan timing harness (task_bac3fefed239 / task_c5b91f0dce14).
+  Native C++ against ncnn's real `Net`/`Extractor`/`gpu.h` API (verified
+  against the actual installed headers, not memory), reads the same 12
+  ground-truth crops from `manifest.jsonl`, runs N=50 timed inferences per
+  crop under `use_vulkan_compute=false` then `=true`, reports median/min/max
+  plus a last-crop argmax+presence spot-check. CPU-path output
+  cross-verified byte-for-byte-equivalent argmax against `compare_gt.py`'s
+  onnxruntime/ncnn comparison on the same crop (frame-lower-right-02.jpg):
+  both report `argmax=299`, `sigmoid(presence)≈1.0000`. Gracefully skips
+  the Vulkan half with a clear message if `ncnn::get_gpu_count() == 0`
+  (e.g. this CPU-only dev host) rather than crashing or silently no-op'ing
+  — the real Vulkan numbers come from running this on pikvm01 (V3DV
+  confirmed live there) or another Vulkan-capable host.
 
-All three scripts resolve paths relative to their own location + the repo
-root, so they work from any checkout — no hardcoded absolute paths.
+All scripts/the harness resolve paths relative to their own location + the
+repo root (or take the paths as CLI args, for the harness), so they work
+from any checkout — no hardcoded absolute paths.
 
 ## Reproducing / regenerating
 
