@@ -7,7 +7,7 @@ to main — experimental investigation artifacts, not shipped code.
 
 Three candidates from the task, in the order tackled:
 
-## 1. INT8 dynamic quantization — done, correctness validated, speed NOT yet measured on real hardware
+## 1. INT8 dynamic quantization — CLOSED, NO-GO (real hardware confirms it's SLOWER)
 
 `crop-heatmap.int8.onnx` — dynamic post-training INT8 quantization of
 `ml/crop-heatmap.onnx`, produced via `onnxruntime.quantization`'s
@@ -35,19 +35,29 @@ real captured frames, not synthetic):
   this project for cursor-detection residuals. Not a real accuracy
   regression; a coin-flip on an already-ambiguous case.
 
-**Speed — x86_64 dev-host numbers ARE NOT representative, included only
-as a documented curiosity**: on this x86_64 host, INT8 was measurably
-SLOWER than fp32 (2.12ms vs 1.17ms/inference) — the model is small
-enough that added Cast/DynamicQuantizeLinear graph overhead outweighs
-the arithmetic savings, and this CPU's `avx_vnni` support may not be
-exercised effectively by ONNX Runtime's default x86 INT8 kernels for a
-model this size. **This does NOT predict ARM behavior** — ARMv8.2+'s
-SDOT/UDOT instructions accelerate INT8 GEMM specifically and ARM NEON's
-baseline fp32 throughput is weaker than x86 AVX2's, so the relative
-INT8 benefit could look completely different on a real Pi4. The real
-answer needs an actual Pi4 timing run (same harness pattern as the ncnn
-Phase 0 → Phase 2 split) — that's the one thing this investigation
-could NOT self-contain on this dev host.
+**Speed — REAL HARDWARE RESULT (it-03400, 2026-08-27, via `bench_node.mjs`
+run through the real deployed pikvm-mcp-server-0.5.250 package's own ARM
+`onnxruntime-node` + `sharp` binaries, node 24.18.0 — the exact production
+runtime, not a separately-built environment): INT8 is ~25% SLOWER than
+fp32 (median 88.8-91.9ms vs 71.0-72.7ms/inference across 600 inferences,
+reproduced across 2 independent runs, correctness matched both times).
+Same direction as the x86_64 dev-host result below, though the x86_64
+number alone was explicitly NOT trusted as predictive — this is the
+number that actually counts, and it's a clean NO-GO: plain ONNX Runtime
+CPU EP INT8 kernels don't pay off for this model/op-mix on this ARM
+core, quantize/dequantize overhead exceeds the arithmetic savings.
+
+(Original x86_64 dev-host number, kept for the record: INT8 measurably
+SLOWER than fp32 there too — 2.12ms vs 1.17ms/inference — for the same
+general reason, small-model graph overhead outweighing savings. Was
+flagged at the time as non-predictive of ARM specifically since ARM's
+SDOT/UDOT + weaker baseline NEON fp32 throughput could in principle have
+told a different story — it didn't, but the caution was correct to
+apply before the real number existed.)
+
+**Consequence for XNNPACK (candidate 2)**: the bar just got higher.
+XNNPACK now needs to beat fp32's ~71ms baseline directly, not int8's
+~89ms — there's no "at least beat int8" fallback anymore.
 
 ## 2. XNNPACK execution provider — not yet buildable from this dev host
 
@@ -65,11 +75,16 @@ exists, the SAME correctness harness here (`compare_int8.py`'s
 methodology, swapped to compare XNNPACK EP vs default CPU EP instead of
 INT8 vs fp32) directly reuses.
 
-## 3. ArmNN execution provider — not started (lower priority per the task)
+## 3. ArmNN execution provider — CLOSED, NOT PURSUED
 
-Same packaging-first blocker as XNNPACK — needs a build with ArmNN EP
-support, which nixpkgs may or may not already provide. Deferred until
-1/2 are further along, per the task's own stated priority order.
+pikvm-nixos@nixos-developer-system's packaging investigation found ArmNN
+EP needs prebuilt ARM Compute Library (ACL) + ArmNN shared libs supplied
+externally, not FetchContent-vendored like XNNPACK — neither exists
+anywhere in nixpkgs, and ACL is a large SCons-based (not CMake) tree
+with hand-written NEON/SVE kernels. Packaging it from scratch would be a
+much bigger lift than XNNPACK, for what was already the lower-priority
+stretch goal. Recommendation (accepted): skip entirely, XNNPACK is the
+only candidate with a real path forward.
 
 ## Model I/O contract
 
