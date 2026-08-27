@@ -1,8 +1,14 @@
 """
 Fidelity comparison restricted to crops CENTERED on the real, ground-truth
-cursor position (from openloopshape-real/analysis.json) — this is where
+cursor position (from openloopshape-real/manifest.jsonl) — this is where
 the model is actually meant to fire confidently, unlike the previous
 sweep's mostly-background/no-cursor crops.
+
+Originally read analysis.json, a transient local artifact that was never
+git-tracked — worked on the machine that generated it, broke for anyone
+else checking out this branch fresh (caught by pikvm-nixos@nixos-developer-
+system while building the companion Phase 2 C++ harness). manifest.jsonl
+IS tracked and carries the same gt_x/gt_y ground truth.
 """
 import json
 import os
@@ -19,8 +25,8 @@ MEAN = [0.485, 0.456, 0.406]
 STD = [0.229, 0.224, 0.225]
 DATA_DIR = os.path.join(REPO_ROOT, "data", "openloopshape-real")
 
-with open(f"{DATA_DIR}/analysis.json") as f:
-    analysis = json.load(f)
+with open(os.path.join(DATA_DIR, "manifest.jsonl")) as f:
+    manifest = [json.loads(line) for line in f if line.strip()]
 
 sess = ort.InferenceSession(os.path.join(REPO_ROOT, "ml", "crop-heatmap.onnx"))
 net = ncnn.Net()
@@ -54,14 +60,13 @@ decision_mismatches = 0
 n = 0
 n_confident = 0
 
-for entry in analysis["results"]:
+for entry in manifest:
     path = f"{DATA_DIR}/{entry['file']}"
-    gt = entry["gt"]
     img = Image.open(path).convert("RGB")
     W, H = img.size
     half = CASCADE_CROP // 2
-    left = max(0, min(W - CASCADE_CROP, gt["x"] - half))
-    top = max(0, min(H - CASCADE_CROP, gt["y"] - half))
+    left = max(0, min(W - CASCADE_CROP, entry["gt_x"] - half))
+    top = max(0, min(H - CASCADE_CROP, entry["gt_y"] - half))
 
     crop = img.crop((left, top, left + CASCADE_CROP, top + CASCADE_CROP))
     arr = np.asarray(crop, dtype=np.float32) / 255.0

@@ -21,13 +21,13 @@ experimental-GPU-path artifacts, not shipped product code.
 - `compare_batch.py` — broader sweep (27 real frames × 5 crop positions
   = 135 cases, mostly background/no-cursor content).
 - `compare_gt.py` — the strongest evidence: 12 crops centered on real
-  ground-truth cursor positions (`data/openloopshape-real/analysis.json`),
-  0/12 argmax mismatches, 0/12 presence-decision mismatches between
-  onnxruntime and ncnn. NOTE: `analysis.json` isn't tracked in this repo
-  (was a transient local artifact of the original spike) — the same
-  ground-truth `gt_x`/`gt_y` fields live directly in the tracked
-  `data/openloopshape-real/manifest.jsonl`; `vulkan_cpu_bench.cpp` below
-  reads from there instead, same 12 crops, same crop/normalize logic.
+  ground-truth cursor positions (`data/openloopshape-real/manifest.jsonl`'s
+  `gt_x`/`gt_y` fields), 0/12 argmax mismatches, 0/12 presence-decision
+  mismatches between onnxruntime and ncnn. Originally read a transient,
+  untracked local `analysis.json` — worked on the machine that generated
+  it, broke for anyone else checking out this branch fresh (caught by
+  pikvm-nixos@nixos-developer-system building the companion Phase 2
+  harness below, fixed to read the tracked manifest instead).
 - `vulkan_cpu_bench.cpp` / `build_vulkan_cpu_bench.sh` — Phase 2's
   CPU-vs-Vulkan timing harness (task_bac3fefed239 / task_c5b91f0dce14).
   Native C++ against ncnn's real `Net`/`Extractor`/`gpu.h` API (verified
