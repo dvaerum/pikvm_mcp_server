@@ -477,6 +477,40 @@ before it):
    `-local-source`/`-monitor-main`, `health-check.ts`,
    `desktop-e2e-metrics.ts`) — the #51 stale-settle-latch incident's home;
    largely independent of layer 4, can build in parallel with it.
+
+   **Second real cross-layer coupling point, found by nixos-dev surveying
+   module 5's FULL import surface (all 13 files) before writing code** —
+   this "largely independent of layer 4" framing is also an
+   understatement: `ipad-unlock.ts` imports `takeRawScreenshot` from
+   `ballistics.ts` and `emitChunked` from `gesture.ts`; `hid-mode.ts`
+   imports `defaultChunkPaceMsFor`/`defaultMaxResidualPxFor` from
+   `click-verify.ts` — all layer 4 files. Checked against the actual TS
+   source (2026-08-28) rather than taken on trust: `emitChunked(client:
+   PiKVMClient, ...)` calls `client.mouseMoveRelative(...)` and
+   `takeRawScreenshot(client: PiKVMClient)` calls `client.screenshot()` —
+   both take the concrete layer-2 client directly, not an injected
+   closure. `defaultChunkPaceMsFor`/`defaultMaxResidualPxFor` are pure
+   (`bool -> Option<number>`, no client dependency at all).
+
+   **Resolution — do NOT fold into module 1 (foundation).** Foundation
+   has zero PiKVM/HID domain knowledge by design (§7.1: "no PiKVM domain
+   logic, pure infrastructure") and nothing else in the dependency graph
+   runs foundation → kvmd-client; putting a function that calls
+   `client.mouseMoveRelative`/`client.screenshot` there would force
+   foundation to depend on module 2, inverting the one dependency edge
+   the whole workspace structure is built on. Instead: a new crate,
+   **`pikvm-mcp-ipad-primitives`** (`rust/ipad-primitives`), depending on
+   `pikvm-mcp-kvmd-client` (module 2), holding `emit_chunked` (gesture.rs),
+   `take_raw_screenshot`, and the two `click-verify` default-lookup
+   functions. Modules 4 and 5 both depend on `ipad-primitives` instead of
+   on each other — this is the same "extracted because two consumers need
+   the same mechanism without an import cycle" pattern the codebase
+   already used once for `ipad-keys.ts` (F7, Round 2 Phase 4), just given
+   its own crate boundary instead of a same-crate file. Module 5 is no
+   longer blocked on module 4 landing first; only on this small crate,
+   which module 2's owner (or whoever gets there first) should build
+   before either of modules 4/5 needs it in earnest — it's ~50 LOC of
+   faithful port, not a design risk.
 6. **MCP protocol surface** (~3,100 LOC: `index.ts` — 2,575 LOC, the tool
    registry/dispatch, plus `cli.ts`, `http-server.ts`, `prompts/*`) — built
    LAST, on top of everything above, using `rmcp` per §6. `index.ts`'s size
