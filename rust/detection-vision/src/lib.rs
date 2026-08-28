@@ -14,6 +14,7 @@
 
 pub mod brightness;
 pub mod cursor_detect;
+pub mod cursor_ml_detect;
 pub mod cursor_shape_detect;
 pub mod decode;
 pub mod ipad_region_detect;
