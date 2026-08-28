@@ -59,21 +59,55 @@ apply before the real number existed.)
 XNNPACK now needs to beat fp32's ~71ms baseline directly, not int8's
 ~89ms — there's no "at least beat int8" fallback anymore.
 
-## 2. XNNPACK execution provider — not yet buildable from this dev host
+## 2. XNNPACK execution provider — built, real InferenceSession confirmed working (x86_64), Pi4 benchmark still needed
 
 The standard `pip install onnxruntime` wheel does NOT include the
 XNNPACK EP (`ort.get_available_providers()` only returns
 `['AzureExecutionProvider', 'CPUExecutionProvider']` on 1.29.0). XNNPACK
-support requires either a custom ONNX Runtime build (`--use_xnnpack`) or
-a specialized distribution (e.g. onnxruntime-mobile) not verified
-available for this platform. Since XNNPACK's whole value proposition is
-ARM NEON optimization, a meaningful validation belongs on the real
-target architecture anyway — routed to pikvm-nixos@nixos-developer-system
-to check whether nixpkgs' `onnxruntime` derivation has (or can gain) an
-XNNPACK-enabled build option for the aarch64 target. Once a build
-exists, the SAME correctness harness here (`compare_int8.py`'s
+support requires a custom ONNX Runtime build (`onnxruntime_USE_XNNPACK`).
+nixpkgs' `onnxruntime` derivation had zero packaging for it —
+`onnxruntime-xnnpack-overlay.nix` (this dir) fixes that via
+`overrideAttrs` on `pkgs.onnxruntime`, pinning 4 new sources
+(XNNPACK itself — declared upstream as `googlexnnpack`, not `xnnpack` —
+plus pthreadpool, fxdiv, and kleidiai, Arm's NEON/SVE kernel lib, which
+onnxruntime's own cmake pulls in unconditionally for any arm64 target;
+FP16 is reused from nixpkgs' existing coreml wiring) to the exact
+revisions onnxruntime v1.24.4's own `cmake/deps.txt` and
+`cmake/external/xnnpack.cmake` reference. `doCheck`/
+`onnxruntime_BUILD_UNIT_TESTS` and `onnxruntime_ENABLE_LTO` are off (we
+only need the library + wheel, not onnxruntime's own test suite or
+LTO's runtime win, and both are real memory/time costs on a
+shared/oversubscribed build host); a narrow `-Wno-error=maybe-uninitialized`
+carve-out (same mechanism nixpkgs' package already uses for
+`unused-variable`) works around a GCC false positive that only
+surfaces with LTO off, in onnxruntime's own `tensorprotoutils.cc`, not
+a bug in this override. Build via `build_onnxruntime_xnnpack.sh`
+(`PIKVM_NIXOS_REPO=<pikvm-nixos checkout> ./build_onnxruntime_xnnpack.sh`)
+— real, non-cached rebuild, ~real wall-clock time, not free like the
+ncnn+Vulkan Phase 0 build.
+
+**Verified working, not just "exit 0"**: installed the built wheel into
+a clean venv (same `LD_LIBRARY_PATH`-to-zlib+`stdenv.cc.cc.lib` detour
+documented below — a bare pip venv on NixOS needs it same as before),
+confirmed `ort.get_available_providers()` genuinely includes
+`XnnpackExecutionProvider`, then constructed a REAL
+`InferenceSession(providers=['XnnpackExecutionProvider',
+'CPUExecutionProvider'])` against the actual `ml/crop-heatmap.onnx` and
+ran a real inference — `sess.get_providers()` confirms XNNPACK is
+actually active (not silently falling back to CPU), output shapes match
+the known model contract ([1,1,24,24] + [1]). This is on x86_64 only
+(dev-host smoke test, not a performance measurement) — the real
+fp32-vs-XNNPACK comparative BENCHMARK still needs a matching aarch64
+build + real Pi4 run, same pattern as every other candidate in this
+doc. Worth noting before that benchmark runs: given task_484bed055820's
+search-narrowing fix (shrinks the real production crop count well
+below this doc's N=352 baseline), the more representative benchmark
+shape may now be the NEW crop count rather than N=352 — check with the
+task owner before interpreting the eventual number.
+
+The build now exists — the SAME correctness harness here (`compare_int8.py`'s
 methodology, swapped to compare XNNPACK EP vs default CPU EP instead of
-INT8 vs fp32) directly reuses.
+INT8 vs fp32) directly reuses for whoever runs the real Pi4 benchmark.
 
 ## 3. ArmNN execution provider — CLOSED, NOT PURSUED
 
