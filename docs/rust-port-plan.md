@@ -478,6 +478,21 @@ before it):
    the ONNX/image-crate-heavy layer; the model contract and thresholds from
    §3's magic-number examples live here and must port byte-for-byte, not
    be "improved" along the way.
+
+   **Fourth crate-boundary finding (2026-08-28, nixos-dev), same shape as
+   the three above**: `seed-template.ts` (this layer) needs
+   `looksLikeCursor` — but that function is defined in `move-to.ts`
+   (layer 4, not yet started). Checked the actual TS source first: it's
+   pure (operates only on `CursorTemplate`, zero `PiKVMClient`/mover
+   dependency). Unlike the CursorBelief/ipad-primitives/cursor-belief-
+   crate cases, this one is NOT a new dependency edge — layer 4 already
+   depends on layer 3 per this section's own build order (foundation →
+   kvmd-client → detection/vision → mover), so pulling a pure function
+   forward into layer 3 as `looks_like_cursor.rs` (+ its
+   `cohesiveBlobInMask` helper) just moves it to where it's first
+   needed, nothing more. When module 4's `move-to.ts` is ported, it
+   imports `looks_like_cursor` from `pikvm-mcp-detection-vision` rather
+   than re-porting it.
 4. **Mover/HID orchestration** (~5,300 LOC: `move-to.ts`, `curve-mover.ts`,
    `move-to-probe-driven.ts`, `click-at.ts`, `click-verify.ts`,
    `click-verify-archive.ts`, `ballistics.ts`, `auto-calibrate.ts`,
