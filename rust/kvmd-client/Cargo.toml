@@ -19,6 +19,12 @@ url = "2"
 rustls = "0.23"
 rustls-pki-types = "1"
 webpki-roots = "0.26"
+regex = "1"
+# Only need to read decoded dimensions of PiKVM screenshot bytes (JPEG the
+# streamer actually serves; PNG covers a hypothetical future preview
+# format) — default features pull in AVIF/rav1e encoding and other
+# codecs this crate never touches.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

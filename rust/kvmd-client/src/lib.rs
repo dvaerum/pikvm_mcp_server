@@ -8,5 +8,7 @@
 //! REST + WS transport to the PiKVM appliance — every other module calls
 //! through this layer.
 
+pub mod client;
+pub mod emit_clock;
 pub mod operator_hints;
 pub mod streamer_keepalive;
