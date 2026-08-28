@@ -1,0 +1,18 @@
+[package]
+name = "pikvm-mcp-foundation"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Module 1 (foundation) of the pikvm-mcp-server Rust port: config, settings, auth, session-auth, kvmd-auth, lock, util, version. Faithful port of src/{config,settings,auth,session-auth,kvmd-auth}.ts + src/pikvm/{lock,util}.ts + src/version.ts. See docs/rust-port-plan.md."
+
+[dependencies]
+subtle = "2"
+base64 = "0.22"
+tokio = { version = "1", features = ["time", "rt", "sync"] }
+sha2 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+dotenvy = "0.15"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["time", "rt", "macros", "test-util", "sync"] }
+wiremock = "0.6"
