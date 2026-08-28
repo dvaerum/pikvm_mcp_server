@@ -54,15 +54,24 @@ pub struct SharedState {
     /// (blocks the executor thread, risks deadlock), which is exactly why
     /// tokio ships its own async-aware `Mutex` for this shape.
     pub hid_mode_resolver: tokio::sync::Mutex<HidModeResolver>,
+    /// EXPERIMENTAL (#41), off by default. `ScaleLearner`'s own methods
+    /// are all sync — a plain `std::sync::Mutex` is fine here (never held
+    /// across an `.await`, unlike `hid_mode_resolver` above).
+    pub scale_learner: Mutex<pikvm_mcp_mover::scale_learner::ScaleLearner>,
     pub tools: Vec<ToolEntry>,
 }
 
 impl SharedState {
-    pub fn new(client: PiKVMClient, hid_mode_resolver: HidModeResolver) -> Self {
+    pub fn new(
+        client: PiKVMClient,
+        hid_mode_resolver: HidModeResolver,
+        scale_learner: pikvm_mcp_mover::scale_learner::ScaleLearner,
+    ) -> Self {
         Self {
             client: Arc::new(client),
             lock: Mutex::new(BusyLock::new()),
             hid_mode_resolver: tokio::sync::Mutex::new(hid_mode_resolver),
+            scale_learner: Mutex::new(scale_learner),
             tools: tools::tool_registry(),
         }
     }

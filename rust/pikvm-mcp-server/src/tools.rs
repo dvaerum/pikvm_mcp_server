@@ -37,6 +37,7 @@ mod hid;
 mod hidmode;
 mod ipad_unlock;
 mod mouse;
+mod mover_scale;
 mod orientation;
 mod screenshot;
 mod seed_template;
@@ -111,6 +112,10 @@ pub type ToolHandlerFn = Arc<
         + Sync,
 >;
 
+/// Re-exported so `main.rs` can call the scale-learner warm-start at
+/// startup without reaching into a private submodule.
+pub use mover_scale::load_warm_start as scale_learner_load_warm_start;
+
 pub struct ToolEntry {
     pub name: &'static str,
     pub description: String,
@@ -135,5 +140,6 @@ pub fn tool_registry() -> Vec<ToolEntry> {
     tools.extend(ipad_unlock::entries());
     tools.extend(mouse::entries());
     tools.extend(hidmode::entries());
+    tools.extend(mover_scale::entries());
     tools
 }

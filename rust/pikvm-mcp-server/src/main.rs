@@ -135,7 +135,18 @@ async fn main() {
     };
     hid_mode_resolver.resolve().await;
 
-    let shared = Arc::new(SharedState::new(client, hid_mode_resolver));
+    // (#41) EXPERIMENTAL, off by default: warm-start from persisted state
+    // when opted in via PIKVM_MOVER_LEARN=1. A true no-op otherwise — see
+    // load_warm_start's own doc comment for what's NOT ported yet (the
+    // periodic-flush timer half).
+    let env_learn_1 = env.get("PIKVM_MOVER_LEARN").map(String::as_str) == Some("1");
+    let scale_learner =
+        pikvm_mcp_mover::scale_learner::ScaleLearner::new(Default::default(), env_learn_1);
+    let scale_learner = std::sync::Mutex::new(scale_learner);
+    pikvm_mcp_server::tools::scale_learner_load_warm_start(&scale_learner).await;
+    let scale_learner = scale_learner.into_inner().unwrap();
+
+    let shared = Arc::new(SharedState::new(client, hid_mode_resolver, scale_learner));
     let server = PikvmMcpServer::new(shared, None);
 
     eprintln!("PiKVM MCP Server running (stdio)");
