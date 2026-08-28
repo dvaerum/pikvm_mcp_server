@@ -454,6 +454,23 @@ before it):
    treat this module as "done" and discover the real requirements once
    layer 4 is underway; that would mean reworking an API already marked
    complete.
+
+   **Resolved (2026-08-28), and it turned out to need action before
+   client.rs could even compile, not just before layer 4 lands:**
+   `PiKVMClient` needs the `CursorBelief` TYPE itself as a struct field
+   (`belief: CursorBelief`), but `cursor-belief.ts` is nominally layer 3's
+   file — a strict top-down build order would block module 2 on module 3.
+   Checked the file itself before deciding: zero imports, "pure /
+   deterministic / no I/O" per its own header — the ideal shape for a
+   dependency-free shared crate. Given its own crate,
+   **`pikvm-mcp-cursor-belief`** (`rust/cursor-belief`, depends on nothing),
+   which both module 2 (`kvmd-client`, this layer) and module 3 depend on
+   directly instead of one blocking the other. Same class of finding, same
+   resolution shape, as the `pikvm-mcp-ipad-primitives` extraction under
+   module 5 below. 48
+   tests ported faithfully from both `cursor-belief.test.ts` and
+   `cursor-belief-integration.test.ts` (including a bit-for-bit port of the
+   TS test's deterministic LCG noise generator), all passing first run.
 3. **Detection/vision** (~4,900 LOC: `cursor-detect.ts`, `cursor-ml-detect.ts`,
    `cursor-shape-detect.ts`, `cursor-belief.ts`, `cursor-locator.ts`,
    `cursor-anchor.ts`, `orientation.ts`, `ipad-region-detect.ts`,
