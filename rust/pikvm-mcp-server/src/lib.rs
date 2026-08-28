@@ -12,3 +12,6 @@
 
 pub mod cli;
 pub mod prompts;
+pub mod server;
+pub mod tool_helpers;
+pub mod tools;
