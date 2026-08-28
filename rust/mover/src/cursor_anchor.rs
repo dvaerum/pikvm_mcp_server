@@ -326,15 +326,20 @@ async fn run_slam(
     .await?)
 }
 
-enum KeySequence {
+pub(crate) enum KeySequence {
     Unlock,
     Defensive,
 }
 
 /// Adapts `Arc<PiKVMClient>` into `ipad_keys.rs`'s closure-DI shape. See
 /// this file's header doc for why `AnchorRequest.client` is an `Arc` in the
-/// first place.
-async fn run_key_sequence(client: &Arc<PiKVMClient>, which: KeySequence) -> anyhow::Result<()> {
+/// first place. `pub(crate)`: `ipad_unlock.rs` (this crate) needs the exact
+/// same adaptation for its own key-sequence recovery calls — reused rather
+/// than duplicated.
+pub(crate) async fn run_key_sequence(
+    client: &Arc<PiKVMClient>,
+    which: KeySequence,
+) -> anyhow::Result<()> {
     let client_for_key = client.clone();
     let send_key = move |k: &'static str| -> BoxFuture<'static, anyhow::Result<()>> {
         let client = client_for_key.clone();
