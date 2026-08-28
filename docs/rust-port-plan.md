@@ -95,25 +95,19 @@ exact machine, rather than asserting from priors:
   latency lives) holds for both modes, but "one-time" was doing more work than
   the actual restart cadence supports for the interactive path specifically.
 - **Memory footprint**: `/usr/bin/time -l` on a running server (3s after
-  spawn, before any request) measured **~108MB max RSS**
-  (113,459,200 bytes) — **on this Mac, not the Pi4 target.** Flagging this as
-  an unverified assumption, not a checked fact (per review): the actual Pi4
-  has 3.6GB RAM with **zero swap**, shared with kvmd/ustreamer/
-  hid-latch-monitor/pikvm-mcp itself. Zero-swap doesn't degrade gracefully —
-  it OOM-kills. My claim that "108MB is not currently a reported problem" was
-  asserted from the Mac number, not verified against the Pi4's actual
-  headroom under real concurrent load from the other services sharing that
-  box. I did not have a way to measure Pi4-side RSS directly in this session
-  (no SSH; the on-box MCP endpoint doesn't expose a memory-introspection
-  tool). This doesn't flip the recommendation — Node/onnxruntime is already
-  running successfully on that box today, so *some* real headroom clearly
-  exists — but the specific claim "not a problem" is weaker than it read in
-  v1; it should read as "no OOM incidents have been reported" (true) rather
-  than "verified safe" (not checked). Some of the 108MB is V8/Node's own
-  baseline (a Rust binary would trim this part meaningfully); a large and
-  *language-independent* share is onnxruntime's own native runtime + loaded
-  model weights, which a Rust build would load via the identical C++ library
-  and pay the same cost for either way.
+  spawn, before any request) measured **~108MB max RSS** on this Mac
+  (113,459,200 bytes) — not the Pi4 target, flagged in earlier drafts as an
+  unverified assumption rather than a checked fact given the Pi4's 3.6GB RAM
+  with **zero swap** (which doesn't degrade gracefully, it OOM-kills) shared
+  with kvmd/ustreamer/hid-latch-monitor. **Now checked**: pikvm-nixos@it-03400
+  pulled real numbers off a live Pi4 running the identical service (§5.5) —
+  VmRSS 127.2MB idle, VmHWM 153.7MB peak. Close to the Mac estimate, not
+  wildly different, and comfortable against 3.6GB with zero swap — "not
+  currently a problem" is now a checked fact, not an assertion. Some of this
+  is V8/Node's own baseline (a Rust binary would trim this part meaningfully);
+  a large and *language-independent* share is onnxruntime's own native
+  runtime + loaded model weights, which a Rust build would load via the
+  identical C++ library and pay the same cost for either way.
 - **GC-pause elimination for latency-SENSITIVE (not latency-DOMINANT) paths**:
   this is the one place a genuine, narrow case could exist — e.g. if HID
   emit timing has a tight tolerance where a GC pause mid-sequence could
@@ -228,14 +222,125 @@ aren't the problem:
    profiling what else consumes the other ~10+ seconds of a Pi4 move) before
    assuming a rewrite of anything is the answer.
 
-**Independent corroboration, found by nixos-dev while investigating an
-unrelated XNNPACK acceleration spike**: XNNPACK is confirmed a dead end for
-`onnxruntime-node` specifically — Microsoft's own binding source has no code
-path to request it, on both the pinned and current upstream versions. This
-is a *data point for* this doc's conclusion, not against it: it confirms the
-native-inference boundary here is fixed regardless of host language — Rust
-would hit the identical onnxruntime C++ library through a different FFI,
-with the identical XNNPACK gap (arguably worse, since a custom Rust
-onnxruntime binding with XNNPACK wired in would itself be novel, unbuilt
-work). The inference boundary isn't a Node-specific limitation a port would
-route around; it's a property of the onnxruntime library itself.
+**Corroboration found by nixos-dev while investigating an unrelated XNNPACK
+acceleration spike, CORRECTED in v4 (see §5 below)**: XNNPACK is a dead end
+for `onnxruntime-node` *specifically* — Microsoft's own binding source
+(`session_options_helper.cc`) has no provider-dispatch code path to request
+it, confirmed on both the pinned and current upstream versions. My v1-v3
+read of this as evidence that a Rust port would hit "the identical XNNPACK
+gap" was **wrong** — georg caught the actual distinction: the gap is in
+onnxruntime-node's own incomplete JS↔C++ binding layer, not in the
+underlying onnxruntime C++ library itself, which has confirmed-working
+XNNPACK support (the Python wheel built during the spike loaded and ran it
+successfully) — and Rust's `ort` crate binds directly against the C API with
+a real, working `xnnpack` feature flag (verified: crates.io lists it; XNNPACK
+itself supports Linux/aarch64, the Pi4's exact architecture, via ONNX
+Runtime's own `--use_xnnpack` build option). So this data point actually cuts
+the OTHER way from what I originally wrote: it's the one place a *narrow*,
+*scoped* native-addon rewrite (not a full port) could plausibly unlock
+something a pure Node.js path structurally cannot reach. See the new §5
+below for the concrete sub-plan.
+
+## 5. Sub-plan: scoped Rust-native-addon for XNNPACK inference (task_1f094d75e393)
+
+This is the escape hatch from §4 made concrete for one specific candidate —
+NOT a reopening of the full-port question. Everything in §§1-4 stands: this
+is a single, narrow component, called from the otherwise-unchanged existing
+JS server exactly where inference happens today.
+
+### 5.1 Feasibility — checked, not assumed
+
+- **`ort` crate genuinely supports XNNPACK**: confirmed via its published
+  docs/crates.io listing — execution providers are opt-in Cargo feature
+  flags, and `xnnpack` is one of them, with automatic fallback to plain CPU
+  execution if registration ever fails (a safe, non-silent-corruption
+  failure mode — worth confirming that fallback doesn't silently mask a
+  broken XNNPACK path in practice, but the *design* is fail-safe).
+- **XNNPACK supports the Pi4's actual architecture**: ONNX Runtime's own docs
+  confirm XNNPACK builds for Linux/ARM including aarch64 via the
+  `--use_xnnpack` build flag — this is not an Android/WebAssembly-only
+  feature as an early, incomplete read of the search results suggested; a
+  closer read of ONNX Runtime's own platform-support docs confirms aarch64
+  Linux is supported.
+- **napi-rs is a real, maintained bridge**: builds precompiled Node.js
+  addons in Rust via Node-API, generates TypeScript defs, no `node-gyp`
+  required. Its own documentation is explicit that native addons are "the
+  last 10x move, not the first" and are only worth it once profiling
+  confirms a real hot spot — exactly the discipline this whole doc has tried
+  to apply throughout, and exactly why this is being proposed as a
+  **feasibility spike**, not a committed rewrite (§5.3).
+- **What I have NOT verified**: that this specific ONNX model (the dual-head
+  crop-cascade detector) actually gets faster under XNNPACK on THIS specific
+  hardware. Nobody has — the binding gap was found before any such test
+  could run. This is the open empirical question §5.3 is for.
+
+### 5.2 Scope — kept as narrow as the escape-hatch principle demands
+
+- Replaces exactly one thing: the ONNX inference call currently made via
+  `onnxruntime-node`'s `session.run()` in `cursor-ml-detect.ts`'s
+  `runCascadeInference` — the batched tensor-in/heatmap-out call, nothing
+  else in that file or elsewhere.
+- Model I/O contract is unchanged: same tensor shapes, same preprocessing
+  (mean/std normalization, crop batching), same postprocessing (presence
+  threshold, heatmap soft-argmax) — all of that stays exactly where it is in
+  TypeScript. Only the inference call itself crosses into the native addon
+  and back.
+- Everything else in the codebase — HID, streamer, MCP protocol, mover
+  orchestration, the other 47 files from §1 — is completely untouched. This
+  is the opposite of a rewrite: one function call gets a new implementation
+  behind the same call site.
+
+### 5.3 The open empirical question — propose a minimal spike, not a commitment
+
+Never benchmarked, because the binding gap was found before any test could
+run. Proposed first step: build a minimal `napi-rs` addon wrapping `ort`
+with the `xnnpack` feature enabled, load the actual production cascade
+model, and run a real fp32-CPU-vs-XNNPACK comparison **on the actual Pi4**
+(not this Mac) — same "prove it before committing further" discipline as
+GPU and INT8, both of which looked promising on paper and lost to real
+measured overhead this session. XNNPACK's mechanism (a hand-optimized
+NEON/SIMD kernel library, not a coprocessor round-trip or a quantization
+accuracy tradeoff) is genuinely different from either of those, so it isn't
+assumed to repeat that failure pattern — but it isn't assumed to avoid it
+either. Spike deliverable: one number — real crop-batch inference latency,
+XNNPACK vs. current CPU provider, on the Pi4, holding everything else fixed.
+
+### 5.4 Effort/risk vs. the full-port numbers (§3), apples-to-apples
+
+- **Full port** (§3): 19,083 LOC, 1240 tests, multi-month effort, touches
+  every subsystem, concrete demonstrated risk of reintroducing hard-won bugs
+  (the magic-number examples in §3).
+- **This spike**: one new small Rust crate + one napi-rs binding, one
+  call-site swap in one function in one file, zero changes to HID/mover/
+  protocol logic, zero changes to the 1240 tests' intent (the model contract
+  and postprocessing thresholds — `HEATMAP_FLOOR`, `TAUTOLOGY_PROX_THRESHOLD`
+  — are untouched; they gate the *output* of inference, not how inference
+  itself is computed). A rough order of magnitude smaller and safer than the
+  full port, and the spike itself (before committing to shipping it) is
+  smaller still — a standalone benchmark harness, not even wired into the
+  production call path yet.
+
+### 5.5 Recommendation
+
+**Worth attempting the spike.** Unlike the full port (§4: clear no), this is
+cheap to test and the potential payoff is real: if XNNPACK gives a genuine
+2x+ speedup on this model on this hardware, it stacks with PR93's own
+1.6-1.8x on-box win (§4, point 2) rather than competing with it — the two
+are orthogonal (fewer crops scanned × faster-per-crop). If the spike shows
+XNNPACK doesn't meaningfully help this specific model/hardware combination
+(plausible — small models with irregular crop-batch shapes don't always
+benefit from SIMD-heavy kernels the way larger, regular-shaped models do),
+the cost is one afternoon's throwaway benchmark code, not a wrong multi-month
+bet. This is exactly the shape §4's escape hatch describes: small, scoped,
+falsifiable before any commitment to ship it.
+
+**Real Pi4 RSS data, obtained per nixos-dev's round-2 ask** (pikvm-nixos@
+it-03400, live `pikvm-mcp.service`, PID 736202, ~3.2h uptime post-PR93
+deploy): VmRSS (idle, settled) **127.2 MB**, VmHWM (peak since start)
+**153.7 MB** — not a pristine pre-first-request reading (a couple of
+read-only health-check probes happened ~3h before the read), but real,
+on-target, and close to this doc's Mac-measured ~108MB estimate (§2) rather
+than wildly different — the earlier "unverified assumption" caveat is now a
+checked fact, and it doesn't change §2's or §4's conclusions: 127-154MB
+against 3.6GB with zero swap is comfortable headroom, not a Rust-for-memory
+argument on its own.
