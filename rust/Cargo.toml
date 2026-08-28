@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "foundation",
     "ipad-hid",
+    "ipad-primitives",
 ]
 
 [workspace.package]

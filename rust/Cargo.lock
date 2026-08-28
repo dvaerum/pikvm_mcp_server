@@ -705,6 +705,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pikvm-mcp-ipad-primitives"
+version = "0.1.0"
+dependencies = [
+ "pikvm-mcp-foundation",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
