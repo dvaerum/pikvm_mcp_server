@@ -15,6 +15,7 @@
 pub mod cursor_anchor;
 pub mod cursor_keepalive;
 pub mod curve_mover;
+pub mod gesture;
 pub mod scale_learner;
 pub mod scale_persist;
 pub mod slam;
