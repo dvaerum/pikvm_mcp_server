@@ -7,6 +7,8 @@ description = "Module 5 (iPad-specific / HID recovery) of the pikvm-mcp-server R
 
 [dependencies]
 pikvm-mcp-foundation = { path = "../foundation" }
+pikvm-mcp-detection-vision = { path = "../detection-vision" }
+pikvm-mcp-ipad-primitives = { path = "../ipad-primitives" }
 tokio = { version = "1", features = ["time", "rt", "sync", "process", "fs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
@@ -15,5 +17,6 @@ regex = "1"
 anyhow = "1"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["time", "rt", "macros", "test-util", "sync", "process"] }
+tokio = { version = "1", features = ["time", "rt", "macros", "test-util", "sync", "process", "net", "io-util"] }
 wiremock = "0.6"
+url = "2"

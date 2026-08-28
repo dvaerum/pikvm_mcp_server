@@ -6,10 +6,11 @@
 //! `docs/adr/0002-rust-port-full-bigbang.md` — this crate is
 //! task_4719c8794fbd.
 //!
-//! Depends on module 1 (`pikvm-mcp-foundation`) only; independent of module 4
-//! (mover/HID orchestration) per the import-graph verification in the plan's
-//! review — two known exceptions (takeRawScreenshot/emitChunked/click-verify
-//! defaults) are tracked separately, not yet resolved.
+//! Depends on module 1 (`pikvm-mcp-foundation`), module 3
+//! (`pikvm-mcp-detection-vision`, for brightness.rs's VERY_DIM_THRESHOLD),
+//! and `pikvm-mcp-ipad-primitives` (click-verify defaults); independent of
+//! module 4 (mover/HID orchestration) per the import-graph verification in
+//! the plan's review.
 
 pub mod desktop_e2e_metrics;
 pub mod hid_diagnosis;
@@ -17,5 +18,6 @@ pub mod hid_latch_local_source;
 pub mod hid_latch_monitor;
 pub mod hid_latch_runner;
 pub mod hid_latch_ssh_source;
+pub mod hid_mode;
 pub mod hid_recovery;
 pub mod ipad_keys;
