@@ -1,0 +1,17 @@
+[package]
+name = "pikvm-mcp-kvmd-client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Module 2 (kvmd transport client) of the pikvm-mcp-server Rust port: REST + WS client for the PiKVM appliance, streamer idle-stop keepalive, operator-hint error enrichment. Faithful port of src/pikvm/{client,streamer-keepalive}.ts + src/operator-hints.ts. See docs/rust-port-plan.md."
+
+[dependencies]
+pikvm-mcp-foundation = { path = "../foundation" }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio-rustls = "0.26"
+
+[dev-dependencies]
