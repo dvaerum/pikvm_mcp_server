@@ -4,26 +4,37 @@
 //! │ `find_cursor_by_v8_full_frame()` → `run_cascade()`, model                 │
 //! │ `ml/crop-heatmap.onnx`                                                    │
 //! └────────────────────────────────────────────────────────────────────────────┘
-//! Faithful port of `src/pikvm/cursor-ml-detect.ts`'s PURE geometry only —
-//! `cascade_axis`, `build_cascade_grid`, `build_ml_hints`. These have zero
-//! ONNX/inference dependency and are exactly what the existing TS test
-//! suite (`cursor-ml-detect.test.ts`) covers: it does NOT exercise real
-//! inference either (`runCascade`, `runCascadeInference`, `findCursorByML`,
-//! `findCursorPresenceV5`, `findCursorByV8FullFrame`, `getSession`,
-//! `disposeMLSession`) — those are validated exclusively via the mandatory
-//! live hardware gate, never unit tests.
+//! Faithful port of `src/pikvm/cursor-ml-detect.ts`'s PURE geometry
+//! (`cascade_axis`, `build_cascade_grid`, `build_ml_hints`) plus the
+//! ACTUAL cascade inference (`run_cascade_inference`, `run_cascade`) —
+//! the real, shipped tracker, run against the bundled
+//! `ml/crop-heatmap.onnx`.
 //!
-//! The ONNX-dependent half is DEFERRED, not ported here — see the crate's
-//! task note for the reasoning (a new `ort`/onnxruntime system dependency
-//! is an architectural decision surfaced to the team before committing,
-//! same discipline as every other crate-boundary finding this session).
-//! Only `ml/crop-heatmap.onnx` (the canonical cascade verifier) is bundled
-//! in this repo — the legacy v1/v5/v8/v9/v11/v12/v14 single-stage models
-//! referenced elsewhere in the TS file are NOT present, confirming they are
-//! vestigial/refuted paths per the file's own header, not live production
-//! code that needs equal porting priority.
+//! ONNX linking: `ort` with the `load-dynamic` feature, dlopen-ing the
+//! nixpkgs-provided onnxruntime `.so` at runtime via `ORT_DYLIB_PATH`
+//! rather than `ort`'s default download-binaries feature (which fetches an
+//! unverified prebuilt binary over the network at build time — wrong shape
+//! for a nix-packaged service). See `flake.nix`'s devShell for the
+//! `ORT_DYLIB_PATH` wiring.
+//!
+//! Deliberately NOT ported: the legacy single-stage v1/v5/v8/v9/v11/v12/v14
+//! models (`findCursorByML`, `findCursorPresenceV5`,
+//! `findCursorByV8FullFrame`'s non-cascade branch, `findCursorByMLMultiHint`,
+//! `getSession`, `disposeMLSession`). None of their `.onnx` files are
+//! bundled in this repo (only `ml/crop-heatmap.onnx` is), confirming they
+//! are genuinely vestigial/refuted per the TS file's own header, not
+//! equal-priority production code — porting them would be untestable
+//! guesswork against models that don't exist. The existing TS test suite
+//! agrees: it doesn't exercise ANY real inference either, only the pure
+//! geometry — real inference is validated exclusively via the mandatory
+//! live hardware gate, which this port cannot self-administer (see the
+//! crate's task note).
 
 use crate::cursor_detect::Point;
+use crate::decode::decode_to_rgb;
+use crate::ipad_region_detect::{detect_ipad_region, NATIVE_MARGIN};
+use ort::session::Session;
+use ort::value::TensorRef;
 
 /// Native-px verifier crop size (MUST match training).
 pub const CASCADE_CROP: f64 = 96.0;
@@ -165,6 +176,218 @@ pub fn build_ml_hints(
     }
 
     hints
+}
+
+/// Dual-head heatmap output resolution (crop 96 / 4).
+pub const HM_OUT: u32 = 24;
+const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+const STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+/// A cascade detection result, in full-frame native pixels.
+#[derive(Clone, Copy, Debug)]
+pub struct CascadeResult {
+    pub x: i64,
+    pub y: i64,
+    /// Sigmoid of the winning crop's presence logit.
+    pub presence: f32,
+    /// Same value as `presence` in this port — faithful to the TS source,
+    /// which returns `maxP` for both fields (see `runCascadeInference`).
+    pub heatmap_peak: f32,
+}
+
+static VERIFIER_SESSION: std::sync::Mutex<Option<Session>> = std::sync::Mutex::new(None);
+static VERIFIER_LOAD_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static REGION_CACHE: std::sync::Mutex<Option<Region>> = std::sync::Mutex::new(None);
+
+/// Lazily load the ONNX verifier session and hand it to `f`. Returns `Ok(None)`
+/// (and logs once) if the model file is missing or fails to load — that
+/// failure is NOT cached, so the next call retries the load, matching the TS
+/// source's `cachedVerifierSession === null` retry-on-failure semantics.
+/// A `Mutex<Option<Session>>` (rather than a plain `OnceLock`) both gives us
+/// that retry behavior on stable Rust and satisfies `Session::run`'s `&mut
+/// self` requirement.
+fn with_verifier_session<T>(
+    model_path: &str,
+    f: impl FnOnce(&mut Session) -> anyhow::Result<T>,
+) -> anyhow::Result<Option<T>> {
+    let mut guard = VERIFIER_SESSION.lock().unwrap();
+    if guard.is_none() {
+        let loaded: anyhow::Result<Session> = (|| {
+            // Idempotent: commit() only takes effect on the first call in
+            // the process: https://docs.rs/ort — subsequent calls return
+            // false and are harmless no-ops.
+            ort::init().commit();
+            Ok(Session::builder()?.commit_from_file(model_path)?)
+        })();
+        match loaded {
+            Ok(session) => *guard = Some(session),
+            Err(e) => {
+                if !VERIFIER_LOAD_LOGGED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    eprintln!("[cursor-ml-detect] failed to load verifier at {model_path}: {e}. Cascade disabled.");
+                }
+                return Ok(None);
+            }
+        }
+    }
+    let session = guard.as_mut().expect("just verified Some above");
+    Ok(Some(f(session)?))
+}
+
+/// Batch `centers` into ONE inference call against the verifier session and
+/// decode the winning crop's sub-pixel position. Returns `None` when there
+/// are no centers to search, or the best crop's presence score doesn't
+/// clear `verify_thresh` (caller decides what "no confident result" means
+/// — for `run_cascade`, that's the signal to fall back to the full-region
+/// scan).
+pub fn run_cascade_inference(
+    session: &mut Session,
+    full: &[u8],
+    fw: u32,
+    fh: u32,
+    centers: &[(i64, i64)],
+    verify_thresh: f32,
+) -> anyhow::Result<Option<CascadeResult>> {
+    let n = centers.len();
+    if n == 0 {
+        return Ok(None);
+    }
+    let crop = CASCADE_CROP as i64; // 96
+    let half = crop / 2;
+    let plane = (crop * crop) as usize;
+    let mut batch = vec![0f32; n * 3 * plane];
+    for (idx, &(cx, cy)) in centers.iter().enumerate() {
+        let left = 0i64.max((fw as i64 - crop).min(cx - half));
+        let top = 0i64.max((fh as i64 - crop).min(cy - half));
+        let base = idx * 3 * plane;
+        for yy in 0..crop {
+            for xx in 0..crop {
+                let si = (((top + yy) as usize) * (fw as usize) + ((left + xx) as usize)) * 3;
+                let di = (yy * crop + xx) as usize;
+                batch[base + di] = (full[si] as f32 / 255.0 - MEAN[0]) / STD[0];
+                batch[base + plane + di] = (full[si + 1] as f32 / 255.0 - MEAN[1]) / STD[1];
+                batch[base + 2 * plane + di] = (full[si + 2] as f32 / 255.0 - MEAN[2]) / STD[2];
+            }
+        }
+    }
+
+    let shape = vec![n as i64, 3, crop, crop];
+    let tensor = TensorRef::from_array_view((shape, batch.as_slice()))?;
+    let outputs = session.run(ort::inputs!["crop" => tensor])?;
+    let (_, presence) = outputs["presence_logit"].try_extract_tensor::<f32>()?;
+    let (_, heatmap) = outputs["heatmap_logits"].try_extract_tensor::<f32>()?;
+
+    // PRESENCE head (offset-invariant, confuser-rejecting) picks the crop;
+    // the HEATMAP head gives the sub-pixel tip within it via soft-argmax.
+    let mut bi = 0usize;
+    for i in 1..n {
+        if presence[i] > presence[bi] {
+            bi = i;
+        }
+    }
+    let max_p = 1.0 / (1.0 + (-presence[bi]).exp());
+    if max_p < verify_thresh {
+        return Ok(None);
+    }
+
+    let hm_out = HM_OUT as i64;
+    let hm_scale = crop as f64 / hm_out as f64;
+    let off = bi * (hm_out * hm_out) as usize;
+    let mut mx = f32::NEG_INFINITY;
+    for k in 0..(hm_out * hm_out) as usize {
+        mx = mx.max(heatmap[off + k]);
+    }
+    let mut sum = 0f64;
+    let mut ex = 0f64;
+    let mut ey = 0f64;
+    for gy in 0..hm_out {
+        for gx in 0..hm_out {
+            let w = (heatmap[off + (gy * hm_out + gx) as usize] - mx).exp() as f64;
+            sum += w;
+            ex += gx as f64 * w;
+            ey += gy as f64 * w;
+        }
+    }
+    ex /= sum;
+    ey /= sum;
+
+    let (bcx, bcy) = centers[bi];
+    let left = 0i64.max((fw as i64 - crop).min(bcx - half));
+    let top = 0i64.max((fh as i64 - crop).min(bcy - half));
+
+    Ok(Some(CascadeResult {
+        x: (left as f64 + ex * hm_scale).round() as i64,
+        y: (top as f64 + ey * hm_scale).round() as i64,
+        presence: max_p,
+        heatmap_peak: max_p,
+    }))
+}
+
+/// Cascade detection: run the VERIFIER over a dense grid of 96px crops
+/// covering the iPad region (batched in ONE inference), take the
+/// max-scoring crop, and refine to the score-weighted centroid of the
+/// winning cluster for sub-cell precision.
+///
+/// When `hint` is given, searches a bounded window around it FIRST (see
+/// `build_cascade_grid`) — the SAME verifier model, just over far fewer
+/// crops — falling back to the full-region scan when the window doesn't
+/// overlap the region, or the narrow search comes back empty/low-confidence.
+/// Without a hint, behavior is a full-region scan.
+pub fn run_cascade(
+    model_path: &str,
+    jpeg_buffer: &[u8],
+    frame_w: u32,
+    frame_h: u32,
+    hint: Option<Point>,
+    grid_stride: f64,
+    verify_thresh: f32,
+) -> anyhow::Result<Option<CascadeResult>> {
+    let reg = {
+        let mut cache = REGION_CACHE.lock().unwrap();
+        if cache.is_none() {
+            let region = match detect_ipad_region(jpeg_buffer) {
+                Ok(r) => Region {
+                    x: (r.x + NATIVE_MARGIN) as f64,
+                    y: (r.y + NATIVE_MARGIN) as f64,
+                    w: r.w as f64 - 2.0 * NATIVE_MARGIN as f64,
+                    h: r.h as f64 - 2.0 * NATIVE_MARGIN as f64,
+                },
+                Err(_) => Region {
+                    x: 0.0,
+                    y: 0.0,
+                    w: frame_w as f64,
+                    h: frame_h as f64,
+                },
+            };
+            *cache = Some(region);
+        }
+        (*cache).unwrap()
+    };
+
+    let full = decode_to_rgb(jpeg_buffer)?;
+    let (fw, fh) = (full.width, full.height);
+
+    let result = with_verifier_session(model_path, |session| {
+        if let Some(hint) = hint {
+            let narrow_centers =
+                build_cascade_grid(reg, fw as f64, fh as f64, Some(hint), grid_stride);
+            if !narrow_centers.is_empty() {
+                if let Some(result) = run_cascade_inference(
+                    session,
+                    &full.data,
+                    fw,
+                    fh,
+                    &narrow_centers,
+                    verify_thresh,
+                )? {
+                    return Ok(Some(result));
+                }
+            }
+        }
+        let full_centers = build_cascade_grid(reg, fw as f64, fh as f64, None, grid_stride);
+        run_cascade_inference(session, &full.data, fw, fh, &full_centers, verify_thresh)
+    })?;
+    Ok(result.flatten())
 }
 
 #[cfg(test)]
@@ -395,5 +618,100 @@ mod tests {
         };
         let narrowed = build_cascade_grid(region, 6000.0, 6000.0, Some(hint), DEFAULT_STRIDE);
         assert!(narrowed.is_empty());
+    }
+
+    // --- real-model sanity checks -----------------------------------------
+    //
+    // NOT part of the default `cargo test --workspace` gate (no bundled
+    // onnxruntime .so on every dev/CI machine) — mirrors the precedent set
+    // by module 2's `examples/streamer_keepalive_smoke.rs` for real-
+    // hardware/real-dependency checks that shouldn't force every commit's
+    // test run to need the extra system dependency. Run explicitly:
+    //
+    //   ORT_DYLIB_PATH=$(nix build --no-link --print-out-paths nixpkgs#onnxruntime)/lib/libonnxruntime.so \
+    //     cargo test --package pikvm-mcp-detection-vision -- --ignored real_model
+    //
+    // This is the offline-verifiable half only (real tensor shapes, finite/
+    // plausible output values against a real crop) — NOT the mandatory live
+    // hardware gate the file's own header requires before this can ship;
+    // that still has to go to whoever has PiKVM hardware access.
+
+    fn synthetic_crop_source(fw: u32, fh: u32) -> Vec<u8> {
+        // A plausible-looking synthetic frame: mid-grey with a brighter
+        // patch, JPEG-noise-free since it's raw RGB fed directly (no
+        // encode/decode round trip needed here — run_cascade_inference
+        // takes already-decoded RGB).
+        let mut buf = vec![120u8; (fw as usize) * (fh as usize) * 3];
+        for y in 200..260u32 {
+            for x in 200..260u32 {
+                let i = ((y * fw + x) as usize) * 3;
+                buf[i] = 230;
+                buf[i + 1] = 230;
+                buf[i + 2] = 230;
+            }
+        }
+        buf
+    }
+
+    #[test]
+    #[ignore = "needs a real onnxruntime .so via ORT_DYLIB_PATH — see comment above"]
+    fn real_model_produces_plausible_shaped_and_valued_output() {
+        let model_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ml/crop-heatmap.onnx");
+
+        let (fw, fh) = (640u32, 480u32);
+        let full = synthetic_crop_source(fw, fh);
+        // A small grid of centers covering part of the frame — enough to
+        // exercise the batched-inference path with N > 1.
+        let centers: Vec<(i64, i64)> = vec![(100, 100), (230, 230), (400, 300)];
+
+        let result = with_verifier_session(model_path, |session| {
+            run_cascade_inference(session, &full, fw, fh, &centers, 0.0)
+        })
+        .expect("verifier session should load — check ORT_DYLIB_PATH")
+        .expect("with_verifier_session must yield Some once the session loaded")
+        // verify_thresh=0.0 means we always get a result back when centers
+        // is non-empty (mirrors the "no gate" test pattern used elsewhere
+        // in this port) — the point here is validating tensor SHAPES and
+        // VALUE PLAUSIBILITY, not the model's actual detection accuracy on
+        // a synthetic frame with no real cursor.
+        .expect("non-empty centers must produce a result at verify_thresh=0.0");
+
+        assert!(
+            (0.0..=1.0).contains(&result.presence),
+            "presence must be a valid sigmoid output, got {}",
+            result.presence
+        );
+        assert_eq!(result.presence, result.heatmap_peak);
+        assert!(
+            result.x >= 0 && (result.x as u32) < fw,
+            "x={} out of frame bounds",
+            result.x
+        );
+        assert!(
+            result.y >= 0 && (result.y as u32) < fh,
+            "y={} out of frame bounds",
+            result.y
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a real onnxruntime .so via ORT_DYLIB_PATH — see comment above"]
+    fn real_model_respects_verify_thresh_gate() {
+        let model_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ml/crop-heatmap.onnx");
+
+        let (fw, fh) = (640u32, 480u32);
+        let full = synthetic_crop_source(fw, fh);
+        let centers: Vec<(i64, i64)> = vec![(100, 100)];
+
+        // A threshold of 1.01 can never be cleared by a sigmoid output
+        // (max possible value is 1.0) — this must always gate to None,
+        // proving the threshold check actually runs against a real
+        // model output rather than being a dead branch.
+        let gated = with_verifier_session(model_path, |session| {
+            run_cascade_inference(session, &full, fw, fh, &centers, 1.01)
+        })
+        .expect("verifier session should load — check ORT_DYLIB_PATH")
+        .expect("with_verifier_session must yield Some once the session loaded");
+        assert!(gated.is_none());
     }
 }

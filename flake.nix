@@ -101,10 +101,19 @@
             python3
             vips
             prefetch-npm-deps
+            # rust/ port (task_63dd02e1bd7e): the crate needs a real
+            # onnxruntime .so at runtime for the dual-head cascade cursor
+            # tracker (rust/detection-vision's cursor_ml_detect.rs). Linked
+            # via ort's `load-dynamic` feature + ORT_DYLIB_PATH below rather
+            # than ort's default download-binaries feature, which would
+            # fetch an unverified prebuilt binary over the network at build
+            # time — wrong shape for a nix-packaged service.
+            onnxruntime
           ];
           shellHook = ''
             echo "pikvm-mcp-server dev shell — Node $(node --version), npm $(npm --version)"
             echo "Regenerate npmDepsHash with: prefetch-npm-deps package-lock.json"
+            export ORT_DYLIB_PATH="${pkgs.onnxruntime}/lib/libonnxruntime.so"
           '';
         };
 

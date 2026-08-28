@@ -11,6 +11,12 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 anyhow = "1"
 serde_json = "1"
 tokio = { version = "1", features = ["fs", "time"] }
+# NixOS-idiomatic linking: load-dynamic dlopens the nixpkgs-provided
+# onnxruntime .so at runtime (via ORT_DYLIB_PATH) rather than the crate's
+# default download-binaries feature, which would fetch an unverified
+# prebuilt binary over the network at build time. See docs/rust-port-plan.md
+# §6 and the crate's own task note for the go/no-go discussion.
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["load-dynamic"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["fs", "rt", "macros"] }
