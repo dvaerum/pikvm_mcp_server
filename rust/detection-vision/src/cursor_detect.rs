@@ -417,9 +417,46 @@ pub fn diff_screenshots(
 //
 // `takeRawScreenshot(client)` and `locateCursor(client, options)` both take
 // `PiKVMClient` directly (screenshot capture + mouse-move emission) and are
-// deferred until module 2's `client.rs` lands. `LocateCursorOptions` /
-// `LocateCursorResult` are deferred alongside them since nothing else uses
-// those shapes.
+// STILL deferred — this crate doesn't depend on kvmd-client, by design (see
+// module-3's own crate-boundary decisions). `LocateCursorOptions` /
+// `LocateCursorResult` are ported below on their own, though: they're pure
+// data shapes (no client dependency), and cursor_locator.rs's
+// `CursorLocatorDeps.locate_cursor` field needs the real contract, not a
+// stand-in — matches the TS source's own `import type { LocateCursorOptions,
+// LocateCursorResult } from './cursor-detect.js'` in cursor-locator.ts,
+// which imports only the types, not the client-taking function.
+
+/// Options for the (deferred) `locate_cursor` probe-and-diff function.
+/// Ported now as a pure data shape for `cursor_locator.rs`'s DI contract.
+#[derive(Clone, Debug, Default)]
+pub struct LocateCursorOptions {
+    /// Mickeys, +x direction. TS default 60.
+    pub probe_delta: Option<f64>,
+    /// ms between move and screenshot. TS default 300.
+    pub settle_ms: Option<u64>,
+    pub detection: Option<DetectionConfig>,
+    /// TS default 3.
+    pub max_attempts: Option<u32>,
+    pub expected_near: Option<Point>,
+    /// TS default 200.
+    pub expected_near_radius: Option<f64>,
+    pub verbose: bool,
+}
+
+/// Result of the (deferred) `locate_cursor` probe-and-diff function.
+#[derive(Clone, Copy, Debug)]
+pub struct LocateCursorResult {
+    /// Cursor position AFTER the probe (i.e. where it is when this returns).
+    pub position: Point,
+    /// Where the cursor was BEFORE the probe — informational.
+    pub pre_position: Point,
+    /// Observed displacement from the probe.
+    pub probe_offset_px: Point,
+    /// Signed mickey count emitted in the successful probe.
+    pub probe_mickeys: Point,
+    /// For diagnostics.
+    pub cluster_count: usize,
+}
 
 // ============================================================================
 // Template matching — fallback cursor detection that doesn't rely on motion.

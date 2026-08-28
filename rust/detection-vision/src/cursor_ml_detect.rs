@@ -178,6 +178,29 @@ pub fn build_ml_hints(
     hints
 }
 
+/// Result shape from the LEGACY single-stage `findCursorByML`/
+/// `findCursorByMLMultiHint` (cursor-v1, 256px hint crop). Ported as a pure
+/// data shape only — cursor_locator.rs's `CursorLocatorDeps` needs the real
+/// contract for its injected `find_cursor_by_ml_multi_hint` field, matching
+/// the TS source's own `import type { MLCursorResult } from
+/// './cursor-ml-detect.js'`. The function itself stays deferred (needs a
+/// model file that doesn't exist in this repo — see this file's header).
+#[derive(Clone, Copy, Debug)]
+pub struct MlCursorResult {
+    /// Cursor x in full-frame screenshot pixels.
+    pub x: f64,
+    /// Cursor y in full-frame screenshot pixels.
+    pub y: f64,
+    /// Sigmoid of heatmap peak — model's confidence in cursor presence.
+    pub confidence: f64,
+    /// Diagnostics only: the crop window used. `(0, 0)` signals the
+    /// hint-independent full-frame cascade fired rather than the
+    /// crop-near-hint fallback (see `cursor_locator.rs`'s tautology-gate
+    /// skip for this exact case).
+    pub crop_left: f64,
+    pub crop_top: f64,
+}
+
 /// Dual-head heatmap output resolution (crop 96 / 4).
 pub const HM_OUT: u32 = 24;
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];

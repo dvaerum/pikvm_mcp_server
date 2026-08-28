@@ -7,14 +7,16 @@
 //! `docs/adr/0002-rust-port-full-bigbang.md` — this crate is
 //! task_72403c2d858c.
 //!
-//! Depends on module 1 (`pikvm-mcp-foundation`) only so far. The ONNX/
-//! image-crate-heavy layer; model contracts and thresholds must port
-//! byte-for-byte, not be "improved" along the way (per the plan's §3
-//! magic-number examples and the ADR's own warning).
+//! Depends on module 1 (`pikvm-mcp-foundation`) and the dependency-free
+//! `pikvm-mcp-cursor-belief` crate. The ONNX/image-crate-heavy layer; model
+//! contracts and thresholds must port byte-for-byte, not be "improved"
+//! along the way (per the plan's §3 magic-number examples and the ADR's
+//! own warning).
 
 pub mod brightness;
 pub mod capture;
 pub mod cursor_detect;
+pub mod cursor_locator;
 pub mod cursor_ml_detect;
 pub mod cursor_shape_detect;
 pub mod decode;

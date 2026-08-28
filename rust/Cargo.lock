@@ -985,6 +985,7 @@ dependencies = [
  "anyhow",
  "image",
  "ort",
+ "pikvm-mcp-cursor-belief",
  "pikvm-mcp-foundation",
  "serde_json",
  "tokio",
