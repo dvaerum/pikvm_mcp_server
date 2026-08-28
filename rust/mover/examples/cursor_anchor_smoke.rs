@@ -66,16 +66,20 @@ async fn main() {
     eprintln!(
         "=== 1/2: anchor_cursor(CallerAsserted) — real bounds detection + guarded corner slam + verify ==="
     );
-    // Layer 5: the caller (this smoke test, standing in for unlockIpad/
-    // ipadGoHome) has already established slamming is safe — same
-    // production guard kind, not a bypass. Never refuses on the safety
-    // question; bounds detection still runs best-effort for the corner
-    // target math, but a None here is not itself a failure (see below).
+    // v3 (2026-08-28), post-incident: v2's CallerAsserted reason asserted
+    // safety BECAUSE the target was "awake/unlocked" — exactly backwards.
+    // CallerAsserted's own contract (this file's doc, unlockIpad's real
+    // call site) is "a lock screen has no active hot corner" — the real
+    // callers (unlockIpad, ipadGoHome) assert safety BECAUSE the target IS
+    // a lock screen, not despite it. This run requires the operator to
+    // have locked the iPad (Ctrl+Cmd+Q) and confirmed via screenshot
+    // BEFORE running this example — the same real production precondition
+    // unlockIpad/ipadGoHome actually hold, not a bare "looked fine" claim.
     let result = anchor_cursor(AnchorRequest {
         client: client.clone(),
         corner: Some(Corner::TopLeft),
         guard: AnchorGuard::CallerAsserted {
-            reason: "cursor_anchor_smoke: operator-attended hardware gate, target confirmed awake/unlocked before running".to_string(),
+            reason: "cursor_anchor_smoke v3: operator locked the iPad (Ctrl+Cmd+Q) and confirmed via screenshot BEFORE this run — matches unlockIpad's real precondition, not an active/interactive target".to_string(),
         },
         // Nudging variant: keeps the auto-fading iPad cursor visible for the
         // verification screenshot pair (ADR-0001).
@@ -165,5 +169,28 @@ async fn main() {
     }
     eprintln!("SUCCESS: cursor nudged off the corner");
 
-    eprintln!("=== ALL GATES PASSED ===");
+    // Manager's finding on the v2/CallerAsserted incident: phase 1's
+    // verified:true only confirms the FIRST slam landed — nothing checked
+    // device state after the LAST action (phase 2's slam+nudge), which is
+    // exactly how "ALL GATES PASSED" printed while the iPad ended up
+    // locked. This project deliberately has no automated lock-screen
+    // classifier (the Phase 318 isLikelyLockScreen heuristic was removed
+    // for false positives — lock-state determination is the operator's
+    // job via visual inspection, not a pixel heuristic's). So: capture and
+    // save the FINAL state as a concrete artifact every run, pass or fail,
+    // for the operator to actually look at before trusting this line.
+    let final_shot = client.screenshot(None).await;
+    match final_shot {
+        Ok(shot) => {
+            let path = "/tmp/cursor_anchor_smoke_final.jpg";
+            if let Err(e) = std::fs::write(path, &shot.buffer) {
+                eprintln!("WARNING: could not save final-state screenshot: {e}");
+            } else {
+                eprintln!("final-state screenshot saved to {path} — INSPECT IT before trusting the line below");
+            }
+        }
+        Err(e) => eprintln!("WARNING: final-state screenshot capture failed: {e}"),
+    }
+
+    eprintln!("=== ALL GATES PASSED (mechanically) — final state NOT auto-verified, inspect the screenshot ===");
 }
