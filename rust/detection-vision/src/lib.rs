@@ -12,4 +12,5 @@
 //! byte-for-byte, not be "improved" along the way (per the plan's §3
 //! magic-number examples and the ADR's own warning).
 
+pub mod brightness;
 pub mod ipad_region_detect;
