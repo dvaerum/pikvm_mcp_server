@@ -655,6 +655,44 @@ suite"**:
    against the TypeScript baseline this time, but confirming the Rust
    implementation's own hint-narrowing achieves comparable behavior to what
    PR93 already validated.
+5. **Hardware-gate harnesses must check FINAL device state, not just the
+   first step's — and a `CallerAsserted`-shaped guard's safety claim must
+   hold for the ACTUAL target, not the target the harness author assumed**
+   (georgs-mac-mini, 2026-08-28, `cursor_anchor.rs`'s live gate). A smoke
+   test (`cursor_anchor_smoke.rs`) reported "ALL GATES PASSED" — verified:
+   true from phase 1's slam — while the iPad ended up on a Touch ID
+   lockout prompt after phase 2's second slam+nudge, because nothing
+   checked device state after the LAST action. Root-caused (via source
+   comparison, not guesswork): NOT a `cursor_anchor.rs`/port bug — the
+   guard mechanism worked exactly as designed throughout (`BoundsGuard`
+   correctly refused against a genuine iPad target moments earlier, iPad
+   confirmed untouched via before/after screenshots). The smoke test's
+   OWN `CallerAsserted` reason asserted safety *because* the target was
+   "confirmed awake/unlocked" — backwards from the guard's actual
+   contract (both `cursor-anchor.ts:62` and the faithfully-ported
+   `cursor_anchor.rs:79-81`: "a lock screen has no active hot corner"),
+   and from the real production callers' own reason strings
+   (`unlockIpad`: "lock screen has no active hot corner"; `ipadGoHome`:
+   "safe on lock screen and home screen, idempotent") — both assert
+   safety *because* the target is a lock screen, not despite it.
+   `CallerAsserted` never refuses on the safety question by design; a
+   caller that asserts safety for a context it doesn't actually hold gets
+   exactly what it asked for. Two takeaways for the Rust E2E plan: (a)
+   any harness driving a multi-step live sequence must capture and the
+   operator must inspect a screenshot of the FINAL state, not just verify
+   the first step's result, before trusting a "PASSED" line — this
+   project deliberately has no automated lock-screen classifier (a prior
+   heuristic was removed for false positives; lock-state determination is
+   the operator's job via visual inspection); (b) the live positive-path
+   gate for `CallerAsserted`-on-lock-screen was deliberately DEFERRED
+   rather than forced (two real Touch-ID-lockout recoveries in one
+   session already, a documented escalating-risk pattern on this rig) —
+   its natural home is `ipad-unlock.ts`'s own future hardware gate (lock
+   the iPad, run the real `unlockIpad`/`ipadGoHome` flow, confirm
+   recovery), which exercises this exact code path in its real production
+   context instead of an isolated synthetic smoke test. **Flag this as a
+   requirement when ipad-unlock.ts's gate comes up**: that gate must
+   include a genuine `CallerAsserted`-on-lock-screen positive-path run.
 
 **Structural requirement, not just content**: per §7's build-then-validate
 sequence, each layer's live validation should happen as that layer lands,
