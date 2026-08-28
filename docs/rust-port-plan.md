@@ -344,3 +344,193 @@ than wildly different — the earlier "unverified assumption" caveat is now a
 checked fact, and it doesn't change §2's or §4's conclusions: 127-154MB
 against 3.6GB with zero swap is comfortable headroom, not a Rust-for-memory
 argument on its own.
+
+---
+
+# Part II — full-port technical plan (ADR-0002, task_63dd02e1bd7e)
+
+Georg has decided to proceed with a full Rust port anyway, on **preference/
+maintainability grounds, explicitly not performance** — see
+`docs/adr/0002-rust-port-full-bigbang.md` for the decision record. Parts
+I (§§1-5) above are NOT retracted: they correctly answer "would this help
+speed" (no) and remain the reference for why this isn't a performance
+project. Part II answers a different question — given the decision is made,
+how should it actually be done.
+
+## 6. Library-first ground rules
+
+Standing rule for whoever implements: **use a mature, established crate
+instead of hand-rolling infrastructure, wherever one genuinely exists and
+fits.** Any case where hand-rolling is chosen over an available crate needs
+explicit justification recorded in that module's own task, not a silent
+default. Concrete evaluation, not a generic "use good libraries" gesture:
+
+- **MCP protocol — `rmcp`** (`modelcontextprotocol/rust-sdk`, the OFFICIAL
+  Rust SDK, currently v0.16.x). Implements the current stable MCP spec while
+  staying compatible with earlier releases, pluggable transport (the
+  `Transport` trait — stdio and others), server AND client support. This
+  directly answers the task's "check whether an official Rust MCP SDK exists
+  before hand-implementing the wire protocol" — **yes, it exists, use it.**
+  Hand-rolling the MCP wire protocol (JSON-RPC framing, session handling,
+  Streamable HTTP transport per this codebase's own `http-server.ts`) would
+  be pure duplicated effort against a maintained official implementation.
+- **ONNX inference — `ort`**. Already evaluated in §5: binds directly
+  against the onnxruntime C API, has a real, working `xnnpack` feature flag
+  confirmed for Linux/aarch64 (the Pi4's architecture) — something
+  `onnxruntime-node` structurally cannot offer (§4's corrected XNNPACK
+  finding). This is the one place the port can plausibly do *better* than
+  the current implementation, not just port it — pending §5.3's spike to
+  confirm XNNPACK actually helps this specific model.
+- **HTTP framework — `axum`**, over `actix-web`. Actix-web has a raw-
+  throughput edge (10-15% under heavy load per current comparisons), but
+  this project is not throughput-bound (§§1-5's whole point) and axum is
+  built by the Tokio team specifically for type-safe ergonomic composition
+  with `tower-http`/`tracing` — a better fit for a maintainability-driven
+  port than a framework chosen for a performance property this project
+  doesn't need.
+- **WebSocket (streamer keepalive, iPadCollector ground-truth link) —
+  `tokio-tungstenite`**. Does not have built-in HTTP/HTTPS proxy support
+  (relevant: georgs-mac-mini's node requires a loopback CONNECT-tunnel proxy
+  for all traffic, per `PiKVMConfig.proxyUrl`) — but the fix is already
+  known and already validated in the current codebase:
+  `streamer-keepalive.ts`'s `ConnectTunnelAgent` (PR91,
+  task_484bed055820-adjacent) is exactly "establish a CONNECT-tunneled TCP
+  stream by hand, then hand it to the WS layer" — tokio-tungstenite accepts
+  a pre-established stream the same way. Port the *pattern*, not a novel
+  design.
+- **Serialization — `serde`/`serde_json`**. No real alternative worth
+  evaluating; this is the ecosystem default for a reason.
+- **Image decode/resize/crop (replacing `sharp`)** — the `image` crate for
+  general handling, with `libjpeg-turbo-rs` (or `turbojpeg` bindings) for
+  the JPEG-heavy hot path specifically (screenshot decode is JPEG
+  throughout this codebase). `fast_image_resize` (SIMD-accelerated, crop
+  support) if resize/crop ends up being a measurable cost independent of
+  decode — check before adding, don't assume.
+- **Not evaluated in depth here, flag for the implementing module's own
+  task**: an ARM SBC HID/USB-gadget interaction layer (currently plain HTTP
+  calls to kvmd — likely stays HTTP client code via `reqwest` or axum's own
+  client, no exotic dependency needed) and the SSH-based HID-latch source
+  (`hid-latch-ssh-source.ts`) — check for a maintained Rust SSH client crate
+  (e.g. `russh`) rather than shelling out, when that module's task comes up.
+
+## 7. Module-by-module technical plan
+
+Broken into logical build units below, filed as real agent-mcp subtasks
+under task_63dd02e1bd7e (not just prose) per the task's explicit ask:
+task_39b946273448 (module 1), task_dbf947d5d878 (module 2),
+task_72403c2d858c (module 3), task_9bb80e84c948 (module 4),
+task_4719c8794fbd (module 5), task_ead854232bc8 (module 6) — see the task
+tracker for each one's full scope/dependency/validation detail. Summary of
+the grouping and proposed build sequence (each layer depends only on layers
+before it):
+
+1. **Foundation** (~530 LOC: `config.ts`, `settings.ts`, `auth.ts`,
+   `session-auth.ts`, `kvmd-auth.ts`, `lock.ts`, `util.ts`, `version.ts`) —
+   no PiKVM domain logic, pure infrastructure. Build first; everything
+   else depends on it.
+2. **kvmd transport client** (~1,280 LOC: `client.ts`, `streamer-keepalive.ts`,
+   `operator-hints.ts`) — REST + WS to the PiKVM appliance. The `ort`/`axum`/
+   `tokio-tungstenite` choices from §6 land here first, and this is the
+   layer every other layer calls through.
+3. **Detection/vision** (~4,900 LOC: `cursor-detect.ts`, `cursor-ml-detect.ts`,
+   `cursor-shape-detect.ts`, `cursor-belief.ts`, `cursor-locator.ts`,
+   `cursor-anchor.ts`, `orientation.ts`, `ipad-region-detect.ts`,
+   `template-set.ts`, `seed-template.ts`, `brightness.ts`, `capture.ts`) —
+   the ONNX/image-crate-heavy layer; the model contract and thresholds from
+   §3's magic-number examples live here and must port byte-for-byte, not
+   be "improved" along the way.
+4. **Mover/HID orchestration** (~5,300 LOC: `move-to.ts`, `curve-mover.ts`,
+   `move-to-probe-driven.ts`, `click-at.ts`, `click-verify.ts`,
+   `click-verify-archive.ts`, `ballistics.ts`, `auto-calibrate.ts`,
+   `scale-learner.ts`, `scale-persist.ts`, `pointer-accel.ts`,
+   `open-loop-planner.ts`, `cursor-keepalive.ts`, `slam.ts`, `gesture.ts`) —
+   the largest, highest-risk layer: this is where N1's correction-loop bug,
+   the cornerTargetFromBounds P0, and PR93's cascade-hint logic all live.
+   `move-to.ts` alone (2,711 LOC) is the single largest file in the
+   codebase — plan for it as its own dedicated sub-effort, not folded into
+   a generic "mover" task.
+5. **iPad-specific / HID recovery** (~3,300 LOC: `ipad-unlock.ts`,
+   `ipad-app-ws.ts`, `ipad-keys.ts`, `hid-recovery.ts`, `hid-mode.ts`,
+   `hid-diagnosis.ts`, `hid-latch-monitor.ts` + `-runner`/`-ssh-source`/
+   `-local-source`/`-monitor-main`, `health-check.ts`,
+   `desktop-e2e-metrics.ts`) — the #51 stale-settle-latch incident's home;
+   largely independent of layer 4, can build in parallel with it.
+6. **MCP protocol surface** (~3,100 LOC: `index.ts` — 2,575 LOC, the tool
+   registry/dispatch, plus `cli.ts`, `http-server.ts`, `prompts/*`) — built
+   LAST, on top of everything above, using `rmcp` per §6. `index.ts`'s size
+   reflects ~90 MCP tool definitions with real validation logic per tool,
+   not incidental bulk — expect this to be a genuinely large task even
+   though it's "just" protocol glue.
+
+Total: ~22,000 non-test LOC across 61 files (grown since Part I's 19,083/48
+count — the codebase kept moving during this same investigation, e.g. #51's
+hid-latch-monitor family, cursor-anchor.ts's unification). Re-measure before
+committing to a final schedule; don't treat either snapshot as frozen.
+
+## 8. E2E validation plan — re-earning historically-hardware-only coverage
+
+**A green Rust test suite is necessary, not sufficient.** This session's own
+history is the evidence: multiple production-affecting bugs shipped with
+fully green offline tests and were caught only by live iPad-rig hardware
+testing. A port that validates itself only against a ported test suite will
+reproduce this pattern — it inherits the ASSERTIONS but not the discipline
+that found what needed asserting in the first place. The Rust implementation
+must re-earn hardware confidence independently, the same way the TypeScript
+implementation did, not inherit it by association.
+
+**Mandatory risk categories, named explicitly rather than "run the test
+suite"**:
+
+1. **Mover/cursor-detection safety logic.** Specifically: N1's
+   correction-loop dead-exit (task N1, this session — an outer-scoped
+   `break` that skipped bookkeeping on ML-recovery, only found via a live
+   click-bench + a paired iPadCollector ground-truth bench showing the bug
+   reproduced 100% of the time it fired). The Rust port's E2E validation
+   must include the equivalent of that gate: a live click-bench (N≥20,
+   this project's negotiated minimum below its usual N≥80) AND a paired
+   iPadCollector ground-truth bench, on the SAME kind of real targets,
+   comparing against the current TypeScript implementation's own numbers
+   as the baseline — not just "clicks land somewhere reasonable."
+2. **cornerTargetFromBounds / anchor-verification logic** (referred to in
+   the task as "F6/F8" bugs — cursor-anchor.ts's unification history). The
+   deterministic ~619px corner-target bug (comparing against the raw HDMI
+   frame corner instead of the iPad's own detected letterboxed-content
+   corner) passed offline tests for months before a live gate caught it
+   with a positive AND negative control on real hardware. The Rust E2E plan
+   must include an equivalent positive/negative control pair: verified:true
+   at a genuine correct-corner landing, verified:false at a genuine
+   deliberately-short slam — both on real hardware, not simulated.
+3. **HID recovery edge cases** (the #51 stale-settle-latch incident and
+   related: a one-way `settling` flag cleared by exactly one caller, never
+   re-evaluated on release, causing an indefinite latch — found via a real
+   HID-mode-switch gate, not offline tests). The Rust port's HID-recovery
+   layer (§7 layer 5) needs its own live gate: force a real mode switch,
+   confirm the gate releases within the expected window without a restart,
+   across at least the specific failure shape #51 exhibited.
+4. **PR #93's cascade hint-narrowing / search behavior** (task_484bed055820).
+   Re-run the same three-part live gate this session already proved out:
+   (a) an isolated detection-call test confirming a good hint is faster
+   with equivalent accuracy to no-hint, (b) a negative control confirming a
+   deliberately bad/stale hint still falls back to a full scan and finds
+   the real cursor, (c) a real on-box before/after latency measurement — not
+   against the TypeScript baseline this time, but confirming the Rust
+   implementation's own hint-narrowing achieves comparable behavior to what
+   PR93 already validated.
+
+**Structural requirement, not just content**: per §7's build-then-validate
+sequence, each layer's live validation should happen as that layer lands,
+not deferred to one big validation pass at the end — the same "validate a
+component *when it's testable*, don't wait for a from the whole system"
+discipline that already caught the four incidents above during layer-by-
+layer development of the CURRENT TypeScript implementation. A big-bang
+*build* strategy (ADR-0002) does not mean a big-bang *validation* strategy;
+those are independent choices and this doc explicitly does not couple them.
+
+**Owner of this validation, when it comes time to execute it**: the iPad
+rig is real, physical hardware with no simulated equivalent — this work
+belongs to whichever node owns live behavioral gating when Rust code is
+ready to test (currently `pikvm-mcp-server@georgs-mac-mini`'s role for the
+existing TypeScript implementation). Not scheduling that work now — this
+section defines WHAT must be re-validated and WHY, not WHEN, since no Rust
+implementation code exists yet to validate (this task is planning only,
+per ADR-0002 and the task's own explicit scope).
