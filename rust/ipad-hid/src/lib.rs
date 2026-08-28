@@ -16,5 +16,6 @@ pub mod hid_diagnosis;
 pub mod hid_latch_local_source;
 pub mod hid_latch_monitor;
 pub mod hid_latch_runner;
+pub mod hid_latch_ssh_source;
 pub mod hid_recovery;
 pub mod ipad_keys;
