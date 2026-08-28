@@ -13,6 +13,7 @@
 //! magic-number examples and the ADR's own warning).
 
 pub mod brightness;
+pub mod capture;
 pub mod cursor_detect;
 pub mod cursor_ml_detect;
 pub mod cursor_shape_detect;
