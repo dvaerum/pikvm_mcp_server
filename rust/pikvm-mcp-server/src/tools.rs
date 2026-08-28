@@ -34,7 +34,9 @@ use crate::server::SharedState;
 mod basic;
 mod calibration;
 mod hid;
+mod hidmode;
 mod ipad_unlock;
+mod mouse;
 mod orientation;
 mod screenshot;
 mod seed_template;
@@ -131,5 +133,7 @@ pub fn tool_registry() -> Vec<ToolEntry> {
     tools.extend(orientation::entries());
     tools.extend(seed_template::entries());
     tools.extend(ipad_unlock::entries());
+    tools.extend(mouse::entries());
+    tools.extend(hidmode::entries());
     tools
 }

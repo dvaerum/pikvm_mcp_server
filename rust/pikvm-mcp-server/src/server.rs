@@ -12,15 +12,13 @@
 //! not a singleton: concurrent HTTP clients must not share one `Server`'s
 //! JSON-RPC request-id space.
 //!
-//! Phase A (this increment) wires: `get_info`, `list_prompts`/`get_prompt`
-//! (delegating to the already-ported `prompts` crate module), and
-//! `list_tools`/`call_tool` with the busy-lock gate + the try/sanitize
-//! wrapper around dispatch. NOT yet wired (later phases, see
-//! docs/rust-port-plan.md §7 item 6): the login gate's `ListTools`
-//! filtering (stdio never passes a gate, so `gate` is always `None` until
-//! http-server.rs lands), the HID-mode mover gate, and the
-//! absolute/relative-mouse gate (both need `HidModeResolver`, not ported
-//! into this crate yet).
+//! Wires: `get_info`, `list_prompts`/`get_prompt` (delegating to the
+//! already-ported `prompts` crate module), and `list_tools`/`call_tool`
+//! with the busy-lock gate, the HID-mode mover gate, the absolute/
+//! relative-mouse gate, and the try/sanitize wrapper around dispatch. NOT
+//! yet wired (a later phase, see docs/rust-port-plan.md §7 item 6): the
+//! login gate's `ListTools` filtering — stdio never passes a gate, so
+//! `gate` is always `None` until `http-server.rs` lands.
 
 use std::sync::{Arc, Mutex};
 
@@ -37,26 +35,34 @@ use serde_json::Value;
 
 use pikvm_mcp_foundation::lock::BusyLock;
 use pikvm_mcp_foundation::session_auth::LoginGate;
+use pikvm_mcp_ipad_hid::hid_mode::HidModeResolver;
 use pikvm_mcp_kvmd_client::client::PiKVMClient;
 
 use crate::prompts as prompt_defs;
 use crate::tools::{self, ToolContent, ToolEntry, ToolOutcome};
 
 /// Module-global-equivalent state, shared across every session. Grows in
-/// later phases (hid_mode_resolver, cached_profile, recovery_trigger,
-/// udc_state_reader — see index.ts) as the tools that need them are
-/// ported in.
+/// later phases (cached_profile, recovery_trigger, udc_state_reader — see
+/// index.ts) as the tools that need them are ported in.
 pub struct SharedState {
     pub client: Arc<PiKVMClient>,
     pub lock: Mutex<BusyLock>,
+    /// `tokio::sync::Mutex` (not `std::sync::Mutex`): `resolve()`/`set()`
+    /// are `async fn`s that need the lock held across their whole `.await`
+    /// chain (a real HTTP round-trip for the endpoint-derived case) — a
+    /// std `MutexGuard` held across an await point is a real footgun
+    /// (blocks the executor thread, risks deadlock), which is exactly why
+    /// tokio ships its own async-aware `Mutex` for this shape.
+    pub hid_mode_resolver: tokio::sync::Mutex<HidModeResolver>,
     pub tools: Vec<ToolEntry>,
 }
 
 impl SharedState {
-    pub fn new(client: PiKVMClient) -> Self {
+    pub fn new(client: PiKVMClient, hid_mode_resolver: HidModeResolver) -> Self {
         Self {
             client: Arc::new(client),
             lock: Mutex::new(BusyLock::new()),
+            hid_mode_resolver: tokio::sync::Mutex::new(hid_mode_resolver),
             tools: tools::tool_registry(),
         }
     }
@@ -179,6 +185,73 @@ fn regex_replace_password(input: &str) -> String {
         "password=[REDACTED]",
         &input[value_start + end_offset..]
     )
+}
+
+/// Pointer-driving tools whose correctness depends on the HID mode: in
+/// endpoint mode these are REFUSED while the mode is unknown (unreachable)
+/// or settling (post-switch re-enumeration). Keyboard/screenshot/health/
+/// recovery are deliberately excluded — they work regardless of mouse
+/// mode. Faithful port of index.ts's `MODE_SENSITIVE_TOOLS` — cross-
+/// checked there by `mcp-hidmode-gate.test.ts` so a new pointer-driving
+/// tool can't slip in unguarded; this port doesn't have that meta-test
+/// yet (deferred with the rest of the gate/schema-exposure test family,
+/// see the Phase B batch 1 commit message), so this list is the single
+/// source of truth for now — keep it in sync by hand.
+const MODE_SENSITIVE_TOOLS: &[&str] = &[
+    "pikvm_mouse_move",
+    "pikvm_mouse_click",
+    "pikvm_mouse_scroll",
+    "pikvm_mouse_move_to",
+    "pikvm_mouse_click_at",
+    "pikvm_calibrate",
+    "pikvm_auto_calibrate",
+    "pikvm_measure_ballistics",
+    "pikvm_seed_cursor_template",
+    "pikvm_ipad_unlock",
+    "pikvm_ipad_unlock_with_code",
+    "pikvm_ipad_lock",
+    "pikvm_ipad_home",
+    "pikvm_ipad_app_switcher",
+    "pikvm_ipad_launch_app",
+    "pikvm_dismiss_popup",
+];
+
+const ABSOLUTE_MOUSE_NOTE: &str = "This target reports mouse.absolute=false (typical for iPad / boot-mouse HID). \
+     Use the relative-mode tools instead: pikvm_ipad_unlock, pikvm_mouse_move with relative:true, \
+     pikvm_mouse_click_at, pikvm_mouse_move_to, pikvm_mouse_click. See docs/skills/ipad-keyboard-workflow.md \
+     for the recommended pattern.";
+
+const RELATIVE_MOUSE_NOTE: &str = "This target reports mouse.absolute=true (desktop, dual absolute+relative gadget). \
+     A forced relative:true emit here is a documented silent no-op (see ADR 0002: relative reports into an \
+     absolute-assembled gadget are accepted by kvmd but never delivered) — pass absolute pixel coordinates \
+     instead (omit relative, or pass relative:false), or use pikvm_mouse_move_to / pikvm_mouse_click_at, which \
+     already select the correct strategy for this mode.";
+
+/// The single source of truth for "which calls need mouse.absolute=true".
+/// Faithful port of index.ts's `ABSOLUTE_MOUSE_GATE`/`requiresAbsoluteMouse`.
+fn requires_absolute_mouse(name: &str, args: &serde_json::Map<String, Value>) -> bool {
+    match name {
+        "pikvm_calibrate"
+        | "pikvm_set_calibration"
+        | "pikvm_get_calibration"
+        | "pikvm_clear_calibration"
+        | "pikvm_auto_calibrate" => true,
+        // Absolute unless relative:true.
+        "pikvm_mouse_move" => args.get("relative").and_then(Value::as_bool) != Some(true),
+        // The SHAPE of the call decides: x/y mean absolute pixels.
+        "pikvm_mouse_click" => {
+            args.get("x").and_then(Value::as_f64).is_some()
+                && args.get("y").and_then(Value::as_f64).is_some()
+        }
+        _ => false,
+    }
+}
+
+/// The mirror of `requires_absolute_mouse`: "which calls need
+/// mouse.absolute=false" (an explicit FORCED relative emit). Faithful
+/// port of index.ts's `RELATIVE_MOUSE_GATE`/`requiresRelativeMouse`.
+fn requires_relative_mouse(name: &str, args: &serde_json::Map<String, Value>) -> bool {
+    name == "pikvm_mouse_move" && args.get("relative").and_then(Value::as_bool) == Some(true)
 }
 
 impl ServerHandler for PikvmMcpServer {
@@ -367,9 +440,51 @@ impl ServerHandler for PikvmMcpServer {
             }
         }
 
-        // TODO(Module 6 later phase): HID-mode mover gate + absolute/
-        // relative-mouse gate — both need HidModeResolver, not ported
-        // into this crate yet (see docs/rust-port-plan.md §7 item 6).
+        // (#51) HID-mode mover gate: pointer-driving tools need the mode
+        // KNOWN and the HID settled before they move. Faithful port of
+        // index.ts's `MODE_SENSITIVE_TOOLS`/`refreshHidMode()` gate.
+        if MODE_SENSITIVE_TOOLS.contains(&name.as_str()) {
+            let mut resolver = self.shared.hid_mode_resolver.lock().await;
+            resolver.resolve().await;
+            let gate = resolver.mover_gate();
+            if !gate.allowed {
+                let reason = gate.reason.unwrap_or_default();
+                return Ok(to_call_tool_result(ToolOutcome::error_text(format!(
+                    "Error: {reason}"
+                )))
+                .into());
+            }
+        }
+
+        // ADR-0002 Phase 1: read policy() once instead of a module global.
+        // Non-null for MODE_SENSITIVE_TOOLS (the gate above just confirmed
+        // it); for the handful of non-mover calibration CRUD tools outside
+        // that set it falls back to `false` — same safe default index.ts
+        // itself starts from.
+        let current_mouse_absolute = self
+            .shared
+            .hid_mode_resolver
+            .lock()
+            .await
+            .policy()
+            .map(|p| p.mouse_absolute)
+            .unwrap_or(false);
+
+        if !current_mouse_absolute && requires_absolute_mouse(&name, &args) {
+            return Ok(to_call_tool_result(ToolOutcome::error_text(format!(
+                "Error: tool '{name}' requires absolute-mode mouse. {ABSOLUTE_MOUSE_NOTE}"
+            )))
+            .into());
+        }
+        // Mirror of the above (#3): a FORCED relative emit into an
+        // absolute/desktop gadget is a documented silent no-op (ADR 0002)
+        // — refuse rather than report a false success.
+        if current_mouse_absolute && requires_relative_mouse(&name, &args) {
+            return Ok(to_call_tool_result(ToolOutcome::error_text(format!(
+                "Error: tool '{name}' requires relative-mode mouse. {RELATIVE_MOUSE_NOTE}"
+            )))
+            .into());
+        }
 
         let entry = self.shared.tools.iter().find(|t| t.name == name);
         let Some(entry) = entry else {

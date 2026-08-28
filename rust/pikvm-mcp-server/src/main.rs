@@ -12,8 +12,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pikvm_mcp_foundation::config::load_config;
+use pikvm_mcp_ipad_hid::hid_mode::{
+    make_http_hid_mode_endpoint, HidMode, HidModeHttpConfig, HidModeHttpDeps, HidModeResolver,
+    HidModeResolverOpts,
+};
 use pikvm_mcp_kvmd_client::client::{create_default_belief, PiKVMClient, PiKVMConfig};
-use pikvm_mcp_server::cli::{help_text, parse_cli_options, resolve_hid_mode_source, TransportKind};
+use pikvm_mcp_server::cli::{
+    help_text, parse_cli_options, resolve_hid_mode_source, HidModeSource, TargetKind, TransportKind,
+};
 use pikvm_mcp_server::server::{PikvmMcpServer, SharedState};
 use rmcp::transport::stdio;
 use rmcp::ServiceExt;
@@ -37,10 +43,13 @@ async fn main() {
     }
 
     let hid_mode_url = env.get("PIKVM_HIDMODE_URL").cloned();
-    if let Err(e) = resolve_hid_mode_source(options.target, hid_mode_url.as_deref()) {
-        eprintln!("{e}");
-        std::process::exit(1);
-    }
+    let hid_mode_source = match resolve_hid_mode_source(options.target, hid_mode_url.as_deref()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
 
     if options.transport == TransportKind::Http {
         eprintln!(
@@ -56,13 +65,22 @@ async fn main() {
     // config).
     let config = load_config();
     let cursor_belief = create_default_belief();
+    // Kept for hidModeEndpointConfig's Basic-auth fallback below (the
+    // off-box front-door /hidmode deployment reuses the ALREADY-RESOLVED
+    // kvmd credentials + proxy, matching index.ts's own comment on this —
+    // it deliberately does NOT re-read PIKVM_USERNAME/PASSWORD/PROXY a
+    // second time).
+    let config_username = config.pikvm.username.clone();
+    let config_password = config.pikvm.password.clone();
+    let config_proxy_url =
+        (!config.pikvm.proxy_url.is_empty()).then(|| config.pikvm.proxy_url.clone());
     let client_config = PiKVMConfig {
         host: config.pikvm.host,
         username: config.pikvm.username,
         password: config.pikvm.password,
         verify_ssl: config.pikvm.verify_ssl,
         default_keymap: config.pikvm.default_keymap,
-        proxy_url: (!config.pikvm.proxy_url.is_empty()).then_some(config.pikvm.proxy_url),
+        proxy_url: config_proxy_url.clone(),
     };
     let client = PiKVMClient::new(client_config, Some(cursor_belief));
 
@@ -71,7 +89,53 @@ async fn main() {
         eprintln!("Warning: Could not authenticate with PiKVM. Check credentials.");
     }
 
-    let shared = Arc::new(SharedState::new(client));
+    // (#51) HID-mode resolver: a declared --target is a fixed mode; an
+    // endpoint source derives it from the appliance /hidmode (unknown
+    // when unreachable — pointer ops then refuse rather than guess). See
+    // ADR 0002. `pikvmCreds` reuses the ALREADY-RESOLVED kvmd credentials
+    // + proxy for the off-box front-door /hidmode deployment's Basic-auth
+    // fallback, matching index.ts's own `hidModeEndpointConfig`.
+    let mut hid_mode_resolver = match hid_mode_source {
+        HidModeSource::Declared { target } => HidModeResolver::new(HidModeResolverOpts {
+            declared: Some(match target {
+                TargetKind::Ipad => HidMode::Ipad,
+                TargetKind::Desktop => HidMode::Desktop,
+            }),
+            endpoint: None,
+            ttl_ms: None,
+            settle_window_ms: None,
+            now: None,
+        }),
+        HidModeSource::Endpoint => {
+            let endpoint = make_http_hid_mode_endpoint(
+                HidModeHttpConfig {
+                    url: hid_mode_url,
+                    token: env.get("PIKVM_HIDMODE_TOKEN").cloned(),
+                    username: Some(config_username.clone()),
+                    password: Some(config_password.clone()),
+                    proxy_url: config_proxy_url.clone(),
+                    verify_ssl: Some(
+                        env.get("PIKVM_HIDMODE_VERIFY_SSL").map(String::as_str) == Some("true"),
+                    ),
+                    timeout_ms: None,
+                },
+                HidModeHttpDeps {
+                    get: None,
+                    post: None,
+                },
+            );
+            HidModeResolver::new(HidModeResolverOpts {
+                declared: None,
+                endpoint: Some(endpoint),
+                ttl_ms: None,
+                settle_window_ms: None,
+                now: None,
+            })
+        }
+    };
+    hid_mode_resolver.resolve().await;
+
+    let shared = Arc::new(SharedState::new(client, hid_mode_resolver));
     let server = PikvmMcpServer::new(shared, None);
 
     eprintln!("PiKVM MCP Server running (stdio)");

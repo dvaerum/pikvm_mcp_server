@@ -78,11 +78,11 @@ fn hid_reset(
                     .to_string(),
             );
         }
-        // TODO(Module 6 later phase): index.ts also calls
-        // `hidModeResolver?.markReconnect()` here to force the mode
-        // resolver to re-derive on its next read (a HID reset invalidates
-        // its TTL cache) — deferred until HidModeResolver is wired into
-        // SharedState (see server.rs's header comment).
+        // ADR-0002 Phase 1: force the resolver to re-derive on its next
+        // read instead of trusting its TTL cache — a HID reset is exactly
+        // the kind of event that invalidates it, same invalidation
+        // hidModeResolver.set() uses after a mode switch.
+        shared.hid_mode_resolver.lock().await.mark_reconnect();
         Ok(ToolOutcome::text(lines.join("\n")))
     })
 }
