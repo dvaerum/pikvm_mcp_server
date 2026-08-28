@@ -1,0 +1,18 @@
+[package]
+name = "pikvm-mcp-mover"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Module 4 (mover/HID orchestration) of the pikvm-mcp-server Rust port: move-to/curve-mover, click-at/click-verify, ballistics, auto-calibrate, the passive scale learner + its persistence, pointer acceleration, open-loop planning, cursor keepalive, slam. Faithful port of src/pikvm/{move-to,curve-mover,click-at,click-verify,ballistics,auto-calibrate,scale-learner,scale-persist,pointer-accel,open-loop-planner,cursor-keepalive,slam}.ts. See docs/rust-port-plan.md."
+
+[dependencies]
+pikvm-mcp-foundation = { path = "../foundation" }
+pikvm-mcp-cursor-belief = { path = "../cursor-belief" }
+pikvm-mcp-kvmd-client = { path = "../kvmd-client" }
+tokio = { version = "1", features = ["fs", "rt", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tempfile = "3"

@@ -4,6 +4,7 @@ members = [
     "foundation",
     "cursor-belief",
     "kvmd-client",
+    "mover",
 ]
 
 [workspace.package]
