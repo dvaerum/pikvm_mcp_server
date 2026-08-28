@@ -366,14 +366,19 @@ explicit justification recorded in that module's own task, not a silent
 default. Concrete evaluation, not a generic "use good libraries" gesture:
 
 - **MCP protocol — `rmcp`** (`modelcontextprotocol/rust-sdk`, the OFFICIAL
-  Rust SDK, currently v0.16.x). Implements the current stable MCP spec while
-  staying compatible with earlier releases, pluggable transport (the
-  `Transport` trait — stdio and others), server AND client support. This
-  directly answers the task's "check whether an official Rust MCP SDK exists
-  before hand-implementing the wire protocol" — **yes, it exists, use it.**
-  Hand-rolling the MCP wire protocol (JSON-RPC framing, session handling,
-  Streamable HTTP transport per this codebase's own `http-server.ts`) would
-  be pure duplicated effort against a maintained official implementation.
+  Rust SDK — corrected per review: the repo's own README references
+  migrating to a 3.x line, not v0.16.x as I first cited; a documented
+  cross-major-version migration guide indicates a MORE established project
+  than a pre-1.0 number would suggest, strengthening rather than weakening
+  this recommendation). Confirmed (nixos-dev, independently) supports both
+  stdio AND Streamable HTTP transports — matching this codebase's actual
+  need (`scripts/pikvm-mcp-stdio.sh`'s interactive path AND the on-box
+  `pikvm-mcp.service`'s HTTP path, task_93118fdf3c5b) — plus both server
+  and client roles. This directly answers the task's "check whether an
+  official Rust MCP SDK exists before hand-implementing the wire protocol"
+  — **yes, it exists, use it.** Hand-rolling the MCP wire protocol (JSON-RPC
+  framing, session handling, Streamable HTTP transport) would be pure
+  duplicated effort against a maintained official implementation.
 - **ONNX inference — `ort`**. Already evaluated in §5: binds directly
   against the onnxruntime C API, has a real, working `xnnpack` feature flag
   confirmed for Linux/aarch64 (the Pi4's architecture) — something
@@ -432,6 +437,23 @@ before it):
    `operator-hints.ts`) — REST + WS to the PiKVM appliance. The `ort`/`axum`/
    `tokio-tungstenite` choices from §6 land here first, and this is the
    layer every other layer calls through.
+
+   **Real cross-layer coupling point, found by nixos-dev tracing the actual
+   import graph rather than trusting the LOC grouping** — flagged here
+   explicitly because the strict "depends only on layers before it" framing
+   understates it: `CursorBelief`'s state storage lives on `PiKVMClient`
+   (`client.belief`, this layer), but it's actively read AND WRITTEN by
+   layer 4's movers (`move-to.ts`/`curve-mover.ts` read `client.belief`
+   before planning a move, then feed observations back via the locator's
+   `observe()`). That's not a clean one-directional "layer 4 calls into
+   layer 2's finished API" relationship — it's a shared-mutable-state
+   handoff spanning layers 2 (storage), 3 (`cursor-belief.ts`'s own
+   transition logic, layer 3 below), and 4 (the actual read/write call
+   sites). **Design `CursorBelief`'s Rust interface with layer 4's real
+   read/write pattern already in mind when this module is built** — don't
+   treat this module as "done" and discover the real requirements once
+   layer 4 is underway; that would mean reworking an API already marked
+   complete.
 3. **Detection/vision** (~4,900 LOC: `cursor-detect.ts`, `cursor-ml-detect.ts`,
    `cursor-shape-detect.ts`, `cursor-belief.ts`, `cursor-locator.ts`,
    `cursor-anchor.ts`, `orientation.ts`, `ipad-region-detect.ts`,
