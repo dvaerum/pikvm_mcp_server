@@ -155,8 +155,15 @@ export interface CurveOneShotOptions {
   acceptGatePx?: number;
 }
 
-/** Detection seam — screenshot + locate the cursor. */
-type DetectFn = (client: PiKVMClient, minPresence: number) => Promise<{ x: number; y: number } | null>;
+/** Detection seam — screenshot + locate the cursor. `hint` (task_484bed055820,
+ *  optional): when the caller already has a reasonable guess (e.g. the target
+ *  of an emit that was just made), the cascade searches a bounded window
+ *  around it first instead of the whole region. Omit for cold-start detects. */
+type DetectFn = (
+  client: PiKVMClient,
+  minPresence: number,
+  hint?: { x: number; y: number },
+) => Promise<{ x: number; y: number } | null>;
 
 /** Test-only injection seam for {@link moveByCurveOneShot}: a scriptable detector
  *  that keeps unit tests off onnxruntime. Defaults to the real V8 detect. */
@@ -251,14 +258,19 @@ async function wakeCursorAndRedetect(
   return detectFn(client, minPresence);
 }
 
-async function detect(client: PiKVMClient, minPresence: number): Promise<{ x: number; y: number } | null> {
+async function detect(
+  client: PiKVMClient,
+  minPresence: number,
+  hint?: { x: number; y: number },
+): Promise<{ x: number; y: number } | null> {
   const shot = await client.screenshot({ quality: 80 });
   // Route the "where is the cursor?" call through the single CursorLocator front
   // door (C1 P3 curve). Byte-identical to the prior inline call: same screenshot,
-  // same findCursorByV8FullFrame(buffer, w, h, { minPresence }) via locate('curve').
+  // same findCursorByV8FullFrame(buffer, w, h, { minPresence }) via locate('curve'),
+  // now also passing `hint` through (task_484bed055820) when the caller has one.
   const locator = new CursorLocator(makeCurveLocatorDeps(client));
   const fix = await locator.locate(
-    shot.buffer, shot.screenshotWidth, shot.screenshotHeight, 'curve', undefined, { minPresence },
+    shot.buffer, shot.screenshotWidth, shot.screenshotHeight, 'curve', hint, { minPresence },
   );
   return fix ? { x: fix.position.x, y: fix.position.y } : null;
 }
@@ -329,7 +341,11 @@ export async function moveByCurveOneShot(
   let emitted = { ...m1 };
   let chunkCount = 1;
 
-  let landed = await detectFn(client, minPresence);
+  // task_484bed055820: we just emitted toward `target`, so it's a real hint —
+  // the cascade searches a bounded window around it before falling back to a
+  // full-region scan, instead of scanning the whole region on every landing
+  // check regardless of how good a guess we already have.
+  let landed = await detectFn(client, minPresence, target);
   // (#41) capture the FIRST-shot landing before any correction shot — the passive
   // learner's free sample (planned vs achieved). `start` is non-null here.
   const firstLanded = landed;
@@ -374,7 +390,7 @@ export async function moveByCurveOneShot(
     await sleep(settleMs);
     emitted = { x: emitted.x + m2.x, y: emitted.y + m2.y };
     chunkCount += 1;
-    const landed2 = await detectFn(client, minPresence);
+    const landed2 = await detectFn(client, minPresence, target);
     if (landed2) landed = landed2;
   }
 
