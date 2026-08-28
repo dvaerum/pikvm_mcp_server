@@ -896,6 +896,26 @@ suite"**:
    context instead of an isolated synthetic smoke test. **Flag this as a
    requirement when ipad-unlock.ts's gate comes up**: that gate must
    include a genuine `CallerAsserted`-on-lock-screen positive-path run.
+6. **`curve_mover.rs`'s own live gate: PASSED** (georgs-mac-mini,
+   2026-08-29) — the actual THE-mover-is-solved iPad-critical path,
+   `move_by_curve_one_shot`, run live against the real iPad via
+   `curve_mover_smoke.rs`. Detected the cursor (via a faded-cursor wake —
+   the pointer was faded at start, exercising that mechanism for real,
+   not just its mocked unit tests), emitted the deterministic curve-based
+   burst, and verified the landing: 6.7px residual (950,400 target →
+   956,403 detected), matching the ~9px median this mover was originally
+   validated at in TS. Confirmed visually, not just from the numeric
+   result — the orange cursor arrow is clearly visible at the landing
+   position in the saved screenshot.
+   One reusable operational gotcha, not a port bug: the first run failed
+   with "Cascade disabled — model file not found" —
+   `resolve_verifier_model`'s bundled/cwd-relative resolution doesn't
+   find `ml/crop-heatmap.onnx` from a `cargo run` invoked inside `rust/`
+   (the model lives at the repo root, one level up). Fixed by setting
+   `PIKVM_ML_VERIFIER_MODEL` explicitly for the run. Worth keeping in
+   mind for every future example/gate invoked from `rust/` — and
+   eventually for the real packaged deployment's own path resolution,
+   which is pikvm-nixos's call, not decided here.
 
 **Structural requirement, not just content**: per §7's build-then-validate
 sequence, each layer's live validation should happen as that layer lands,
