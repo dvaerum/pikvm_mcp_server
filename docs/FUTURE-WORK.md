@@ -243,3 +243,27 @@ classic Node `http(s).Agent`, not undici's `Dispatcher` interface, so undici's `
 couldn't be reused as-is. Not implemented in the first PR because it looked out of scope
 (headless nixos-developer-system usage is unproxied) and would need a new proxy-agent dependency
 or a hand-rolled CONNECT-tunnelling `http.Agent` — turned out to be needed after all, see above.
+
+## Cascade batch-size fix (PR #93) real on-box latency — 1.6-1.8x, not the ~6x extrapolation  [RESOLVED, 2026-08-28]
+task_484bed055820's hardware gate (georgs-mac-mini) measured a ~5-6x speedup on an ISOLATED
+`findCursorByV8FullFrame` call (57-67ms vs 315-344ms) when a hint narrows the cascade's search
+window instead of scanning the whole region — and separately measured a real E2E `curve-one-shot`
+win too (median 1881ms→1640ms, ~13%), but flagged that number as Mac-hardware-only (the full-scan
+baseline there is only ~330ms, vs the 15-25s the fix targets on real Pi4) and explicitly declined
+to extrapolate the ~6x isolated ratio onto Pi4 E2E latency without a direct measurement.
+
+Once deployed live to pikvm01, georgs-mac-mini ran that direct measurement: `move_to` 25341ms→
+13854ms median (1.83x), `click_at` 39795ms→24807ms median (1.60x) — a genuine, solid win, but
+meaningfully smaller than the ~6x the isolated-detection ratio alone would suggest. Likely
+explanation (their diagnosis, not independently re-confirmed further): the cascade detection call
+is only part of a move's total wall-clock — HID emit chunking, settle sleeps, and other fixed
+per-operation overhead don't shrink just because the detector's own crop count did, diluting the
+pure-detection speedup at the whole-operation level. Accuracy held up (healthy landings, one safe
+detection-failure skip out of 3 `click_at` attempts, consistent with pre-existing behavior).
+
+Recorded here because PR #93 is already squash-merged (2097bf9) — this real, deployed-hardware
+number is the fact worth keeping, not the pre-deployment extrapolation. No further action; noted
+as a general caution for future latency-fix claims in this codebase: an isolated component-level
+speedup ratio does not automatically carry over to the enclosing operation's E2E ratio when the
+component isn't the operation's only cost — always get the direct on-box measurement before
+quoting a number past the specific thing that was actually timed.
