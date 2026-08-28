@@ -753,6 +753,57 @@ before it):
    not incidental bulk — expect this to be a genuinely large task even
    though it's "just" protocol glue.
 
+   **Correction (2026-08-28, nixos-dev) — exact tool count, from an
+   exhaustive read of `index.ts`, not the estimate above**: `toolRegistry`
+   holds **37** entries (its own in-file comment claiming "32" is stale),
+   3 of them gated off entirely unless `PIKVM_MOVER_LEARN=1`. Separately,
+   `prompts/skill-tools.ts` generates one `skill_*` tool per entry in
+   `allPrompts` (22 today) — not counted in the 37, dispatched via a
+   `name.startsWith('skill_')` check that bypasses `toolsByName` entirely.
+   Plus the unprefixed `login` tool (only present when a `LoginGate` is
+   passed to `createMcpServer`). Of the 37, **34 have real Rust backing
+   today**; the other 3 (`pikvm_health_check`, `pikvm_mouse_move_to`,
+   `pikvm_mouse_click_at`) need `health-check.ts` (module 5's own
+   remaining item) and `move-to.ts`'s `moveToPixel` (parked — its pieces
+   are scattered across `cursor_anchor.rs`/`cursor_locator.rs`/
+   `template_set.rs` but never assembled as a top-level function).
+   `pikvm_mouse_scroll`'s optional pane-targeting pre-move shares that
+   same gap but its core wheel-scroll works standalone.
+
+   **Design decision (2026-08-28, nixos-dev), recorded per this section's
+   own hand-rolling-justification rule**: `index.ts` does NOT use zod — it
+   hand-validates args with permissive clamp-not-reject/default-not-reject
+   semantics (`validateNumber` clamps to bounds rather than rejecting
+   out-of-range, `validateEnum` silently falls back to a documented
+   default rather than throwing) via a flat name-keyed `toolRegistry`
+   array, not a schema library. `rmcp`'s `#[tool_router]`/`#[tool]` macros
+   generate STRICT schemas via `schemars` from typed `Parameters<T>`
+   extractors — the opposite semantics, and would reject inputs the TS
+   server has always accepted. The Rust port (`pikvm-mcp-server` crate,
+   `tools.rs`/`server.rs`) implements `ServerHandler::list_tools`/
+   `call_tool` BY HAND instead, keeping `index.ts`'s own manual-registry
+   shape (raw JSON Schema + a name→entry map) — using `rmcp` for what this
+   section actually calls out as worth not hand-rolling (JSON-RPC framing,
+   session management, SSE transport), not its schema-generation sugar.
+
+   **Phase A shipped (2026-08-28, nixos-dev, `rust-port/module-3-cursor-
+   locator-anchor` — the branch name predates this task but is where the
+   whole session's work has landed)**: a real, working `pikvm-mcp-server`
+   binary over the stdio transport — `ServerHandler` skeleton (`server.rs`)
+   with the busy-lock gate, the login-gate scaffold (always `None` until
+   `http-server.ts` lands), and the central sanitize-and-catch error path,
+   plus 8 of the 34 assemblable tools (`pikvm_version`,
+   `pikvm_get_resolution`, `pikvm_type`, `pikvm_key`, `pikvm_shortcut`,
+   `pikvm_screen_state`, `pikvm_screenshot`, `pikvm_snapshot`). Verified
+   end-to-end against the real built binary (a scripted stdio JSON-RPC
+   session: initialize, tools/list, tools/call success/validation-error/
+   unknown-tool paths, prompts/list, prompts/get against a real
+   `docs/skills/*.md` file), not just unit tests. Remaining phases: B (the
+   other 26 assemblable tools, mechanical repetition of the same pattern),
+   C (`http-server.ts`: axum + Basic/kvmd auth + the login gate +
+   `skill_*` dynamic tools), D (`health-check.ts` + explicit stubs for the
+   3 blocked tools).
+
 Total: ~22,000 non-test LOC across 61 files (grown since Part I's 19,083/48
 count — the codebase kept moving during this same investigation, e.g. #51's
 hid-latch-monitor family, cursor-anchor.ts's unification). Re-measure before
