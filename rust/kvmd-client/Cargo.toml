@@ -7,6 +7,7 @@ description = "Module 2 (kvmd transport client) of the pikvm-mcp-server Rust por
 
 [dependencies]
 pikvm-mcp-foundation = { path = "../foundation" }
+pikvm-mcp-cursor-belief = { path = "../cursor-belief" }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
