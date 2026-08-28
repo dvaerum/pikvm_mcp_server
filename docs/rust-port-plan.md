@@ -151,13 +151,15 @@ exact machine, rather than asserting from priors:
   actual magic-number constants a port would have to reproduce correctly,
   each backed by a paragraph of empirical justification a rewrite would need
   to either preserve verbatim or re-derive from scratch:
-  - `TAUTOLOGY_PROX_THRESHOLD = 30` (`move-to.ts:688`) — the proximity
+  - `TAUTOLOGY_PROX_THRESHOLD = 30` (`move-to.ts:692`) — the proximity
     threshold below which an ML detection is suspect for the Phase 310
     tautology failure mode (an icon-feature false-positive reported as the
     cursor). Get this constant wrong and detections silently skip a needed
     wiggle-verify, reproducing a class of bug this codebase already lived
     through once.
-  - `HEATMAP_FLOOR = 0.2` (`cursor-ml-detect.ts:666`) — set just above the
+  - `HEATMAP_FLOOR = 0.2` (`cursor-ml-detect.ts:752`, re-verified against
+    current origin/main after re-fetching — PR93 shifted this file's line
+    numbers ~86 lines since I first cited it) — set just above the
     empirically-observed 0.12-0.14 confidence band that a real degenerate
     corner-prediction failure mode (documented against a specific captured
     trace, "PA19-c Books") scored at. Too low and degenerate predictions pass
