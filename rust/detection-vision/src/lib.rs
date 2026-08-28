@@ -13,4 +13,6 @@
 //! magic-number examples and the ADR's own warning).
 
 pub mod brightness;
+pub mod decode;
 pub mod ipad_region_detect;
+pub mod orientation;
