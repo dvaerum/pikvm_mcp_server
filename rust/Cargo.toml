@@ -6,6 +6,8 @@ members = [
     "cursor-belief",
     "kvmd-client",
     "mover",
+    "ipad-hid",
+    "ipad-primitives",
 ]
 
 [workspace.package]

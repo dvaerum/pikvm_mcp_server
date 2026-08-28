@@ -1005,6 +1005,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "pikvm-mcp-ipad-hid"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pikvm-mcp-foundation",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
+name = "pikvm-mcp-ipad-primitives"
+version = "0.1.0"
+dependencies = [
+ "pikvm-mcp-foundation",
+]
+
+[[package]]
 name = "pikvm-mcp-kvmd-client"
 version = "0.1.0"
 dependencies = [
