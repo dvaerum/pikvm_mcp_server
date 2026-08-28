@@ -473,7 +473,7 @@ before it):
    TS test's deterministic LCG noise generator), all passing first run.
 3. **Detection/vision** (~4,900 LOC: `cursor-detect.ts`, `cursor-ml-detect.ts`,
    `cursor-shape-detect.ts`, `cursor-belief.ts`, `cursor-locator.ts`,
-   `cursor-anchor.ts`, `orientation.ts`, `ipad-region-detect.ts`,
+   `orientation.ts`, `ipad-region-detect.ts`,
    `template-set.ts`, `seed-template.ts`, `brightness.ts`, `capture.ts`) —
    the ONNX/image-crate-heavy layer; the model contract and thresholds from
    §3's magic-number examples live here and must port byte-for-byte, not
@@ -493,11 +493,32 @@ before it):
    needed, nothing more. When module 4's `move-to.ts` is ported, it
    imports `looks_like_cursor` from `pikvm-mcp-detection-vision` rather
    than re-porting it.
+
+   **Fifth crate-boundary finding (2026-08-28, nixos-dev), opposite
+   direction from the fourth**: the task list originally filed
+   `cursor-anchor.ts` under this layer, but the actual TS source imports
+   `slam.ts` directly — and `slam.ts` is layer 4 (mover), not layer 3.
+   Per this section's own dependency ordering (mover depends on
+   detection/vision, never the reverse), `cursor-anchor.ts` cannot live in
+   `pikvm-mcp-detection-vision` without inverting that edge. Confirmed
+   against the real import graph, then against georgs-mac-mini (slam.rs's
+   owner) before moving it: **`cursor_anchor.rs` lands in `rust/mover/`**,
+   alongside `slam.rs`, not in detection-vision. One follow-on extraction
+   fell out of this: `slam.rs` carried a private
+   `detect_bounds_or_null`/`detect_ipad_bounds` pair (client-taking
+   wrapper around orientation.rs's buffer-based detector) with its own
+   comment flagging it as "move into detection-vision once a second
+   caller needs it (cursor-anchor.rs will)" — cursor-anchor.rs is exactly
+   that second caller, so the pair was promoted to a shared, public home
+   in `orientation.rs` and slam.rs's private copy deleted (slam.rs's 20
+   tests re-verified unchanged against the shared function before
+   pushing).
 4. **Mover/HID orchestration** (~5,300 LOC: `move-to.ts`, `curve-mover.ts`,
    `move-to-probe-driven.ts`, `click-at.ts`, `click-verify.ts`,
    `click-verify-archive.ts`, `ballistics.ts`, `auto-calibrate.ts`,
    `scale-learner.ts`, `scale-persist.ts`, `pointer-accel.ts`,
-   `open-loop-planner.ts`, `cursor-keepalive.ts`, `slam.ts`, `gesture.ts`) —
+   `open-loop-planner.ts`, `cursor-keepalive.ts`, `slam.ts`,
+   `cursor-anchor.ts`, `gesture.ts`) —
    the largest, highest-risk layer: this is where N1's correction-loop bug,
    the cornerTargetFromBounds P0, and PR93's cascade-hint logic all live.
    `move-to.ts` alone (2,711 LOC) is the single largest file in the
