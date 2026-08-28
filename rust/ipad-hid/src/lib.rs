@@ -14,5 +14,6 @@
 pub mod desktop_e2e_metrics;
 pub mod hid_diagnosis;
 pub mod hid_latch_monitor;
+pub mod hid_latch_runner;
 pub mod hid_recovery;
 pub mod ipad_keys;
