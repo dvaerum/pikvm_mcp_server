@@ -12,5 +12,6 @@
 //! redesign.** `curve-mover.ts` + `strategy:'curve-one-shot'` is the iPad
 //! default; do not change its behavior while porting.
 
+pub mod curve_mover;
 pub mod scale_learner;
 pub mod scale_persist;
