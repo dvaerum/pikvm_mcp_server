@@ -15,7 +15,7 @@ use pikvm_mcp_detection_vision::cursor_detect::{
     diff_screenshots, Cluster, DetectionConfig, DEFAULT_DETECTION_CONFIG,
 };
 use pikvm_mcp_detection_vision::orientation::{
-    detect_ipad_bounds_from_buffer, get_last_good_bounds, DetectOptions, IpadBounds,
+    detect_bounds_or_null, get_last_good_bounds, DetectOptions, IpadBounds,
 };
 use pikvm_mcp_kvmd_client::client::{ClientError, PiKVMClient, ScreenResolution};
 
@@ -73,41 +73,6 @@ async fn take_screenshot(
     match mode {
         ScreenshotMode::Nudging => Ok(client.screenshot_keeping_cursor_alive(None).await?.buffer),
         ScreenshotMode::Raw => Ok(client.screenshot(None).await?.buffer),
-    }
-}
-
-/// Client-taking bounds detection, best-effort (never fails the caller).
-/// Faithful port of orientation.ts's `detectIpadBounds` + `detectBoundsOrNull`
-/// pair — genuinely thin (screenshot + the buffer-based detector, a
-/// try/catch with optional verbose logging), but not yet ported into
-/// `pikvm-mcp-detection-vision` itself (that crate only has the
-/// buffer-based half so far, since it doesn't depend on kvmd-client).
-/// Lives here, local to its first real caller, same pattern as this
-/// session's other cross-layer thin-wrapper resolutions (ipad-primitives,
-/// cursor-belief) — move it into detection-vision once a second caller
-/// needs it (cursor-anchor.rs will).
-async fn detect_bounds_or_null(
-    client: &PiKVMClient,
-    options: DetectOptions,
-    log_prefix: &str,
-) -> Option<IpadBounds> {
-    let shot = match client.screenshot(None).await {
-        Ok(s) => s.buffer,
-        Err(e) => {
-            if options.verbose {
-                eprintln!("[{log_prefix}] bounds detection failed: {e}");
-            }
-            return None;
-        }
-    };
-    match detect_ipad_bounds_from_buffer(&shot, options) {
-        Ok(b) => Some(b),
-        Err(e) => {
-            if options.verbose {
-                eprintln!("[{log_prefix}] bounds detection failed: {e}");
-            }
-            None
-        }
     }
 }
 
