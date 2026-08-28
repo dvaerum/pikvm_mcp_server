@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use base64::Engine as _;
 use pikvm_mcp_detection_vision::snapshot::{save_snapshot, SnapshotRegion};
 use pikvm_mcp_kvmd_client::client::ScreenshotOptions;
 
@@ -11,7 +10,7 @@ use crate::server::SharedState;
 use crate::tool_helpers::{
     require_number, require_string, validate_boolean, validate_number, validate_string,
 };
-use crate::tools::{BoxFuture, ToolEntry, ToolOutcome};
+use crate::tools::{b64, BoxFuture, ToolEntry, ToolOutcome};
 
 pub fn entries() -> Vec<ToolEntry> {
     vec![
@@ -111,7 +110,7 @@ fn screenshot(
             ));
         }
 
-        let data = base64::engine::general_purpose::STANDARD.encode(&result.buffer);
+        let data = b64(&result.buffer);
         Ok(ToolOutcome::text_and_image(info_text, data, "image/jpeg"))
     })
 }

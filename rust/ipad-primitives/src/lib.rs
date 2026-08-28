@@ -4,11 +4,16 @@
 //!
 //! See `docs/rust-port-plan.md` §7 and `docs/adr/0002-rust-port-full-bigbang.md`.
 //!
-//! `click_verify`: the two pure default-lookup functions, ported now since
-//! they only need `foundation`. `take_raw_screenshot` (`src/pikvm/
-//! ballistics.ts`) is deferred until ballistics.ts itself is ported — it
-//! takes the concrete client type directly, not an injected closure, per
-//! the TS source (checked, not assumed).
+//! `click_verify`: a SUBSET of `src/pikvm/click-verify.ts` — the two pure
+//! default-lookup functions (only need `foundation`), plus
+//! `run_dismiss_recipe`/`format_dismiss_result` (pulled in 2026-08-28 for
+//! Module 6's `pikvm_dismiss_popup` tool). The rest of that TS file
+//! (`verifyClickByDecodedFrames`/`verifyClickByDiff`/`chunkMickeys`/
+//! `biasCorrectedAimPoint`/etc.) belongs to move-to.ts's/click-at.ts's own
+//! future port — parked, not ported here. `take_raw_screenshot`
+//! (`src/pikvm/ballistics.ts`) is deferred until ballistics.ts itself is
+//! ported — it takes the concrete client type directly, not an injected
+//! closure, per the TS source (checked, not assumed).
 //!
 //! `ipad_keys` (`src/pikvm/ipad-keys.ts`): moved here from module 5's crate
 //! (2026-08-28) once cursor-anchor.ts's real callers were traced —

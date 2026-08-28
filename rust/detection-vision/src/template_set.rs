@@ -119,7 +119,16 @@ fn is_jpeg_name(f: &str) -> bool {
 /// positions.
 pub async fn load_template_set(
     dir: &str,
-    validate: Option<&dyn Fn(&CursorTemplate) -> bool>,
+    // `+ Send + Sync` (not just `Fn`) so this async fn's own generated
+    // Future stays `Send` regardless of whether a caller actually passes
+    // `Some(validate)` — a bare `Option<&dyn Fn(...)>` fixes the type of
+    // EVERY local binding of this signature, `None::<&dyn Fn(...)>`
+    // included, so a Send-bound caller (e.g. a boxed `dyn Future + Send`
+    // tool handler) could never call this at all without the bound here.
+    // Found while wiring `seed_cursor_template` into Module 6's tool
+    // registry (nixos-dev, 2026-08-28) — a real latent gap, not a
+    // hypothetical one.
+    validate: Option<&(dyn Fn(&CursorTemplate) -> bool + Send + Sync)>,
     max_age: MaxAge,
 ) -> anyhow::Result<Vec<CursorTemplate>> {
     let mut entries = match tokio::fs::read_dir(dir).await {

@@ -26,14 +26,26 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use base64::Engine as _;
 use serde_json::{Map, Value};
 
 use crate::server::SharedState;
 
 mod basic;
+mod calibration;
+mod hid;
+mod ipad_unlock;
+mod orientation;
 mod screenshot;
+mod seed_template;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Base64-encode image bytes for a `ToolContent::Image` block. Shared
+/// helper so every image-returning tool encodes the same way.
+pub(crate) fn b64(data: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
 
 /// One content block of a tool's result. Faithful mirror of the TS
 /// `CallToolResult.content` entries (`{type:'text', text}` /
@@ -114,5 +126,10 @@ pub struct ToolEntry {
 pub fn tool_registry() -> Vec<ToolEntry> {
     let mut tools = basic::entries();
     tools.extend(screenshot::entries());
+    tools.extend(calibration::entries());
+    tools.extend(hid::entries());
+    tools.extend(orientation::entries());
+    tools.extend(seed_template::entries());
+    tools.extend(ipad_unlock::entries());
     tools
 }
