@@ -594,6 +594,119 @@ before it):
    concurrently by default. Replaced with one crate-wide
    `mover::test_support::GLOBAL_STATE_LOCK` all three files' tests share;
    a real, previously-latent flake, not a cursor_anchor.rs-only concern.
+
+   **`move-to.ts`'s own submodule structure (2026-08-28, georgs-mac-mini),
+   planned ahead of implementation per georg's file-structure rule (read
+   the file in full first, no code written yet)**:
+
+   The file's own first branch is the key structural fact: `moveToPixel`
+   immediately delegates `strategy==='curve-one-shot'` (the iPad DEFAULT,
+   validated N=80 ≈11px) to `curve-mover.ts` — already fully ported as
+   `curve_mover.rs` and explicitly the SOLVED, do-not-touch path per
+   CLAUDE.md. Everything else in the file (~1,200 of `moveToPixel`'s own
+   1,244 lines, plus every helper above it) is the LEGACY iterative
+   correction-loop path for the other three strategies
+   (`detect-then-move`/`slam-then-move`/`assume-at`). This is NOT dead
+   weight — `detect-then-move` is the real production DEFAULT for
+   desktop/absolute-mouse targets (index.ts's own tool description:
+   `"detect-then-move" (default on desktop/absolute)`) — but it is a
+   materially lower hardware-gate priority than curve-one-shot: the
+   iPad-critical path is already solved and gated; this path's own live
+   gate belongs on a desktop/absolute target (it-03400), not the iPad rig.
+
+   Cross-checked the full dependency graph against what's already
+   ported: nearly all of it is. `cursor_locator::CursorLocator` (origin
+   discovery), `cursor_anchor::anchor_cursor` (slam-then-move's guard),
+   `cursor_detect` (`Cluster`/`DetectionConfig`/`diff_screenshots_decoded`
+   family), `cursor_ml_detect`, `cursor_shape_detect`, `looks_like_cursor`
+   (per the fourth finding above), and `template_set` (load/persist/
+   migrate) all already exist in `detection-vision`. `move_to.rs` is
+   almost entirely an orchestration layer over already-ported primitives,
+   the same shape `cursor_anchor.rs` and `ballistics.rs` turned out to be.
+
+   Two real gaps, not yet ported, that block starting real implementation:
+   - `emit_chunked` (`gesture.ts`, ~25 LOC) — already flagged above
+     (module 5's coupling finding) as belonging in the new
+     `pikvm-mcp-ipad-primitives` crate. `move_to.rs` is this function's
+     OTHER real caller (open-loop emission, every correction pass) —
+     confirms the crate-boundary call, doesn't change it. Needs building
+     before `move_to.rs`'s legacy path can compile.
+   - `pointer-accel.ts` — NOT yet ported, not yet flagged anywhere in
+     this doc. `learnedBallisticsPxPerMickey` (the `PIKVM_USE_LEARNED_
+     BALLISTICS=1` opt-in forward-model path) depends on it entirely.
+     `foundation::settings` already has the env-var plumbing
+     (`use_learned_ballistics`, `pointer_accel_model`) but no actual
+     `pointer_accel.rs` exists. Recommend SCOPING THIS OUT of `move_to.rs`'s
+     initial port: it's opt-in, off by default, gated behind a real ONNX
+     model file, and porting it means porting a whole separate file first
+     for a path that isn't the iPad-critical one either. Faithful-port
+     discipline still applies eventually — flagging as a deferred,
+     individually-justified gap, not a silent drop.
+
+   Also: `move-to.ts` declares its OWN third `Axis = 'x' | 'y'` type
+   (line 173), structurally identical to but deliberately NOT unified
+   with `slam.ts`'s (already `crate::slam::Axis` in Rust) or
+   `scale-learner.ts`'s (already `crate::mover::scale_learner::Axis`) —
+   `cursor-anchor.ts`'s own header comment already named this exact
+   three-way split as a known, deliberately-out-of-scope TS property.
+   The Rust port keeps all three independent for the same reason the
+   other two already do: faithful to a real source-level decision, not
+   an oversight to "clean up" during porting.
+
+   Proposed submodule layout (`rust/mover/src/move_to/`, built as a
+   directory from the start — no flat 2,700-line file at any point):
+   - `types.rs` — `MoveStrategy`, this file's own `Axis`, `MoveToOptions`
+     (the large options struct), `CorrectionPass`, `MovePassDiagnostic`,
+     `MoveToResult`, `MoveLearnSample`.
+   - `correction_math.rs` — the pure, already-well-tested helpers:
+     `clamp`, `pick_nearest_plausible_match`, `cap_correction_mickeys`,
+     `clamp_mickeys_to_screen`, `should_abort_blind_corrections`,
+     `pick_bail_pass`, `is_stale_template_match`. Maps directly to
+     `move-to.pickBailPass.test.ts` + `move-to.staleMatch.test.ts`.
+   - `template_cache.rs` — `get_cached_templates`, `maybe_persist_template`
+     (thin client-taking wrappers over `template_set`'s already-ported
+     load/persist/migrate functions).
+   - `origin.rs` — `make_locator_deps`, `discover_origin` (glue over
+     `CursorLocator` + `anchor_cursor`, per `discoverOrigin`'s own
+     comment: both already exist).
+   - `motion_diff.rs` — `detect_motion` (the ~270-line cluster-pairing
+     core of the legacy correction loop; pure given decoded frames,
+     independently testable). Maps to `move-to.detectMotion.test.ts`
+     (26 cases, the single biggest test file here).
+   - `wiggle_verify.rs` — `ml_wiggle_verify`, `wiggle_verify_candidate`,
+     `try_open_loop_shape_detect`.
+   - `pointer_accel_bridge.rs` — `learned_ballistics_enabled`,
+     `learned_ballistics_px_per_mickey` — stubbed/deferred per the gap
+     above, isolated in its own file specifically so the opt-in path
+     doesn't entangle with the default path's files.
+   - `legacy_move.rs` (name tentative) — `moveToPixel`'s own body for
+     the non-curve-one-shot strategies: option resolution, ballistics
+     profile lookup, calibration probe, open-loop emission, the
+     open-loop landing cascade (motion→template→shape→predicted), the
+     correction-pass loop (gross + linear regimes, blind-pass circuit
+     breaker, oscillation guard, icon-tolerance exit, linear bailout),
+     bail-to-best-pass, the V8 authoritative fallback, result-message
+     assembly. Maps to `move-to.correctionCascade.test.ts` (the N1 bug
+     regression), `move-to.verificationLag.test.ts`, and the
+     `forbidSlam`/`forbidSlamOnIpad` tests (though those may turn out
+     largely redundant with `cursor_anchor.rs`'s own guard tests now —
+     confirm overlap before faithfully re-porting both). Flagged as the
+     single largest remaining file even after this split (likely still
+     600-900 lines) — may need further internal splitting once real
+     line counts are known during implementation; not committing to a
+     final shape before writing code against it.
+   - `move_to.rs` (root) — the `curve-one-shot` dispatch (trivial: one
+     `if`, delegates to `curve_mover::move_by_curve_one_shot`) + mod
+     declarations + re-exports, mirroring every other root file this
+     session's file-structure work has produced.
+
+   Not yet decided, deferred to implementation time: whether
+   `legacy_move.rs`'s while-loop is better left as one function (matches
+   its own tight internal state-threading — many local variables read
+   and mutated across the whole loop) or whether the landing-cascade and
+   the loop-body are separable without an awkward parameter-passing
+   seam. Judgment call for whoever implements it, informed by how it
+   actually reads once transcribed, not decided in the abstract here.
 6. **MCP protocol surface** (~3,100 LOC: `index.ts` — 2,575 LOC, the tool
    registry/dispatch, plus `cli.ts`, `http-server.ts`, `prompts/*`) — built
    LAST, on top of everything above, using `rmcp` per §6. `index.ts`'s size
