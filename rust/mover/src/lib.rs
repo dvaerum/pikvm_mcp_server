@@ -12,6 +12,7 @@
 //! redesign.** `curve-mover.ts` + `strategy:'curve-one-shot'` is the iPad
 //! default; do not change its behavior while porting.
 
+pub mod ballistics;
 pub mod cursor_anchor;
 pub mod cursor_keepalive;
 pub mod curve_mover;

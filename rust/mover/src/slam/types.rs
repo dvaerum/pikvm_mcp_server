@@ -2,14 +2,21 @@
 //! of `PiKVMClient`'s two real screenshot behaviors a `verify_motion`
 //! capture should use.
 
+use serde::{Deserialize, Serialize};
+
 /// Slam's own per-axis type — structurally identical to
 /// `scale_learner::Axis` but a SEPARATE type, matching the TS source
 /// faithfully: `slam.ts` declares its own `Axis = 'x' | 'y'` rather than
 /// importing scale-learner.ts's (the two files have no import
 /// relationship in the original), so this port keeps them independent
 /// too rather than silently merging two types the source deliberately
-/// didn't share.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// didn't share. `ballistics.ts` imports THIS `Axis` (re-exporting it
+/// itself), matching this crate's `ballistics.rs` using `crate::slam::Axis`
+/// rather than `scale_learner::Axis` for `BallisticsSample.axis` —
+/// `Serialize`/`Deserialize` (`rename_all = "lowercase"`, matching
+/// `scale_learner::Axis`'s own identical derive) are for that JSON field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Axis {
     X,
     Y,
