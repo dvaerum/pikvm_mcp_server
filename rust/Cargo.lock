@@ -1026,7 +1026,9 @@ dependencies = [
 name = "pikvm-mcp-ipad-primitives"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "pikvm-mcp-foundation",
+ "tokio",
 ]
 
 [[package]]
@@ -1059,6 +1061,7 @@ dependencies = [
  "pikvm-mcp-cursor-belief",
  "pikvm-mcp-detection-vision",
  "pikvm-mcp-foundation",
+ "pikvm-mcp-ipad-primitives",
  "pikvm-mcp-kvmd-client",
  "serde",
  "serde_json",

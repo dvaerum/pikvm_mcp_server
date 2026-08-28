@@ -137,12 +137,13 @@ mod tests {
     use super::*;
     use pikvm_mcp_kvmd_client::client::{PiKVMConfig, RequestArgs, RequestFn, ResponseBody};
     use std::sync::{Arc, Mutex as StdMutex};
-    use tokio::sync::Mutex as AsyncMutex;
 
     // emit_clock is a process-global static shared by every test in this
-    // binary — serialize the tests that touch it so they can't race,
-    // same discipline as kvmd-client's own emit_clock tests.
-    static TEST_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
+    // crate's test binary — serialize against the crate-wide lock, not a
+    // file-local one, so this doesn't race against slam.rs's/
+    // cursor_anchor.rs's own tests touching the same static. See
+    // `crate::test_support::GLOBAL_STATE_LOCK`'s doc.
+    use crate::test_support::GLOBAL_STATE_LOCK as TEST_LOCK;
 
     /// Records every `/hid/events/send_mouse_relative` path hit (which
     /// embeds `delta_x=.../delta_y=...`) so assertions can reconstruct

@@ -365,14 +365,15 @@ mod tests {
     };
     use pikvm_mcp_kvmd_client::client::{PiKVMConfig, RequestArgs, RequestFn, ResponseBody};
     use std::sync::{Arc, Mutex as StdMutex};
-    use tokio::sync::Mutex as AsyncMutex;
 
     // slam_to_corner touches two process-global statics indirectly:
     // emit_clock (via mouse_move_relative) and orientation's bounds cache
     // (via the verify_motion path). Serialize every test that runs a real
-    // client call through this lock, same discipline as
-    // cursor_keepalive.rs's TEST_LOCK.
-    static TEST_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
+    // client call through this crate-wide lock — see
+    // `crate::test_support::GLOBAL_STATE_LOCK`'s doc for why a per-file
+    // lock doesn't actually serialize against cursor_keepalive.rs's/
+    // cursor_anchor.rs's own tests touching the same globals.
+    use crate::test_support::GLOBAL_STATE_LOCK as TEST_LOCK;
 
     type Moves = Arc<StdMutex<Vec<String>>>;
     type ShotCalls = Arc<StdMutex<usize>>;

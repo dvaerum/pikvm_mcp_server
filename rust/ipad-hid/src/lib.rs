@@ -8,9 +8,19 @@
 //!
 //! Depends on module 1 (`pikvm-mcp-foundation`), module 3
 //! (`pikvm-mcp-detection-vision`, for brightness.rs's VERY_DIM_THRESHOLD),
-//! and `pikvm-mcp-ipad-primitives` (click-verify defaults); independent of
-//! module 4 (mover/HID orchestration) per the import-graph verification in
-//! the plan's review.
+//! and `pikvm-mcp-ipad-primitives` (click-verify defaults, and — as of
+//! the cursor-anchor.ts crate-placement finding — `ipad_keys`); independent
+//! of module 4 (mover/HID orchestration) per the import-graph verification
+//! in the plan's review.
+//!
+//! `ipad-keys.ts`'s port moved to `pikvm-mcp-ipad-primitives::ipad_keys`
+//! (2026-08-28): it was first ported here since its TS source sits
+//! alongside this module's other `ipad-*.ts` files, but cursor-anchor.ts —
+//! its other real caller — turned out to belong in `rust/mover` (module 4,
+//! not module 3 as originally filed), which cannot depend on this crate
+//! without inverting the module 4→5 dependency direction. Same
+//! shared-primitive resolution as `click_verify`/`emit_chunked`/
+//! `take_raw_screenshot` below it in that crate.
 
 pub mod desktop_e2e_metrics;
 pub mod hid_diagnosis;
@@ -20,4 +30,3 @@ pub mod hid_latch_runner;
 pub mod hid_latch_ssh_source;
 pub mod hid_mode;
 pub mod hid_recovery;
-pub mod ipad_keys;
