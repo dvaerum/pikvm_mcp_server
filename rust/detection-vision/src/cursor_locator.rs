@@ -31,10 +31,10 @@
 mod locator;
 mod types;
 
+pub use crate::cursor_ml_detect::{MlMultiHintOptions, V8Detection, V8FullFrameOptions};
 pub use locator::CursorLocator;
 pub use types::{
-    BoxFuture, CursorFix, CursorFixSource, CursorLocatorDeps, LocateProfile, MlMultiHintOptions,
-    ProbeMeasurement, V8Detection, V8FullFrameOptions,
+    BoxFuture, CursorFix, CursorFixSource, CursorLocatorDeps, LocateProfile, ProbeMeasurement,
 };
 
 #[cfg(test)]

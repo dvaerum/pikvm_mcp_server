@@ -178,13 +178,12 @@ pub fn build_ml_hints(
     hints
 }
 
-/// Result shape from the LEGACY single-stage `findCursorByML`/
-/// `findCursorByMLMultiHint` (cursor-v1, 256px hint crop). Ported as a pure
-/// data shape only — cursor_locator.rs's `CursorLocatorDeps` needs the real
-/// contract for its injected `find_cursor_by_ml_multi_hint` field, matching
-/// the TS source's own `import type { MLCursorResult } from
-/// './cursor-ml-detect.js'`. The function itself stays deferred (needs a
-/// model file that doesn't exist in this repo — see this file's header).
+/// Result shape shared by `find_cursor_by_ml_multi_hint` (real, below —
+/// it's the v8/cascade fast path's result reshaped into this contract)
+/// and the LEGACY single-stage `findCursorByML` (cursor-v1, 256px hint
+/// crop, NOT ported — needs a model file that doesn't exist in this repo,
+/// see this file's header). Matches the TS source's own `import type {
+/// MLCursorResult } from './cursor-ml-detect.js'`.
 #[derive(Clone, Copy, Debug)]
 pub struct MlCursorResult {
     /// Cursor x in full-frame screenshot pixels.
@@ -413,46 +412,147 @@ pub fn run_cascade(
     Ok(result.flatten())
 }
 
-/// The stable, real-caller-facing entry point (`cursor-ml-detect.ts`'s
-/// `findCursorByV8FullFrame`) — callers use this, never `run_cascade`
-/// directly. Faithful port of the `CASCADE_ENABLED` branch only: TS
-/// resolves `V8_MODEL`/`CASCADE_ENABLED`/`GRID_STRIDE`/`VERIFY_THRESH`
-/// once from module-level constants (an IIFE'd `settings.ml.*` read at
-/// import time) — Rust has no import-time-constant equivalent, so this
-/// port takes the resolved cascade config as explicit parameters instead
-/// (same DI discipline the rest of this port uses for what TS reads from
-/// a module-level `settings` singleton). The REAL caller resolves these
-/// once from `Settings` and closes over them when constructing a
-/// `CursorLocatorDeps`/DI closure, matching TS's resolve-once semantics.
-///
-/// The legacy single-stage (non-cascade) path is NOT ported — deferred,
-/// same individually-justified gap as `pointer-accel.ts` (see
-/// `docs/rust-port-plan.md` §7 item 4, move-to.ts's v13 note): cascade
-/// is the validated production default (`PIKVM_ML_CASCADE` defaults ON;
-/// DETECTION SOLVED per this project's own history — single-stage was
-/// superseded, not a fallback anyone currently relies on). TS's
-/// `options?.minPresence` is dropped entirely rather than threaded
-/// through unused — the cascade branch never reads it either (only the
-/// unported legacy branch does), so keeping a dead parameter here would
-/// be pure noise; re-add it if the legacy path is ever ported.
+/// Locate the shipped cascade model file. Faithful port of
+/// `resolveVerifierModel` (`src/pikvm/cursor-ml-detect.ts`) — same
+/// bundled-then-cwd-then-fallback resolution shape already used by
+/// `pikvm-mcp-server`'s `skill_docs.rs::resolve_skills_dir` for the same
+/// "find a real bundled asset regardless of run location" problem.
+/// `PIKVM_ML_VERIFIER_MODEL` (via `settings.ml.verifier_model`) is an
+/// explicit override and always wins.
+pub fn resolve_verifier_model() -> std::path::PathBuf {
+    use pikvm_mcp_foundation::settings::get_settings;
+
+    if let Some(explicit) = &get_settings().ml.verifier_model {
+        return std::path::PathBuf::from(explicit);
+    }
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+        .map(|exe_dir| exe_dir.join("..").join("ml").join("crop-heatmap.onnx"));
+    let cwd_local = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join("ml").join("crop-heatmap.onnx"));
+    for candidate in [bundled, cwd_local].into_iter().flatten() {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+        .map(|exe_dir| exe_dir.join("..").join("ml").join("crop-heatmap.onnx"))
+        .unwrap_or_else(|| std::path::PathBuf::from("ml/crop-heatmap.onnx"))
+}
+
+/// The native shape returned by `find_cursor_by_v8_full_frame` (the
+/// dual-head cascade). Owned here (not `cursor_locator.rs`, which only
+/// CONSUMES it via DI) since it's this file's own function's return type;
+/// `cursor_locator/types.rs` re-exports it for its `CursorLocatorDeps`
+/// contract.
+#[derive(Clone, Copy, Debug)]
+pub struct V8Detection {
+    pub x: f64,
+    pub y: f64,
+    pub presence: f64,
+    pub heatmap_peak: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct V8FullFrameOptions {
+    pub min_presence: Option<f64>,
+    pub hint: Option<Point>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MlMultiHintOptions {
+    pub min_confidence: Option<f64>,
+}
+
+/// The native shape returned by `find_cursor_by_v8_full_frame` maps
+/// straight onto `run_cascade`'s `CascadeResult` — see this file's header:
+/// `find_cursor_by_v8_full_frame() → run_cascade()`. The TS source's
+/// legacy single-stage v8 model branch (behind `CASCADE_ENABLED`, default
+/// ON — `settings.ml.cascade_enabled`) is NOT ported: no `.onnx` file for
+/// it is bundled in this repo (confirmed — only `ml/crop-heatmap.onnx`
+/// exists), so that branch can never execute in this deployment. Same
+/// exclusion class as this file's header note for `findCursorByML`/
+/// `findCursorPresenceV5`.
 pub fn find_cursor_by_v8_full_frame(
-    model_path: &str,
-    grid_stride: f64,
-    verify_thresh: f32,
     jpeg_buffer: &[u8],
-    frame_w: u32,
-    frame_h: u32,
-    hint: Option<Point>,
-) -> anyhow::Result<Option<CascadeResult>> {
-    run_cascade(
-        model_path,
+    frame_width: u32,
+    frame_height: u32,
+    options: V8FullFrameOptions,
+) -> anyhow::Result<Option<V8Detection>> {
+    use pikvm_mcp_foundation::settings::get_settings;
+
+    let settings = get_settings();
+    // `cascade_enabled` defaults true and this port doesn't carry the
+    // legacy single-stage branch (see doc comment above) — when a
+    // deployment explicitly disables the cascade via PIKVM_ML_CASCADE=0,
+    // there is no other detector to fall back to here, so this returns
+    // None rather than silently running dead code.
+    if !settings.ml.cascade_enabled {
+        return Ok(None);
+    }
+    let model_path = resolve_verifier_model();
+    let result = run_cascade(
+        model_path.to_string_lossy().as_ref(),
         jpeg_buffer,
-        frame_w,
-        frame_h,
-        hint,
-        grid_stride,
-        verify_thresh,
-    )
+        frame_width,
+        frame_height,
+        options.hint,
+        settings.ml.grid_stride,
+        settings.ml.verify_thresh as f32,
+    )?;
+    let _ = options.min_presence; // presence gating happens inside run_cascade via verify_thresh; kept for API parity with the TS options shape.
+    Ok(result.map(|r| V8Detection {
+        x: r.x as f64,
+        y: r.y as f64,
+        presence: r.presence as f64,
+        heatmap_peak: r.heatmap_peak as f64,
+    }))
+}
+
+/// Faithful port of `findCursorByMLMultiHint`'s REACHABLE behavior only.
+/// The TS source's crop-based single-hint fallback (`findCursorByML`,
+/// used when v8/cascade doesn't clear `HEATMAP_FLOOR`) needs a `.onnx`
+/// model this repo doesn't bundle (see this file's header) — it can never
+/// produce a non-null result in this deployment, so it's not ported; this
+/// function returns `None` in that case instead of running ~130 lines of
+/// dead crop-search code. `hints` is accepted (matching the DI contract
+/// `cursor_locator.rs` needs) but only `hints[0]` is used, matching the
+/// TS source's own comment: "hints[0] is always the caller's primary
+/// guess... lets the cascade search a bounded window around it."
+pub fn find_cursor_by_ml_multi_hint(
+    jpeg_buffer: &[u8],
+    frame_width: u32,
+    frame_height: u32,
+    hints: &[Point],
+    options: MlMultiHintOptions,
+) -> anyhow::Result<Option<MlCursorResult>> {
+    const HEATMAP_FLOOR: f64 = 0.2;
+    let v8 = find_cursor_by_v8_full_frame(
+        jpeg_buffer,
+        frame_width,
+        frame_height,
+        V8FullFrameOptions {
+            min_presence: options.min_confidence,
+            hint: hints.first().copied(),
+        },
+    )?;
+    Ok(v8.and_then(|v8| {
+        if v8.heatmap_peak >= HEATMAP_FLOOR {
+            Some(MlCursorResult {
+                x: v8.x,
+                y: v8.y,
+                confidence: v8.heatmap_peak,
+                crop_left: 0.0,
+                crop_top: 0.0,
+            })
+        } else {
+            None
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -759,25 +859,6 @@ mod tests {
         );
     }
 
-    // --- find_cursor_by_v8_full_frame ---------------------------------------
-    //
-    // `run_cascade` itself (the function this wraps) has no existing test in
-    // this file — a real end-to-end check needs BOTH a loadable ONNX model
-    // AND a frame `detect_ipad_region` can actually find a region in, which
-    // this crate doesn't yet have synthetic-frame infrastructure for. That
-    // real end-to-end path is exactly what this session's own
-    // `slam_and_cascade_smoke.rs` LIVE hardware gate already covers
-    // authoritatively (real captured frames, real model, PASSED). This test
-    // instead proves the one thing worth unit-testing about a pure
-    // argument-forwarding wrapper: it propagates a failure rather than
-    // panicking or silently swallowing it.
-    #[test]
-    fn propagates_a_region_detection_failure_rather_than_panicking() {
-        let result =
-            find_cursor_by_v8_full_frame("/nonexistent/model.onnx", 48.0, 0.5, &[], 640, 480, None);
-        assert!(result.is_err());
-    }
-
     #[test]
     #[ignore = "needs a real onnxruntime .so via ORT_DYLIB_PATH — see comment above"]
     fn real_model_respects_verify_thresh_gate() {
@@ -797,5 +878,135 @@ mod tests {
         .expect("verifier session should load — check ORT_DYLIB_PATH")
         .expect("with_verifier_session must yield Some once the session loaded");
         assert!(gated.is_none());
+    }
+
+    // -- resolve_verifier_model / find_cursor_by_v8_full_frame /
+    //    find_cursor_by_ml_multi_hint --
+
+    // Settings are process-wide global state (memoized) — env-var-mutating
+    // tests must not interleave, same discipline as ipad-primitives'
+    // click_verify.rs tests.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_env<T>(pairs: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
+        use pikvm_mcp_foundation::settings::reset_settings_for_test;
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous: Vec<(String, Option<String>)> = pairs
+            .iter()
+            .map(|(k, _)| (k.to_string(), std::env::var(k).ok()))
+            .collect();
+        for (k, v) in pairs {
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
+        }
+        reset_settings_for_test();
+        let result = f();
+        for (k, v) in previous {
+            match v {
+                Some(val) => std::env::set_var(&k, val),
+                None => std::env::remove_var(&k),
+            }
+        }
+        reset_settings_for_test();
+        result
+    }
+
+    fn uniform_jpeg(width: u32, height: u32, gray: u8) -> Vec<u8> {
+        use image::{ImageBuffer, Rgb};
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(width, height, Rgb([gray, gray, gray]));
+        let mut buf = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 90);
+        encoder.encode_image(&img).unwrap();
+        buf
+    }
+
+    #[test]
+    fn resolve_verifier_model_prefers_the_explicit_override() {
+        with_env(
+            &[(
+                "PIKVM_ML_VERIFIER_MODEL",
+                Some("/tmp/some-other-model.onnx"),
+            )],
+            || {
+                assert_eq!(
+                    resolve_verifier_model(),
+                    std::path::PathBuf::from("/tmp/some-other-model.onnx")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn find_cursor_by_v8_full_frame_returns_none_when_cascade_is_disabled() {
+        // No other detector exists in this port for the disabled-cascade
+        // case (see this function's own doc comment) — must short-circuit
+        // to None rather than error or panic, and must NOT need a real
+        // ONNX session (this test runs without ORT_DYLIB_PATH).
+        with_env(&[("PIKVM_ML_CASCADE", Some("0"))], || {
+            let jpeg = uniform_jpeg(64, 64, 128);
+            let result = find_cursor_by_v8_full_frame(&jpeg, 64, 64, V8FullFrameOptions::default());
+            assert!(result.unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn find_cursor_by_ml_multi_hint_returns_none_when_cascade_is_disabled() {
+        // Same disabled-cascade short-circuit, exercised through the
+        // multi-hint wrapper — confirms it propagates v8's None rather
+        // than falling through to the (unported, dead) single-hint path.
+        with_env(&[("PIKVM_ML_CASCADE", Some("0"))], || {
+            let jpeg = uniform_jpeg(64, 64, 128);
+            let hints = vec![Point { x: 32.0, y: 32.0 }];
+            let result =
+                find_cursor_by_ml_multi_hint(&jpeg, 64, 64, &hints, MlMultiHintOptions::default());
+            assert!(result.unwrap().is_none());
+        });
+    }
+
+    #[test]
+    #[ignore = "needs a real onnxruntime .so via ORT_DYLIB_PATH — see comment above"]
+    fn find_cursor_by_v8_full_frame_real_model_runs_end_to_end() {
+        // No real cursor in a uniform frame — this asserts the real
+        // pipeline (region-detect → grid → batched inference → soft-argmax)
+        // runs without erroring and, if it returns Some, the position is
+        // in-bounds and heatmap_peak/presence are valid sigmoid outputs.
+        // The point is proving the wiring is correct end-to-end against
+        // the real bundled model, not asserting a specific detection.
+        let jpeg = uniform_jpeg(640, 480, 128);
+        let result = find_cursor_by_v8_full_frame(&jpeg, 640, 480, V8FullFrameOptions::default())
+            .expect("find_cursor_by_v8_full_frame should not error — check ORT_DYLIB_PATH");
+        if let Some(det) = result {
+            assert!((0.0..640.0).contains(&det.x));
+            assert!((0.0..480.0).contains(&det.y));
+            assert!((0.0..=1.0).contains(&det.presence));
+            assert!((0.0..=1.0).contains(&det.heatmap_peak));
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a real onnxruntime .so via ORT_DYLIB_PATH — see comment above"]
+    fn find_cursor_by_ml_multi_hint_real_model_gates_on_heatmap_floor() {
+        // A verify_thresh of 0.0 (the default settings value is 0.5, but
+        // this test only needs the pipeline to RUN, not to actually find a
+        // cursor in a blank frame) — the HEATMAP_FLOOR=0.2 gate inside
+        // find_cursor_by_ml_multi_hint is what's under test: whatever v8
+        // returns, either the result clears 0.2 and comes back Some with
+        // confidence == heatmap_peak, or it's below the floor and comes
+        // back None. Both are valid outcomes for a cursor-less synthetic
+        // frame; this test just proves the gate runs against a real
+        // inference output rather than being a dead branch.
+        let jpeg = uniform_jpeg(640, 480, 128);
+        let hints = vec![Point { x: 320.0, y: 240.0 }];
+        let result =
+            find_cursor_by_ml_multi_hint(&jpeg, 640, 480, &hints, MlMultiHintOptions::default())
+                .expect("find_cursor_by_ml_multi_hint should not error — check ORT_DYLIB_PATH");
+        if let Some(r) = result {
+            assert!(r.confidence >= 0.2);
+            assert_eq!((r.crop_left, r.crop_top), (0.0, 0.0));
+        }
     }
 }

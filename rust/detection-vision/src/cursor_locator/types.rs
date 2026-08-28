@@ -9,7 +9,9 @@ use crate::cursor_detect::{
     CursorTemplate, DecodedScreenshot, FindCursorOptions, FindCursorSetResult, LocateCursorOptions,
     LocateCursorResult, Point,
 };
-use crate::cursor_ml_detect::MlCursorResult;
+use crate::cursor_ml_detect::{
+    MlCursorResult, MlMultiHintOptions, V8Detection, V8FullFrameOptions,
+};
 use pikvm_mcp_cursor_belief::{CursorBelief, Point as BeliefPoint};
 use std::future::Future;
 use std::pin::Pin;
@@ -63,27 +65,6 @@ pub struct CursorFix {
     /// the motion-diff probe's offset + mickeys that moveToPixel uses for
     /// calibration).
     pub probe_measurement: Option<ProbeMeasurement>,
-}
-
-/// The native shape returned by `find_cursor_by_v8_full_frame` (the
-/// dual-head cascade).
-#[derive(Clone, Copy, Debug)]
-pub struct V8Detection {
-    pub x: f64,
-    pub y: f64,
-    pub presence: f64,
-    pub heatmap_peak: f64,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct V8FullFrameOptions {
-    pub min_presence: Option<f64>,
-    pub hint: Option<Point>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MlMultiHintOptions {
-    pub min_confidence: Option<f64>,
 }
 
 type ScreenshotFn =

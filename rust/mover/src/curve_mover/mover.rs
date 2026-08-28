@@ -6,10 +6,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use pikvm_mcp_detection_vision::cursor_locator::{
-    CursorLocator, CursorLocatorDeps, LocateProfile, V8FullFrameOptions,
-};
-use pikvm_mcp_foundation::settings::get_settings;
+use pikvm_mcp_detection_vision::cursor_locator::{CursorLocator, CursorLocatorDeps, LocateProfile};
+use pikvm_mcp_detection_vision::cursor_ml_detect::find_cursor_by_v8_full_frame as detect_v8_full_frame;
 use pikvm_mcp_kvmd_client::client::PiKVMClient;
 
 use super::curve::{
@@ -23,30 +21,13 @@ fn dist(a: Point, b: Point) -> f64 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
 
-/// Resolve the shipped cascade model's path. Faithful for the two tiers
-/// that don't depend on how the Rust binary is eventually packaged: an
-/// explicit override, then `./ml/crop-heatmap.onnx` under the current
-/// working directory (TS's `cwdLocal` fallback — what every hardware
-/// gate this session has run against so far actually uses). TS's third
-/// tier (`bundled`, resolved relative to the running module's own file)
-/// has no settled Rust equivalent yet — the packaged binary's install
-/// layout is pikvm-nixos's call, not decided here — so it's deliberately
-/// NOT ported; `PIKVM_ML_VERIFIER_MODEL` covers a packaged deployment in
-/// the meantime.
-fn resolve_verifier_model(verifier_model_override: Option<&str>) -> std::path::PathBuf {
-    if let Some(p) = verifier_model_override {
-        return std::path::PathBuf::from(p);
-    }
-    std::env::current_dir()
-        .expect("current working directory should be readable")
-        .join("ml")
-        .join("crop-heatmap.onnx")
-}
-
 /// Deps for the `'curve'` locator profile, which only touches the
 /// belief and the V8 dual-head cascade. Every other profile's dep is a
 /// throwing stub — never reached by `locate('curve')` (matches
 /// `move_to`'s own `make_locator_deps` stub pattern, once it lands).
+/// `find_cursor_by_v8_full_frame` resolves its own model path/cascade
+/// config from `Settings` internally (see its own doc comment in
+/// `cursor_ml_detect.rs`) — nothing to close over here.
 fn make_curve_locator_deps(belief: pikvm_mcp_cursor_belief::CursorBelief) -> CursorLocatorDeps {
     fn not_wired<T: Send + 'static>(
         name: &'static str,
@@ -56,11 +37,6 @@ fn make_curve_locator_deps(belief: pikvm_mcp_cursor_belief::CursorBelief) -> Cur
         })
     }
 
-    let settings = get_settings();
-    let model_path = resolve_verifier_model(settings.ml.verifier_model.as_deref());
-    let grid_stride = settings.ml.grid_stride;
-    let verify_thresh = settings.ml.verify_thresh as f32;
-
     CursorLocatorDeps {
         belief,
         screenshot: Arc::new(|| not_wired("screenshot")),
@@ -69,31 +45,8 @@ fn make_curve_locator_deps(belief: pikvm_mcp_cursor_belief::CursorBelief) -> Cur
         sleep: Arc::new(|_| Box::pin(async {})),
         get_cached_templates: Arc::new(|| not_wired("getCachedTemplates")),
         is_ml_disabled: Arc::new(|| false),
-        find_cursor_by_v8_full_frame: Arc::new(move |buf, w, h, options: V8FullFrameOptions| {
-            let model_path = model_path.clone();
-            Box::pin(async move {
-                let hint = options
-                    .hint
-                    .map(|p| pikvm_mcp_detection_vision::cursor_detect::Point { x: p.x, y: p.y });
-                let result =
-                    pikvm_mcp_detection_vision::cursor_ml_detect::find_cursor_by_v8_full_frame(
-                        model_path.to_string_lossy().as_ref(),
-                        grid_stride,
-                        verify_thresh,
-                        &buf,
-                        w,
-                        h,
-                        hint,
-                    )?;
-                Ok(result.map(
-                    |r| pikvm_mcp_detection_vision::cursor_locator::V8Detection {
-                        x: r.x as f64,
-                        y: r.y as f64,
-                        presence: r.presence as f64,
-                        heatmap_peak: r.heatmap_peak as f64,
-                    },
-                ))
-            })
+        find_cursor_by_v8_full_frame: Arc::new(|buf, w, h, options| {
+            Box::pin(async move { detect_v8_full_frame(&buf, w, h, options) })
         }),
         locate_cursor: Arc::new(|_| not_wired("locateCursor")),
         find_cursor_by_template_set: Arc::new(|_, _, _| None),

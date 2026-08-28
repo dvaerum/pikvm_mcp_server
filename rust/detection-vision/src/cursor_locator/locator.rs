@@ -5,11 +5,12 @@
 //! layout — see this module's root file for why).
 
 use crate::cursor_detect::{FindCursorOptions, LocateCursorOptions, Point};
+use crate::cursor_ml_detect::{MlMultiHintOptions, V8FullFrameOptions};
 use pikvm_mcp_cursor_belief::{Bounds, CursorBelief, Emit};
 
 use super::types::{
     from_belief_point, to_belief_point, CursorFix, CursorFixSource, CursorLocatorDeps,
-    LocateProfile, MlMultiHintOptions, ProbeMeasurement, V8FullFrameOptions,
+    LocateProfile, ProbeMeasurement,
 };
 
 const CURVE_MIN_PRESENCE: f64 = 0.5;
