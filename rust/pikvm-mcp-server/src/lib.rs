@@ -11,3 +11,4 @@
 //! like the TS source's own `parseCliOptions(argv, env)` shape.
 
 pub mod cli;
+pub mod prompts;
