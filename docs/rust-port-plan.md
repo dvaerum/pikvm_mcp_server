@@ -564,6 +564,36 @@ before it):
    which module 2's owner (or whoever gets there first) should build
    before either of modules 4/5 needs it in earnest — it's ~50 LOC of
    faithful port, not a design risk.
+
+   **Sixth crate-boundary finding (2026-08-28, nixos-dev), a direct
+   consequence of the fifth (cursor-anchor.ts, §7.4 above)**: `ipad-keys.ts`
+   itself was ported into this crate first (its TS source sits alongside
+   this module's other `ipad-*.ts` files), landing as
+   `ipad_hid::ipad_keys`. But its own header comment already named BOTH
+   real callers — `ipad-unlock.ts` (this module) AND `cursor-anchor.ts`'s
+   `key-sequence-retry`/`defensive-keys` recovery kinds — and
+   cursor-anchor.ts turned out to belong in `rust/mover` (module 4, per the
+   finding just above), not module 3 as originally filed. A module-4 file
+   depending on this module-5 crate would invert the module 4→5 direction
+   the same way the `emit_chunked`/`take_raw_screenshot` case above did.
+   Moved `ipad_keys.rs` into `pikvm-mcp-ipad-primitives` alongside
+   `click_verify` — the exact "both modules 4 and 5 need this, neither
+   depends on the other" crate this section already built, for the exact
+   reason its own description already named `ipad-keys.ts` as precedent.
+   Zero real callers existed anywhere in the Rust port yet, so this was a
+   clean mechanical move (all 15 `ipad-primitives` tests pass unchanged);
+   `cursor_anchor.rs` (`rust/mover`) is its first.
+
+   Also while building `cursor_anchor.rs`'s tests: `slam.rs` and
+   `cursor_keepalive.rs` (both `rust/mover`) each carried their own private
+   per-file `TEST_LOCK`, meant to serialize tests that touch process-global
+   state (`kvmd-client`'s `emit_clock`, `detection-vision`'s
+   `LAST_GOOD_BOUNDS` cache). Adding a third, heavy consumer of the same
+   globals surfaced that three separate mutex instances don't actually
+   serialize against each other — `cargo test` runs a crate's tests
+   concurrently by default. Replaced with one crate-wide
+   `mover::test_support::GLOBAL_STATE_LOCK` all three files' tests share;
+   a real, previously-latent flake, not a cursor_anchor.rs-only concern.
 6. **MCP protocol surface** (~3,100 LOC: `index.ts` — 2,575 LOC, the tool
    registry/dispatch, plus `cli.ts`, `http-server.ts`, `prompts/*`) — built
    LAST, on top of everything above, using `rmcp` per §6. `index.ts`'s size
