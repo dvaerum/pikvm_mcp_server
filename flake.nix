@@ -238,6 +238,125 @@
                 assert code(f"-u admin:kvmdpass {init}") == "200", "valid kvmd credentials must be accepted"
               '';
             };
+
+          # (#51) The APPLIANCE shape: target = null, mode DERIVED from the /hidmode
+          # endpoint. This is the gate that would have caught the crash-loop — with
+          # target required + --target unconditional, target=null couldn't be
+          # produced and URL+--target both-set fail-fasted the unit. A fake /hidmode
+          # (reports the assembled gadget = ipad) starts before the MCP so the initial
+          # derive succeeds. Asserts: the unit STARTS (no crash-loop), ExecStart omits
+          # --target, PIKVM_HIDMODE_URL is wired, and the server logged the derive.
+          nixos-service-hidmode =
+            let
+              fakeHidmode = pkgs.writeText "fake-hidmode.py" ''
+                from http.server import BaseHTTPRequestHandler, HTTPServer
+                import json
+                class H(BaseHTTPRequestHandler):
+                    def do_GET(self):
+                        if self.path.rstrip("/").endswith("/hidmode"):
+                            self.send_response(200)
+                            self.send_header("content-type", "application/json")
+                            self.end_headers()
+                            self.wfile.write(json.dumps({
+                                "ok": True, "mode": "ipad", "requested": "ipad",
+                                "observed": "ipad", "settled": True,
+                            }).encode())
+                        else:
+                            self.send_response(404); self.end_headers()
+                    def log_message(self, *a):
+                        pass
+                HTTPServer(("127.0.0.1", 8083), H).serve_forever()
+              '';
+            in
+            pkgs.testers.runNixOSTest {
+              name = "pikvm-mcp-service-hidmode";
+              nodes.machine = { ... }: {
+                imports = [ self.nixosModules.pikvm-mcp ];
+                systemd.services.fake-hidmode = {
+                  wantedBy = [ "multi-user.target" ];
+                  before = [ "pikvm-mcp.service" ];
+                  serviceConfig.ExecStart = "${pkgs.python3}/bin/python3 ${fakeHidmode}";
+                };
+                services.pikvm-mcp = {
+                  enable = true;
+                  # DERIVE: no declared target, mode comes from the appliance endpoint.
+                  target = null;
+                  hidModeUrl = "http://127.0.0.1:8083/hidmode";
+                  host = "https://pikvm.invalid";
+                  security = "no";
+                  openFirewall = true;
+                };
+              };
+              testScript = ''
+                machine.wait_for_open_port(8083)  # the /hidmode endpoint is listening
+                # The KEY assertion: with target=null + a URL, the unit STARTS — the
+                # module produced a URL-only invocation, not the both-set crash-loop.
+                machine.wait_for_unit("pikvm-mcp.service")
+                machine.wait_for_open_port(3000)
+
+                # ExecStart carries NO --target (would be both-set with the URL), and
+                # PIKVM_HIDMODE_URL is wired.
+                execstart = machine.succeed("systemctl show -p ExecStart --value pikvm-mcp.service")
+                assert "--target" not in execstart, f"--target must be omitted when deriving: {execstart}"
+                env = machine.succeed("systemctl show -p Environment --value pikvm-mcp.service")
+                assert "PIKVM_HIDMODE_URL=http://127.0.0.1:8083/hidmode" in env, env
+
+                # DERIVE proof, race-free: restart now that /hidmode is confirmed up so
+                # the startup read hits the ready endpoint, then assert the derive log.
+                machine.succeed("systemctl restart pikvm-mcp.service")
+                machine.wait_for_open_port(3000)
+                machine.succeed(
+                    "journalctl -u pikvm-mcp.service | grep -q 'derived ipad'"
+                )
+              '';
+            };
+
+          # (#51) NEGATIVE gate (eval-only, no VM boot): target + hidModeUrl both set
+          # MUST be an eval error (the mutual-exclusion assertion), so the toplevel /
+          # host-eval catches the two-copies misconfig instead of a runtime crash-loop.
+          # Positive control: the SAME config with only hidModeUrl evaluates cleanly,
+          # proving the failure is the assertion, not the scaffolding.
+          hidmode-both-set-rejected =
+            let
+              mkSys = extra: nixpkgs.lib.nixosSystem {
+                inherit system;
+                modules = [
+                  self.nixosModules.pikvm-mcp
+                  ({ ... }: {
+                    boot.loader.grub.enable = false;
+                    fileSystems."/" = { device = "none"; fsType = "tmpfs"; };
+                    system.stateVersion = "24.11";
+                    services.pikvm-mcp = {
+                      enable = true;
+                      host = "https://pikvm.invalid";
+                      security = "no";
+                    } // extra;
+                  })
+                ];
+              };
+              forceTop = sys: builtins.seq sys.config.system.build.toplevel.drvPath true;
+              execOf = sys: sys.config.systemd.services.pikvm-mcp.serviceConfig.ExecStart;
+              envOf = sys: sys.config.systemd.services.pikvm-mcp.environment;
+              hasInfix = needle: hay: builtins.match ".*${needle}.*" hay != null;
+              both = builtins.tryEval (forceTop (mkSys { target = "ipad"; hidModeUrl = "http://127.0.0.1:8083/hidmode"; }));
+              urlSys = mkSys { hidModeUrl = "http://127.0.0.1:8083/hidmode"; };
+              onlyUrl = builtins.tryEval (forceTop urlSys);
+              declaredSys = mkSys { target = "ipad"; };
+            in
+            if both.success then
+              throw "services.pikvm-mcp with BOTH target and hidModeUrl evaluated OK — the #51 mutual-exclusion assertion must reject it at eval time"
+            else if !onlyUrl.success then
+              throw "positive control failed: the URL-only config should evaluate cleanly, so the both-set rejection above is not attributable to the assertion"
+            else if hasInfix "--target" (execOf urlSys) then
+              throw "derive (target=null) ExecStart must OMIT --target; got: ${execOf urlSys}"
+            else if (envOf urlSys).PIKVM_HIDMODE_URL or null != "http://127.0.0.1:8083/hidmode" then
+              throw "derive config must wire PIKVM_HIDMODE_URL into the service env"
+            else if !(hasInfix "--target ipad" (execOf declaredSys)) then
+              throw "declared (target=ipad) ExecStart must KEEP --target (regression); got: ${execOf declaredSys}"
+            else
+              pkgs.runCommand "pikvm-mcp-hidmode-module-eval" { } ''
+                echo 'both-set rejected at eval; URL-only accepted, ExecStart omits --target + wires PIKVM_HIDMODE_URL; declared keeps --target' > $out
+              '';
         };
       }))
     // {

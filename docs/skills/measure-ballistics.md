@@ -21,7 +21,6 @@ When the PiKVM target uses `mouse.absolute=false` (e.g. iPad), deltas have a non
 | reps | number | 2 | Repetitions per cell |
 | callsPerCell | number | 5 | Delta calls emitted per cell |
 | slowPaceMs | number | 30 | Ms between calls in slow pace |
-| settleMs | number | 150 | Ms before screenshots |
 | profilePath | string | `./data/ballistics.json` | Profile output path |
 | verbose | boolean | false | Log per-cell diagnostics to stderr |
 

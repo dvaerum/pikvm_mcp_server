@@ -24,7 +24,8 @@
  */
 
 import { PiKVMClient, ScreenResolution } from './client.js';
-import { slamToCorner } from './ballistics.js';
+import { takeRawScreenshot } from './ballistics.js';
+import { anchorCursor } from './cursor-anchor.js';
 import {
   detectBoundsOrNull,
   slamOriginFromBounds,
@@ -35,6 +36,10 @@ import {
 } from './orientation.js';
 import { sleep } from './util.js';
 import { emitChunked } from './gesture.js';
+// F7 (Round 2 Phase 4): the Phase-217 unlock triad / Phase-231 defensive
+// pair moved out to a shared mechanism module — see its own header comment
+// for why not into either consuming module directly.
+import { ipadUnlockKeySequence, ipadDefensiveKeys } from './ipad-keys.js';
 
 export interface IpadUnlockOptions {
   /** Whether to slam to top-left first to establish a known cursor position
@@ -68,7 +73,10 @@ export interface IpadUnlockOptions {
   /** Per-call mickey size for the drag. Smaller = higher call rate = faster
    *  apparent motion. Default 30. */
   chunkMickeys?: number;
-  /** Slam-to-corner pace when slamFirst is true (ms between calls). */
+  /** Slam-to-corner pace when slamFirst is true (ms between calls). Unset
+   *  falls through to slamToCorner's own default (currently 60ms) via
+   *  cursor-anchor.ts's anchorCursor — kept undefined rather than defaulted
+   *  here so that default stays a single source of truth. */
   slamPaceMs?: number;
   /** px/mickey estimate used to position the cursor at (startX, startY)
    *  before the swipe. Default 1.0 (the iPad's approximate ratio at
@@ -90,6 +98,14 @@ export interface IpadUnlockResult {
   /** iPad bounds used for swipe positioning. Null if startX/startY were
    *  both passed explicitly (no detection performed). */
   bounds: IpadBounds | null;
+  /** Result of anchorCursor's post-slam motion check (cursor-anchor.ts,
+   *  captureVerification:true). true = the expected cursor motion
+   *  registered near the corner; false = it didn't (the slam may have
+   *  been reinterpreted as a system gesture — see the retry note on
+   *  slamFirst's handling below) and key-sequence-retry recovery was
+   *  attempted; null = slamFirst was false, or the key-press-only path
+   *  returned before reaching the slam step, so no check was performed. */
+  slamVerified: boolean | null;
   message: string;
 }
 
@@ -97,18 +113,13 @@ export async function unlockIpad(
   client: PiKVMClient,
   options: IpadUnlockOptions = {},
 ): Promise<IpadUnlockResult> {
-  // Esc → Enter → Space: Enter unlocks iPadOS 26; Space is the
-  // working key on older revisions; Esc closes any Control/Notification
-  // overlay a prior failed gesture may have opened.
+  // Esc → Enter → Space (see ipad-keys.ts's ipadUnlockKeySequence for the
+  // full per-key rationale). The try/catch is caller-specific fallthrough
+  // logic — stays here, not in the extracted function.
   let keyPressAttempted = false;
   if (options.tryKeyPressFirst !== false) {
     try {
-      await client.sendKey('Escape');
-      await sleep(200);
-      await client.sendKey('Enter');
-      await sleep(600);
-      await client.sendKey('Space');
-      await sleep(400);
+      await ipadUnlockKeySequence(client);
       keyPressAttempted = true;
     } catch {
       // If sendKey fails, fall through to swipe-based unlock
@@ -133,6 +144,7 @@ export async function unlockIpad(
       chunkCount: 0,
       swipeDurationMs: 0,
       bounds: null,
+      slamVerified: null,
       message:
         'Sent Escape + Enter + Space (Phase 217). Swipe SKIPPED to avoid ' +
         'the home-screen-to-lock-screen gesture artifact (Phase 219). ' +
@@ -151,7 +163,6 @@ export async function unlockIpad(
   // full unlock attempt and confuses callers.
   const dragPx = options.dragPx ?? 1500;
   const chunkMickeys = options.chunkMickeys ?? 30;
-  const slamPaceMs = options.slamPaceMs ?? 60;
   const ppm = options.positionPxPerMickey ?? 1.0;
   const postSettleMs = options.postSettleMs ?? 1000;
 
@@ -175,8 +186,38 @@ export async function unlockIpad(
   const startY = options.startY ?? detectedSwipeStart.y;
 
   // 1. Optionally slam so we know the starting position (top-left of iPad content).
+  //
+  // 2026-08-24: a controlled retest found the slam's lock-screen risk
+  // present at a non-trivial rate regardless of pace (see slamPaceMs's
+  // note in ballistics.ts) — and this is the one slamToCorner call site
+  // that's unguarded and reachable with zero special args (pikvm_ipad_launch_app's
+  // default unlockFirst=true calls unlockIpad() by default). Layer 5
+  // (docs/troubleshooting/ipad-safety-guards.md): a locked screen has no
+  // active hot corner, so slamming here is safe by design — cursor-anchor.ts's
+  // `caller-asserted` guard never refuses, unlike move-to.ts's bounds-guard.
+  // captureVerification checks whether the slam's expected motion actually
+  // registered; if not, key-sequence-retry recovery retries the key
+  // sequence once and re-attempts the slam (we can't call unlockIpad()
+  // again to recover — that's this function, would recurse). If it still
+  // doesn't verify, continue anyway: the swipe below is still our best
+  // remaining attempt, and the caller inspects the returned screenshot
+  // either way. slamOriginPx is passed explicitly from the bounds already
+  // detected above so anchorCursor doesn't re-detect (this function needs
+  // that same detection for the swipe-start position regardless).
+  let slamVerified: boolean | null = null;
   if (slamFirst) {
-    await slamToCorner(client, { corner: 'top-left', paceMs: slamPaceMs });
+    const slamResult = await anchorCursor({
+      client,
+      corner: 'top-left',
+      guard: { kind: 'caller-asserted', reason: 'Layer 5 — lock screen has no active hot corner' },
+      screenshot: takeRawScreenshot,
+      captureVerification: true,
+      recovery: 'key-sequence-retry',
+      paceMs: options.slamPaceMs,
+      slamOriginPx: bounds ? slamOriginFromBounds(bounds) : LEGACY_PORTRAIT_SLAM_ORIGIN,
+      verbose: options.verbose,
+    });
+    slamVerified = slamResult.verified;
   }
 
   // 2. Position the cursor at (startX, startY). Post-slam origin is the
@@ -216,10 +257,15 @@ export async function unlockIpad(
 
   const shot = await client.screenshot();
 
+  const slamWarning = slamVerified === false
+    ? ' WARNING: the pre-swipe slam-to-corner motion did not verify (even after a key-sequence retry) — ' +
+      'the cursor origin used for positioning may be wrong; inspect the screenshot carefully.'
+    : '';
   const message =
     `Unlock swipe: ${dragPx} px upward in ${chunkCount} chunks over ${swipeDurationMs} ms. ` +
     `Inspect the returned screenshot to confirm the iPad is now on the home screen ` +
-    `(if still lock screen, the swipe did not clear iPadOS's unlock threshold — retry with larger dragPx).`;
+    `(if still lock screen, the swipe did not clear iPadOS's unlock threshold — retry with larger dragPx).` +
+    slamWarning;
 
   return {
     screenshot: shot.buffer,
@@ -229,6 +275,7 @@ export async function unlockIpad(
     chunkCount,
     swipeDurationMs,
     bounds,
+    slamVerified,
     message,
   };
 }
@@ -375,15 +422,37 @@ export async function ipadGoHome(
   if (options.forceHomeViaSwipe) {
     if (options.verbose) console.error('[ipad-home] swipe-up to force dismiss App Switcher');
     const dragPx = options.swipeDragPx ?? 1500;
-    await slamToCorner(client, { corner: 'top-left', paceMs: 60 });
-    // Move down to the bottom-centre area so the swipe starts from
-    // a region where iPadOS expects the home gesture.
-    const bounds = await detectBoundsOrNull(client, {
+    // 2026-08-24: the ONE intentional behavior change in the cursor-anchor.ts
+    // migration. Before: hardcoded slamToCorner call, no verification, no
+    // recovery — ipad-keys.ts's ipadDefensiveKeys doc documents this exact
+    // slam occasionally re-locking an unlocked iPad, with nothing to catch
+    // it until the unconditional defensive Esc+Enter after the swipe. Now:
+    // captureVerification checks whether the slam's motion actually
+    // registered near the corner; on failure, defensive-keys recovery
+    // (Esc+Enter, matching Phase 231's own sequence) runs immediately,
+    // closing a real, previously-unguarded gap rather than relying solely
+    // on the post-swipe belt-and-suspenders below.
+    // F3 (Round 2 Phase 4): anchorCursor already ran a full bounds
+    // detection internally to resolve the slam origin (resolveCallerAssertedOrigin,
+    // cursor-anchor.ts) and returns it as `.origin`/`.bounds` — destructure
+    // those instead of re-detecting + recomputing slamOriginFromBounds(bounds)
+    // a second time 14 lines later, which is what this code used to do.
+    const { verified, origin: slamOrigin, bounds } = await anchorCursor({
+      client,
+      corner: 'top-left',
+      guard: { kind: 'caller-asserted', reason: 'Layer 5 — safe on lock screen and home screen, idempotent' },
+      screenshot: takeRawScreenshot,
+      captureVerification: true,
+      recovery: 'defensive-keys',
       verbose: options.verbose,
-      logPrefix: 'ipad-home',
     });
+    if (verified === false) {
+      messagePart += ' WARNING: the pre-swipe slam-to-corner motion did not verify (defensive Esc+Enter sent) — inspect the screenshot carefully.';
+    }
+    // Move down to the bottom-centre area so the swipe starts from
+    // a region where iPadOS expects the home gesture. `bounds`/`slamOrigin`
+    // came from anchorCursor above — no second detection round trip.
     const start = bounds ? unlockStartFromBounds(bounds) : LEGACY_PORTRAIT_UNLOCK_START;
-    const slamOrigin = bounds ? slamOriginFromBounds(bounds) : LEGACY_PORTRAIT_SLAM_ORIGIN;
     const posX = Math.round(start.x - slamOrigin.x);
     const posY = Math.round(start.y - slamOrigin.y);
     const posChunks = await emitChunked(client, posX, posY, 127, 20);
@@ -393,15 +462,9 @@ export async function ipadGoHome(
     await emitChunked(client, 0, -dragPx, 30, 0);
     await client.mouseClick('left', { state: false });
     await sleep(1000);
-    // Phase 231 (v0.5.207): defensive Esc + Enter after the swipe.
-    // The swipe-up gesture sometimes re-locks an already-unlocked iPad
-    // (live-verified 2026-05-10) — same hazard Phase 219 fixed for
-    // unlockIpad. Esc + Enter is a no-op on home but unlocks if we
-    // accidentally locked. Cheap (~800 ms) belt-and-suspenders.
-    await client.sendKey('Escape');
-    await sleep(200);
-    await client.sendKey('Enter');
-    await sleep(600);
+    // Phase 231 (v0.5.207) defensive pair — see ipad-keys.ts's
+    // ipadDefensiveKeys for the full rationale.
+    await ipadDefensiveKeys(client);
     // Phase 235 (v0.5.208): the swipe leaves cursor pinned at the
     // top edge (drag terminates at y≈0). Live N=5 diagnostic
     // 2026-05-10: target-region clicks fail (residual 438 px) when

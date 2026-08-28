@@ -24,8 +24,8 @@ import {
   extractCursorTemplateDecoded,
   type CursorTemplate,
   type DecodedScreenshot,
-} from '../cursor-detect.js';
-import { evaluatePreClickAgreement } from '../click-verify.js';
+} from '../../cursor-detect.js';
+import { evaluatePreClickAgreement } from '../../click-verify-archive.js';
 
 /** Build a 256×256 dark frame with a single bright 12×12 cursor blob
  *  centered at (cx, cy). */

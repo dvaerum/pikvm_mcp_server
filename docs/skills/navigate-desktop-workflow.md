@@ -10,6 +10,8 @@ Step-by-step procedure for navigating a desktop environment.
 |----------|----------|-------------|
 | `goal` | Yes | What you want to accomplish (e.g., "open Firefox", "find and open a file") |
 
+Goal: **{{goal}}**
+
 ## Workflow Steps
 
 Use an **Observe-Plan-Act-Verify** loop until the goal is achieved.
@@ -57,4 +59,4 @@ Take another screenshot to confirm the action had the expected effect. If not, r
 
 ## Repeat
 
-Continue the Observe-Plan-Act-Verify loop until the goal is achieved. If you get stuck, try a different approach (e.g., use keyboard shortcuts instead of mouse, or use a terminal command instead of the GUI).
+Continue the Observe-Plan-Act-Verify loop until the goal **{{goal}}** is achieved. If you get stuck, try a different approach (e.g., use keyboard shortcuts instead of mouse, or use a terminal command instead of the GUI).

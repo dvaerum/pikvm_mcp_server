@@ -13,7 +13,9 @@
  *   4. Exposes a lookup function that consumers (move-to, click-at) use to
  *      convert a desired pixel distance into a sequence of relative deltas.
  *
- * See /Users/georg/.claude/plans/we-have-not-have-vivid-stallman.md
+ * See docs/adr/0001-do-not-merge-cursor-detection-and-calibration-sampling-lookalikes.md
+ * and docs/troubleshooting/ipad-safety-guards.md for the design rationale and
+ * the safety guards this profile feeds into.
  */
 
 import { promises as fs } from 'fs';
@@ -27,14 +29,29 @@ import {
   locateCursor,
 } from './cursor-detect.js';
 import { sleep, median } from './util.js';
+// F9 (Round 2 Phase 3, 2/2): anchorCursor is the only thing this module
+// imports from cursor-anchor.js now — the prior circular import (this
+// module also exported slamToCorner/nudgeFromEdge/cornerTargetPx/
+// cornerVector for cursor-anchor.ts to import back) is gone: that whole
+// slam vocabulary moved to slam.ts (see its own header comment), which
+// cursor-anchor.ts now imports from instead of this module.
+import { anchorCursor } from './cursor-anchor.js';
+// F9: Axis's canonical declaration lives in slam.ts now (it's part of the
+// slam vocabulary — NudgeOptions.onlyAxis) — this module still needs it for
+// its own measurement types (BallisticsSample.axis, MeasureBallisticsOptions
+// .axes, medianKey, etc.), so import + re-export rather than duplicate.
+// NOTE: two OTHER separately-declared `Axis = 'x' | 'y'` types still exist
+// (move-to.ts:173, scale-learner.ts:39) — structurally identical but not
+// unified with this one. Deliberately out of scope for F9 (a pure symbol
+// move); worth a follow-up if the three ever drift apart.
+import type { Axis } from './slam.js';
+export type { Axis };
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type Axis = 'x' | 'y';
 export type Pace = 'fast' | 'slow';
-export type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 export interface BallisticsSample {
   axis: Axis;
@@ -64,13 +81,15 @@ export interface MeasureBallisticsOptions {
   reps?: number;              // default 2
   callsPerCell?: number;      // default 5 (calls of `magnitude` per rep)
   slowPaceMs?: number;        // default 30 ms between calls in 'slow'
-  settleMs?: number;          // default 400 ms after deltas, before screenshot
-  slamCalls?: number;         // default computed from resolution
-  slamPaceMs?: number;        // default 15 ms between slam calls
-  nudgeCalls?: number;        // default 20 — away-from-edge calls after slam
-  nudgeCallPaceMs?: number;   // default 5 ms between nudge calls
-  cornerTolerance?: number;   // default 80 px — post-slam cluster must land
-                              // within this box from the expected corner
+  // settleMs, slamCalls, slamPaceMs, nudgeCalls, nudgeCallPaceMs, and
+  // cornerTolerance were removed 2026-08-24 (cursor-anchor.ts migration,
+  // Phase 3 PR 3/3): settleMs was dead code (computed, never read — the
+  // interface's own doc claimed a 400ms default while the actual code used
+  // 150, and neither value did anything); the other five are now owned
+  // entirely by anchorCursor()'s own parameters/defaults inside measureCell,
+  // the single source of truth this interface used to duplicate and drift
+  // out of sync with (see git history for the slamPaceMs/slamCalls
+  // drift-prevention doc that used to live here).
   noiseFrames?: number;       // default 4 — baseline frames for noise capture
   noiseIntervalMs?: number;   // default 500 — gap between baseline frames
   noiseExcludeRadius?: number; // default 50 px around a noise centroid
@@ -93,21 +112,24 @@ export interface MeasureBallisticsResult {
 // Helpers
 // ============================================================================
 
-async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
+/**
+ * ADR 0001 (docs/adr/0001-do-not-merge-cursor-detection-and-calibration-
+ * sampling-lookalikes.md): the non-nudging takeRawScreenshot variant — a
+ * wake nudge right before a calibration/ballistics capture would
+ * contaminate the very displacement being measured. Exported so
+ * cursor-anchor.ts's `caller-asserted`/`none-calibration` call sites
+ * (unlockIpad, ipadGoHome, eventually measureCell) can pass this exact
+ * implementation as their `screenshot` fn rather than writing a 4th copy —
+ * that's reusing the existing implementation through the unified
+ * interface, not merging it with cursor-detect.ts's nudging variant.
+ */
+export async function takeRawScreenshot(client: PiKVMClient): Promise<Buffer> {
   const result = await client.screenshot();
   return result.buffer;
 }
 
 // median moved to ./util.js (shared with auto-calibrate).
-
-function cornerVector(corner: Corner): { x: -1 | 1; y: -1 | 1 } {
-  switch (corner) {
-    case 'top-left': return { x: -1, y: -1 };
-    case 'top-right': return { x: 1, y: -1 };
-    case 'bottom-left': return { x: -1, y: 1 };
-    case 'bottom-right': return { x: 1, y: 1 };
-  }
-}
+// cornerVector moved to slam.js (F9, Round 2 Phase 3, 2/2).
 
 function defaultProfilePath(): string {
   return path.resolve(process.cwd(), 'data', 'ballistics.json');
@@ -208,94 +230,8 @@ function filterOutNoise(
   });
 }
 
-// ============================================================================
-// Slam to corner
-// ============================================================================
-
-export interface SlamOptions {
-  calls?: number;
-  paceMs?: number;
-  corner?: Corner;
-  verbose?: boolean;
-}
-
-export interface NudgeOptions {
-  calls?: number;      // default 5 — each emits ±127 per axis
-  paceMs?: number;     // default 10
-  away?: Corner;       // which corner to move AWAY from (opposite of slam target)
-  onlyAxis?: Axis;     // if set, move only along this axis (perpendicular to
-                       // the measurement axis, so the measurement starts
-                       // with maximum travel room)
-  verbose?: boolean;
-}
-
-/**
- * After a slam, the cursor is pinned at a screen edge. iPadOS applies an
- * "edge dead zone" that absorbs the first ~100-200 mickeys of any movement
- * away from the edge — the cursor doesn't visibly travel until that budget
- * is spent. Observed empirically on this iPad: 127 mickeys = no movement;
- * 635 mickeys = 475 px travel.
- *
- * This nudge emits enough deltas in the "away" direction to comfortably
- * exceed the dead zone, placing the cursor in open space where measurements
- * and cursor detection are clean.
- */
-export async function nudgeFromEdge(
-  client: PiKVMClient,
-  options: NudgeOptions = {},
-): Promise<void> {
-  const away = options.away ?? 'top-left';
-  const calls = options.calls ?? 5;
-  const paceMs = options.paceMs ?? 10;
-  // Invert the corner: moving AWAY from top-left means +x, +y.
-  const vec = cornerVector(away);
-  let dx = -127 * vec.x;
-  let dy = -127 * vec.y;
-  if (options.onlyAxis === 'x') dy = 0;
-  if (options.onlyAxis === 'y') dx = 0;
-  if (options.verbose) {
-    console.error(`[nudge] away from ${away}: ${calls} × (${dx},${dy}) @ ${paceMs}ms`);
-  }
-  for (let i = 0; i < calls; i++) {
-    await client.mouseMoveRelative(dx, dy);
-    if (paceMs > 0) await sleep(paceMs);
-  }
-}
-
-/**
- * Drive the pointer into a screen corner by emitting many full-range deltas
- * in that direction. iPadOS clamps the pointer at the screen edge regardless
- * of acceleration, so after enough calls we have a deterministic origin.
- *
- * No verification by cursor detection here — the caller (measureBallistics)
- * validates "we actually hit the corner" implicitly: the first cell's diff
- * will show a cursor cluster starting near the corner. If slam failed, the
- * first cell's measurement will be garbage and will be rejected by the
- * outlier filter. That's cheaper than an explicit locateCursor per slam.
- */
-export async function slamToCorner(
-  client: PiKVMClient,
-  options: SlamOptions = {},
-): Promise<void> {
-  const corner = options.corner ?? 'top-left';
-  // Pace matters on iPadOS: rapid slams to the edge appear to be interpreted
-  // as a system gesture (observed: iPad went to lock screen after a 28x @ 15ms
-  // slam from mid-screen to top-left). 60 ms between calls is slow enough for
-  // iPadOS to treat it as ordinary pointer movement.
-  const paceMs = options.paceMs ?? 60;
-  const resolution = await client.getResolution();
-  const calls = options.calls ?? Math.ceil(Math.max(resolution.width, resolution.height) / 100) + 8;
-  const vec = cornerVector(corner);
-
-  if (options.verbose) {
-    console.error(`[slam] ${corner} × ${calls} calls @ ${paceMs}ms`);
-  }
-
-  for (let i = 0; i < calls; i++) {
-    await client.mouseMoveRelative(127 * vec.x, 127 * vec.y);
-    if (paceMs > 0) await sleep(paceMs);
-  }
-}
+// Slam-to-corner (SlamOptions/SlamMotionCheck/cornerTargetPx/cornerTargetFromBounds/
+// NudgeOptions/nudgeFromEdge/slamToCorner) moved to slam.js (F9, Round 2 Phase 3, 2/2).
 
 // ============================================================================
 // Measurement
@@ -394,7 +330,7 @@ async function measureCell(
   pace: Pace,
   rep: number,
   noise: NoiseBaseline | null,
-  options: Required<Omit<MeasureBallisticsOptions, 'detection' | 'profilePath' | 'verbose' | 'axes' | 'magnitudes' | 'paces'>> & {
+  options: Omit<Required<Omit<MeasureBallisticsOptions, 'detection' | 'profilePath' | 'verbose' | 'axes' | 'magnitudes' | 'paces'>>, never> & {
     detection: DetectionConfig;
     verbose: boolean;
     noiseExcludeRadius: number;
@@ -402,24 +338,47 @@ async function measureCell(
 ): Promise<BallisticsSample | null> {
   // Reset: slam to top-left, then nudge past the edge dead zone so the
   // cursor sits in open space where movement registers and detection is
-  // clean.
-  await slamToCorner(client, {
-    calls: options.slamCalls,
-    paceMs: options.slamPaceMs,
+  // clean. captureVerification:true (2026-08-24, live-confirmed by the #60
+  // gate: the very first production-shape measureBallistics run hit a
+  // genuine iPad lock screen mid-sweep) — without this, a slam interrupted
+  // by a system-gesture reinterpretation reads as ordinary near-zero-
+  // displacement noise, silently poisoning the cell rather than failing
+  // loudly. recovery:'inspect-only': measureCell reads `verified` itself and rejects
+  // the cell outright on failure — no retry (unlike unlockIpad, which can't
+  // call itself to recover) — ballistics already resamples via `reps`, so a
+  // rejected cell is a cheap, no-new-risk response; #62's protection
+  // carries forward unchanged, just relocated into the shared primitive.
+  // guard:'none-calibration' — synthetic scene, no iPad-lock risk, no
+  // bounds detection. slamCalls/paceMs/cornerTolerance left undefined so
+  // anchorCursor's own defaults (== slamToCorner's own defaults) apply,
+  // same "leave unset, single source of truth" principle this file already
+  // used before the migration. The nudge-away-from-edge step is also owned
+  // by anchorCursor now (nudgeFromEdge's own built-in calls/pace, which is
+  // what this file's own default already matched pre-migration — see git
+  // history's nudgeCalls/nudgeCallPaceMs doc for the exact prior value).
+  const anchorResult = await anchorCursor({
+    client,
     corner: 'top-left',
+    guard: { kind: 'none-calibration' },
+    // ADR 0001: this module's own non-nudging capture — the same one
+    // slamToCorner's verifyMotion used before this migration, and the
+    // one measureCell's own before/after measurement pair below still
+    // uses directly (that pair is NOT verification, it's the actual
+    // ballistics measurement — kept entirely separate per ADR 0001's
+    // asymmetric-nudge rule, see the `before`/`after` capture further down).
+    screenshot: takeRawScreenshot,
+    captureVerification: true,
+    // F6 (Round 2 Phase 5c): selfGate:false collapsed into 'inspect-only'.
+    recovery: 'inspect-only',
+    nudge: { away: 'top-left', onlyAxis: axis === 'x' ? 'y' : 'x' },
     verbose: false,
   });
-  // Nudge PERPENDICULAR to the measurement axis so the cursor stays near
-  // the edge it will travel away from (maximising measurement headroom).
-  // For +x measurements: nudge down (onlyAxis=y), cursor lands at left-middle.
-  // For +y measurements: nudge right (onlyAxis=x), cursor lands at top-middle.
-  await nudgeFromEdge(client, {
-    calls: options.nudgeCalls,
-    paceMs: options.nudgeCallPaceMs,
-    away: 'top-left',
-    onlyAxis: axis === 'x' ? 'y' : 'x',
-    verbose: false,
-  });
+  if (anchorResult.verified === false) {
+    if (options.verbose) {
+      console.error(`[cell ${axis}/${magnitude}/${pace}/r${rep}] slam motion not verified — rejecting cell`);
+    }
+    return null;
+  }
 
   // Warm-up probe: a small move right before screenshot A so the cursor is
   // guaranteed visible (iPadOS fades the cursor ~300 ms after movement
@@ -522,12 +481,6 @@ export async function measureBallistics(
     reps: userOptions.reps ?? 2,
     callsPerCell: userOptions.callsPerCell ?? 5,
     slowPaceMs: userOptions.slowPaceMs ?? 30,
-    settleMs: userOptions.settleMs ?? 150,
-    slamCalls: userOptions.slamCalls ?? 0, // 0 = auto, resolved in slamToCorner
-    slamPaceMs: userOptions.slamPaceMs ?? 15,
-    nudgeCalls: userOptions.nudgeCalls ?? 5,
-    nudgeCallPaceMs: userOptions.nudgeCallPaceMs ?? 10,
-    cornerTolerance: userOptions.cornerTolerance ?? 80,
     noiseFrames: userOptions.noiseFrames ?? 4,
     noiseIntervalMs: userOptions.noiseIntervalMs ?? 500,
     noiseExcludeRadius: userOptions.noiseExcludeRadius ?? 30,

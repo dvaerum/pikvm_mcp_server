@@ -116,6 +116,54 @@ export function formatCaptureLines(saved: (CaptureSaved | null)[]): string {
   );
 }
 
+/**
+ * F12 (Round 2 Phase 5b): a stateful wrapper around capturePhaseAdvisory so
+ * call sites stop repeating `if (config) { captured.push(...) }` three times
+ * each. `beginCapture` returns phase methods that no-op entirely (never touch
+ * the client, never allocate) when capture is off, plus `entries`/`lines()`
+ * for the eventual tool result. `entries` keeps the pre-F12 CaptureSaved[]
+ * shape so existing assertions on the collected array (click-at.test.ts)
+ * don't need to change — only the accumulation mechanics moved.
+ */
+export interface CaptureSession {
+  before(): Promise<void>;
+  during(): Promise<void>;
+  /** providedBuffer lets a caller reuse a frame it already has in hand
+   *  (e.g. moveToPixel's result.screenshot) instead of paying a second
+   *  screenshot — same contract as capturePhase's own providedBuffer. */
+  after(providedBuffer?: Buffer): Promise<void>;
+  lines(): string;
+  readonly entries: (CaptureSaved | null)[];
+}
+
+export function beginCapture(client: CaptureClient, config: CaptureConfig | undefined): CaptureSession {
+  const entries: (CaptureSaved | null)[] = [];
+  if (!config) {
+    // Capture off: every method is a true no-op — zero screenshots, zero
+    // writes, zero entries. Callers don't need their own `if (config)` guard.
+    return {
+      async before() {},
+      async during() {},
+      async after() {},
+      lines: () => '',
+      entries,
+    };
+  }
+  return {
+    async before() {
+      entries.push(await capturePhaseAdvisory(client, config, 'before'));
+    },
+    async during() {
+      entries.push(await capturePhaseAdvisory(client, config, 'during'));
+    },
+    async after(providedBuffer?: Buffer) {
+      entries.push(await capturePhaseAdvisory(client, config, 'after', providedBuffer));
+    },
+    lines: () => formatCaptureLines(entries),
+    entries,
+  };
+}
+
 function requireFiniteNumber(value: unknown, field: string): number {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) {

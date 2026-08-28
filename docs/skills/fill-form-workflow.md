@@ -10,6 +10,8 @@ Step-by-step procedure for filling in a form on screen.
 |----------|----------|-------------|
 | `form_description` | No | Description of the form or the fields to fill in |
 
+Target: **{{form_description}}**
+
 ## Workflow Steps
 
 ### Step 1 — Screenshot and Identify Fields

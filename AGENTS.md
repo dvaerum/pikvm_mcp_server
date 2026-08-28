@@ -168,7 +168,9 @@ The numbers are derived from observed median residual ~50-80 px on iPad with iPa
 
 The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) and read-only `skill_*` tools (`tools/list` / `tools/call`). The skill tools are auto-generated from prompt definitions for marketplace visibility (e.g. LobeHub indexes tools, not prompts).
 
-**Total tools: 57** (35 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow). ⚠️ **3 of the 35 `pikvm_*` tools — `pikvm_mover_scale_{status,control,reset}` (#41) — are EXPERIMENTAL and registered ONLY under the opt-in `PIKVM_MOVER_LEARN=1`.** So the DEFAULT registered surface a client sees is **54** tools; opting in makes it 57. (The 57 above counts every tool defined in source, incl. the 3 conditional ones.)
+**Total tools: 59** (37 `pikvm_*` hardware/diagnostic tools + 22 `skill_*` guidance tools = 14 tool-guide + 8 workflow). ⚠️ **3 of the 37 `pikvm_*` tools — `pikvm_mover_scale_{status,control,reset}` (#41) — are EXPERIMENTAL and registered ONLY under the opt-in `PIKVM_MOVER_LEARN=1`.** So the DEFAULT registered surface a client sees is **56** tools; opting in makes it 59. (The 59 above counts every tool defined in source, incl. the 3 conditional ones.)
+
+**HID-mode tools (#51):** `pikvm_hidmode_status` reports the HID-mode source (declared `--target` vs derived from the appliance `PIKVM_HIDMODE_URL`/hidmode endpoint) and the current mode (ipad=relative / desktop=absolute), reachability, and whether pointer ops are allowed (they refuse when the mode is unknown/unreachable or mid-switch/settling). `pikvm_hidmode_set` switches the appliance mode (POSTs /hidmode; a declared target is fixed and cannot be switched) — the switch drops the session and the new mode is not live until the USB re-enumerates. See `docs/adr/0002-mcp-derives-hid-mode-from-appliance-endpoint.md`.
 
 ### Tool Guides
 | Prompt | Skill Tool | Covers |
@@ -200,7 +202,7 @@ The server exposes skills as both MCP prompts (`prompts/list` / `prompts/get`) a
 | `navigate-desktop-workflow` | `skill_navigate_desktop_workflow` | goal (required) | Navigate desktop with Observe-Plan-Act-Verify loop |
 | `desktop-workflow` | `skill_desktop_workflow` | none | Set up a desktop for reliable mouse control (--target desktop, auto-calibrate, absolute positioning) |
 
-Implementation: `src/prompts/` (types.ts, tool-guides.ts, workflows.ts, skill-tools.ts, index.ts). Human-readable guides: `docs/skills/`.
+Implementation: `src/prompts/` (types.ts, tool-guides.ts, workflows.ts, skill-tools.ts, index.ts, skill-docs.ts). `docs/skills/` is the source of truth for every guide's served text (F11, Round 2 Phase 2d) — tool-guides.ts/workflows.ts load it at runtime via skill-docs.ts rather than embedding a separately-maintained copy.
 
 ## Key Implementation Notes
 

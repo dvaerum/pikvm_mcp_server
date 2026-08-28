@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { shouldFireDismissRecipe } from '../click-verify.js';
+import { shouldFireDismissRecipe } from '../../click-verify-archive.js';
 
 const baseFire = {
   cursorVerified: true,

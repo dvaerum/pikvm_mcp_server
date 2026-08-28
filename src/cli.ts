@@ -21,6 +21,43 @@ export type TransportKind = 'stdio' | 'http';
  */
 export type TargetKind = 'ipad' | 'desktop';
 
+/**
+ * (#51) Where the HID mode comes from. Exactly one source:
+ *  - 'declared'  — a fixed `--target` (stock PiKVM / pikvm01; no /hidmode endpoint).
+ *  - 'endpoint'  — derived from the appliance `PIKVM_HIDMODE_URL` (the single source
+ *    of truth; the MCP holds no copy). See ADR 0002.
+ */
+export type HidModeSource = { kind: 'declared'; target: TargetKind } | { kind: 'endpoint' };
+
+/**
+ * Resolve the HID-mode source from the declared `target` and the endpoint URL.
+ * Exactly one must be present: BOTH is the two-copies defect #51 kills (they can
+ * disagree at runtime); NEITHER leaves no source. Returns `{ error }` for the
+ * caller to print + exit — kept pure so it is unit-testable.
+ */
+export function resolveHidModeSource(
+  target: TargetKind | undefined,
+  hidModeUrl: string | undefined,
+): HidModeSource | { error: string } {
+  const urlSet = Boolean(hidModeUrl?.trim());
+  if (urlSet && target) {
+    return {
+      error:
+        '--target and PIKVM_HIDMODE_URL are mutually exclusive: the appliance /hidmode endpoint is the ' +
+        'single source of truth for the HID mode, so a declared --target would be a second copy that can ' +
+        'disagree at runtime. Set exactly one.',
+    };
+  }
+  if (!urlSet && !target) {
+    return {
+      error:
+        'A HID-mode source is required — pass --target ipad|desktop (declared; stock PiKVM / pikvm01) OR ' +
+        'set PIKVM_HIDMODE_URL to derive the mode from the appliance /hidmode endpoint.',
+    };
+  }
+  return urlSet ? { kind: 'endpoint' } : { kind: 'declared', target: target! };
+}
+
 export type SecurityChoice = 'yes' | 'no' | 'kvmd';
 
 export interface CliOptions {
@@ -89,8 +126,11 @@ export function parseCliOptions(
     throw new Error(`Invalid --port "${portRaw}" (expected an integer 1-65535)`);
   }
 
-  // Required (enforced in main so --help still works without it); no default.
-  const target = (values.target as string | undefined) ?? env.PIKVM_TARGET;
+  // Optional (a HID-mode source is enforced in main so --help works without it).
+  // An empty value (blank flag or PIKVM_TARGET="") is treated as UNSET — consistent
+  // with how an empty PIKVM_HIDMODE_URL is unset — so it falls through to the
+  // source-required check rather than a confusing "invalid target" (#51).
+  const target = ((values.target as string | undefined) ?? env.PIKVM_TARGET) || undefined;
   if (target !== undefined && target !== 'ipad' && target !== 'desktop') {
     throw new Error(`Invalid --target "${target}" (expected "ipad" or "desktop")`);
   }

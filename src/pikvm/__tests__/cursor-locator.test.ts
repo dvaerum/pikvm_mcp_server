@@ -55,12 +55,8 @@ function makeDeps(overrides: Partial<CursorLocatorDeps> = {}): CursorLocatorDeps
     locateCursor: vi.fn(async () => null),
     findCursorByTemplateSet: vi.fn(() => null),
     findCursorByMLMultiHint: vi.fn(async () => null),
-    findCursorByShape: vi.fn(() => null),
     buildMLHints: vi.fn((predicted) => [predicted]),
     mlWiggleVerify: vi.fn(async () => null),
-    wiggleVerifyCandidate: vi.fn(async () => null),
-    shouldFireSecondOpinion: vi.fn(() => false),
-    shouldAdoptSecondOpinion: vi.fn(() => false),
     tautologyProxThreshold: 30,
   };
   return { ...base, ...overrides };
@@ -223,7 +219,6 @@ describe('locate(profile: openLoopShape)', () => {
     });
     expect(deps.buildMLHints).toHaveBeenCalledTimes(1);
     expect(deps.mlWiggleVerify).not.toHaveBeenCalled();
-    expect(deps.findCursorByShape).not.toHaveBeenCalled();
     // ML crop ran at minConfidence 0.5.
     const mlCall = (deps.findCursorByMLMultiHint as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(mlCall[4]).toMatchObject({ minConfidence: 0.5 });
@@ -252,7 +247,6 @@ describe('locate(profile: openLoopShape)', () => {
 
     expect(deps.mlWiggleVerify).toHaveBeenCalledTimes(1);
     expect(fix?.source).toBe('ml');
-    expect(deps.findCursorByShape).not.toHaveBeenCalled();
   });
 
   it('SKIPS wiggle-verify for a full-frame-cascade (crop 0,0) detection near the hint (the fix)', async () => {
@@ -271,7 +265,6 @@ describe('locate(profile: openLoopShape)', () => {
 
     expect(deps.mlWiggleVerify).not.toHaveBeenCalled();
     expect(fix).toEqual({ position: { x: HINT.x, y: HINT.y }, source: 'ml', rawScore: 0.8, confidence: 0.8 });
-    expect(deps.findCursorByShape).not.toHaveBeenCalled();
   });
 
   it('returns null when a crop-based ML detection is wiggle-rejected (shape fallback RETIRED)', async () => {
@@ -284,128 +277,32 @@ describe('locate(profile: openLoopShape)', () => {
         crop: { left: 120, top: 80 },
       })),
       mlWiggleVerify: vi.fn(async () => null),
-      // Provide shape mocks that WOULD have produced a candidate pre-retirement —
-      // the retired path must NOT consult them.
-      findCursorByShape: vi.fn(() => ({ centroidX: 510, centroidY: 402, pixels: 40, shapeScore: 0.6 })),
-      wiggleVerifyCandidate: vi.fn(async (pos) => ({ pos })),
     });
     const loc = new CursorLocator(deps);
 
     const fix = await loc.locate(FRAME, 200, 100, 'openLoopShape', HINT);
 
-    // Shape fallback retired — a rejected ML detection yields no fix, and shape
-    // is never consulted.
+    // Shape fallback retired (F4, Round 2 Phase 2b: findCursorByShape/
+    // wiggleVerifyCandidate deleted from CursorLocatorDeps entirely — there's
+    // nothing left to stub/assert-not-called; see the source-grep test below
+    // for the retirement's enforcement now that CursorLocatorDeps itself
+    // can't strand these calls) — a rejected ML detection yields no fix.
     expect(fix).toBeNull();
-    expect(deps.findCursorByShape).not.toHaveBeenCalled();
-    expect(deps.wiggleVerifyCandidate).not.toHaveBeenCalled();
   });
 
   it('returns null when ML finds nothing (no shape fallback)', async () => {
     // findCursorByMLMultiHint defaults to null in makeDeps.
-    const deps = makeDeps({
-      findCursorByShape: vi.fn(() => ({ centroidX: 510, centroidY: 402, pixels: 40, shapeScore: 0.6 })),
-      wiggleVerifyCandidate: vi.fn(async (pos) => ({ pos })),
-    });
+    const deps = makeDeps();
     const loc = new CursorLocator(deps);
 
     const fix = await loc.locate(FRAME, 200, 100, 'openLoopShape', HINT);
 
     expect(fix).toBeNull();
-    expect(deps.findCursorByShape).not.toHaveBeenCalled();
-    expect(deps.wiggleVerifyCandidate).not.toHaveBeenCalled();
   });
 
   it('requires a hint', async () => {
     const loc = new CursorLocator(makeDeps());
     await expect(loc.locate(FRAME, 200, 100, 'openLoopShape')).rejects.toThrow(/hint/);
-  });
-});
-
-// --- verify -----------------------------------------------------------------
-
-describe('locate(profile: verify)', () => {
-  const TARGET = { x: 300, y: 300 };
-
-  it('adopts the template second-opinion and does NOT run V8', async () => {
-    const deps = makeDeps({
-      getCachedTemplates: vi.fn(async () => [{ t: 1 }] as never),
-      shouldFireSecondOpinion: vi.fn(() => true),
-      findCursorByTemplateSet: vi.fn(() => ({
-        position: { x: 305, y: 298 },
-        score: 0.82,
-        templateIndex: 0,
-      })),
-      shouldAdoptSecondOpinion: vi.fn(() => true),
-    });
-    const loc = new CursorLocator(deps);
-
-    const fix = await loc.locate(FRAME, 200, 100, 'verify', TARGET);
-
-    expect(fix).toEqual({
-      position: { x: 305, y: 298 },
-      source: 'template',
-      rawScore: 0.82,
-      confidence: null,
-    });
-    expect(deps.shouldFireSecondOpinion).toHaveBeenCalledTimes(1);
-    expect(deps.shouldAdoptSecondOpinion).toHaveBeenCalledTimes(1);
-    expect(deps.findCursorByV8FullFrame).not.toHaveBeenCalled();
-    // template match ran with the 0.7 floor + target locality.
-    const tCall = (deps.findCursorByTemplateSet as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(tCall[2]).toMatchObject({ minScore: 0.7, expectedNear: TARGET, expectedNearRadius: 200 });
-  });
-
-  it('falls to the V8 cascade when the second opinion does not fire', async () => {
-    const deps = makeDeps({
-      shouldFireSecondOpinion: vi.fn(() => false),
-      findCursorByV8FullFrame: vi.fn(async () => v8({ x: 301, y: 302, presence: 0.75, heatmapPeak: 0.6 })),
-    });
-    const loc = new CursorLocator(deps);
-
-    const fix = await loc.locate(FRAME, 200, 100, 'verify', TARGET);
-
-    expect(fix).toEqual({
-      position: { x: 301, y: 302 },
-      source: 'cascade',
-      rawScore: 0.75,
-      confidence: 0.75,
-    });
-    expect(deps.findCursorByTemplateSet).not.toHaveBeenCalled();
-  });
-
-  it('falls to V8 when the template is found but not adopted', async () => {
-    const deps = makeDeps({
-      getCachedTemplates: vi.fn(async () => [{ t: 1 }] as never),
-      shouldFireSecondOpinion: vi.fn(() => true),
-      findCursorByTemplateSet: vi.fn(() => ({
-        position: { x: 999, y: 999 },
-        score: 0.71,
-        templateIndex: 0,
-      })),
-      shouldAdoptSecondOpinion: vi.fn(() => false),
-      findCursorByV8FullFrame: vi.fn(async () => v8({ heatmapPeak: 0.5 })),
-    });
-    const loc = new CursorLocator(deps);
-
-    const fix = await loc.locate(FRAME, 200, 100, 'verify', TARGET);
-
-    expect(fix?.source).toBe('cascade');
-    expect(deps.findCursorByV8FullFrame).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects a low-heatmap V8 detection (heatmapPeak < 0.3) as null', async () => {
-    const deps = makeDeps({
-      findCursorByV8FullFrame: vi.fn(async () => v8({ heatmapPeak: 0.2 })),
-    });
-    const loc = new CursorLocator(deps);
-
-    const fix = await loc.locate(FRAME, 200, 100, 'verify', TARGET);
-    expect(fix).toBeNull();
-  });
-
-  it('requires a hint', async () => {
-    const loc = new CursorLocator(makeDeps());
-    await expect(loc.locate(FRAME, 200, 100, 'verify')).rejects.toThrow(/hint/);
   });
 });
 
@@ -480,5 +377,29 @@ describe('belief wiring', () => {
 
     loc.predict({ dx: 7, dy: -3 });
     expect(deps.belief.predict).toHaveBeenCalledWith({ dx: 7, dy: -3 });
+  });
+});
+
+/**
+ * F4 (Round 2 Phase 2b): findCursorByShape/wiggleVerifyCandidate deleted
+ * from CursorLocatorDeps entirely — never referenced inside the class body
+ * despite being wired/stubbed by all 3 deps builders (move-to.ts,
+ * curve-mover.ts, and this test file's own makeDeps). Deleting the interface
+ * members stranded the 7 `not.toHaveBeenCalled()` assertions above that used
+ * to pin "the retired shape fallback stayed retired" — there's nothing left
+ * to assert wasn't called once the property doesn't exist. This source-grep
+ * (style of no-fifth-slam-copy.test.ts) replaces them: if a future edit
+ * reintroduces a findCursorByShape( call inside cursor-locator.ts itself,
+ * this fails — the shape-fallback retirement (docs/adr/0003-cursor-locator-
+ * is-the-front-door.md's follow-on note) survives losing its old enforcement
+ * vehicle.
+ */
+describe('shape fallback stays retired (F4 source-grep)', () => {
+  it('cursor-locator.ts contains no findCursorByShape( call', async () => {
+    const { promises: fs } = await import('fs');
+    const path = await import('path');
+    const here = path.dirname(new URL(import.meta.url).pathname);
+    const src = await fs.readFile(path.join(here, '..', 'cursor-locator.ts'), 'utf-8');
+    expect(src).not.toMatch(/findCursorByShape\(/);
   });
 });

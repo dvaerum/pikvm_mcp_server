@@ -119,7 +119,11 @@ describe('ipadGoHome', () => {
     expect(result.message.toLowerCase()).toContain('unlock');
   });
 
-  // Phase 214 (v0.5.202)
+  // Phase 214 (v0.5.202). Tests below use 30000ms timeouts (not the 5000ms
+  // default): 2026-08-24's cursor-anchor.ts migration gave the pre-swipe
+  // slam a real captureVerification pass (slam pace-sleeps + a settle nudge,
+  // ~1.7s), which the default budget doesn't leave enough room for — same
+  // convention move-to.ts's slam-adjacent tests already use.
   describe('forceHomeViaSwipe', () => {
     it('default false: only Cmd+H is sent; no mouse activity', async () => {
       const m = mockClient();
@@ -142,7 +146,7 @@ describe('ipadGoHome', () => {
       // Some upward (negative-y) motion happened during the drag.
       const upward = m.moves.filter((mv) => mv.dy < 0);
       expect(upward.length).toBeGreaterThan(0);
-    });
+    }, 30000);
 
     it('true: message records that the swipe and defensive keys were performed', async () => {
       const m = mockClient();
@@ -151,7 +155,7 @@ describe('ipadGoHome', () => {
       // Phase 231: message now mentions the defensive Esc+Enter rather
       // than "app switcher" exclusively.
       expect(result.message.toLowerCase()).toMatch(/esc|enter|phase 231/);
-    });
+    }, 30000);
 
     it('respects custom swipeDragPx', async () => {
       const m = mockClient();
@@ -165,7 +169,7 @@ describe('ipadGoHome', () => {
       const totalUpward = m.moves.reduce((s, mv) => s + Math.min(0, mv.dy), 0);
       expect(downIdx).toBeGreaterThanOrEqual(0);
       expect(totalUpward).toBeLessThanOrEqual(-600);
-    });
+    }, 30000);
 
     // Phase 231 (v0.5.207): the swipe-up gesture sometimes re-locks an
     // already-unlocked iPad (live-verified 2026-05-10 same hazard as
@@ -183,7 +187,7 @@ describe('ipadGoHome', () => {
       const escIdx = m.keys.indexOf('Escape');
       const enterIdx = m.keys.indexOf('Enter');
       expect(escIdx).toBeLessThan(enterIdx);
-    });
+    }, 30000);
 
     it('Phase 231: defensive Esc + Enter is NOT sent when forceHomeViaSwipe=false', async () => {
       const m = mockClient();
@@ -214,7 +218,7 @@ describe('ipadGoHome', () => {
       // Expect cumulative downward motion ≥ 400 px (target is mid-
       // screen, default fallback chunks 6×100 = 600 px).
       expect(downwardEmitsTotal).toBeGreaterThanOrEqual(400);
-    });
+    }, 30000);
 
     it('Phase 235: deposit emits are chunked (no single emit > 127 px)', async () => {
       const m = mockClient();
@@ -222,6 +226,30 @@ describe('ipadGoHome', () => {
       // Per-call mickey cap is 127. Any emit above that is a bug.
       const overcap = m.moves.filter((mv) => Math.abs(mv.dx) > 127 || Math.abs(mv.dy) > 127);
       expect(overcap).toHaveLength(0);
-    });
+    }, 30000);
+
+    // 2026-08-24: the ONE intentional behavior change in the cursor-anchor.ts
+    // migration (Phase 3). Before: the pre-swipe slam had zero verification —
+    // Phase 231's Esc+Enter only ran unconditionally AFTER the swipe, with
+    // nothing watching the slam itself. Now: the slam is verified, and on
+    // failure defensive-keys recovery sends its own Esc+Enter immediately,
+    // BEFORE the swipe even starts — closing the gap Phase 231's own comment
+    // documents (this exact slam occasionally re-locking an unlocked iPad).
+    // The mock's screenshot() returns non-image bytes, so verification always
+    // fails here (decode throws → caught → verified:false) — deterministically
+    // exercising the recovery path without needing real image fixtures.
+    it("Phase 3: the pre-swipe slam is now verified, and a failed check triggers its own Esc+Enter (the migration's one intentional behavior change)", async () => {
+      const m = mockClient();
+      const result = await ipadGoHome(m.client, { settleMs: 0, forceHomeViaSwipe: true });
+      // Two Escape+Enter pairs total: one from the NEW pre-swipe
+      // defensive-keys recovery (this test), one from the pre-existing
+      // unconditional post-swipe Phase 231 block (unchanged, still fires
+      // every time forceHomeViaSwipe is used). Before this migration there
+      // was only ever one pair — the pre-swipe slam had no verification
+      // and therefore no recovery to fire.
+      expect(m.keys.filter((k) => k === 'Escape')).toHaveLength(2);
+      expect(m.keys.filter((k) => k === 'Enter')).toHaveLength(2);
+      expect(result.message).toContain('did not verify');
+    }, 30000);
   });
 });

@@ -43,12 +43,8 @@ function makeCurveLocatorDeps(client: PiKVMClient): CursorLocatorDeps {
     locateCursor: notWired('locateCursor'),
     findCursorByTemplateSet: notWired('findCursorByTemplateSet'),
     findCursorByMLMultiHint: notWired('findCursorByMLMultiHint'),
-    findCursorByShape: notWired('findCursorByShape'),
     buildMLHints: notWired('buildMLHints'),
     mlWiggleVerify: notWired('mlWiggleVerify'),
-    wiggleVerifyCandidate: notWired('wiggleVerifyCandidate'),
-    shouldFireSecondOpinion: notWired('shouldFireSecondOpinion'),
-    shouldAdoptSecondOpinion: notWired('shouldAdoptSecondOpinion'),
     tautologyProxThreshold: 0,
   };
 }
@@ -159,8 +155,15 @@ export interface CurveOneShotOptions {
   acceptGatePx?: number;
 }
 
-/** Detection seam — screenshot + locate the cursor. */
-type DetectFn = (client: PiKVMClient, minPresence: number) => Promise<{ x: number; y: number } | null>;
+/** Detection seam — screenshot + locate the cursor. `hint` (task_484bed055820,
+ *  optional): when the caller already has a reasonable guess (e.g. the target
+ *  of an emit that was just made), the cascade searches a bounded window
+ *  around it first instead of the whole region. Omit for cold-start detects. */
+type DetectFn = (
+  client: PiKVMClient,
+  minPresence: number,
+  hint?: { x: number; y: number },
+) => Promise<{ x: number; y: number } | null>;
 
 /** Test-only injection seam for {@link moveByCurveOneShot}: a scriptable detector
  *  that keeps unit tests off onnxruntime. Defaults to the real V8 detect. */
@@ -255,14 +258,19 @@ async function wakeCursorAndRedetect(
   return detectFn(client, minPresence);
 }
 
-async function detect(client: PiKVMClient, minPresence: number): Promise<{ x: number; y: number } | null> {
+async function detect(
+  client: PiKVMClient,
+  minPresence: number,
+  hint?: { x: number; y: number },
+): Promise<{ x: number; y: number } | null> {
   const shot = await client.screenshot({ quality: 80 });
   // Route the "where is the cursor?" call through the single CursorLocator front
   // door (C1 P3 curve). Byte-identical to the prior inline call: same screenshot,
-  // same findCursorByV8FullFrame(buffer, w, h, { minPresence }) via locate('curve').
+  // same findCursorByV8FullFrame(buffer, w, h, { minPresence }) via locate('curve'),
+  // now also passing `hint` through (task_484bed055820) when the caller has one.
   const locator = new CursorLocator(makeCurveLocatorDeps(client));
   const fix = await locator.locate(
-    shot.buffer, shot.screenshotWidth, shot.screenshotHeight, 'curve', undefined, { minPresence },
+    shot.buffer, shot.screenshotWidth, shot.screenshotHeight, 'curve', hint, { minPresence },
   );
   return fix ? { x: fix.position.x, y: fix.position.y } : null;
 }
@@ -274,54 +282,6 @@ async function emitToward(client: PiKVMClient, from: { x: number; y: number }, t
   for (const e of ex) { await client.mouseMoveRelative(e, 0); mx += e; await sleep(paceMs); }
   for (const e of ey) { await client.mouseMoveRelative(0, e); my += e; await sleep(paceMs); }
   return { x: mx, y: my };
-}
-
-/**
- * Calibrate the emit-curve SCALE for the current iPad-in-HDMI geometry.
- *
- * The curve shape is device-intrinsic (iPad pointer accel in logical px); only
- * the scale (HDMI px per logical px = region-size / logical-resolution) changes
- * when the iPad's screen size/position in the frame changes. So we measure one
- * scale per axis: emit a LARGE burst (reports × ±127, ~300px) where the ~11px
- * detector noise is negligible, and read the per-full-report displacement. The
- * returned {x,y} are measured FULL_REPORT_PX per axis; divide by FULL_REPORT_PX
- * (X) / FULL_REPORT_PX×Y_SCALE (Y) to get the scale factor for the curve.
- *
- * Uses the same V8 detector as production (no getCursor needed). Averages `reps`.
- */
-export async function calibrateFullReport(
-  client: PiKVMClient,
-  opts: { reports?: number; reps?: number; minPresence?: number; settleMs?: number; paceMs?: number } = {},
-): Promise<{ x: number; y: number; samplesX: number[]; samplesY: number[] }> {
-  const reports = opts.reports ?? 2;
-  const reps = opts.reps ?? 3;
-  const minPresence = opts.minPresence ?? 0.5;
-  const settleMs = opts.settleMs ?? 300;
-  const paceMs = opts.paceMs ?? 110;
-  const slamCorner = async (): Promise<void> => { for (let s = 0; s < 6; s++) await client.mouseMoveRelative(-127, -127); await sleep(settleMs); };
-
-  const measure = async (axis: 'x' | 'y'): Promise<number[]> => {
-    const out: number[] = [];
-    for (let r = 0; r < reps; r++) {
-      await slamCorner();
-      // inset a little off the hard corner so detection isn't clipped
-      await client.mouseMoveRelative(axis === 'x' ? 15 : 40, axis === 'x' ? 40 : 15);
-      await sleep(settleMs);
-      const start = await detect(client, minPresence);
-      if (!start) continue;
-      for (let i = 0; i < reports; i++) { await client.mouseMoveRelative(axis === 'x' ? 127 : 0, axis === 'y' ? 127 : 0); await sleep(paceMs); }
-      await sleep(settleMs);
-      const end = await detect(client, minPresence);
-      if (!end) continue;
-      const disp = axis === 'x' ? (end.x - start.x) : (end.y - start.y);
-      if (disp > reports * 40) out.push(disp / reports); // sanity: a full report is ~150px; reject tiny/stale
-    }
-    return out;
-  };
-  const samplesX = await measure('x');
-  const samplesY = await measure('y');
-  const med = (a: number[]): number => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : NaN; };
-  return { x: med(samplesX), y: med(samplesY), samplesX, samplesY };
 }
 
 /**
@@ -381,7 +341,11 @@ export async function moveByCurveOneShot(
   let emitted = { ...m1 };
   let chunkCount = 1;
 
-  let landed = await detectFn(client, minPresence);
+  // task_484bed055820: we just emitted toward `target`, so it's a real hint —
+  // the cascade searches a bounded window around it before falling back to a
+  // full-region scan, instead of scanning the whole region on every landing
+  // check regardless of how good a guess we already have.
+  let landed = await detectFn(client, minPresence, target);
   // (#41) capture the FIRST-shot landing before any correction shot — the passive
   // learner's free sample (planned vs achieved). `start` is non-null here.
   const firstLanded = landed;
@@ -426,7 +390,7 @@ export async function moveByCurveOneShot(
     await sleep(settleMs);
     emitted = { x: emitted.x + m2.x, y: emitted.y + m2.y };
     chunkCount += 1;
-    const landed2 = await detectFn(client, minPresence);
+    const landed2 = await detectFn(client, minPresence, target);
     if (landed2) landed = landed2;
   }
 

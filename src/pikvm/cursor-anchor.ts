@@ -1,0 +1,397 @@
+/**
+ * Unified cursor-anchoring primitive: slam-to-corner + safety guard +
+ * optional verification + optional recovery.
+ *
+ * Consolidates what used to be 3 independently-evolving copies of this
+ * logic: move-to.ts's `discoverOrigin` (Layers 1/2/3 iPad-lock guard),
+ * ipad-unlock.ts's `unlockIpad` + `ipadGoHome` (verify + key-sequence
+ * recovery), and ballistics.ts's `measureCell` (no guard, synthetic-scene
+ * calibration slam). See docs/troubleshooting/ipad-safety-guards.md for
+ * the hot-corner-lock failure mode the guard exists to prevent.
+ *
+ * Migrated call-site by call-site, each gated on real hardware before the
+ * next: move-to.ts first (highest traffic), then ipad-unlock.ts's two
+ * call sites, then ballistics.ts last. See git history / PR descriptions
+ * for the per-call-site gate results.
+ */
+
+import { PiKVMClient } from './client.js';
+// F9 (Round 2 Phase 3, 2/2): the slam vocabulary moved out of ballistics.ts
+// into its own mechanism file — this module now imports it from there
+// instead, breaking the prior documented-deliberate ballistics.ts↔
+// cursor-anchor.ts import cycle. ballistics.ts, in turn, no longer imports
+// anything from this module except anchorCursor itself.
+import {
+  Axis,
+  Corner,
+  nudgeFromEdge,
+  slamToCorner,
+  SlamMotionCheck,
+} from './slam.js';
+import {
+  detectBoundsOrNull,
+  getLastGoodBounds,
+  IpadBounds,
+  LEGACY_PORTRAIT_SLAM_ORIGIN,
+  slamOriginFromBounds,
+} from './orientation.js';
+// F7 (Round 2 Phase 4): the Phase-217 unlock triad / Phase-231 defensive
+// pair moved out to a shared mechanism module (ipad-keys.ts) — NOT
+// imported from ipad-unlock.ts, which already imports anchorCursor from
+// this module; that would recreate the exact cycle F9 broke.
+import { ipadUnlockKeySequence, ipadDefensiveKeys } from './ipad-keys.js';
+
+export type AnchorGuard =
+  // Layers 1/2/3 (docs/troubleshooting/ipad-safety-guards.md): refuses to
+  // slam when the target looks like (or might be) an iPad-portrait
+  // letterbox, unless the caller passed an explicit slamOriginPx. Throws
+  // on refusal — this is move-to.ts's discoverOrigin behavior today.
+  | {
+      kind: 'bounds-guard';
+      /** move-to.ts's forbidSlamOnIpad=false opt-out. Gates ONLY the
+       *  refusal-throw — origin computation (cache-first via
+       *  getLastGoodBounds(), else fresh detection, else LEGACY_PORTRAIT
+       *  fallback) is identical either way. This matters because
+       *  forbidSlamOnIpad:false isn't a rare test escape hatch: hid-mode.ts's
+       *  policy() sets it for every real desktop/absolute-mouse target, so
+       *  silently dropping the cache path here would be a live perf
+       *  regression, not just a guard-semantics change. Default false
+       *  (today's always-refuse-on-undetermined behavior). */
+      allowOnUndetermined?: boolean;
+    }
+  // Layer 5: caller has already established slamming is safe (e.g. a lock
+  // screen has no active hot corner) and takes responsibility. Never
+  // throws on the safety question — unlockIpad, ipadGoHome.
+  | { kind: 'caller-asserted'; reason: string }
+  // measureCell: synthetic calibration scene, no iPad-lock risk, no guard.
+  | { kind: 'none-calibration' };
+
+/**
+ * F6 (Round 2 Phase 5c): collapses what used to be two separate fields
+ * (`selfGate: boolean` + `recovery: {kind: 'none'|'key-sequence-retry'|
+ * 'defensive-keys'}`) into one enum — 1:1 with the four behaviors the four
+ * real call sites actually use today, verified against move-to.ts:966,
+ * ipad-unlock.ts:209 (unlockIpad), ipad-unlock.ts:436 (ipadGoHome), and
+ * ballistics.ts:359 (measureCell). Only meaningful when
+ * `captureVerification` is true — irrelevant otherwise (nothing computed to
+ * gate on), same as the old selfGate/recovery pair.
+ *
+ *  - 'inspect-only' — was selfGate:false: verified is still computed and
+ *    returned, but anchorCursor never throws or acts on failure; the caller
+ *    reads `AnchorResult.verified` itself (measureCell's exact combo: reject
+ *    the cell, no retry — ballistics already resamples via `reps`).
+ *  - 'throw' — was the old default (selfGate:true + recovery:{kind:'none'}):
+ *    a failed verification throws. `recovery` itself has NO default now
+ *    (same discipline as `guard` — a new call site must name its posture
+ *    explicitly), so this is just an ordinary variant, not a fallback. Not
+ *    exercised by any of the four real call sites today — each of the
+ *    three that verify explicitly picks one of the other three variants.
+ *  - 'key-sequence-retry' — unlockIpad's Esc→Enter→Space, then re-attempt
+ *    the slam+verify once.
+ *  - 'defensive-keys' — ipadGoHome's Phase-231 Esc+Enter. No re-attempt —
+ *    caller inspects the returned screenshot itself, matching ipadGoHome's
+ *    existing messaging.
+ */
+export type AnchorRecoveryPosture = 'inspect-only' | 'throw' | 'key-sequence-retry' | 'defensive-keys';
+
+export interface AnchorRequest {
+  client: PiKVMClient;
+  /** Corner to slam to. Default 'top-left' — the only corner any current
+   *  call site uses, but kept general rather than hardcoded. */
+  corner?: Corner;
+  /** REQUIRED, no default — a new call site can't compile without naming
+   *  its safety posture. */
+  guard: AnchorGuard;
+  /**
+   * ADR 0001 (docs/adr/0001-do-not-merge-cursor-detection-and-calibration-
+   * sampling-lookalikes.md): three real takeRawScreenshot variants exist on
+   * purpose and must not be merged — cursor-detect.ts's exported version
+   * wake-nudges before capture (±1 px, keeps the auto-fading iPad cursor
+   * visible), ballistics.ts's and auto-calibrate.ts's private versions
+   * deliberately don't (a nudge right before a calibration/ballistics
+   * capture would contaminate the very displacement being measured).
+   *
+   * REQUIRED, no default: an optional param defaulting to the only
+   * *exported* variant (the "natural" default) would silently contaminate
+   * every ballistics measurement — a numeric regression no test catches,
+   * only a live N≥80 bench would ever surface it. Pass the non-nudging
+   * capture for calibration-adjacent call sites; read ADR 0001 before
+   * relaxing this.
+   */
+  screenshot: (client: PiKVMClient) => Promise<Buffer>;
+  /** Whether anchorCursor takes a before/after screenshot pair (via
+   *  `screenshot`) to compute `verified` at all. Default false: `verified`
+   *  stays null, `screenshot` is never called for this purpose, `recovery`
+   *  is irrelevant (nothing to gate on). This is the zero-cost path —
+   *  move-to.ts's bounds-guard migration relies on the default to stay
+   *  byte-for-byte behavior-identical to today (no new round trips). */
+  captureVerification?: boolean;
+  /**
+   * What anchorCursor does when captureVerification is true and the slam
+   * fails to verify — see AnchorRecoveryPosture's doc for the 4 variants
+   * and their mapping to the 4 real call sites. Irrelevant when
+   * captureVerification is false (nothing computed to gate on) — but still
+   * REQUIRED, no default, same discipline as `guard`: a new call site can't
+   * compile without naming a posture, even an inert one, rather than
+   * silently inheriting a failure mode it never consciously chose. Pass
+   * 'inspect-only' for the inert case (captureVerification false).
+   */
+  recovery: AnchorRecoveryPosture;
+  /** Post-slam nudge away from the slammed corner, past iPadOS's edge dead
+   *  zone, so the cursor sits in open space (measureCell's use case — the
+   *  ballistics sweep needs room to travel). Runs after verification/
+   *  recovery, using nudgeFromEdge's own built-in call-count/pace. Pass
+   *  false or omit to skip. */
+  nudge?: { away?: Corner; onlyAxis?: Axis } | false;
+  paceMs?: number;
+  /** Caller-supplied slam origin. Also the bounds-guard escape hatch: an
+   *  explicit slamOriginPx means the caller has taken responsibility for
+   *  where the slam lands, so the iPad-letterbox refusal doesn't apply. */
+  slamOriginPx?: { x: number; y: number };
+  verbose?: boolean;
+}
+
+export interface AnchorResult {
+  /** Post-slam origin in HDMI pixel coordinates. */
+  origin: { x: number; y: number };
+  /** Result of the post-slam "landed near corner" check. null when
+   *  `captureVerification` was false (or defaulted false) — no check ran. */
+  verified: boolean | null;
+  /** Whether recovery ran (verification failed and recovery wasn't 'inspect-only'). */
+  recoveryAttempted: boolean;
+  /** iPad bounds used to compute `origin`, when detection ran. Null for
+   *  guard:'none-calibration' (no detection) or when the caller supplied
+   *  slamOriginPx directly (detection skipped). */
+  bounds: IpadBounds | null;
+}
+
+/**
+ * Layers 1/2/3 (docs/troubleshooting/ipad-safety-guards.md), moved
+ * verbatim from move-to.ts's discoverOrigin. The thrown error string is
+ * intentionally unchanged (including its "moveToPixel:" prefix) — callers
+ * pattern-match on it; see cursor-anchor.test.ts's byte-identical
+ * assertion.
+ */
+async function resolveBoundsGuardOrigin(
+  req: AnchorRequest,
+  guard: Extract<AnchorGuard, { kind: 'bounds-guard' }>,
+): Promise<{ origin: { x: number; y: number }; bounds: IpadBounds | null }> {
+  const client = req.client;
+  let slamOrigin = req.slamOriginPx;
+  let detectedBounds: IpadBounds | null = null;
+  if (!slamOrigin) {
+    detectedBounds = getLastGoodBounds();
+    if (detectedBounds) {
+      if (req.verbose) {
+        console.error(
+          `[cursor-anchor] using cached ${detectedBounds.orientation} bounds ${detectedBounds.width}×${detectedBounds.height} (no re-detection)`,
+        );
+      }
+    } else {
+      detectedBounds = await detectBoundsOrNull(client, {
+        verbose: req.verbose,
+        logPrefix: 'cursor-anchor',
+      });
+    }
+    if (detectedBounds) {
+      slamOrigin = slamOriginFromBounds(detectedBounds);
+      if (req.verbose) {
+        console.error(
+          `[cursor-anchor] auto-detected ${detectedBounds.orientation} slam-origin (${slamOrigin.x},${slamOrigin.y})`,
+        );
+      }
+    } else {
+      slamOrigin = LEGACY_PORTRAIT_SLAM_ORIGIN;
+    }
+  }
+
+  const callerProvidedOrigin = req.slamOriginPx !== undefined;
+  const knownNonIpad = detectedBounds !== null && detectedBounds.orientation === 'landscape';
+  if (!guard.allowOnUndetermined && !knownNonIpad && !callerProvidedOrigin) {
+    const reason = detectedBounds
+      ? `iPad-portrait letterbox detected (bounds ${detectedBounds.width}×${detectedBounds.height})`
+      : `target type undetermined (bounds detection failed — frame too dark or unrecognised) ` +
+        `and slam-origin defaulted to LEGACY_PORTRAIT, which presumes iPad`;
+    throw new Error(
+      `moveToPixel: refusing slam-then-move — ${reason}. ` +
+      `Slam-to-corner on an iPad triggers the iPadOS hot-corner gesture and ` +
+      `re-locks the screen mid-session. Options: ` +
+      `(1) use strategy='detect-then-move' (recommended for iPad), ` +
+      `(2) pass slamOriginPx explicitly if you know the target is non-iPad, ` +
+      `(3) pass forbidSlamOnIpad=false to opt out (only safe if iPad ` +
+      `hot-corners are disabled).`,
+    );
+  }
+
+  return { origin: slamOrigin, bounds: detectedBounds };
+}
+
+/**
+ * Layer 5: caller has already decided slamming is safe. Best-effort bounds
+ * detection purely to compute a sane origin — never throws.
+ *
+ * F3 (Round 2 Phase 4): cache-first, matching resolveBoundsGuardOrigin's own
+ * pattern (this function was the one guard-resolver that always paid a
+ * fresh detection round trip). REAL BEHAVIOR CHANGE, called out explicitly
+ * (not a pure no-op refactor like the ipad-unlock.ts double-detection
+ * removal in the same PR): a stale cached bounds reading can now be
+ * returned here instead of a fresh detect, on the same trade-off
+ * resolveBoundsGuardOrigin already accepts elsewhere — cheaper, but a
+ * genuine orientation/bounds change between calls won't be picked up until
+ * the cache is next invalidated. Both this guard's real call sites
+ * (unlockIpad, ipadGoHome) run once per user-initiated action, not in a
+ * tight loop, so the staleness window in practice is short.
+ */
+async function resolveCallerAssertedOrigin(
+  req: AnchorRequest,
+): Promise<{ origin: { x: number; y: number }; bounds: IpadBounds | null }> {
+  if (req.slamOriginPx) {
+    return { origin: req.slamOriginPx, bounds: null };
+  }
+  const bounds = getLastGoodBounds() ?? await detectBoundsOrNull(req.client, {
+    verbose: req.verbose,
+    logPrefix: 'cursor-anchor',
+  });
+  return {
+    origin: bounds ? slamOriginFromBounds(bounds) : LEGACY_PORTRAIT_SLAM_ORIGIN,
+    bounds,
+  };
+}
+
+/** measureCell: synthetic scene, no guard, no detection. */
+function resolveCalibrationOrigin(
+  req: AnchorRequest,
+): { origin: { x: number; y: number }; bounds: IpadBounds | null } {
+  return { origin: req.slamOriginPx ?? LEGACY_PORTRAIT_SLAM_ORIGIN, bounds: null };
+}
+
+/**
+ * F1 (Round 2 Phase 3): the single call into slamToCorner's own
+ * verifyMotion — previously anchorCursor reimplemented that whole
+ * before/nudge/after/diff/match sequence itself (verifySlamLanded, now
+ * deleted) because slamToCorner's verifyMotion was hardwired to
+ * ballistics.ts's own non-nudging takeRawScreenshot, which wasn't right
+ * for every anchorCursor call site. slamToCorner now takes an injected
+ * `screenshot` fn (see SlamOptions.screenshot's ADR-0001 doc) and an
+ * optional `boundsHint` to skip a redundant detection round trip — so
+ * there's nothing left for anchorCursor to reimplement.
+ */
+async function runSlam(
+  req: AnchorRequest,
+  corner: Corner,
+  verifyMotion: boolean,
+  boundsHint: IpadBounds | null,
+): Promise<SlamMotionCheck | undefined> {
+  return slamToCorner(req.client, {
+    // F6 (Round 2 Phase 5c): calls/cornerTolerance/detection deleted from
+    // AnchorRequest — zero of the 4 real call sites ever supplied them, so
+    // they're left unset here too, falling through to slamToCorner's own
+    // defaults (matching what ballistics.ts's pre-migration comment already
+    // documented as the single-source-of-truth intent).
+    paceMs: req.paceMs,
+    corner,
+    verbose: req.verbose,
+    verifyMotion,
+    screenshot: req.screenshot,
+    boundsHint,
+  });
+}
+
+export async function anchorCursor(req: AnchorRequest): Promise<AnchorResult> {
+  const corner = req.corner ?? 'top-left';
+  const captureVerification = req.captureVerification ?? false;
+  // F6 (Round 2 Phase 5c): selfGate + the old {kind:...} recovery object
+  // collapsed into one posture enum — see AnchorRecoveryPosture's doc.
+  // REQUIRED, no default, same discipline as `guard`.
+  const recovery = req.recovery;
+
+  let resolved: { origin: { x: number; y: number }; bounds: IpadBounds | null };
+  switch (req.guard.kind) {
+    case 'bounds-guard':
+      resolved = await resolveBoundsGuardOrigin(req, req.guard);
+      break;
+    case 'caller-asserted':
+      resolved = await resolveCallerAssertedOrigin(req);
+      break;
+    case 'none-calibration':
+      resolved = resolveCalibrationOrigin(req);
+      break;
+  }
+
+  let verified: boolean | null = null;
+  let recoveryAttempted = false;
+
+  if (!captureVerification) {
+    await runSlam(req, corner, false, null);
+  } else {
+    // Bounds for the verification corner target: reuse whatever the guard
+    // resolution already detected (zero extra cost for bounds-guard/
+    // caller-asserted callers that didn't supply an explicit slamOriginPx).
+    // Otherwise best-effort cache-first/fresh-detect — measureCell's
+    // none-calibration guard never detects for origin purposes, but
+    // verification still needs real bounds when the target IS a real
+    // letterboxed iPad (see cornerTargetFromBounds's doc: the P0 bug this
+    // fixes was found via exactly this call path). Never throws.
+    const verificationBounds = resolved.bounds
+      ?? getLastGoodBounds()
+      ?? await detectBoundsOrNull(req.client, { verbose: req.verbose, logPrefix: 'cursor-anchor' });
+    const check = await runSlam(req, corner, true, verificationBounds);
+    verified = check?.verified ?? false;
+
+    if (!verified && recovery !== 'inspect-only') {
+      if (recovery === 'throw') {
+        throw new Error(
+          `anchorCursor: slam motion did not verify (guard=${req.guard.kind}) and recovery:'throw' ` +
+          `(the default). Pass recovery:'key-sequence-retry' / 'defensive-keys', or 'inspect-only' ` +
+          `to handle this yourself.`,
+        );
+      }
+      recoveryAttempted = true;
+      if (recovery === 'key-sequence-retry') {
+        // unlockIpad's existing retry (see ipad-keys.ts's
+        // ipadUnlockKeySequence for the full rationale), then re-attempt
+        // the slam+verify once.
+        if (req.verbose) {
+          console.error('[cursor-anchor] slam motion not verified — retrying via key sequence before re-slamming');
+        }
+        await ipadUnlockKeySequence(req.client);
+        const retryCheck = await runSlam(req, corner, true, verificationBounds);
+        verified = retryCheck?.verified ?? false;
+      } else if (recovery === 'defensive-keys') {
+        // ipadGoHome's Phase-231 belt-and-suspenders (see ipad-keys.ts's
+        // ipadDefensiveKeys for the full rationale) — no re-attempt, caller
+        // inspects the returned screenshot itself, matching ipadGoHome's
+        // existing messaging pattern.
+        if (req.verbose) {
+          console.error('[cursor-anchor] slam motion not verified — sending defensive Esc+Enter');
+        }
+        await ipadDefensiveKeys(req.client);
+      }
+    }
+  }
+
+  // Skip the nudge when verification was attempted and ultimately failed
+  // (even after recovery, if any ran) — nudging the cursor away from an
+  // already-failed slam wastes real HID calls on a measurement/position
+  // the caller is about to reject anyway. measureCell relies on this: its
+  // pre-migration code only ever called nudgeFromEdge after its own early-
+  // return check passed.
+  if (req.nudge && verified !== false) {
+    await nudgeFromEdge(req.client, {
+      away: req.nudge.away,
+      onlyAxis: req.nudge.onlyAxis,
+      verbose: req.verbose,
+    });
+  }
+
+  return {
+    origin: resolved.origin,
+    verified,
+    recoveryAttempted,
+    bounds: resolved.bounds,
+  };
+}
+
+// Re-exported so call sites migrating to anchorCursor don't need a second
+// import from ballistics.ts just for the shared Corner/Axis types.
+export type { Axis, Corner };

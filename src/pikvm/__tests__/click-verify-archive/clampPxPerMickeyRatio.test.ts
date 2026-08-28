@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { clampPxPerMickeyRatio } from '../click-verify.js';
+import { clampPxPerMickeyRatio } from '../../click-verify-archive.js';
 
 describe('clampPxPerMickeyRatio', () => {
   it('passes through a value inside the [0.9, 2.5] range', () => {

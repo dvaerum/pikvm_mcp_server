@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 import {
   shouldAdoptSecondOpinion,
   shouldFireSecondOpinion,
-} from '../click-verify.js';
+} from '../../click-verify-archive.js';
 
 describe('shouldFireSecondOpinion', () => {
   it('does NOT fire when no templates are cached (nothing to match against)', () => {

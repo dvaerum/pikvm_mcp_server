@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isLockScreenRecoveryError } from '../click-verify.js';
+import { isLockScreenRecoveryError } from '../../click-verify-archive.js';
 
 describe('isLockScreenRecoveryError', () => {
   it('matches the Phase 71 error phrase "lock screen"', () => {

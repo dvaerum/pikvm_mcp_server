@@ -1,8 +1,14 @@
 /**
  * Tool guide prompts — one per PiKVM tool that agents commonly use.
+ *
+ * F11 (Round 2 Phase 2d): served text loads directly from docs/skills/*.md
+ * at runtime (see skill-docs.ts) — docs/skills/ is the source of truth,
+ * not a separately-maintained embedded copy. See skill-docs.ts's header
+ * for why (the two had already drifted before this change).
  */
 
 import type { PromptDefinition } from './types.js';
+import { loadSkillDoc } from './skill-docs.js';
 
 export const toolGuidePrompts: PromptDefinition[] = [
   // ---------- take-screenshot ----------
@@ -15,33 +21,7 @@ export const toolGuidePrompts: PromptDefinition[] = [
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_screenshot — Capture a Screenshot
-
-## Purpose
-Capture the current screen of the remote machine as a JPEG image. This is your primary way to **see** what is on screen.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| maxWidth | number | *(native)* | Maximum width in pixels — image is scaled down if the screen is wider |
-| maxHeight | number | *(native)* | Maximum height in pixels — image is scaled down if the screen is taller |
-| quality | number | 80 | JPEG quality (1-100) |
-
-Scaling preserves aspect ratio. When you scale a screenshot, the server tracks the scale factor so that mouse coordinates you derive from the image are automatically mapped back to native resolution.
-
-## Example Call
-\`\`\`json
-{
-  "name": "pikvm_screenshot",
-  "arguments": { "maxWidth": 1280, "quality": 70 }
-}
-\`\`\`
-
-## Tips
-- Omit maxWidth/maxHeight to get the full native resolution — best for reading small text.
-- Use lower quality (50-60) when you only need layout/position information to save bandwidth.
-- Always take a screenshot **after** performing an action to verify the result.
-- The response includes a text line describing dimensions and any scaling that was applied.`,
+            text: loadSkillDoc('take-screenshot'),
           },
         },
       ];
@@ -58,27 +38,7 @@ Scaling preserves aspect ratio. When you scale a screenshot, the server tracks t
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_get_resolution — Check Screen Resolution
-
-## Purpose
-Return the current width and height of the remote screen in pixels. The result defines the valid coordinate space for all mouse operations.
-
-## Parameters
-None.
-
-## Example Call
-\`\`\`json
-{ "name": "pikvm_get_resolution" }
-\`\`\`
-
-## When to Call
-- At the **start of a session** so you know the coordinate space before any mouse interaction.
-- After the remote machine might have **changed resolution** (e.g., opening a game, switching display settings).
-- Before **calibration** — the calibrate workflow uses this value.
-
-## Tips
-- Valid mouse coordinates range from (0, 0) to (width-1, height-1).
-- If the resolution changes after you have calibrated, calibration is **automatically invalidated** — you will need to recalibrate.`,
+            text: loadSkillDoc('check-resolution'),
           },
         },
       ];
@@ -95,32 +55,7 @@ None.
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_type — Type Text
-
-## Purpose
-Type a string of text on the remote machine. The server converts characters into the correct HID key events using the specified keyboard layout, so special characters (e.g., @, #, {) are handled correctly.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| text | string | *(required)* | The text to type |
-| keymap | string | en-us | Keyboard layout for character-to-key conversion |
-| slow | boolean | false | Use slow typing mode (adds extra delays for compatibility) |
-| delay | number | *(default)* | Delay between keystrokes in ms (0-200) |
-
-## Example Call
-\`\`\`json
-{
-  "name": "pikvm_type",
-  "arguments": { "text": "Hello, world!", "slow": true }
-}
-\`\`\`
-
-## Tips
-- Use \`pikvm_type\` for printable text. For control keys (Enter, Tab, Escape, etc.) use \`pikvm_key\` instead.
-- Enable **slow** mode or increase **delay** if the target machine drops characters.
-- Very long strings may hit PiKVM endpoint limits — keep individual calls under ~1000 characters and split longer text into multiple calls.
-- The response shows a truncated preview of what was typed (first 50 chars) for privacy.`,
+            text: loadSkillDoc('type-text'),
           },
         },
       ];
@@ -137,39 +72,7 @@ Type a string of text on the remote machine. The server converts characters into
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_key — Send a Key or Key Combination
-
-## Purpose
-Send a single key event, optionally with modifier keys held down. Use this for control keys, function keys, and modifier combos that aren't representable as plain text.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| key | string | *(required)* | JavaScript key code (e.g., Enter, KeyA, F5) |
-| modifiers | string[] | [] | Modifier keys to hold while pressing key |
-| state | "click" \\| "press" \\| "release" | click | Key state — click sends press+release |
-
-## Common Key Codes
-- Letters: KeyA … KeyZ
-- Digits: Digit0 … Digit9
-- Function: F1 … F12
-- Modifiers: ShiftLeft, ControlLeft, AltLeft, MetaLeft (and Right variants)
-- Special: Enter, Escape, Backspace, Tab, Space, Delete, Insert, Home, End, PageUp, PageDown
-- Arrows: ArrowUp, ArrowDown, ArrowLeft, ArrowRight
-
-## Example Calls
-\`\`\`json
-{ "name": "pikvm_key", "arguments": { "key": "Enter" } }
-
-{ "name": "pikvm_key", "arguments": { "key": "KeyS", "modifiers": ["ControlLeft"] } }
-
-{ "name": "pikvm_key", "arguments": { "key": "ShiftLeft", "state": "press" } }
-\`\`\`
-
-## Tips
-- For simultaneous multi-key shortcuts (e.g., Ctrl+Alt+Del), prefer \`pikvm_shortcut\` — it presses all keys in one operation.
-- Use **press** / **release** states for drag operations or when you need a modifier held across multiple actions.
-- Modifiers are automatically pressed before and released after the main key.`,
+            text: loadSkillDoc('send-key'),
           },
         },
       ];
@@ -186,30 +89,7 @@ Send a single key event, optionally with modifier keys held down. Use this for c
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_shortcut — Send a Keyboard Shortcut
-
-## Purpose
-Press multiple keys simultaneously. All keys are pressed in order, then released in reverse order, mimicking a human pressing a shortcut.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| keys | string[] | *(required)* | Array of key codes to press together (max 10) |
-
-## Example Calls
-\`\`\`json
-{ "name": "pikvm_shortcut", "arguments": { "keys": ["ControlLeft", "AltLeft", "Delete"] } }
-
-{ "name": "pikvm_shortcut", "arguments": { "keys": ["ControlLeft", "KeyC"] } }
-
-{ "name": "pikvm_shortcut", "arguments": { "keys": ["AltLeft", "F4"] } }
-\`\`\`
-
-## Tips
-- List **modifier keys first**, then the action key — this mirrors how humans press shortcuts.
-- Maximum of **10 keys** per call.
-- Common shortcuts: Ctrl+C (copy), Ctrl+V (paste), Ctrl+Z (undo), Alt+Tab (switch window), Ctrl+Alt+Delete (security attention).
-- If you only need one key with modifiers, \`pikvm_key\` with the \`modifiers\` parameter works too. \`pikvm_shortcut\` is better when there are many keys or no single "main" key.`,
+            text: loadSkillDoc('send-shortcut'),
           },
         },
       ];
@@ -226,33 +106,7 @@ Press multiple keys simultaneously. All keys are pressed in order, then released
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_mouse_move — Move the Mouse Cursor
-
-## Purpose
-Move the mouse cursor to an absolute pixel position or by a relative delta.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| x | number | *(required)* | X coordinate (absolute) or delta (relative) |
-| y | number | *(required)* | Y coordinate (absolute) or delta (relative) |
-| relative | boolean | false | If true, move relative to current position |
-
-## Coordinate Space
-- **Absolute mode** (default): (0, 0) is the top-left corner. Maximum values are (width-1, height-1) from \`pikvm_get_resolution\`.
-- **Relative mode**: Deltas are clamped to -127 to 127 per call. Use multiple calls for larger relative moves.
-
-## Example Calls
-\`\`\`json
-{ "name": "pikvm_mouse_move", "arguments": { "x": 500, "y": 300 } }
-
-{ "name": "pikvm_mouse_move", "arguments": { "x": -50, "y": 0, "relative": true } }
-\`\`\`
-
-## Tips
-- If calibration is active, absolute coordinates are automatically adjusted.
-- A **resolution change** will invalidate calibration — you'll see a warning in the response.
-- To move and click in one step, use \`pikvm_mouse_click\` with x/y parameters instead.`,
+            text: loadSkillDoc('move-mouse'),
           },
         },
       ];
@@ -269,33 +123,7 @@ Move the mouse cursor to an absolute pixel position or by a relative delta.
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_mouse_click — Click a Mouse Button
-
-## Purpose
-Click a mouse button, optionally moving to a position first. Supports left, right, middle click and scroll wheel buttons.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| button | "left" \\| "right" \\| "middle" \\| "up" \\| "down" | left | Button to click. "up"/"down" are scroll wheel buttons |
-| x | number | *(current)* | X pixel coordinate to move to before clicking |
-| y | number | *(current)* | Y pixel coordinate to move to before clicking |
-| state | "click" \\| "press" \\| "release" | click | Button state |
-
-## Example Calls
-\`\`\`json
-{ "name": "pikvm_mouse_click", "arguments": { "x": 500, "y": 300 } }
-
-{ "name": "pikvm_mouse_click", "arguments": { "button": "right", "x": 100, "y": 200 } }
-
-{ "name": "pikvm_mouse_click", "arguments": { "button": "left", "x": 100, "y": 100, "state": "press" } }
-\`\`\`
-
-## Tips
-- Providing x and y moves the cursor **then** clicks — it's a single tool call instead of move + click.
-- Use **press** and **release** states for drag-and-drop: press at the source, move, release at the destination.
-- Double-click: call twice in quick succession with the same coordinates.
-- Always take a screenshot first to determine accurate click coordinates.`,
+            text: loadSkillDoc('click-element'),
           },
         },
       ];
@@ -312,38 +140,7 @@ Click a mouse button, optionally moving to a position first. Supports left, righ
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_auto_calibrate — Automatic Mouse Calibration
-
-## Purpose
-Automatically calibrate mouse coordinates by detecting the cursor position via screenshot diffing. More accurate than manual calibration because it detects the actual cursor position programmatically instead of relying on visual estimation.
-
-## How It Works
-1. Moves the mouse a known distance across multiple rounds
-2. Diffs pairs of screenshots to find cursor-sized changes (connected pixel clusters)
-3. Compares detected movement to commanded movement to compute calibration factors
-4. Verifies accuracy by moving to random positions and checking detected vs expected positions
-5. Retries with increased delays if verification fails
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| rounds | number | 5 | Number of sampling rounds to compute calibration factors |
-| verifyRounds | number | 5 | Number of verification rounds after calibration is computed |
-| moveDelayMs | number | 300 | Delay in ms after each mouse move (increase for slow PiKVM connections) |
-
-## Example Call
-\`\`\`json
-{ "name": "pikvm_auto_calibrate" }
-
-{ "name": "pikvm_auto_calibrate", "arguments": { "moveDelayMs": 500 } }
-\`\`\`
-
-## Tips
-- This is the **preferred calibration method** — try it before manual calibration.
-- Other tools are blocked while auto-calibration is running.
-- If it fails, try increasing \`moveDelayMs\` (slow video capture is the most common cause).
-- If it repeatedly fails, fall back to manual calibration with \`pikvm_calibrate\`.
-- Works best when the desktop is static (no animations, videos, or blinking elements near the cursor).`,
+            text: loadSkillDoc('auto-calibrate'),
           },
         },
       ];
@@ -360,29 +157,7 @@ Automatically calibrate mouse coordinates by detecting the cursor position via s
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_mouse_scroll — Scroll the Mouse Wheel
-
-## Purpose
-Scroll the mouse wheel vertically or horizontally.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| deltaY | number | *(required)* | Vertical scroll: negative = scroll up, positive = scroll down |
-| deltaX | number | 0 | Horizontal scroll: negative = scroll left, positive = scroll right |
-
-## Example Calls
-\`\`\`json
-{ "name": "pikvm_mouse_scroll", "arguments": { "deltaY": -3 } }
-
-{ "name": "pikvm_mouse_scroll", "arguments": { "deltaY": 5, "deltaX": 2 } }
-\`\`\`
-
-## Tips
-- A deltaY of **-3 to -5** is a reasonable "scroll up one section" amount; **3 to 5** for scrolling down.
-- Move the cursor over the target area first if the scroll should apply to a specific pane or element.
-- For long pages, use multiple scroll calls with screenshots in between to verify you've reached the desired content.
-- Horizontal scrolling is less commonly supported — verify it works on the target application.`,
+            text: loadSkillDoc('scroll-page'),
           },
         },
       ];
@@ -399,28 +174,7 @@ Scroll the mouse wheel vertically or horizontally.
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_detect_orientation — Detect iPad Bounds and Orientation
-
-## Purpose
-PiKVM captures the full HDMI frame (e.g. 1920×1080), but an iPad displayed in portrait fills only a vertical strip in the middle, with black letterbox bars on either side; in landscape, the iPad fills (or nearly fills) the frame. This tool finds the iPad's actual content rectangle inside the HDMI capture and reports its size, position, centre, and orientation.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| brightnessSum | number | 60 | Per-channel sum (R+G+B) above which a pixel counts as iPad content rather than letterbox black. Lower this if your iPad has very dark wallpaper that the default threshold misses. |
-
-## Example Call
-\`\`\`json
-{ "name": "pikvm_detect_orientation", "arguments": {} }
-\`\`\`
-
-## When to Use
-- **Almost never directly.** \`pikvm_ipad_unlock\` and \`pikvm_mouse_move_to\` both call this internally when their swipe/slam origin arguments are not set, so most agents can rely on automatic orientation handling.
-- Call manually for debugging or when you want to precompute slam/unlock origins to skip repeated detection cost.
-
-## Tips
-- If detection throws "entire screenshot is black" the HDMI input is disconnected or the iPad is asleep — wake it via \`pikvm_ipad_unlock\` or a key press first.
-- Animated wallpaper transitions can shift the detected rect by a few pixels; that is fine for slam/swipe origins which only need the rough centre and inset corner.`,
+            text: loadSkillDoc('detect-orientation'),
           },
         },
       ];
@@ -437,40 +191,7 @@ PiKVM captures the full HDMI frame (e.g. 1920×1080), but an iPad displayed in p
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_ipad_unlock — Unlock the iPad from Lock Screen
-
-## Purpose
-Dismiss the iPadOS lock screen and return to home. Current mechanism (Phase 217, v0.5.205): sends \`Escape\` → \`Enter\` → \`Space\` keys; \`Enter\` is the actual unlock key on iPadOS 26. The legacy 1500-px swipe-up gesture only runs when keys cannot be sent or the caller opts out via \`swipeOnKeyPressFailure: false\` (Phase 219, v0.5.206) — running the swipe after a successful key-press takes an already-unlocked home screen TO the lock screen.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| tryKeyPressFirst | boolean | true | Send Esc + Enter + Space before any swipe. Set false to skip keys (legacy callers / older iPadOS revisions). |
-| swipeOnKeyPressFailure | boolean | true | When keys ran successfully, SKIP the swipe. Set false to force the legacy keys-then-swipe sequence. |
-| slamFirst | boolean | true | Slam to top-left for a known cursor origin (only relevant when the swipe runs). |
-| startX | number | auto | HDMI X of swipe start. Auto-detected from iPad letterbox bounds (centre X). |
-| startY | number | auto | HDMI Y of swipe start. Auto-detected (~45 px above the iPad bottom edge). |
-| dragPx | number | 1500 | Total upward drag distance (Phase 209 raised default 800 → 1500). |
-| chunkMickeys | number | 30 | Per-call mickey size for the swipe (smaller = faster motion). |
-
-The swipe origin is computed from \`pikvm_detect_orientation\` so it works for portrait or landscape iPads in any letterbox position. Pass explicit \`startX\`/\`startY\` only if auto-detection misfires.
-
-## Example Call
-\`\`\`json
-{ "name": "pikvm_ipad_unlock", "arguments": {} }
-\`\`\`
-
-## When to Use
-- Before any click/move operation if a fresh screenshot shows the lock screen.
-- After a long period of inactivity (iPadOS auto-locks after 30 s – 2 min by default).
-
-## Side Effects on Already-Unlocked iPads
-- **Default behavior (keys + skip swipe)**: SAFE on home screen. Esc + Enter + Space are no-ops on home; the swipe is skipped because keys ran successfully.
-- **\`swipeOnKeyPressFailure: false\`** or **\`tryKeyPressFirst: false\`**: the swipe runs. **HAZARD**: a swipe-up from the bottom on an already-unlocked home screen is interpreted by iPadOS as a system gesture that takes the iPad TO THE LOCK SCREEN (live-verified Phase 219, 2026-05-10). Only enable when keys cannot reach the iPad.
-
-## Tips
-- **Check the returned screenshot.** If the iPad is still on the lock screen, call again with \`tryKeyPressFirst: false\` to force the swipe-based unlock.
-- The Phase 210 doc claimed \`Space\` alone unlocks. That stopped working between Phase 210 and Phase 217; \`Enter\` is the current working key. The Esc + Enter + Space sequence is defensive — Esc closes any Control Centre / Notification Centre overlay that a prior failed gesture may have opened.`,
+            text: loadSkillDoc('ipad-unlock'),
           },
         },
       ];
@@ -487,31 +208,7 @@ The swipe origin is computed from \`pikvm_detect_orientation\` so it works for p
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_measure_ballistics — Characterize iPad/Relative-Mouse Ballistics
-
-## Purpose
-When the PiKVM target uses \`mouse.absolute=false\` (e.g. iPad), deltas have a non-trivial, non-linear pixel/mickey ratio because of OS-side pointer acceleration. This tool slams the cursor to a known corner, sweeps (axis × magnitude × pace × rep), and writes a JSON profile to \`./data/ballistics.json\`. The profile is consulted by \`pikvm_mouse_move_to\` and \`pikvm_mouse_click_at\`.
-
-## When to Run
-- Once per device + orientation + resolution.
-- When your observed move-to accuracy degrades (e.g. after iPadOS updates that change pointer acceleration).
-
-## Caveats (read before running)
-- **Needs a quiet screen.** On the iPad home screen, animated widgets (clock second hand, weather ticker) produce so many pixel diffs that cursor detection mis-locks on them. Navigate to a static screen first — iPad Settings, a blank Safari page, or the lock screen.
-- **Results have variance.** Even on quiet screens, per-cell medians can vary 2-3x between runs because iPad auto-hides the cursor and pointer-effect rendering perturbs the diff. Treat the profile as a *hint*, not ground truth.
-- **Takes ~1-5 minutes** depending on rep count.
-
-## Example Calls
-\`\`\`json
-{ "name": "pikvm_measure_ballistics", "arguments": {} }
-
-{ "name": "pikvm_measure_ballistics", "arguments": { "magnitudes": [127], "paces": ["slow"], "reps": 5, "verbose": true } }
-\`\`\`
-
-## Tips
-- If \`samplesAccepted\` is much less than the total sweep size, the screen was too noisy — navigate to a quieter view and retry.
-- A reasonable default empirical value on iPad is **~1.0 px/mickey at mag=127, pace=slow** — if your profile's medians are far from that, re-check the target screen.
-- You can skip this tool entirely. \`pikvm_mouse_move_to\` falls back to 1.0 px/mickey when no profile exists, and its output screenshot lets the caller close the loop visually.`,
+            text: loadSkillDoc('measure-ballistics'),
           },
         },
       ];
@@ -528,54 +225,7 @@ When the PiKVM target uses \`mouse.absolute=false\` (e.g. iPad), deltas have a n
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_mouse_move_to — Approximate Move to a Screen Pixel (Relative Mode)
-
-## Purpose
-Move the pointer to an approximate target pixel on a PiKVM target in relative mouse mode (iPad, etc.). Default strategy \`"detect-then-move"\` probes the cursor with a small motion-diff to discover the origin (no slam required), then emits a chunked delta sequence to the target with up to 2 correction passes plus a ground-truth detection pass. Returns a post-move screenshot.
-
-## Parameters
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| x | number | *(required)* | Target X in HDMI screenshot pixels |
-| y | number | *(required)* | Target Y in HDMI screenshot pixels |
-| strategy | string | detect-then-move | Origin discovery. **DO NOT use \`"slam-then-move"\` on iPad** — slam to top-left triggers the iPadOS hot-corner gesture and re-locks the screen (Phase 32a). |
-| assumeCursorAtX/Y | number | — | With \`strategy="assume-at"\`, where the cursor currently is. |
-| fallbackPxPerMickey | number | 1.3 | px/mickey when no ballistics profile is loaded. |
-| chunkMagnitude | number | 60 | Per-call delta size in mickeys. |
-| chunkPaceMs | number | 20 | Pace between chunked calls (ms). |
-| correct | boolean | true | Enable motion-diff detection + correction loop. |
-| maxCorrectionPasses | number | 2 | Max correction passes (independent attempts to re-aim). |
-| minResidualPx | number | 25 | Early-exit threshold (px) for the correction loop. |
-| warmupMickeys | number | 8 | Tiny move emitted before screenshot A so the cursor renders. |
-
-## Expected Accuracy
-
-After Phases 65-77 (v0.5.68+):
-
-| Target width | Per-attempt residual ≤ 25 px | 3-attempt rate (with retry layer) |
-|--------------|------------------------------|------------------------------------|
-| ≥ 200 px     | ~80% (residual ≤ 100 px) | ~99% |
-| 100-200 px   | ~70% (residual ≤ 100 px) | ~97% |
-| 50-100 px    | ~60% (residual ≤ 50 px)  | **~50-60%** (Phase 111 N=15) |
-| < 50 px      | ~50% (residual ≤ 25 px)  | ~88% |
-
-Single-digit residuals are achievable when motion-diff succeeds (Phase 69 measured 6-9 px hits).
-
-## When to Use vs Closed-Loop Correction
-- For most click tasks: prefer \`pikvm_mouse_click_at\` (iPad default \`maxRetries: 3\` is auto-applied per Phase 142) — same algorithm, with retry-on-miss orchestration baked in.
-- For agent-driven closed-loop where you want screenshot inspection between move and click: this tool returns the screenshot and reported residual, suitable for an agent to compute a correction delta and issue follow-up \`pikvm_mouse_move\` calls.
-
-## Example Calls
-\`\`\`json
-{ "name": "pikvm_mouse_move_to", "arguments": { "x": 960, "y": 540 } }
-
-{ "name": "pikvm_mouse_move_to", "arguments": { "x": 1200, "y": 800, "strategy": "assume-at", "assumeCursorAtX": 800, "assumeCursorAtY": 700 } }
-\`\`\`
-
-## Tips
-- Prefer \`pikvm_mouse_click_at\` for "move + click in one step" — it adds verification and retries.
-- On a locked iPad: call \`pikvm_ipad_unlock\` first. detect-then-move can move the cursor on a locked iPad but clicks won't trigger app behavior.
-- iPadOS dims the cursor after ~1 s of inactivity; the algorithm's warmup nudge handles the common case.`,
+            text: loadSkillDoc('move-to'),
           },
         },
       ];
@@ -592,72 +242,7 @@ Single-digit residuals are achievable when motion-diff succeeds (Phase 69 measur
           role: 'assistant',
           content: {
             type: 'text',
-            text: `# pikvm_mouse_click_at — Click at an Approximate Screen Pixel (Relative Mode)
-
-## Purpose
-On a PiKVM target in relative mouse mode (iPad), move the pointer to an approximate target pixel and click. Internally: \`pikvm_mouse_move_to\` → brief settle → \`mouseClick\`. Returns a post-click screenshot.
-
-## Reliability (revised post-Phase 199, v0.5.195)
-
-| Target width | 3-attempt CORRECT-element hit | Examples |
-|--------------|-------------------------------|----------|
-| ≥ 200 px | ~95-99% | Sidebar rows, large buttons |
-| 100-200 px | ~80-95% | App icons (large), search fields |
-| 50-100 px | **~5-15%** + ~85-95% explicit skips | ~70 px iPad app icons |
-| < 50 px | ~88% | Back arrows, X buttons, toggles |
-
-**For ~70 px iPad app icons, USE \`pikvm_ipad_launch_app\` instead** — it's 100% reliable via Spotlight and avoids the ~95% skip / ~5% hit reality of small-icon clicks via cursor positioning. Phase 199 production-bench measured this.
-
-The earlier "~50-60% small-icon hit" figure was based on screen-changed checks that counted clicks landing on adjacent icons as hits. The MCP server's default safety gate (\`maxResidualPx: 35\`) properly refuses those, so the real correct-element rate is much lower. The user-side Pointer Animations toggle (Settings → Accessibility → Touch → Pointer Control) lifts small-icon hit rate to ≥ 90% — see \`docs/troubleshooting/2026-04-30-phase-194h-disable-pointer-animations.md\`.
-
-**Phase 94 / Phase 142 default**: \`maxRetries\` defaults to 3 on iPad (relative-mouse) targets. Pass \`maxRetries: 0\` explicitly to opt out (single-shot for one-off toggles).
-
-**Silent failure remedy**: when click_at returns success but the post-click screenshot shows no UI change, the dominant cause is an iOS HDMI-blocked security popup (Apple Pay / Face ID / Low Battery / app permission) eating input. Call \`pikvm_dismiss_popup\` to fire the documented Escape → Enter recipe, then retry. Live-verified twice on Low Battery modals (10% and 5% — both dismissed cleanly with one Escape). **2026-06-03 escalation**: a stuck Low Battery 5% modal that had been sitting for hours (HDMI frame frozen) absorbed Escape with NO effect — the modal lost keyboard focus. \`pikvm_dismiss_popup\` with \`force: true\` appends Cmd+H (system Home shortcut) after Escape+Enter, which bypasses the focus problem. Cmd+H is destructive (exits any foreground app), so only use \`force: true\` when (a) the iPad is on or near the home screen, AND (b) the plain recipe already returned with no visible change.
-
-## Critical pre-flight
-
-**The iPad MUST be unlocked.** Detect-then-move can't find the cursor against the lock-screen wallpaper. If you don't know the iPad's state, either:
-1. Take a \`pikvm_screenshot\` first to confirm it's not on lock screen.
-2. Pass \`autoUnlockOnDetectFail: true\` (Phase 72) for opt-in self-recovery — note this calls \`ipadGoHome\` which exits any open app.
-3. Just call \`pikvm_ipad_unlock\` first if you know it might be locked.
-
-## Parameters (key ones)
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| x | number | *(required)* | Target X in HDMI screenshot pixels |
-| y | number | *(required)* | Target Y in HDMI screenshot pixels |
-| button | string | left | left / right / middle / up / down |
-| maxRetries | number | 2 (iPad) / 0 (desktop) | Phase 94: auto-defaults to 2 on iPad (relative-mouse) / 0 on desktop. Pass 0 explicitly to opt out of retries on iPad. |
-| autoUnlockOnDetectFail | boolean | false | Phase 72 opt-in lock-screen recovery |
-| maxResidualPx | number | *(unset)* | Phase 88: skip the click if cursor lands more than N px from target. Set to 25 for strict icon-tolerance (refuses imprecise clicks that risk hitting adjacent UI elements); leave unset for permissive behaviour. |
-| verifyClick | boolean | true | Pre/post screenshot diff confirms click landed |
-
-## Recommended call shapes
-
-**Reliable iPad click on a known-unlocked iPad:**
-\`\`\`json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2 } }
-\`\`\`
-
-**Self-recovering click (assumes iPad might be locked / faded):**
-\`\`\`json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2, "autoUnlockOnDetectFail": true } }
-\`\`\`
-
-**Strict-target click (refuse to click on the wrong adjacent element):**
-\`\`\`json
-{ "name": "pikvm_mouse_click_at", "arguments": { "x": 1060, "y": 700, "maxRetries": 2, "maxResidualPx": 25 } }
-\`\`\`
-With \`maxResidualPx: 25\`, attempts that land more than 25 px from the target are skipped (counts as a retry). Trades absolute hit rate for "I clicked the right thing" confidence — useful when the target is near other clickable elements that could be accidentally hit.
-
-## When NOT to Use
-- **iPad app icons on the home screen**: use \`pikvm_ipad_launch_app\` (Spotlight + type) — 100% reliable vs ~5-15% for cursor-clicking 70 px icons. This is the dominant case where users reach for click_at and shouldn't.
-- Tiny targets (< 30 px): even with retries, hit rate drops below 80%. Use keyboard navigation if available — see \`ipad-keyboard-workflow\`.
-- Anywhere a keyboard shortcut exists: keyboard input has 100% reliability vs cursor's ~80-99%.
-
-## Tips
-- Take a \`pikvm_screenshot\` first to confirm the target pixel is where the UI element actually is — icon positions change between app rearrangements and iOS versions.
-- After the click, examine the returned screenshot: did the expected app open / dialog appear? If not, the click missed — retry or fall back to keyboard.`,
+            text: loadSkillDoc('click-at'),
           },
         },
       ];

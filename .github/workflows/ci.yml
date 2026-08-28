@@ -55,3 +55,11 @@ jobs:
             exit 1
           fi
           echo "runtime smoke OK — onnxruntime-node loaded, --help returned cleanly"
+      - name: hidmode module eval-guard (#51 both-set can't return silently)
+        # The nixos-module mutual-exclusion assertion (target + hidModeUrl both-set
+        # → eval error). This EVAL-ONLY check (no KVM) is the durable guard for the
+        # exact class that crash-looped the appliance in #47 — CI doesn't run
+        # `nix flake check`, so wire the specific check in so a future change can't
+        # silently reintroduce the both-set state. Asserts both-set is rejected AND
+        # URL-only omits --target + wires the URL AND declared keeps --target.
+        run: nix build .#checks.x86_64-linux.hidmode-both-set-rejected --print-build-logs

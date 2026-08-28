@@ -152,70 +152,88 @@ let cachedVerifierSession: ort.InferenceSession | null = null;
 let verifierLoadFailureLogged = false;
 let cachedRegion: { x: number; y: number; w: number; h: number } | null = null;
 
+// task_484bed055820: how far (native px) a hint-narrowed cascade search extends
+// on each side of the hint. Set well above curve-mover.ts's own documented
+// finding that a first-shot landing more than ~80px from the deterministic
+// emit's target can ONLY be a detector false-positive on an unrelated widget,
+// never a correct detection — so this window comfortably covers a real
+// detection's noise floor while still cutting the crop count by roughly an
+// order of magnitude versus scanning the whole region every call.
+const HINT_WINDOW_RADIUS_PX = 150;
+
+/** Same axis-building math runCascade always used: walk the span at
+ *  GRID_STRIDE, always include the far edge (a plain inset grid leaves a
+ *  ~stride blind spot there — MISSED the cursor in the DOCK / bottom edge in
+ *  live exploration), then clamp+dedup so every crop stays fully in-frame. */
+function cascadeAxis(lo: number, hi: number, frameMax: number): number[] {
+  const half = CASCADE_CROP / 2;
+  const raw: number[] = [];
+  for (let v = lo; v < hi; v += GRID_STRIDE) raw.push(v);
+  raw.push(hi);
+  const seen = new Set<number>(), out: number[] = [];
+  for (const v of raw) {
+    const c = Math.round(Math.max(half, Math.min(frameMax - half, v)));
+    if (!seen.has(c)) { seen.add(c); out.push(c); }
+  }
+  return out;
+}
+
 /**
- * Cascade detection: run the VERIFIER over a dense grid of 96px crops covering the
- * iPad region (batched in ONE inference), take the max-scoring crop, and refine to
- * the score-weighted centroid of the winning cluster for sub-cell precision. This
- * DECOUPLES detection from the full-frame proposer, whose recall failed live (it
- * missed the cursor on the Maps app icon — verifier=1.0 there but the proposer never
- * proposed it). The proposer heatmap is intentionally NOT used. ~230 crops / ~110ms.
- * See docs/detector-retrain-plan.md cycle 14.
+ * Build the list of 96px crop centers the cascade will batch into ONE
+ * inference call. Without a hint: the WHOLE detected region — byte-identical
+ * to runCascade's behavior before this function existed (cold-start / no-
+ * known-position paths are unaffected by task_484bed055820).
+ *
+ * With a hint: a bounded HINT_WINDOW_RADIUS_PX window around it instead of
+ * the whole region (task_484bed055820 — the production cascade's default
+ * full-region scan costs 14.8-25.5s/call on real Pi4 hardware, N=352 on a
+ * 1920x1080 frame, and runs 2-13+ times per single interactive move; this is
+ * the fix). Returns [] when the window doesn't overlap the region at all —
+ * the caller's signal to fall back to the hint-less full scan.
  */
-async function runCascade(
-  jpegBuffer: Buffer, frameW: number, frameH: number,
-): Promise<{ x: number; y: number; presence: number; heatmapPeak: number } | null> {
-  if (cachedVerifierSession === null) {
-    try {
-      await fs.access(VERIFIER_MODEL);
-      cachedVerifierSession = await ort.InferenceSession.create(VERIFIER_MODEL);
-    } catch (e) {
-      if (!verifierLoadFailureLogged) {
-        console.error(
-          `[cursor-ml-detect] failed to load verifier at ${VERIFIER_MODEL}: ` +
-          `${(e as Error).message}. Cascade disabled.`,
-        );
-        verifierLoadFailureLogged = true;
-      }
-      return null;
-    }
+export function buildCascadeGrid(
+  region: { x: number; y: number; w: number; h: number },
+  frameW: number,
+  frameH: number,
+  hint?: { x: number; y: number } | null,
+): Array<{ x: number; y: number }> {
+  let xLo = region.x, xHi = region.x + region.w;
+  let yLo = region.y, yHi = region.y + region.h;
+
+  if (hint) {
+    xLo = Math.max(xLo, hint.x - HINT_WINDOW_RADIUS_PX);
+    xHi = Math.min(xHi, hint.x + HINT_WINDOW_RADIUS_PX);
+    yLo = Math.max(yLo, hint.y - HINT_WINDOW_RADIUS_PX);
+    yHi = Math.min(yHi, hint.y + HINT_WINDOW_RADIUS_PX);
+    if (xLo >= xHi || yLo >= yHi) return [];
   }
-  if (cachedRegion === null) {
-    try {
-      const r = await detectIpadRegion(jpegBuffer);
-      cachedRegion = { x: r.x + NATIVE_MARGIN, y: r.y + NATIVE_MARGIN, w: r.w - 2 * NATIVE_MARGIN, h: r.h - 2 * NATIVE_MARGIN };
-    } catch {
-      cachedRegion = { x: 0, y: 0, w: frameW, h: frameH };
-    }
-  }
-  const reg = cachedRegion;
-  const { data: full, info } = await sharp(jpegBuffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-  const FW = info.width, half = CASCADE_CROP / 2;
-  // Crop centers covering the FULL region INCLUDING its edges. A plain inset grid
-  // ([reg+half, reg+dim-half]) leaves a ~stride/1 blind-spot at the far edges, which
-  // MISSED the cursor in the DOCK / bottom edge (y≈1010) in live exploration. Build
-  // each axis with an explicit far-edge value so any cursor gets a near-centered crop;
-  // clamp so the 96px crop stays fully in-frame (edge crops just extend into the bezel).
-  const axis = (lo: number, hi: number, frameMax: number): number[] => {
-    const raw: number[] = [];
-    for (let v = lo; v < hi; v += GRID_STRIDE) raw.push(v);
-    raw.push(hi);
-    const seen = new Set<number>(), out: number[] = [];
-    for (const v of raw) {
-      const c = Math.round(Math.max(half, Math.min(frameMax - half, v)));
-      if (!seen.has(c)) { seen.add(c); out.push(c); }
-    }
-    return out;
-  };
-  const ys = axis(reg.y, reg.y + reg.h, info.height);
-  const xs = axis(reg.x, reg.x + reg.w, FW);
-  const centers: { x: number; y: number }[] = [];
+
+  const ys = cascadeAxis(yLo, yHi, frameH);
+  const xs = cascadeAxis(xLo, xHi, frameW);
+  const centers: Array<{ x: number; y: number }> = [];
   for (const cy of ys) for (const cx of xs) centers.push({ x: cx, y: cy });
-  if (centers.length === 0) return null;
-  const N = centers.length, plane = CASCADE_CROP * CASCADE_CROP;
+  return centers;
+}
+
+/** Batch `centers` into ONE inference call against the verifier session and
+ *  decode the winning crop's sub-pixel position. Returns null when there are
+ *  no centers to search, or the best crop's presence score doesn't clear
+ *  VERIFY_THRESH (caller decides what "no confident result" means — for
+ *  runCascade, that's the signal to fall back to the full-region scan). */
+async function runCascadeInference(
+  session: ort.InferenceSession,
+  full: Buffer,
+  FW: number,
+  FH: number,
+  centers: Array<{ x: number; y: number }>,
+): Promise<{ x: number; y: number; presence: number; heatmapPeak: number } | null> {
+  const N = centers.length;
+  if (N === 0) return null;
+  const half = CASCADE_CROP / 2, plane = CASCADE_CROP * CASCADE_CROP;
   const batch = new Float32Array(N * 3 * plane);
   for (let n = 0; n < N; n++) {
     const left = Math.max(0, Math.min(FW - CASCADE_CROP, centers[n].x - half));
-    const top = Math.max(0, Math.min(info.height - CASCADE_CROP, centers[n].y - half));
+    const top = Math.max(0, Math.min(FH - CASCADE_CROP, centers[n].y - half));
     const base = n * 3 * plane;
     for (let yy = 0; yy < CASCADE_CROP; yy++) {
       for (let xx = 0; xx < CASCADE_CROP; xx++) {
@@ -226,7 +244,7 @@ async function runCascade(
       }
     }
   }
-  const out = await cachedVerifierSession.run({ crop: new ort.Tensor('float32', batch, [N, 3, CASCADE_CROP, CASCADE_CROP]) });
+  const out = await session.run({ crop: new ort.Tensor('float32', batch, [N, 3, CASCADE_CROP, CASCADE_CROP]) });
   const presence = out.presence_logit.data as Float32Array;   // [N]
   const heatmap = out.heatmap_logits.data as Float32Array;    // [N,1,HM,HM]
   // PRESENCE head (offset-invariant, confuser-rejecting) picks the crop; the HEATMAP
@@ -247,8 +265,66 @@ async function runCascade(
   }
   ex /= sum; ey /= sum;
   const left = Math.max(0, Math.min(FW - CASCADE_CROP, centers[bi].x - half));
-  const top = Math.max(0, Math.min(info.height - CASCADE_CROP, centers[bi].y - half));
+  const top = Math.max(0, Math.min(FH - CASCADE_CROP, centers[bi].y - half));
   return { x: Math.round(left + ex * hmScale), y: Math.round(top + ey * hmScale), presence: maxP, heatmapPeak: maxP };
+}
+
+/**
+ * Cascade detection: run the VERIFIER over a dense grid of 96px crops covering the
+ * iPad region (batched in ONE inference), take the max-scoring crop, and refine to
+ * the score-weighted centroid of the winning cluster for sub-cell precision. This
+ * DECOUPLES detection from the full-frame proposer, whose recall failed live (it
+ * missed the cursor on the Maps app icon — verifier=1.0 there but the proposer never
+ * proposed it). The proposer heatmap is intentionally NOT used. ~230 crops / ~110ms.
+ * See docs/detector-retrain-plan.md cycle 14.
+ *
+ * task_484bed055820: when `hint` is given, searches a bounded window around it
+ * FIRST (see buildCascadeGrid) — the SAME verifier model, just over far fewer
+ * crops — falling back to the full-region scan when the window doesn't overlap
+ * the region, or the narrow search comes back empty/low-confidence. Without a
+ * hint, behavior is unchanged (full-region scan, as always).
+ */
+async function runCascade(
+  jpegBuffer: Buffer, frameW: number, frameH: number,
+  hint?: { x: number; y: number } | null,
+): Promise<{ x: number; y: number; presence: number; heatmapPeak: number } | null> {
+  if (cachedVerifierSession === null) {
+    try {
+      await fs.access(VERIFIER_MODEL);
+      cachedVerifierSession = await ort.InferenceSession.create(VERIFIER_MODEL);
+    } catch (e) {
+      if (!verifierLoadFailureLogged) {
+        console.error(
+          `[cursor-ml-detect] failed to load verifier at ${VERIFIER_MODEL}: ` +
+          `${(e as Error).message}. Cascade disabled.`,
+        );
+        verifierLoadFailureLogged = true;
+      }
+      return null;
+    }
+  }
+  const session = cachedVerifierSession;
+  if (cachedRegion === null) {
+    try {
+      const r = await detectIpadRegion(jpegBuffer);
+      cachedRegion = { x: r.x + NATIVE_MARGIN, y: r.y + NATIVE_MARGIN, w: r.w - 2 * NATIVE_MARGIN, h: r.h - 2 * NATIVE_MARGIN };
+    } catch {
+      cachedRegion = { x: 0, y: 0, w: frameW, h: frameH };
+    }
+  }
+  const reg = cachedRegion;
+  const { data: full, info } = await sharp(jpegBuffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const FW = info.width, FH = info.height;
+
+  if (hint) {
+    const narrowCenters = buildCascadeGrid(reg, FW, FH, hint);
+    if (narrowCenters.length > 0) {
+      const narrowResult = await runCascadeInference(session, full, FW, FH, narrowCenters);
+      if (narrowResult !== null) return narrowResult;
+    }
+  }
+  const fullCenters = buildCascadeGrid(reg, FW, FH);
+  return runCascadeInference(session, full, FW, FH, fullCenters);
 }
 
 /** Result type returned by findCursorByML. */
@@ -399,7 +475,17 @@ export async function findCursorByV8FullFrame(
   jpegBuffer: Buffer,
   frameWidth: number,
   frameHeight: number,
-  options?: { minPresence?: number },
+  options?: {
+    minPresence?: number;
+    /** task_484bed055820: when the caller already has a reasonable guess at
+     *  the cursor's position (a correction pass's target, a post-emit
+     *  landing check, ...), the cascade searches a bounded window around it
+     *  first instead of the whole region — falling back to the full scan
+     *  automatically if that comes back empty/low-confidence. Omit for
+     *  genuine cold-start (no known position): behavior is then unchanged
+     *  from before this option existed. */
+    hint?: { x: number; y: number } | null;
+  },
 ): Promise<{ x: number; y: number; presence: number; heatmapPeak: number } | null> {
   // DEFAULT detection path (2026-07-20): the dual-head crop CASCADE (grid → presence +
   // heatmap soft-argmax). Validated LIVE 160/160 across two N=80 benches + 2.8px small-
@@ -407,7 +493,7 @@ export async function findCursorByV8FullFrame(
   // the full-frame proposer entirely (the grid doesn't use it). Opt OUT with
   // PIKVM_ML_CASCADE=0 to fall back to the legacy single-stage path below.
   if (CASCADE_ENABLED) {
-    return runCascade(jpegBuffer, frameWidth, frameHeight);
+    return runCascade(jpegBuffer, frameWidth, frameHeight, options?.hint);
   }
   const minPresence = options?.minPresence ?? 0.5;
   if (cachedV8Session === null) {
@@ -664,8 +750,15 @@ export async function findCursorByMLMultiHint(
   // band so valid moderate-confidence detections pass through.
   const presenceThreshold = options.minConfidence ?? DEFAULT_CONFIDENCE_THRESHOLD;
   const HEATMAP_FLOOR = 0.2;
+  // task_484bed055820: hints[0] is always the caller's primary guess (see
+  // buildMLHints — predicted is unconditionally first). Passing it through
+  // lets the cascade search a bounded window around it before falling back
+  // to a full-region scan, instead of scanning the whole region on every
+  // single correction-loop call regardless of how good a guess we already
+  // have.
   const v8 = await findCursorByV8FullFrame(jpegBuffer, frameWidth, frameHeight, {
     minPresence: presenceThreshold,
+    hint: hints[0] ?? null,
   });
   if (v8 !== null && v8.heatmapPeak >= HEATMAP_FLOOR) {
     return {

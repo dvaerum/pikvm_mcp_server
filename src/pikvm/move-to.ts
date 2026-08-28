@@ -27,8 +27,8 @@ import {
   BallisticsProfile,
   lookupPxPerMickey,
   profileIsFreshFor,
-  slamToCorner,
 } from './ballistics.js';
+import { anchorCursor } from './cursor-anchor.js';
 import {
   Cluster,
   CursorTemplate,
@@ -53,12 +53,7 @@ import {
   migrateLegacyTemplate,
   persistTemplate,
 } from './template-set.js';
-import {
-  detectBoundsOrNull,
-  getLastGoodBounds,
-  slamOriginFromBounds,
-  LEGACY_PORTRAIT_SLAM_ORIGIN,
-} from './orientation.js';
+import { getLastGoodBounds } from './orientation.js';
 import {
   buildFeatures as buildPointerAccelFeatures,
   predictDisplacement as predictLearnedDisplacement,
@@ -226,7 +221,6 @@ export interface MoveToOptions {
   postWindow?: number;
 
   /** Forwarded to slamToCorner when slam strategy is used. */
-  slamCalls?: number;
   slamPaceMs?: number;
   verbose?: boolean;
 
@@ -426,9 +420,19 @@ export interface MoveToResult {
    *  learner. null when it can't be measured (start or first landing undetected).
    *  `woken` marks a faded-cursor-wake start (a garbage sample, excluded from
    *  learning). curve-one-shot only; other strategies leave it undefined. */
-  learnSample?: {
-    plannedX: number; plannedY: number; achievedX: number; achievedY: number; woken: boolean;
-  } | null;
+  learnSample?: MoveLearnSample | null;
+}
+
+/** F2 (Round 2 Phase 2): named type for MoveToResult.learnSample, replacing
+ *  the inline structural type both index.ts's and click-at.ts's own
+ *  recordMoveSample() duplicated in their own function signatures before
+ *  this consolidation. See scale-learner.ts's recordMoveSample. */
+export interface MoveLearnSample {
+  plannedX: number;
+  plannedY: number;
+  achievedX: number;
+  achievedY: number;
+  woken: boolean;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -857,27 +861,6 @@ async function maybePersistTemplate(
 // Origin discovery (Phase 5: wakeup nudge before template-match)
 // ============================================================================
 
-/** Nudge the cursor a few mickeys to wake it from iPadOS's faded
- *  state before any detection runs. iPadOS hides the pointer after
- *  ~1s of inactivity; a screenshot taken during that fade window
- *  shows no cursor pixels and template-match returns garbage scores
- *  against UI elements. The +30/-30 round-trip is small enough not
- *  to disturb the cursor's position significantly (some asymmetric
- *  acceleration drift is OK — `discoverOrigin` is about to read the
- *  cursor's actual position next anyway). */
-export async function wakeupCursor(
-  client: PiKVMClient,
-  settleMs = 300,
-): Promise<void> {
-  await client.mouseMoveRelative(30, 0);
-  await sleep(80);
-  await client.mouseMoveRelative(-30, 0);
-  // Must exceed PiKVM streamer + iPadOS render latency (measured 150–
-  // 235 ms in the latency-probe research, 2026-04-26). See
-  // docs/troubleshooting/ipad-cursor-detection.md for the data.
-  await sleep(settleMs);
-}
-
 /**
  * Build CursorLocator deps bound to the client (C1 P3). The origin profile only
  * touches origin deps; the openLoopShape wiggle-verify closures live inside
@@ -900,12 +883,8 @@ function makeLocatorDeps(client: PiKVMClient): CursorLocatorDeps {
     locateCursor: (opts) => locateCursor(client, opts),
     findCursorByTemplateSet,
     findCursorByMLMultiHint,
-    findCursorByShape,
     buildMLHints,
     mlWiggleVerify: notWired('mlWiggleVerify'),
-    wiggleVerifyCandidate: notWired('wiggleVerifyCandidate'),
-    shouldFireSecondOpinion: notWired('shouldFireSecondOpinion'),
-    shouldAdoptSecondOpinion: notWired('shouldAdoptSecondOpinion'),
     tautologyProxThreshold: TAUTOLOGY_PROX_THRESHOLD,
   };
 }
@@ -984,80 +963,45 @@ async function discoverOrigin(
     if (options.verbose) console.error('[move-to] detect-then-move failed; falling back to slam');
   }
 
-  // Auto-detect iPad bounds for the slam origin if not explicitly set,
-  // so landscape and non-default-letterbox iPads work without configuration.
-  // Fast path: if we already have a sane cached detection from earlier in
-  // this process, reuse it instead of re-decoding + re-scanning a fresh
-  // screenshot (~50 ms saving per call on tight loops).
-  let slamOrigin = options.slamOriginPx;
-  let detectedBounds: ReturnType<typeof getLastGoodBounds> = null;
-  if (!slamOrigin) {
-    detectedBounds = getLastGoodBounds();
-    if (detectedBounds) {
-      if (options.verbose) {
-        console.error(
-          `[move-to] using cached ${detectedBounds.orientation} bounds ${detectedBounds.width}×${detectedBounds.height} (no re-detection)`,
-        );
-      }
-    } else {
-      detectedBounds = await detectBoundsOrNull(client, {
-        verbose: options.verbose,
-        logPrefix: 'move-to',
-      });
-    }
-    if (detectedBounds) {
-      slamOrigin = slamOriginFromBounds(detectedBounds);
-      if (options.verbose) {
-        console.error(
-          `[move-to] auto-detected ${detectedBounds.orientation} slam-origin (${slamOrigin.x},${slamOrigin.y})`,
-        );
-      }
-    } else {
-      slamOrigin = LEGACY_PORTRAIT_SLAM_ORIGIN;
-    }
-  }
-
-  // Phase 32 safety guard: refuse to slam if we know the target is an iPad.
-  // Live-verified 2026-04-26: explicit slam-then-move on iPad-portrait
-  // letterbox locks the screen via iPadOS hot-corner gesture. The
-  // forbidSlamFallback option only protected the auto-fallback path; this
-  // covers the explicit-strategy case too.
-  //
-  // Phase 32a: close the safety gap when bounds detection fails (e.g. dark-
-  // mode iPad with all-black canvas). The guard refuses unless EITHER:
-  //   - bounds were detected AND show landscape orientation (clearly not the
-  //     letterboxed-iPad case), OR
-  //   - the caller explicitly passed slamOriginPx (they've decided where to
-  //     slam to and are taking responsibility), OR
-  //   - the caller explicitly opted out via forbidSlamOnIpad=false.
-  // This is fail-safe: if we can't tell what the target is, we don't slam.
-  const forbidSlamOnIpad = options.forbidSlamOnIpad ?? true;
-  const callerProvidedOrigin = options.slamOriginPx !== undefined;
-  const knownNonIpad =
-    detectedBounds !== null && detectedBounds.orientation === 'landscape';
-  if (forbidSlamOnIpad && !knownNonIpad && !callerProvidedOrigin) {
-    const reason = detectedBounds
-      ? `iPad-portrait letterbox detected (bounds ${detectedBounds.width}×${detectedBounds.height})`
-      : `target type undetermined (bounds detection failed — frame too dark or unrecognised) ` +
-        `and slam-origin defaulted to LEGACY_PORTRAIT, which presumes iPad`;
-    throw new Error(
-      `moveToPixel: refusing slam-then-move — ${reason}. ` +
-      `Slam-to-corner on an iPad triggers the iPadOS hot-corner gesture and ` +
-      `re-locks the screen mid-session. Options: ` +
-      `(1) use strategy='detect-then-move' (recommended for iPad), ` +
-      `(2) pass slamOriginPx explicitly if you know the target is non-iPad, ` +
-      `(3) pass forbidSlamOnIpad=false to opt out (only safe if iPad ` +
-      `hot-corners are disabled).`,
-    );
-  }
-
-  await slamToCorner(client, {
-    calls: options.slamCalls,
-    paceMs: options.slamPaceMs,
+  // Phase 32/32a safety guard (docs/troubleshooting/ipad-safety-guards.md,
+  // Layers 1/2/3) + bounds-based slam-origin discovery, both now owned by
+  // cursor-anchor.ts's bounds-guard branch. forbidSlamOnIpad:false isn't a
+  // rare opt-out here — hid-mode.ts's policy() sets it for every real
+  // desktop/absolute-mouse target — so it maps to allowOnUndetermined
+  // rather than swapping guard kinds, which keeps the cache-first origin
+  // computation identical either way (see AnchorGuard's bounds-guard doc).
+  const { origin, bounds } = await anchorCursor({
+    client,
     corner: 'top-left',
+    guard: { kind: 'bounds-guard', allowOnUndetermined: options.forbidSlamOnIpad === false },
+    // ADR 0001: the wake-nudging variant — matches this module's own
+    // cursor-detection screenshots. captureVerification stays unset
+    // (false): this call has never verified the slam landed, and
+    // preserving that (zero new screenshots, zero new throw paths) is
+    // this migration's explicit non-goal-to-change.
+    screenshot: takeRawScreenshot,
+    // F6 (Round 2 Phase 5c): recovery is inert here (captureVerification is
+    // false, so nothing is ever computed to gate on) — but the field is
+    // REQUIRED (no default, same discipline as `guard`), so 'inspect-only'
+    // is named explicitly as the closest honest description: if
+    // verification were ever turned on for this call site, this mover's
+    // own downstream correction loop already handles imprecision, so an
+    // autonomous corner-recovery here would be redundant.
+    recovery: 'inspect-only',
+    // AnchorRequest.slamCalls deleted (structurally unreachable — never
+    // wired to the MCP schema, so options.slamCalls was always undefined
+    // here in production). MoveToOptions.slamCalls itself removed below as
+    // the same finding's direct consequence.
+    paceMs: options.slamPaceMs,
+    slamOriginPx: options.slamOriginPx,
     verbose: options.verbose,
   });
-  return { point: slamOrigin, method: 'slam-then-move' };
+  if (options.verbose && bounds) {
+    console.error(
+      `[move-to] anchorCursor origin (${bounds.orientation} bounds) → (${origin.x},${origin.y})`,
+    );
+  }
+  return { point: origin, method: 'slam-then-move' };
 }
 
 // ============================================================================
@@ -1473,17 +1417,25 @@ export async function wiggleVerifyCandidate(
 }
 
 /** Open-loop shape/ML fallback (C1 P3 openLoopShape). Thin wrapper over the single
- *  CursorLocator front door: ML-multihint -> wiggle -> dark/bright shape -> wiggle
- *  (that cascade lives in locateOpenLoopShape; unit-tested with mock deps). Deps
- *  reuse makeLocatorDeps with a `decode` passthrough over the already-decoded shot
- *  and the module-level mlWiggleVerify/wiggleVerifyCandidate wired real. `prox` is
- *  reconstructed faithfully (hypot(fix.position - predicted); the wiggle helpers
- *  return unchanged positions) and fix.rawScore === the original score.
+ *  CursorLocator front door: ML-multihint -> wiggle (that cascade lives in
+ *  locateOpenLoopShape; unit-tested with mock deps). Deps reuse makeLocatorDeps
+ *  with a `decode` passthrough over the already-decoded shot and the
+ *  module-level mlWiggleVerify wired real. `prox` is reconstructed faithfully
+ *  (hypot(fix.position - predicted); the wiggle helper returns unchanged
+ *  positions) and fix.rawScore === the original score.
  *
  *  Extracted from moveToPixel (was a nested closure over client + observedRatioX/Y)
  *  so it is callable STANDALONE — which is what makes the openLoopShape path
  *  live-verifiable: a bench can call this directly on a real frame + real wiggle
- *  (see bench-openloopshape-groundtruth), closing the earlier "offline-only" TODO. */
+ *  (see bench-openloopshape-groundtruth), closing the earlier "offline-only" TODO.
+ *
+ *  F4 (Round 2 Phase 2b): findCursorByShape/wiggleVerifyCandidate deleted from
+ *  CursorLocatorDeps (dead — the openLoopShape profile never called them; see
+ *  ADR-0003's follow-on note). observedRatioX/Y are now VESTIGIAL params (only
+ *  ever fed the deleted wiggleVerifyCandidate closure) — left in place rather
+ *  than changing this exported function's signature across its 3 call sites
+ *  (2 internal + benches/bench-openloopshape-groundtruth.ts) as a separate,
+ *  broader cleanup than this phase's scope. */
 export async function tryOpenLoopShapeDetect(
   client: PiKVMClient,
   observedRatioX: number,
@@ -1496,8 +1448,6 @@ export async function tryOpenLoopShapeDetect(
       ...makeLocatorDeps(client),
       decode: async () => shot,
       mlWiggleVerify: (ml) => mlWiggleVerify(client, ml),
-      wiggleVerifyCandidate: (pos, score) =>
-        wiggleVerifyCandidate(client, observedRatioX, observedRatioY, pos, score),
     };
     const fix = await new CursorLocator(deps).locate(
       shot.buffer, shot.width, shot.height, 'openLoopShape', predicted,
@@ -2439,7 +2389,21 @@ export async function moveToPixel(
                   `[move-to] correction pass ${totalPasses + 1}: ML recovered cursor at (${currentPos.x},${currentPos.y}) conf=${mlCorrection.confidence.toFixed(3)} prox=${prox.toFixed(0)}`,
                 );
               }
-              break;
+              // N1 (Round 2 Phase 5): this `break` used to exit the ENTIRE
+              // outer correction loop (`while (true)` above) immediately,
+              // skipping the pass-completion bookkeeping below
+              // (corrections.push/diagnostics.push/totalPasses++, the
+              // blind-pass circuit breaker, the oscillation guard) for
+              // every ML-recovered pass. `templated = true` already
+              // guards the `if (!templated)` fall-through correctly — no
+              // break needed here. The sibling shape-success branch
+              // ~45 lines below does the equivalent recovery correctly:
+              // its own `break` is scoped to the INNER candidate loop,
+              // not this outer one, so it already fell through to the
+              // shared completion code. Confirmed a genuine bug via git
+              // archaeology (0456943, "wire ML detector as PRIMARY" —
+              // landed atomically with zero rationale, never exercised by
+              // any test) — see move-to.correctionCascade.test.ts.
             }
 
             // Phase 299 (v0.5.231): try BOTH dark and bright shape

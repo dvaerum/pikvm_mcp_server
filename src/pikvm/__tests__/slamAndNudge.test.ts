@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { slamToCorner, nudgeFromEdge } from '../ballistics.js';
+import { slamToCorner, nudgeFromEdge } from '../slam.js';
 import type { PiKVMClient } from '../client.js';
 
 interface RecordedMove {
