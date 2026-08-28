@@ -794,13 +794,18 @@ dependencies = [
 name = "pikvm-mcp-kvmd-client"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "pikvm-mcp-foundation",
  "reqwest",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+ "url",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

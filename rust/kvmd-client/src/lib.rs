@@ -9,3 +9,4 @@
 //! through this layer.
 
 pub mod operator_hints;
+pub mod streamer_keepalive;
