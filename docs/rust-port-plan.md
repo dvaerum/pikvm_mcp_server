@@ -518,14 +518,14 @@ before it):
    `click-verify-archive.ts`, `ballistics.ts`, `auto-calibrate.ts`,
    `scale-learner.ts`, `scale-persist.ts`, `pointer-accel.ts`,
    `open-loop-planner.ts`, `cursor-keepalive.ts`, `slam.ts`,
-   `cursor-anchor.ts`, `gesture.ts`) —
+   `cursor-anchor.ts`, `gesture.ts`, `ipad-unlock.ts`) —
    the largest, highest-risk layer: this is where N1's correction-loop bug,
    the cornerTargetFromBounds P0, and PR93's cascade-hint logic all live.
    `move-to.ts` alone (2,711 LOC) is the single largest file in the
    codebase — plan for it as its own dedicated sub-effort, not folded into
    a generic "mover" task.
-5. **iPad-specific / HID recovery** (~3,300 LOC: `ipad-unlock.ts`,
-   `ipad-app-ws.ts`, `ipad-keys.ts`, `hid-recovery.ts`, `hid-mode.ts`,
+5. **iPad-specific / HID recovery** (~3,300 LOC: `ipad-app-ws.ts`,
+   `ipad-keys.ts`, `hid-recovery.ts`, `hid-mode.ts`,
    `hid-diagnosis.ts`, `hid-latch-monitor.ts` + `-runner`/`-ssh-source`/
    `-local-source`/`-monitor-main`, `health-check.ts`,
    `desktop-e2e-metrics.ts`) — the #51 stale-settle-latch incident's home;
@@ -565,6 +565,20 @@ before it):
    before either of modules 4/5 needs it in earnest — it's ~50 LOC of
    faithful port, not a design risk.
 
+   **Correction (2026-08-28, nixos-dev) — `emit_chunked` did NOT end up
+   in `pikvm-mcp-ipad-primitives`.** The premise above was that
+   `ipad-unlock.ts` (module 5) was one of its two real callers, alongside
+   `move-to.ts` (module 4) — hence the shared crate. The seventh finding
+   below found `ipad-unlock.ts` itself actually belongs in `rust/mover`
+   (module 4), not module 5. With that corrected, `emit_chunked`'s two
+   real callers (`move-to.ts`, `ipad-unlock.ts`) are BOTH `rust/mover`
+   files — nothing outside mover needs it, so it lives there directly as
+   `mover::gesture`, not through `ipad-primitives`. `take_raw_screenshot`
+   and the two `click-verify` default-lookup functions are unaffected —
+   `ipad-primitives` still exists for those (module 5's `hid-mode.ts`
+   genuinely does need the `click-verify` pair, and `take_raw_screenshot`
+   awaits `ballistics.ts`).
+
    **Sixth crate-boundary finding (2026-08-28, nixos-dev), a direct
    consequence of the fifth (cursor-anchor.ts, §7.4 above)**: `ipad-keys.ts`
    itself was ported into this crate first (its TS source sits alongside
@@ -594,6 +608,29 @@ before it):
    concurrently by default. Replaced with one crate-wide
    `mover::test_support::GLOBAL_STATE_LOCK` all three files' tests share;
    a real, previously-latent flake, not a cursor_anchor.rs-only concern.
+
+   **Seventh crate-boundary finding (2026-08-28, nixos-dev), same shape
+   as the fifth (cursor-anchor.ts)**: the task list filed `ipad-unlock.ts`
+   under this module (its TS source sits alongside this module's other
+   `ipad-*.ts` files), but its real imports are `client.ts`,
+   `cursor-anchor.ts`, `orientation.ts`, `gesture.ts`, `ipad-keys.ts`, and
+   `util.ts` — checked against the actual source, not assumed. Nothing
+   ipad-hid-exclusive (no `hid-recovery.ts`/`hid-mode.ts`/
+   `hid-diagnosis.ts` reference at all). `cursor-anchor.ts` is itself a
+   `rust/mover` file per the fifth finding, and `rust/ipad-hid` has no
+   dependency on `rust/mover` today — filing `ipad-unlock.ts` here would
+   create that edge for no reason. **`ipad_unlock.rs` lands in
+   `rust/mover/`**, split into one file per exported function from the
+   start (`unlock.rs`, `launch_app.rs`, `home.rs`, `app_switcher.rs`,
+   `unlock_with_code.rs`) per the file-structure standing rule, rather
+   than one flat ~620-line file. `gesture.ts` (`emit_chunked`) ported
+   alongside it directly into `mover::gesture` — see the correction note
+   above. 40 tests ported from the 5 TS test files, all passing; full
+   workspace suite green. `ipad-unlock.ts`'s own real remaining gap
+   (`takeRawScreenshot` from `ballistics.ts`) turned out to be a 3-line
+   wrapper already functionally covered by `cursor-detect.ts`'s ported
+   equivalent (`ScreenshotMode::Raw` in `slam.rs`'s own adaptation) — no
+   new porting needed for it.
 
    **`move-to.ts`'s own submodule structure (2026-08-28, georgs-mac-mini),
    planned ahead of implementation per georg's file-structure rule (read
@@ -625,12 +662,14 @@ before it):
    the same shape `cursor_anchor.rs` and `ballistics.rs` turned out to be.
 
    Two real gaps, not yet ported, that block starting real implementation:
-   - `emit_chunked` (`gesture.ts`, ~25 LOC) — already flagged above
-     (module 5's coupling finding) as belonging in the new
-     `pikvm-mcp-ipad-primitives` crate. `move_to.rs` is this function's
-     OTHER real caller (open-loop emission, every correction pass) —
-     confirms the crate-boundary call, doesn't change it. Needs building
-     before `move_to.rs`'s legacy path can compile.
+   - `emit_chunked` (`gesture.ts`, ~25 LOC) — **resolved (2026-08-28,
+     nixos-dev), and its home changed from what this note originally
+     said**: not `pikvm-mcp-ipad-primitives` after all — see the
+     correction note above the sixth finding. `ipad-unlock.ts` (this
+     function's other real caller, alongside `move_to.rs`) turned out to
+     belong in `rust/mover` too (seventh finding, below), so
+     `emit_chunked` now lives directly in `mover::gesture`. Already built
+     and tested (7 tests) — `move_to.rs` can import it from there.
    - `pointer-accel.ts` — NOT yet ported, not yet flagged anywhere in
      this doc. `learnedBallisticsPxPerMickey` (the `PIKVM_USE_LEARNED_
      BALLISTICS=1` opt-in forward-model path) depends on it entirely.
