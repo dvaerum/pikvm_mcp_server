@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildMLHints } from '../cursor-ml-detect.js';
+import { buildMLHints, buildCascadeGrid } from '../cursor-ml-detect.js';
 
 describe('buildMLHints', () => {
   const W = 1680;
@@ -60,5 +60,77 @@ describe('buildMLHints', () => {
       expect(Math.abs(homeHint.x - 1170)).toBeLessThanOrEqual(128);
       expect(Math.abs(homeHint.y - 892)).toBeLessThanOrEqual(128);
     }
+  });
+});
+
+describe('buildCascadeGrid', () => {
+  // task_484bed055820: narrow the cascade's search grid to a bounded window
+  // around a hint (when one is known), instead of always scanning the whole
+  // detected iPad region. Pure geometry — no ONNX involved, same testing
+  // pattern as buildMLHints above.
+
+  it('no hint: covers the whole region (hand-computed, exact — also the pre-fix behavior, so this doubles as a regression/parity check)', () => {
+    // region is exactly one 96px crop wide/tall; axis() walks 0->48 (stride
+    // 48, half=48), then appends the region's own far edge (96) since it
+    // isn't already a multiple of the stride from 0. Two grid lines per
+    // axis (48, 96) => 2x2 = 4 crops. This mirrors runCascade's existing
+    // axis() math verbatim (same stride, same half-crop clamp).
+    const grid = buildCascadeGrid({ x: 0, y: 0, w: 96, h: 96 }, 1000, 1000);
+    const asPairs = grid.map((c) => `${c.x},${c.y}`).sort();
+    expect(asPairs).toEqual(['48,48', '48,96', '96,48', '96,96']);
+  });
+
+  it('no hint: passing null/undefined hint is byte-identical to omitting it', () => {
+    const region = { x: 100, y: 100, w: 400, h: 400 };
+    const withoutArg = buildCascadeGrid(region, 1920, 1080);
+    const withNull = buildCascadeGrid(region, 1920, 1080, null);
+    const withUndefined = buildCascadeGrid(region, 1920, 1080, undefined);
+    expect(withNull).toEqual(withoutArg);
+    expect(withUndefined).toEqual(withoutArg);
+  });
+
+  it('with a hint well inside a large region: shrinks the grid dramatically (the whole point of this fix)', () => {
+    const region = { x: 0, y: 0, w: 2000, h: 2000 };
+    const full = buildCascadeGrid(region, 3000, 3000);
+    const narrowed = buildCascadeGrid(region, 3000, 3000, { x: 1000, y: 1000 });
+    expect(narrowed.length).toBeGreaterThan(0);
+    // Design target: ~7x reduction (352->49 on the real production region).
+    // Assert the same order of magnitude here rather than pinning an exact
+    // count, so this doesn't become brittle to a future stride/radius tune.
+    expect(narrowed.length).toBeLessThan(full.length / 4);
+  });
+
+  it('with a hint: every returned crop center stays within the window radius of the hint (+ one grid step of slack)', () => {
+    const region = { x: 0, y: 0, w: 2000, h: 2000 };
+    const hint = { x: 1000, y: 1000 };
+    const narrowed = buildCascadeGrid(region, 3000, 3000, hint);
+    // Generous slack: the window radius itself, plus one grid step for the
+    // axis()'s own "always include the far edge" behavior.
+    const slack = 150 + 48 + 1;
+    for (const c of narrowed) {
+      expect(Math.abs(c.x - hint.x)).toBeLessThanOrEqual(slack);
+      expect(Math.abs(c.y - hint.y)).toBeLessThanOrEqual(slack);
+    }
+  });
+
+  it('with a hint near the region edge: the window clamps to the region, never scanning outside it', () => {
+    const region = { x: 500, y: 500, w: 1000, h: 1000 };
+    // Hint pinned to the region's own top-left corner.
+    const hint = { x: region.x, y: region.y };
+    const narrowed = buildCascadeGrid(region, 3000, 3000, hint);
+    expect(narrowed.length).toBeGreaterThan(0);
+    for (const c of narrowed) {
+      expect(c.x).toBeGreaterThanOrEqual(region.x);
+      expect(c.y).toBeGreaterThanOrEqual(region.y);
+      expect(c.x).toBeLessThanOrEqual(region.x + region.w);
+      expect(c.y).toBeLessThanOrEqual(region.y + region.h);
+    }
+  });
+
+  it('with a hint entirely outside the region (no overlap): returns empty, signaling "fall back to full scan"', () => {
+    const region = { x: 0, y: 0, w: 200, h: 200 };
+    const hint = { x: 5000, y: 5000 };
+    const narrowed = buildCascadeGrid(region, 6000, 6000, hint);
+    expect(narrowed).toEqual([]);
   });
 });

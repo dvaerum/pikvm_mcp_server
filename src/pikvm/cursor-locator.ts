@@ -91,7 +91,7 @@ export interface CursorLocatorDeps {
     frame: Buffer,
     width: number,
     height: number,
-    options?: { minPresence?: number },
+    options?: { minPresence?: number; hint?: { x: number; y: number } | null },
   ) => Promise<V8Detection | null>;
   locateCursor: (options: LocateCursorOptions) => Promise<LocateCursorResult | null>;
   findCursorByTemplateSet: (
@@ -154,7 +154,7 @@ export class CursorLocator {
       case 'openLoopShape':
         return this.locateOpenLoopShape(frame, hint);
       case 'curve':
-        return this.locateCurve(frame, w, h, opts?.minPresence);
+        return this.locateCurve(frame, w, h, opts?.minPresence, hint);
     }
   }
 
@@ -315,15 +315,21 @@ export class CursorLocator {
   /** curve-mover.ts detect(): V8 full-frame on the given frame. curve-mover's
    *  detect() is parameterised by minPresence (caller-overridable via moveToPixel →
    *  moveByCurveOneShot); the caller threads it so the reroute stays byte-identical.
-   *  Defaults to CURVE_MIN_PRESENCE (0.5) when omitted. */
+   *  Defaults to CURVE_MIN_PRESENCE (0.5) when omitted. `hint` (task_484bed055820,
+   *  optional) lets the cascade search a bounded window around a known/expected
+   *  position first — e.g. curve-mover's post-emit landing check already knows the
+   *  target it just moved toward — instead of scanning the whole region on every
+   *  call; omit for genuine cold-start detects (unchanged full-region behavior). */
   private async locateCurve(
     frame: Buffer,
     w: number,
     h: number,
     minPresence: number = CURVE_MIN_PRESENCE,
+    hint?: { x: number; y: number },
   ): Promise<CursorFix | null> {
     const v8 = await this.deps.findCursorByV8FullFrame(frame, w, h, {
       minPresence,
+      hint,
     });
     if (v8 !== null) {
       return {
