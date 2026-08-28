@@ -11,5 +11,6 @@
 //! review — two known exceptions (takeRawScreenshot/emitChunked/click-verify
 //! defaults) are tracked separately, not yet resolved.
 
+pub mod desktop_e2e_metrics;
 pub mod hid_diagnosis;
 pub mod hid_recovery;
