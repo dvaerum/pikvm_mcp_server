@@ -2,6 +2,8 @@
 //! of the former monolithic `client.rs` (Rust idiomatic module layout —
 //! one logical responsibility per file, not "one file per TS file").
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone)]
 pub struct PiKVMConfig {
     pub host: String,
@@ -61,7 +63,12 @@ pub struct KeyOptions {
     pub state: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `Serialize`/`Deserialize` added for `ballistics.rs`'s
+/// `BallisticsProfile.resolution` field — this crate may read/write JSON
+/// alongside the TS implementation during the port's parallel-build
+/// period, so the derived (already-lowercase, single-word) field names
+/// match `JSON.stringify` byte-for-byte with no `rename_all` needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScreenResolution {
     pub width: u32,
     pub height: u32,
