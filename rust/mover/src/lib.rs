@@ -19,6 +19,7 @@ pub mod cursor_keepalive;
 pub mod curve_mover;
 pub mod gesture;
 pub mod ipad_unlock;
+pub mod move_to;
 pub mod scale_learner;
 pub mod scale_persist;
 pub mod slam;

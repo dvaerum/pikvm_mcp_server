@@ -15,6 +15,16 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// `Copy` added for `move_to::origin`'s need: `PiKVMClient.belief` is a
+/// `Mutex<CursorBelief>` (shared-mutable-cell, matching the TS `client.
+/// belief` reference-semantics original), but `CursorLocatorDeps.belief`
+/// takes an OWNED `CursorBelief` (constructed once per `locate()` call,
+/// not held across calls) — so the real caller must take a snapshot out
+/// of the mutex, hand it to the locator, then write the (possibly
+/// mutated) result back in. Every field is already `Copy` (`Point`,
+/// `Variance`, `RatioState`, `Option<Bounds>`, `Option<LastEmit>`, plain
+/// scalars), so this is a free derive, not a design change.
+#[derive(Debug, Clone, Copy)]
 pub struct CursorBelief {
     pub position: Point,
     pub velocity: Point,

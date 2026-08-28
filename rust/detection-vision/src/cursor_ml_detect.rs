@@ -413,6 +413,48 @@ pub fn run_cascade(
     Ok(result.flatten())
 }
 
+/// The stable, real-caller-facing entry point (`cursor-ml-detect.ts`'s
+/// `findCursorByV8FullFrame`) — callers use this, never `run_cascade`
+/// directly. Faithful port of the `CASCADE_ENABLED` branch only: TS
+/// resolves `V8_MODEL`/`CASCADE_ENABLED`/`GRID_STRIDE`/`VERIFY_THRESH`
+/// once from module-level constants (an IIFE'd `settings.ml.*` read at
+/// import time) — Rust has no import-time-constant equivalent, so this
+/// port takes the resolved cascade config as explicit parameters instead
+/// (same DI discipline the rest of this port uses for what TS reads from
+/// a module-level `settings` singleton). The REAL caller resolves these
+/// once from `Settings` and closes over them when constructing a
+/// `CursorLocatorDeps`/DI closure, matching TS's resolve-once semantics.
+///
+/// The legacy single-stage (non-cascade) path is NOT ported — deferred,
+/// same individually-justified gap as `pointer-accel.ts` (see
+/// `docs/rust-port-plan.md` §7 item 4, move-to.ts's v13 note): cascade
+/// is the validated production default (`PIKVM_ML_CASCADE` defaults ON;
+/// DETECTION SOLVED per this project's own history — single-stage was
+/// superseded, not a fallback anyone currently relies on). TS's
+/// `options?.minPresence` is dropped entirely rather than threaded
+/// through unused — the cascade branch never reads it either (only the
+/// unported legacy branch does), so keeping a dead parameter here would
+/// be pure noise; re-add it if the legacy path is ever ported.
+pub fn find_cursor_by_v8_full_frame(
+    model_path: &str,
+    grid_stride: f64,
+    verify_thresh: f32,
+    jpeg_buffer: &[u8],
+    frame_w: u32,
+    frame_h: u32,
+    hint: Option<Point>,
+) -> anyhow::Result<Option<CascadeResult>> {
+    run_cascade(
+        model_path,
+        jpeg_buffer,
+        frame_w,
+        frame_h,
+        hint,
+        grid_stride,
+        verify_thresh,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,6 +757,25 @@ mod tests {
             "y={} out of frame bounds",
             result.y
         );
+    }
+
+    // --- find_cursor_by_v8_full_frame ---------------------------------------
+    //
+    // `run_cascade` itself (the function this wraps) has no existing test in
+    // this file — a real end-to-end check needs BOTH a loadable ONNX model
+    // AND a frame `detect_ipad_region` can actually find a region in, which
+    // this crate doesn't yet have synthetic-frame infrastructure for. That
+    // real end-to-end path is exactly what this session's own
+    // `slam_and_cascade_smoke.rs` LIVE hardware gate already covers
+    // authoritatively (real captured frames, real model, PASSED). This test
+    // instead proves the one thing worth unit-testing about a pure
+    // argument-forwarding wrapper: it propagates a failure rather than
+    // panicking or silently swallowing it.
+    #[test]
+    fn propagates_a_region_detection_failure_rather_than_panicking() {
+        let result =
+            find_cursor_by_v8_full_frame("/nonexistent/model.onnx", 48.0, 0.5, &[], 640, 480, None);
+        assert!(result.is_err());
     }
 
     #[test]
