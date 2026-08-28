@@ -1053,7 +1053,10 @@ dependencies = [
 name = "pikvm-mcp-mover"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "image",
  "pikvm-mcp-cursor-belief",
+ "pikvm-mcp-detection-vision",
  "pikvm-mcp-foundation",
  "pikvm-mcp-kvmd-client",
  "serde",
