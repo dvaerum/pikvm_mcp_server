@@ -985,7 +985,9 @@ dependencies = [
  "anyhow",
  "image",
  "ort",
+ "pikvm-mcp-cursor-belief",
  "pikvm-mcp-foundation",
+ "pikvm-mcp-kvmd-client",
  "serde_json",
  "tokio",
 ]
@@ -1001,6 +1003,32 @@ dependencies = [
  "subtle",
  "tokio",
  "wiremock",
+]
+
+[[package]]
+name = "pikvm-mcp-ipad-hid"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pikvm-mcp-detection-vision",
+ "pikvm-mcp-foundation",
+ "pikvm-mcp-ipad-primitives",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
+name = "pikvm-mcp-ipad-primitives"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pikvm-mcp-foundation",
+ "tokio",
 ]
 
 [[package]]
@@ -1033,6 +1061,7 @@ dependencies = [
  "pikvm-mcp-cursor-belief",
  "pikvm-mcp-detection-vision",
  "pikvm-mcp-foundation",
+ "pikvm-mcp-ipad-primitives",
  "pikvm-mcp-kvmd-client",
  "serde",
  "serde_json",

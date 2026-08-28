@@ -7,6 +7,8 @@ description = "Module 3 (detection/vision) of the pikvm-mcp-server Rust port: cu
 
 [dependencies]
 pikvm-mcp-foundation = { path = "../foundation" }
+pikvm-mcp-cursor-belief = { path = "../cursor-belief" }
+pikvm-mcp-kvmd-client = { path = "../kvmd-client" }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 anyhow = "1"
 serde_json = "1"

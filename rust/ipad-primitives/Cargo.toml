@@ -1,0 +1,13 @@
+[package]
+name = "pikvm-mcp-ipad-primitives"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Shared iPad-adjacent primitives that both module 4 (mover/HID orchestration) and module 5 (iPad-specific/HID recovery) depend on, rather than depending on each other. Faithful port of takeRawScreenshot (src/pikvm/ballistics.ts), emitChunked (src/pikvm/gesture.ts), and defaultChunkPaceMsFor/defaultMaxResidualPxFor (src/pikvm/click-verify.ts). Same shared-primitive pattern this codebase already used for ipad-keys.ts (module 5), given a real crate boundary this time — see docs/rust-port-plan.md §7."
+
+[dependencies]
+pikvm-mcp-foundation = { path = "../foundation" }
+anyhow = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

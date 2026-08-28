@@ -22,13 +22,15 @@
 //! bounds.
 //!
 //! `detect_ipad_bounds`/`detect_bounds_or_null` (the `PiKVMClient`-taking
-//! wrappers in the TS original) are deferred until module 2's kvmd-client
-//! crate exists — the buffer-based core (everything here) is fully
-//! portable now.
+//! wrappers in the TS original) are ported below alongside the
+//! buffer-based core — module 2's kvmd-client crate is now available, and
+//! `slam.rs` (module 4) needed a second copy of this exact logic (its own
+//! `detect_bounds_or_null`), so it's shared here rather than duplicated.
 
 use std::sync::Mutex;
 
 use crate::decode::decode_to_rgb;
+use pikvm_mcp_kvmd_client::client::PiKVMClient;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IpadOrientation {
@@ -221,6 +223,39 @@ pub fn detect_ipad_bounds_from_buffer(
     }
 
     Ok(LAST_GOOD_BOUNDS.lock().unwrap().unwrap_or(detected))
+}
+
+/// Take a fresh screenshot and detect iPad bounds from it. Errors on a
+/// screenshot failure (propagated from `PiKVMClient`) or an undetectable
+/// (all-black) frame — see `detect_bounds_or_null` for a best-effort
+/// variant that never fails the caller.
+pub async fn detect_ipad_bounds(
+    client: &PiKVMClient,
+    options: DetectOptions,
+) -> anyhow::Result<IpadBounds> {
+    let shot = client.screenshot(None).await?;
+    detect_ipad_bounds_from_buffer(&shot.buffer, options)
+}
+
+/// Best-effort wrapper around `detect_ipad_bounds`. Returns `None` on
+/// failure (e.g. all-black HDMI capture) instead of erroring, optionally
+/// logging the failure with a caller-supplied prefix when verbose.
+/// Encapsulates the try/catch pattern that both `ipad_unlock` and
+/// `cursor_anchor`'s origin discovery use.
+pub async fn detect_bounds_or_null(
+    client: &PiKVMClient,
+    options: DetectOptions,
+    log_prefix: &str,
+) -> Option<IpadBounds> {
+    match detect_ipad_bounds(client, options).await {
+        Ok(b) => Some(b),
+        Err(e) => {
+            if options.verbose {
+                eprintln!("[{log_prefix}] bounds detection failed: {e}");
+            }
+            None
+        }
+    }
 }
 
 /// For tests / fresh-process scenarios. Drops the cached bounds so the next
