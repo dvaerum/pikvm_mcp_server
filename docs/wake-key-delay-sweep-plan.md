@@ -1,7 +1,7 @@
 # Plan: wake-key delay sweep (2s/4s/8s idle-delay, controlled)
 
-**Status: DRAFT, for review by pikvm-mcp-server@nixos-developer-system
-before any implementation.** Follow-up to
+**Status: REVIEWED (nixos-dev, 2026-08-29) — ready to build, not yet run
+live.** Follow-up to
 `docs/wake-key-isolated-experiment-plan.md`'s RESULTS section
 (2026-08-29) — this plan does NOT re-litigate that experiment's own
 scope or recovery ladder, only the controlled follow-up it recommended.
@@ -70,6 +70,18 @@ with ONE new parameter (the delay) inserted between lock-confirm and the
    locked, and now sits idle for a controlled, known duration before the
    press.
 6. Send **exactly one** `Space` press.
+
+**Measured vs. nominal delay (nixos-dev review, incorporated)**: the true
+elapsed idle time from lock to press is ~2.5s (step 3) + variable
+screenshot #2 capture time (near-zero to several seconds on a retried
+capture) + `DELAY_S` — and since the swept values are only 2s apart,
+capture jitter could be the same order of magnitude as the effect being
+measured. Record real timestamps (not `Instant`/wall-clock read via
+`Date.now()`-equivalent is fine here, this isn't the workflow-script
+`Date.now()` restriction) at "screenshot #2 capture succeeded" and
+"`Space` sent," and log the ACTUAL measured gap per trial alongside the
+nominal `DELAY_S` label — so if jitter matters, it's visible in the data,
+not silently smeared into a bucket.
 7. Sleep 1.5s (today's live-confirmed settle time).
 8. Screenshot #3 — the result, classified by eye (A/B/C, same
    definitions as the original plan), same 3x/1s capture-only retry.
@@ -87,18 +99,23 @@ with ONE new parameter (the delay) inserted between lock-confirm and the
 
 ## Trial count and ordering
 
-3 trials per delay value (2s, 4s, 8s) = 9 trials total, matching today's
-established "3-5 trials is the right scale for a binary classification
-question, not 20+" judgment, split three ways. Run delays in this order:
-**8s, 4s, 2s** (longest first) — if 8s already shows a clean A/A/A, the
-shorter values are the more informative ones to spend remaining trials
-on (confirming where the split actually sits, not re-confirming the
-long-delay end which today's ad-hoc data already leans A on). If 8s does
-NOT show a clean A/A/A, that's itself an important, cheap-to-learn result
-(the real threshold, if one exists, is longer than 8s — don't keep
-guessing further doubling values in the same session without checking
-back in, since this is meant to be a small, low-risk follow-up, not an
-open-ended search).
+**Trial count (nixos-dev review, incorporated)**: start smaller — 2
+trials per delay value (6 total), escalating to a 3rd only for a value
+whose 2 trials disagree (A vs B) — matching this project's own
+established "escalate only if ambiguous" pattern (category 1's
+N≥20→N≥80 rule), and appropriate given the rig's documented wear pattern
+from today's session.
+
+**Ordering (nixos-dev review, incorporated — reversed from the original
+draft)**: NOT blocked by delay value. Testing 8s-then-4s-then-2s as
+three separate blocks confounds "delay value" with "how far into this
+session's cumulative live-hardware contact we are" — the same SHAPE of
+problem that produced this whole follow-up (press-count vs elapsed-idle-
+time got tangled in the original experiment). A clean 8s→A/A followed by
+a messy 2s block could mean "2s is below threshold" OR just "the rig
+drifted partway through." Fixed: **interleave/round-robin** —
+8,4,2,8,4,2(,8,4,2 if escalating) — so delay and session-progression
+aren't collinear. Same trial budget, no extra cost.
 
 ## Outcome classification and what a clean vs. messy result means
 
@@ -150,19 +167,28 @@ no changes to `ipad_unlock.rs`/`cursor_anchor.rs`/any guard logic. Not
 running live until this plan is reviewed, matching every other design
 change this session.
 
-## What I'm asking nixos-dev to review
+## Review (nixos-dev, incorporated above) — status: REVIEWED, ready to build
 
-1. Is 3 trials × 3 delay values (9 total) the right scale, or does the
-   "don't stack more live contact than needed" concern from earlier
-   today argue for fewer (e.g., 2 per value, 6 total) as a first pass,
-   escalating only if the result is ambiguous?
-2. Is the 8s-first ordering the right call, or is there a reason to
-   randomize/vary order to avoid a systematic confound (e.g., cumulative
-   iPad state drifting across the whole run regardless of delay)?
-3. Anything about distinguishing condition (a) vs (b) that's underspecified
-   — in particular, is "screen confirmed lit via screenshot #2" a
-   reliable enough proxy for "the lock-screen's own backlight-dim timer
-   hasn't fired yet," or could screenshot #2 itself succeed even after
-   the backlight has already started dimming (i.e., is there a risk this
-   sweep's DELAY_S=0 baseline is already past some threshold, making the
-   whole 2/4/8s range moot)?
+All 4 original questions resolved:
+
+1. **Trial count**: start at 2/value (6 total), escalate to 3 only on
+   disagreement — incorporated above.
+2. **Ordering**: interleaved/round-robin, not blocked by delay value —
+   incorporated above (this was the concern nixos-dev pushed back on
+   hardest; fully agreed, costs nothing extra).
+3. **Is capture-succeeding a reliable dim-timer proxy?** No — but no new
+   mechanism is needed to check it. The by-eye classification already
+   being done on every screenshot should ALSO note visible relative
+   dimming in screenshot #2 (the confirm-lock shot, right before the
+   `DELAY_S` sleep starts) across trials — free signal from data already
+   being collected. If screenshot #2 already looks visibly dimmer in some
+   trials than others at nominally-t=0, that answers whether the
+   backlight timer had already started before the sweep's own clock
+   begins. Incorporate into the by-eye review step (§ "Outcome
+   classification"): classify screenshot #2's OWN brightness qualitatively
+   (full-brightness / visibly dimmed) alongside screenshot #3's A/B/C,
+   not just the latter.
+4. **Delay precision**: log actual measured wall-clock gap, not just the
+   nominal label — incorporated above.
+
+Ready to build per this revised version. No open questions remaining.
