@@ -1,5 +1,82 @@
 # Plan: isolated wake-key experiment (Space-once lock-screen behavior)
 
+## RESULTS (2026-08-29, run live per manager's standing authorization)
+
+**Status: RUN, genuinely mixed result — NOT a clean A/A/A or B/B/B. Two real
+findings, one correcting this plan's own premise.**
+
+Harness: `rust/mover/examples/wake_key_experiment.rs` (built per this plan,
+clippy/fmt clean), plus 2 ad-hoc single-Space checks run directly via REST
+when a genuine video-dark blocker (see below, unrelated root cause) made
+the compiled harness's fixed retry timing not fit the situation.
+
+**Correction to this plan's own premise**: the "no-passcode iPad" assumption
+(stated above, sourced from `ipad-unlock.ts`'s docs) is WRONG for this rig.
+Screenshots from every trial show a genuine Touch ID prompt with "Use
+Passcode"/"Cancel", and `unlock_ipad_with_code()` with the stored
+`PIKVM_IPAD_PASSCODE` recovered it cleanly twice, confirmed visually both
+times (not just via the tool's return value). This device has Touch ID +
+a real passcode configured. Flagging so this doesn't get re-asserted as
+fact in a future session.
+
+**Trial-by-trial**:
+- Trial 1: baseline dark (503, informational-only per plan) -> `Ctrl+Cmd+Q`
+  -> screenshot #2 confirmed a genuine plain lock screen (outcome A) ->
+  single `Space` (~3-4s after the lock command) -> screenshot #3 showed a
+  genuine Touch ID prompt (**outcome B**). Recovered via passcode, confirmed
+  visually.
+- Trial 2: screenshot #2 and #3 both came back solid-black (torn/capture-
+  race frames per this session's own documented artifact class) — correctly
+  logged as INCONCLUSIVE, not force-classified, per this plan's own rule.
+  The cleanup screenshot afterward showed a Touch ID prompt, circumstantial
+  (not proof) that the underlying trial-2 outcome was also B. Recovered via
+  passcode again, confirmed visually.
+- Trial 3: aborted correctly by the harness's fail-closed design — post-lock
+  capture 503'd 3/3 retries, so NO Space was sent (exactly as designed).
+  Manual polling afterward found video genuinely still dark for ~65s+ total
+  (11+ retries) — a real, extended video-source dropout, same class as an
+  earlier blocker this session (root-caused separately by nixos-dev as the
+  iPad's screen going properly to sleep, not a hardware fault).
+  - Sent one manual `Space` from that confirmed-dark state (not corner-
+    adjacent, matches this plan's own low-risk framing) -> screen came back
+    as a genuine **plain lock screen (outcome A)**.
+  - To directly test whether "already-awake" vs "genuinely dark" is the
+    real variable (not press count), sent a SECOND single `Space` from that
+    just-confirmed plain-lock-screen state, tens of seconds later -> result
+    was **plain lock screen again (outcome A)**, not Touch ID.
+
+**Reading the results honestly**: this is genuinely MIXED (A, B/inconclusive-
+leaning-B, A, A) — not a clean signal either way. The simple "1st press
+always wakes-without-dismiss" framing this plan opened with is falsified
+(trial 1 got B on what should have been the "wakes clean" case by that
+framing). But it is NOT simply random either: the two short-elapsed-time
+presses (trial 1's Space at ~3-4s after the lock command; trial 2 likely
+similar) both leaned B, while the two long-elapsed-time presses (after a
+~65s+ genuine dark period; and again after ~tens-of-seconds idle on an
+already-lit lock screen) both gave A. This is circumstantial, N=4, not
+proof — but it's consistent with nixos-dev's own flagged timing-confound
+concern: the real variable may be **how long the lock screen's own
+backlight had been sitting idle at the moment of the press** (a shorter
+internal dim/re-sleep timer than the full device Auto-Lock), not "is this
+the 1st or 2nd key event since lock." A press while the screen is still
+freshly lit reads as an unlock attempt (B); a press after the screen has
+had time to dim again reads as a wake (A) even though the device never
+stopped being logically locked throughout.
+
+**What this means for the combined guard/slam gate**: per this plan's own
+"what this answers" section — a genuinely mixed result means don't trust
+Space-once as the default wake mechanism without a deliberate delay, and
+the mouse-move fallback (already built into
+`cursor_anchor_corner_control_smoke.rs`) is the safer default until the
+timing-confound hypothesis above is confirmed with a properly delay-varied
+protocol (2s/4s/8s explicit waits before the press, matching this plan's
+own contingency section) — which this run did NOT cleanly execute (the
+long-delay trials were opportunistic, not a controlled sweep). Recommending
+that controlled sweep as the actual next step if this mechanism needs to be
+trusted again, rather than treating today's N=4 as final.
+
+---
+
 **Status: DRAFT, for review by pikvm-mcp-server@nixos-developer-system before
 any implementation. NOT TO BE RUN LIVE TODAY** — the team's own call to
 fully rest the iPad rig today stands (task_69cd3362e1da). This plan and its
