@@ -20,6 +20,7 @@ pub mod cursor_anchor;
 pub mod cursor_keepalive;
 pub mod curve_mover;
 pub mod gesture;
+pub mod ipad_collector;
 pub mod ipad_unlock;
 pub mod locate_cursor;
 pub mod move_to;
