@@ -1591,3 +1591,86 @@ lock/Touch-ID escalation encountered was recovered cleanly via the
 established ladder, confirmed visually each time, never left in an
 unknown state. iPad left in a confirmed-safe, unlocked home-screen
 resting state at the end.
+
+---
+
+**§9 categories 2/5 (corner-control + lock-screen unlock gate) executed
+live, plus stationary-guard K=4 targeted reconfirmation — 2026-08-29,
+later same session, georg's explicit direction ("proceed with item 1
+now; write a real plan for item 2").**
+
+**Item 1 — categories 2/5 live execution
+(`cursor_anchor_corner_control_smoke.rs` v7, with the 8s wake-delay from
+§8 already incorporated, commit `726002a`).** Two live attempts, both
+positive-control (full slam) and negative-control (`slam_calls: Some(3)`)
+paths exercised. Both times: the underlying SLAM ACTION was safe — device
+confirmed genuinely locked throughout via a fresh screenshot immediately
+after manual recovery, no unsafe HID reached a live app. But both times,
+the harness itself panicked uncleanly (no cleanup path run) right after
+the slam's own post-verification screenshot call hit a transient 503.
+Root-caused as: the human-confirmation step's own real wall-clock review
+time lets the display re-dim again before the slam's verification screen-
+shot fires — not a flaw in the slam logic, a harness robustness gap.
+Reproduced 2/2, not attempted a 3rd blind time; reported to the manager
+instead.
+
+**Fix (v8, commit `06285e9`)**: both `anchor_cursor(...)` calls (positive
+and negative control) converted from `.expect()` panics to a `match` on
+the result — on `Err`, log the error, call a new shared
+`recover_and_report_final_state()` helper (runs the real production
+`unlock_ipad()` path, then a final confirming screenshot, logging
+failures at each step rather than panicking), and exit with a distinct
+code (2) instead of an uncaught panic. 345/345 mover tests, clippy
+`-D warnings` and fmt clean. **Not yet run live** — manager approved the
+fix code-only and explicitly directed holding the next live attempt
+("hold given today's volume... next live attempt should be a clean
+confirmation run, not a repeat of the same diagnostic work"). That hold
+is still in effect; no live re-run has happened as of this entry.
+
+**Item 2 — stationary-guard (K=4 ring widening) targeted
+reconfirmation.** Wrote a dedicated plan
+(`docs/stationary-guard-targeted-reconfirmation-plan.md`) re-deriving the
+exact original bug scenario from §8 item 7 earlier in this file (target
+`(1050,850)`, `strategy=detect-then-move` + `forbidSlamFallback=true`,
+the `(1085,981)→(1020,662)→(1092,979)` sequence) rather than an arbitrary
+re-run. nixos-dev's review added 3 real points, all incorporated: verify
+the on-screen layout hasn't drifted before trusting a clean non-event;
+add a 4th outcome bucket for an EARLY rejection anywhere in the log (not
+just an exact-pattern match) since K=4 could reroute the whole trajectory
+before ever reaching an analogous failure point — that would be a
+*stronger* confirmation than a precise repro, not a miss; escalate once
+more on a clean non-event before concluding. Added verbose `[stationary-
+guard]` log lines at both call sites in `legacy_move.rs`
+(open-loop candidate check and each correction-pass candidate check,
+commit `bf66514`) so the guard's own firing is directly observable
+independent of whether the final landing looks right.
+
+Executed live twice. Both times: layout verified not drifted (icon
+cluster crop-checked against the original), zero `[stationary-guard]`
+rejections logged, correct final landing — genuine bucket-C non-events,
+not silence. Real, concrete illustration of *why* a repeat doesn't
+reliably reproduce this: the two attempts' open-loop calibration ratios
+differed wildly (1.185 vs 4.553), driving completely different
+correction-pass trajectories each time
+(`(1052,942)→(644,491)→(764,798)→(1022,710)` vs
+`(914,812)→(735,309)→(771,427)→(810,461)`) — the guard's specific
+2+-passes-back stale-cluster trigger condition was never naturally
+reached either time. Honest conclusion: the K=4 fix's own precise
+scenario still has not been directly observed firing live, despite two
+well-targeted attempts. Recommended next methodology — stage
+`CursorBelief` observations directly (construct the exact stale-cluster
+state instead of relying on the natural correction loop to wander into
+it) — nixos-dev endorsed this as "the right next move," explicitly
+deferred as a proper design pass for whenever this comes back up, not
+blocking now.
+
+**Status at end of this entry**: both directed items delivered real,
+honest results (item 1: safety re-confirmed twice, a genuine harness bug
+found and fixed, live re-run deliberately held per the manager's call;
+item 2: a properly targeted repro attempt that came back a genuine
+non-event twice, with the reason understood and the real next step
+identified, not silently dropped). No safety incidents. iPad left in a
+confirmed-safe resting state. `docs/final-e2e-validation-sign-off-plan.md`
+(nixos-dev's file) carries the up-to-date sign-off status for the E2E
+categories; this file's job is the narrative journal, not the sign-off
+bar itself.
