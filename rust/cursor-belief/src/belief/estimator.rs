@@ -39,9 +39,32 @@ pub struct CursorBelief {
     ratio_clamp_max: f64,
 
     last_emit: Option<LastEmit>,
-    last_observation: Option<Point>,
+    /// Bounded ring of the last `STATIONARY_HISTORY_CAPACITY` accepted
+    /// observations (widened from a single `last_observation` slot —
+    /// task_a341720594ad, 2026-08-29, reviewed by nixos-dev). Fixed-size
+    /// array (not `VecDeque`) specifically to keep `CursorBelief` `Copy`
+    /// (see this struct's own doc comment on why that matters for
+    /// `CursorLocatorDeps`'s snapshot-out/write-back pattern) — a
+    /// `[Option<Point>; N]` is `Copy` for any `N` when `Point: Copy`,
+    /// unlike a heap-allocated ring.
+    recent_observations: [Option<Point>; STATIONARY_HISTORY_CAPACITY],
+    /// Index the NEXT accepted observation writes to (wraps modulo
+    /// capacity) — a simple ring cursor, not a length; empty slots stay
+    /// `None` until the ring has filled at least once.
+    recent_observations_head: usize,
     emit_mag_since_last_observation: f64,
 }
+
+/// How many recent accepted observations `would_reject_as_stationary`
+/// checks against, widened from the original single-slot design. K=4 was
+/// chosen to give real margin over the live-confirmed 2-passes-back
+/// repeat bug (`legacy_move_smoke.rs`, 2026-08-29) without unbounded
+/// growth on this hot per-correction-pass path. **Untied to
+/// `legacy_move.rs`'s own actual max-correction-pass budget** — a fixed
+/// constant, not derived from it (nixos-dev's review point) — if that
+/// pass budget ever changes materially, re-check whether this constant's
+/// intended coverage still holds rather than assuming it does.
+const STATIONARY_HISTORY_CAPACITY: usize = 4;
 
 impl CursorBelief {
     pub fn new(opts: CursorBeliefOptions) -> Self {
@@ -73,9 +96,21 @@ impl CursorBelief {
             ratio_clamp_min: ratio_clamp.min,
             ratio_clamp_max: ratio_clamp.max,
             last_emit: None,
-            last_observation: None,
+            recent_observations: [None; STATIONARY_HISTORY_CAPACITY],
+            recent_observations_head: 0,
             emit_mag_since_last_observation: 0.0,
         }
+    }
+
+    /// Push an accepted observation into the ring, overwriting the oldest
+    /// slot. Shared by `observe()` and `reset()`'s "clear then anchor"
+    /// path — `reset()` clears the whole ring FIRST (see its own call
+    /// site) so this always leaves exactly one live entry there, not a
+    /// stale mix of pre-reset history.
+    fn push_recent_observation(&mut self, observation: Point) {
+        self.recent_observations[self.recent_observations_head] = Some(observation);
+        self.recent_observations_head =
+            (self.recent_observations_head + 1) % STATIONARY_HISTORY_CAPACITY;
     }
 
     /// Expose the current per-axis ratio belief (mean px/mickey). The TS
@@ -102,20 +137,37 @@ impl CursorBelief {
     }
 
     /// Query whether `measurement` looks like a static-feature lock-in
-    /// repeat of the last accepted observation. Pure/non-mutating.
+    /// repeat of ANY of the last `STATIONARY_HISTORY_CAPACITY` accepted
+    /// observations — not just the single most-recent one (widened
+    /// 2026-08-29, task_a341720594ad, closing the live-confirmed
+    /// 2-passes-back stale-repeat bug from `legacy_move_smoke.rs`: a
+    /// correction pass locked onto a cluster matching an EARLIER pass's
+    /// post-cluster, not the immediately-preceding one, because the old
+    /// single-slot check only ever compared against the last accepted
+    /// reading). Pure/non-mutating. The emit-gate semantics are
+    /// UNCHANGED (still "enough emit since the single most recent
+    /// accepted observation," not "since whichever ring entry matched")
+    /// — empirically sufficient for the bug this closes (the live trace
+    /// had ample emit between the matching entry and the final
+    /// candidate); a future bug where TOTAL emit across multiple passes
+    /// matters but the single most-recent doesn't would need revisiting
+    /// this, flagged here rather than silently assumed complete.
     pub fn would_reject_as_stationary(
         &self,
         measurement: Point,
         opts: Option<WouldRejectOptions>,
     ) -> bool {
-        let Some(last) = self.last_observation else {
-            return false;
-        };
         let opts = opts.unwrap_or_default();
         let drift_px = opts.drift_px.unwrap_or(5.0);
         let min_emit = opts.min_emit_mickeys.unwrap_or(30.0);
-        let drift = ((measurement.x - last.x).powi(2) + (measurement.y - last.y).powi(2)).sqrt();
-        drift < drift_px && self.emit_mag_since_last_observation >= min_emit
+        if self.emit_mag_since_last_observation < min_emit {
+            return false;
+        }
+        self.recent_observations.iter().flatten().any(|last| {
+            let drift =
+                ((measurement.x - last.x).powi(2) + (measurement.y - last.y).powi(2)).sqrt();
+            drift < drift_px
+        })
     }
 
     /// Forward-predict the belief by an emit. Position += emit · ratio,
@@ -211,7 +263,7 @@ impl CursorBelief {
                 self.kalman_update_ratio(measurement, c);
             }
         }
-        self.last_observation = Some(measurement);
+        self.push_recent_observation(measurement);
         self.emit_mag_since_last_observation = 0.0;
         true
     }
@@ -275,7 +327,15 @@ impl CursorBelief {
         self.variance.vy = 1.0;
         self.last_update_ms = now_ms();
         self.last_emit = None;
-        self.last_observation = Some(observation);
+        // Clear the WHOLE ring first, not just push a new value — a
+        // stale multi-pass-old entry surviving a reset would let a fresh
+        // ground-truth anchor still "reject" a measurement against
+        // history that's no longer meaningful (a regression the old
+        // single-slot design couldn't have, since reset fully replaced
+        // its one slot).
+        self.recent_observations = [None; STATIONARY_HISTORY_CAPACITY];
+        self.recent_observations_head = 0;
+        self.push_recent_observation(observation);
         self.emit_mag_since_last_observation = 0.0;
     }
 
@@ -990,6 +1050,131 @@ mod tests {
                     ..Default::default()
                 })
             ));
+        }
+
+        // -- widened-history tests (task_a341720594ad, 2026-08-29) --
+
+        #[test]
+        fn would_reject_as_stationary_catches_a_repeat_of_an_entry_2_passes_back() {
+            let mut b = CursorBelief::new(opts(pt(0.0, 0.0)));
+            // Pass 1: accept A.
+            b.observe(pt(1092.0, 979.0), 0.9, None);
+            b.predict(Emit { dx: 50.0, dy: 0.0 }, None);
+            // Pass 2: accept B — a genuinely different, real reading (e.g.
+            // an ML-recovery detour), NOT a repeat of A. The old single-
+            // slot design would now only remember B, forgetting A ever
+            // happened.
+            b.observe(pt(1020.0, 662.0), 0.9, None);
+            b.predict(Emit { dx: 50.0, dy: 0.0 }, None);
+            // Pass 3: a candidate matching A (2 passes back), not B (the
+            // immediately-preceding one) — the live-confirmed bug shape.
+            // K=1 would miss this (A is long gone from a single slot);
+            // K=4 must catch it.
+            assert!(b.would_reject_as_stationary(pt(1092.0, 979.0), None));
+        }
+
+        #[test]
+        fn reset_clears_the_full_multi_entry_ring() {
+            let mut b = CursorBelief::new(opts(pt(0.0, 0.0)));
+            b.observe(pt(100.0, 100.0), 0.9, None);
+            b.predict(Emit { dx: 50.0, dy: 0.0 }, None);
+            b.observe(pt(200.0, 200.0), 0.9, None);
+            b.predict(Emit { dx: 50.0, dy: 0.0 }, None);
+            b.observe(pt(300.0, 300.0), 0.9, None);
+            b.predict(Emit { dx: 50.0, dy: 0.0 }, None);
+            b.reset(pt(900.0, 900.0), None);
+            // None of the THREE pre-reset positions should still trigger a
+            // rejection — not just the single most recent one (200,200 or
+            // 300,300), which is all the old design's own analogous test
+            // ever proved.
+            assert!(!b.would_reject_as_stationary(pt(100.0, 100.0), None));
+            assert!(!b.would_reject_as_stationary(pt(200.0, 200.0), None));
+            assert!(!b.would_reject_as_stationary(pt(300.0, 300.0), None));
+        }
+
+        #[test]
+        fn ring_capacity_is_bounded() {
+            let mut b = CursorBelief::new(opts(pt(0.0, 0.0)));
+            // Observe STATIONARY_HISTORY_CAPACITY + 1 distinct positions —
+            // the very first one must fall off the ring.
+            let positions = [
+                pt(100.0, 100.0),
+                pt(200.0, 200.0),
+                pt(300.0, 300.0),
+                pt(400.0, 400.0),
+                pt(500.0, 500.0), // 5th distinct position, capacity is 4
+            ];
+            for p in positions {
+                b.observe(p, 0.9, None);
+                b.predict(Emit { dx: 50.0, dy: 0.0 }, None);
+            }
+            // The oldest (100,100) has been evicted — must NOT be rejected.
+            assert!(!b.would_reject_as_stationary(pt(100.0, 100.0), None));
+            // The 4 most recent are still in the ring — must be rejected.
+            assert!(b.would_reject_as_stationary(pt(200.0, 200.0), None));
+            assert!(b.would_reject_as_stationary(pt(300.0, 300.0), None));
+            assert!(b.would_reject_as_stationary(pt(400.0, 400.0), None));
+            assert!(b.would_reject_as_stationary(pt(500.0, 500.0), None));
+        }
+
+        #[test]
+        fn does_not_reject_legitimate_observations_during_a_converging_pass_sequence() {
+            // nixos-dev's review finding: the opposite failure mode K=4
+            // introduces that K=1 structurally cannot — near the end of a
+            // genuinely successful correction sequence, the cursor is
+            // repeatedly observed within a few px of the target as it
+            // converges, which looks the same as "repeats an entry from a
+            // few passes back" unless the guard is checked against a real
+            // converging trace, not just a stale-repeat trace.
+            //
+            // First attempt at this test used a CONSTANT large emit every
+            // pass regardless of shrinking residual, and it correctly
+            // failed — but not for the K=4-specific reason it was meant to
+            // demonstrate: the failing pair (498,499) vs (502,501) are
+            // IMMEDIATE neighbors (~4.5px apart), a rejection K=1 would
+            // ALSO have produced. That trace wasn't realistic: a real
+            // correction loop emits LESS as the residual shrinks (a
+            // proportional-control shape), and this guard's own
+            // (unchanged) `min_emit_mickeys` gate already exempts small
+            // near-convergence corrections from the check entirely,
+            // regardless of K. This corrected trace models that: larger
+            // emits (≥30 mickeys, gate open) while genuinely far from
+            // converged AND correctly spaced apart (no accidental
+            // closeness to older entries — real forward progress), then
+            // emit dropping below the gate once the residual is small
+            // (the tail is exempt by the emit gate itself, not by luck).
+            let mut b = CursorBelief::new(opts(pt(0.0, 0.0)));
+            let target = pt(500.0, 500.0);
+            let passes: &[(Point, f64)] = &[
+                // (observed position, emit magnitude for THIS pass's predict)
+                (pt(600.0, 600.0), 100.0), // ~141px out — first observation, nothing to compare against yet
+                (pt(530.0, 525.0), 80.0),  // ~35px out — real progress, far from p1
+                (pt(508.0, 506.0), 40.0),  // ~10px out — still ≥ gate, far from p1/p2
+                (pt(503.0, 502.0), 15.0), // ~4px out — BELOW min_emit_mickeys (30): gate exempts this pass
+                (pt(501.0, 500.5), 8.0),  // ~1.4px out — also below gate
+            ];
+            for (p, emit_mag) in passes.iter().copied() {
+                b.predict(
+                    Emit {
+                        dx: emit_mag,
+                        dy: 0.0,
+                    },
+                    None,
+                );
+                let accepted = b.observe(
+                    p,
+                    0.9,
+                    Some(ObserveOptions {
+                        reject_stationary: true,
+                        ..Default::default()
+                    }),
+                );
+                assert!(
+                    accepted,
+                    "legitimate converging observation {p:?} (target {target:?}) was wrongly \
+                     rejected as stationary"
+                );
+            }
         }
     }
 }

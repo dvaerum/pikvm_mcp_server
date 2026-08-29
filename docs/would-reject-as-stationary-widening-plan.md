@@ -1,9 +1,14 @@
 # Plan: widen `wouldRejectAsStationary` beyond single-prior-observation
 
-**Status: DRAFT, for review by pikvm-mcp-server@nixos-developer-system before
-any implementation.** Not started. Georg asked for this to be actually
-designed now (task_a341720594ad), given the finding is a real production
-mover-behavior change, not just a new check bolted on.
+**Status: IMPLEMENTED** (`rust/cursor-belief/src/belief/estimator.rs`),
+reviewed by nixos-dev before build, all 5 required tests passing (52/52
+cursor-belief tests, 928/928 workspace). Reviewed by
+pikvm-mcp-server@nixos-developer-system, one real gap found and closed
+(the convergence-false-positive test, see its own status note below)
+before implementation. **Still open**: the live-hardware re-run of
+`legacy_move_smoke.rs` (or equivalent) confirming the specific
+2-passes-back stale-repeat bug no longer reproduces — deferred per the
+standing "rest the rig today" call, not yet scheduled.
 
 ## The problem, precisely
 
@@ -221,17 +226,46 @@ to a NEW capability, not just a port.
    original live run; the N=80 bench used curve-one-shot, which doesn't
    call this guard at all, so it has no relevant intermediate-observation
    data either) — build from a realistic SYNTHETIC converging trace
-   instead, e.g. target ~(500, 500) with passes at (550, 540) → (510,
-   505) → (502, 501) → (498, 499) → (500.5, 500.2), each pass separated
-   by a real emit ≥30 mickeys (the default `min_emit_mickeys`) so the
-   emit gate doesn't trivially suppress the check. By the last 2-3
-   passes, consecutive AND non-consecutive readings are legitimately
-   within `drift_px` (5px default) of each other purely because the
-   trajectory has converged — assert every one of these observations is
-   ACCEPTED (not rejected) by `observe(..., ObserveOptions{reject_stationary:
-   true, ..})`. This is the test that actually proves "changes real
-   behavior" doesn't mean "regresses currently-successful convergence,"
-   which was this plan's real gap, not just an unproven bug fix.
+   instead.
+
+   **STATUS: implemented, and the first attempt was itself wrong in an
+   instructive way.** First draft used a CONSTANT emit (40 mickeys) for
+   every pass regardless of shrinking residual, with positions (550,540)
+   → (510,505) → (502,501) → (498,499) → (500.5,500.2). It correctly
+   FAILED — but not for the K=4-specific reason it was meant to prove:
+   (498,499) and (502,501) are ~4.5px apart and are IMMEDIATE neighbors
+   in that sequence, so even the OLD K=1 design would have rejected that
+   pair. The test wasn't isolating the new risk at all; it just hit a
+   pre-existing property of the ORIGINAL single-slot guard (any two
+   adjacent readings within `drift_px` after enough emit get rejected,
+   by design — that's the guard's whole job).
+
+   The corrected, real insight: a constant-emit converging trace isn't
+   realistic. `legacy_move.rs`'s actual correction loop shrinks its
+   correction emit as the residual shrinks (proportional-control shape),
+   and the guard's OWN (unchanged) `min_emit_mickeys` gate already
+   exempts small near-convergence corrections from the stationary check
+   ENTIRELY, regardless of K — a tiny real correction near the target
+   naturally has emit below the 30-mickey default, so the check never
+   even reaches the distance comparison for those passes. The corrected
+   test models this: target ~(500,500), passes (600,600)/emit=100 →
+   (530,525)/emit=80 → (508,506)/emit=40 (all ≥ the gate, correctly
+   spaced far apart from earlier entries — real progress, no
+   near-miss) → (503,502)/emit=15 → (501,500.5)/emit=8 (both BELOW the
+   gate — exempt by design, not by luck). All 5 pass. This is a more
+   honest answer to nixos-dev's concern than the original test would
+   have been even if it had passed: the protection against false-
+   rejecting a converging tail isn't something K=4 needs to earn on its
+   own — it inherits the SAME emit-gate protection K=1 already had,
+   *as long as* the correction loop's real emit-sizing behavior shrinks
+   near convergence (a property of `legacy_move.rs` itself, not this
+   guard). The genuine residual risk — a LARGE, gate-passing correction
+   that happens to land near a non-immediately-preceding ring entry by
+   coincidence — is real but narrow: it requires a big, meaningfully-
+   sized correction to also fail to make real forward progress, which a
+   reasonably-behaving correction algorithm shouldn't do often. Flagged
+   as a known, narrow residual risk rather than claimed to be fully
+   eliminated.
 
 ## Scope boundary — explicitly NOT touched
 
