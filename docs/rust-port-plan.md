@@ -1246,3 +1246,58 @@ remain open: the harness design itself is now believed sound (three real
 environmental bugs found and fixed, the actual safety boundary never
 breached), but zero clean runs have yet reached the guarded slam pair
 itself. Resume in a fresh session per the manager's call.
+
+---
+
+**§8 categories 2/5 — resumed session, 2026-08-29 (~12:09-12:47), STILL
+PAUSED.** Resumed after a genuine multi-hour gap (08:40 pause → 12:09
+resume). Two more environmental fixes applied and shipped, each a real,
+live-confirmed finding (both manager-approved before/after applying):
+
+1. A confirmation screenshot came back genuinely torn (a correct
+   lock-screen fragment in one strip, solid colour filling the rest) —
+   this project's own already-documented "screenshot right after a
+   UI-dismissing keypress can be a streamer mid-transition capture, not
+   real state" finding, just not yet applied to this harness's own wake
+   step. Fixed: settle delay 800ms → 1.5s.
+2. Live-confirmed (twice) that sending Ctrl+Cmd+Q + one Space to a
+   device that was ALREADY on a plain lock screen escalates to the Touch
+   ID/passcode prompt instead of landing on the plain lock screen — not
+   a safety incident (fail-closed correctly both times), but pointless
+   HID churn against a device already at the target precondition. Fixed:
+   a new flag-gated pre-check lets the operator skip lock+wake entirely
+   when the baseline screenshot already shows a genuine lock screen,
+   reusing that image directly for the same downstream human-confirm gate.
+
+Retried after both fixes — the baseline screenshot 503'd (unknown
+starting state, the skip-check couldn't apply) and the SAME Touch-ID
+escalation happened a THIRD time regardless, this time from an unverified
+starting state. Recovered cleanly via the standard non-passcode
+`unlock_ipad` path (no passcode needed this time) — confirmed visually
+back to a genuine plain lock screen.
+
+**Reassessment**: the safety boundary (human reviews the confirmation
+screenshot, fail-closed on anything but explicit "yes") held perfectly
+across all three escalations — zero HID ever reached a corner on an
+unconfirmed precondition. But the underlying assumption this whole design
+rests on — that a single Space press wakes a locked iPad to a
+still-locked, visually-confirmable state without dismissing it — has now
+failed to hold 3/3 live attempts, across different starting states. This
+was sourced from `ipad-unlock.ts`'s `unlockIpadWithCode` docs but
+flagged by nixos-dev up front as uncertain specifically for this rig's
+NO-PASSCODE configuration; that uncertainty has not actually been
+resolved, just repeatedly re-encountered inside a run that also exercises
+the guard/slam logic.
+
+**Recommendation going forward**: don't keep folding another guess at the
+wake mechanism into the same run as the guard/slam/recovery logic being
+validated. Isolate the actual open question — does `Space` reliably stop
+at a visible-but-locked state on this rig, or does it not, full stop —
+into its own small, low-risk experiment (lock + one Space + screenshot,
+nothing else) before trying the combined gate again. Categories 2 and 5
+remain open; PAUSED again after this session's block, pending that
+narrower experiment or further team input on the wake-mechanism question.
+Real, sustained live-hardware contact made this session (multiple slams,
+many key presses across two work blocks, one passcode recovery, three
+Touch-ID escalations, all recovered cleanly, zero unsafe HID at any
+point) — deliberately not stacking further live attempts today.
