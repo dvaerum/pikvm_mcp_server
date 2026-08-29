@@ -118,14 +118,29 @@ async fn main() {
     let client = Arc::new(PiKVMClient::new(config, None));
 
     // Step 1: baseline screenshot — documents the starting state honestly,
-    // not a safety-relevant check (locking is unconditional below).
-    let baseline = client
-        .screenshot(None)
-        .await
-        .expect("baseline screenshot failed");
-    std::fs::write("/tmp/corner_control_smoke_baseline.jpg", &baseline.buffer)
-        .expect("write baseline screenshot");
-    eprintln!("=== BASELINE: /tmp/corner_control_smoke_baseline.jpg saved (reference only). ===");
+    // NOT a safety-relevant check (locking is unconditional below and
+    // doesn't care whether the pre-lock state was awake or already
+    // dimmed). Best-effort: two live attempts hit this exact display
+    // already being dimmed from a moment earlier (the display's wake
+    // window is short enough that even the gap between an external wake
+    // probe and this process's own startup can close it) — a real
+    // 503 here is informational-step noise, not grounds to abort before
+    // the actual safety-relevant step (the lock command) has even run.
+    match client.screenshot(None).await {
+        Ok(baseline) => {
+            std::fs::write("/tmp/corner_control_smoke_baseline.jpg", &baseline.buffer)
+                .expect("write baseline screenshot");
+            eprintln!(
+                "=== BASELINE: /tmp/corner_control_smoke_baseline.jpg saved (reference only). ==="
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "=== BASELINE screenshot failed ({e}) — non-fatal, informational only. Proceeding \
+                 to the lock command regardless. ==="
+            );
+        }
+    }
 
     // Step 2: lock — same shortcut pikvm_ipad_lock sends.
     eprintln!("=== Sending Ctrl+Cmd+Q — screen should turn off within 2s ===");
