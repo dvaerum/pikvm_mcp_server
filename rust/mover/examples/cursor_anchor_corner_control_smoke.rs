@@ -214,7 +214,19 @@ async fn main() {
                 .await
                 .expect("wake Space press failed");
         }
-        tokio::time::sleep(Duration::from_millis(800)).await;
+        // 1.5s, not 800ms: this project's own documented finding is that
+        // a screenshot taken immediately after a UI-dismissing keypress
+        // can be a genuinely torn/glitched capture frame (solid-colour
+        // fill with a small correct render in one corner) — a streamer
+        // mid-transition artifact, not real device state. Live-confirmed
+        // 2026-08-29: an 800ms wait produced exactly that (a real, correct
+        // lock-screen fragment in the top strip, solid green filling the
+        // rest) — caught by the human step below (correctly did NOT
+        // confirm it), not by this retry loop, since a torn frame is
+        // still a successful `Ok(shot)`, not an `Err` this loop retries
+        // on. Longer settle reduces how often that happens; the human
+        // step remains the real backstop either way.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
         match client.screenshot(None).await {
             Ok(shot) => {
                 confirm_shot = Some(shot);
