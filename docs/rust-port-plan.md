@@ -1301,3 +1301,175 @@ Real, sustained live-hardware contact made this session (multiple slams,
 many key presses across two work blocks, one passcode recovery, three
 Touch-ID escalations, all recovered cleanly, zero unsafe HID at any
 point) — deliberately not stacking further live attempts today.
+
+---
+
+**§8 categories 2/5 (wake-key) + item 4 (stationary-guard) — resumed
+session, 2026-08-29 ~15:00-15:30, manager's standing authorization
+("georg: 'Go permanently!'"). Wake-key: RUN, genuinely mixed. Item 4:
+RE-RUN live, inconclusive re: the specific fix, surfaced a separate real
+finding.**
+
+Manager lifted the per-instance resume-ask requirement going forward
+("your own judgment on when a rest/cooldown is warranted... stands on its
+own") while keeping the standing rules unchanged: stop+flag on a genuine
+safety incident, real critical review before design/safety-logic changes,
+hardware-gate mover/click/HID-adjacent code before merging.
+
+**Pre-flight blocker (unrelated to any of the 3 items)**: health-check hit
+a persistent capture-source dark state (`/streamer/snapshot` 503 across
+11+ retries, `source.online=false`/`captured_fps=0`) with `/api/hid`
+initially showing `keyboard.online=false`/`outputs.available=[]` —
+looked like the documented HID-down pattern. Ran the cheap R1 rung
+(`POST /hid/reset` + `set_connected` 0→1 toggle) per `hid-recovery.ts`'s
+own ladder; flags flipped to online but capture stayed dark (exactly the
+"flags lie, verify behaviorally" case the ladder itself warns about) — did
+NOT send a blind wake keystroke with zero visual channel. Escalated to the
+manager rather than guessing; pikvm-nixos@georgs-mac-mini root-caused it
+directly on the box as the iPad's screen genuinely asleep (kvmd's own log:
+"no signal"), not a hardware fault — same class as an issue it-03400 hit
+independently the same day. A wake action from their side (mechanism not
+visible to me) brought video back; confirmed visually (plain lock screen,
+correct timestamp) before proceeding.
+
+**Item 1 — wake-key experiment, task_69cd3362e1da (RUN LIVE)**: built
+`wake_key_experiment.rs` exactly per the reviewed plan (fail-closed: a
+capture failure at the post-lock checkpoint aborts without sending the
+Space — verified live, trial 3 hit this path for real). 4 trials + 2
+ad-hoc single-Space checks (needed when the video-dark blocker above
+recurred mid-sequence and the harness's fixed retry timing didn't fit).
+Result: genuinely MIXED — A, B, inconclusive(circumstantial-B), A, A —
+not the clean signal either direction the plan hoped for. Two real
+findings (full detail + evidence in
+`docs/wake-key-isolated-experiment-plan.md`'s RESULTS section):
+
+1. **This plan's own "no-passcode iPad" premise is WRONG.** This rig has
+   Touch ID + a real, working passcode — `unlock_ipad_with_code()`
+   recovered a Touch ID prompt twice, confirmed visually both times (not
+   trusting the tool's return value). Correcting this for any future
+   session that inherits the old assumption.
+2. **The A-vs-B split does not track press count** (falsifies the plan's
+   original 1st-vs-2nd-press framing — trial 1's very first isolated
+   press already gave B). It circumstantially tracks elapsed idle time
+   before the press instead: two short-elapsed presses (~3-4s after a
+   lock/wake action) leaned B; two long-elapsed presses (after a genuine
+   ~65s+ dark period, and again after tens of idle seconds on an
+   already-lit lock screen) both gave A. N=4 informal, not the controlled
+   2s/4s/8s delay sweep nixos-dev's review flagged as the real test for
+   this — recommending that sweep as the next step, not treating today's
+   result as final. Until then: don't trust Space-once as the default
+   wake mechanism for the combined guard/slam gate; the mouse-move
+   fallback (already built into `cursor_anchor_corner_control_smoke.rs`)
+   is the safer default.
+
+Committed `c13142e` on `rust-port/module-4-mover`. Marked
+task_69cd3362e1da completed — the plan's own scope (isolate the question,
+even if the answer is "more complicated than assumed") is met.
+
+**Item 4 — stationary-guard live re-validation (task_a341720594ad)**:
+re-ran `legacy_move_smoke.rs` (same harness as the original 2026-08-29
+find, strategy=detect-then-move/forbidSlamFallback=true, MOVES ONLY)
+against the real home screen, target (950,620). Ran clean (no crash),
+1 correction pass, but that pass's own motion-diff found "no pair passed
+direction/sanity filters" and fell back to trusting the open-loop's
+earlier "last verified" cluster (924,529) — the algorithm was honest
+about the low confidence here ("1/1 pass(es) used template/predicted
+fallback (motion-diff blind)"), unlike the original bug's silent false
+confidence.
+
+Screenshot cross-check (manual before/after pixel-diff against a same-
+layout reference frame, not eyeballing alone — see method note below):
+the REAL cursor landed near the bottom edge of the screen, close to the
+dock (~y just above 1000 in the 1680×1050 capture), nowhere near the
+claimed (924,529). A genuine, large self-report-vs-reality mismatch,
+same class of bug this whole area is known for — but NOT clearly the
+SAME mechanism the K=4 widening was built to catch (no
+`would_reject_as_stationary`-related log line fired in this run; the
+proximate cause here was a plain motion-diff filter failure, not a stale
+2-passes-back cluster match). Genuinely inconclusive as a targeted
+re-validation of the specific fix — this run didn't exercise that code
+path — but it does reconfirm the legacy path's already-documented lower
+reliability (~73px-median class of behavior), and it's a real, fresh
+data point for whoever eventually revisits this path's reliability more
+broadly. Not re-running additional live trials today specifically chasing
+a repro of the original stale-cluster scenario — that would need a more
+deliberately engineered repro condition than an arbitrary target, and
+today's live-hardware volume (health-check blocker + recovery, 6 wake-key
+trials/checks, 2 passcode recoveries, this run) is enough for one
+session's judgment call.
+
+*Method note on the screenshot cross-check*: naive coordinate-space
+guessing (assuming the algorithm's `Point` coordinates map 1:1 onto the
+saved JPEG's own pixel grid) was WRONG and wasted several cropping
+attempts before switching to a same-layout before/after pixel-diff
+(`PIL`/numpy, excluding the known-ticking clock-widget region) to
+localize the real cursor directly — a more reliable ground-truth method
+than reverse-engineering the coordinate convention by hand. Worth
+remembering next time this kind of cross-check is needed. Also: `sips
+--cropOffset` gave silently-wrong crops in this session (black frames at
+coordinates that PIL's unambiguous left/upper/right/lower box crop showed
+had real content) — prefer PIL for any future crop-and-inspect step, not
+`sips`.
+
+**Item 2 (iPadCollector bench)**: see the entry immediately following, or
+the next journal update if run after this one lands.
+
+**Item 2 — iPadCollector bench live run (task_37374b4bce6d)**: relaunched
+the app (`xcrun devicectl ... launch --terminate-existing`), confirmed
+handshake worked (`model=iPad, logical 820x1180`), but the first real
+`get_tracked_cursor()` call broke the connection outright ("Broken pipe").
+Root-caused via a new minimal diagnostic (`ipad_collector_ws_probe.rs`:
+connect -> `get_cursor()` immediately, nothing else) rather than guessing,
+and found **2 real, live-reproducible protocol bugs** in
+`ipad_collector.rs`, both now fixed and unit-tested:
+
+1. `hello-ack`'s `sessionId` needs a real UUID-v4-shaped string, not an
+   arbitrary label (the app closed the connection almost immediately
+   otherwise — consistent with a Swift-side `UUID` decode failing).
+2. **The real root cause**: every frame's top-level `id` was a bare JSON
+   number; `ipad-app-ws.ts`'s own protocol always uses a string
+   (`randomUUID()`). The app silently drops any frame it can't decode —
+   fixed by making `id` a `String` on the wire (kept the cheap internal
+   `u64` counter, just stringified; no new `uuid` dependency needed).
+3. Bonus: `CursorPos.t_ipad` was typed `u64`; the real app sends a
+   fractional-millisecond timestamp, which failed to deserialize. Fixed
+   to `f64` (TS's own `t_ipad: number` was always a double) — would have
+   silently broken every real reading had the bench gotten this far
+   without catching it.
+
+All 3 confirmed fixed live via the probe: a clean, correctly-decoded
+`CursorPos { x: 0.0, y: 0.0, t_ipad: <real epoch ms>, tracked: Some(false)
+}` (a real "not tracked yet" reading, not an error).
+
+**Remaining, genuine architectural gap**: with all 3 bugs fixed, the FULL
+N=20 bench still fails identically on trial 1. Root cause: `ipad_go_home`
+(Cmd+H) backgrounds iPadCollector before `click_at`/`get_tracked_cursor`
+run several seconds later; the app's WS session does not survive being
+backgrounded (iOS almost certainly suspends it — no background-networking
+entitlement on this test app). Confirmed by contrast: the isolated probe
+(app stays foreground throughout) succeeds every time; the full per-trial
+sequence (which backgrounds it) fails every time. This is a genuine
+design mismatch — this bench's plan assumed ground truth could be pulled
+from a backgrounded iPadCollector while clicking the REAL home screen;
+the app's own established historical usage instead keeps it foreground
+the whole time via its own `showScene` rendering. Not patching this live
+today per the standing "best practice, not quick hacks" rule — it needs
+its own write-up + nixos-dev review (most likely fix: click against
+iPadCollector's own `showScene`, trading "tests the literal production
+home screen" for "app never leaves foreground"). `task_37374b4bce6d`
+stays open, not completed. Committed `82617c1` on
+`rust-port/module-4-mover`. Full detail in
+`docs/ipad-collector-ground-truth-bench-plan.md`'s RESULTS section.
+
+**Summary of today's resumed-session block**: all 3 previously-paused
+items were run live under the manager's standing authorization. Item 1
+(wake-key) ran to completion with a genuinely mixed, honestly-reported
+result plus a corrected premise. Item 4 (stationary-guard) re-ran clean
+but was inconclusive on the SPECIFIC fix (surfaced a different, already-
+known legacy-path weakness instead). Item 2 (iPadCollector bench) found
+and fixed 2 real protocol bugs but hit a genuine architectural gap that
+blocks full completion. None of the three ended in a safety incident;
+the iPad was left in a confirmed-safe, unlocked home-screen resting state
+throughout and at the end. Two real, fresh follow-ups are now on the
+board: a controlled delay-sweep for the wake-key timing-confound
+hypothesis, and a `showScene`-based redesign of the iPadCollector bench.
