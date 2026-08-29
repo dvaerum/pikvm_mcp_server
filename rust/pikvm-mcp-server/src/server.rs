@@ -33,6 +33,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
 
+use pikvm_mcp_foundation::auth::HeaderAuthorizer;
 use pikvm_mcp_foundation::lock::BusyLock;
 use pikvm_mcp_foundation::session_auth::LoginGate;
 use pikvm_mcp_ipad_hid::hid_mode::HidModeResolver;
@@ -116,19 +117,75 @@ fn login_tool() -> Tool {
     )
 }
 
+/// Deployment-wide auth config, shared (immutably) by every session's
+/// `PikvmMcpServer` instance minted from the same `StreamableHttpService`
+/// factory. `None` `authorize` = `--security no`. `allow_tool_login` is
+/// only meaningful when `authorize` is `Some` (matches
+/// `http-server.ts`'s own `allowToolLogin = Boolean(opts.allowToolLogin)
+/// && Boolean(authorize)` guard).
+#[derive(Clone, Default)]
+pub struct PikvmAuthConfig {
+    pub authorize: Option<HeaderAuthorizer>,
+    pub allow_tool_login: bool,
+}
+
+/// A custom axum request extension `http_server.rs`'s auth middleware
+/// inserts, carrying whether THIS request's `Authorization` header was
+/// valid — read back inside `initialize()` via `RequestContext::extensions`
+/// (which nests axum's own `Extension` data inside the propagated
+/// `http::request::Parts`, per rmcp's own documented pattern) to seed the
+/// session's initial `SessionAuthState` without re-running the
+/// authorizer a second time.
+#[derive(Clone, Copy, Debug)]
+pub struct HeaderAuthed(pub bool);
+
 #[derive(Clone)]
 pub struct PikvmMcpServer {
     shared: Arc<SharedState>,
-    /// `None` for stdio and for header-only HTTP auth; `Some` only for a
-    /// Streamable-HTTP session opened under `--allow-tool-login` (wired in
-    /// a later phase — always `None` today).
-    gate: Option<Arc<LoginGate>>,
+    auth: Arc<PikvmAuthConfig>,
+    /// Populated once, in `initialize()` — the ONLY place a session's
+    /// initial authenticated state is known. `None` for stdio (no HTTP
+    /// context to read a header from) and for HTTP sessions where
+    /// `allow_tool_login` isn't configured (the strict header-at-connect
+    /// path already fully gates those at the axum middleware layer,
+    /// before rmcp is ever reached — nothing left for the tool layer to
+    /// enforce). Interior-mutable (not a constructor param) because the
+    /// factory that mints this struct has no per-request context to hand
+    /// it — see `http_server.rs`'s own header comment on why the auth
+    /// decision has to happen this late.
+    session_gate: Arc<Mutex<Option<Arc<LoginGate>>>>,
 }
 
 impl PikvmMcpServer {
-    pub fn new(shared: Arc<SharedState>, gate: Option<Arc<LoginGate>>) -> Self {
-        Self { shared, gate }
+    pub fn new(shared: Arc<SharedState>, auth: Arc<PikvmAuthConfig>) -> Self {
+        Self {
+            shared,
+            auth,
+            session_gate: Arc::new(Mutex::new(None)),
+        }
     }
+
+    fn gate(&self) -> Option<Arc<LoginGate>> {
+        self.session_gate.lock().unwrap().clone()
+    }
+}
+
+/// Derives a session's initial authenticated state from the rmcp
+/// `initialize` request's [`rmcp::model::Extensions`] — pulled out of
+/// `initialize()` as its own pure function so the extraction logic (nested
+/// `Parts`-inside-`Extensions` lookup, `HeaderAuthed`, and the "no HTTP
+/// context ⇒ trust it" default) is unit-testable without needing a full
+/// `RequestContext`. Defaults to `authenticated = true` both for stdio (no
+/// `Parts` present at all) and for a valid-header HTTP connect (`Parts`
+/// present, but `require_auth` only ever inserts `HeaderAuthed` on the
+/// pre-auth admission path — see `http_server.rs`) — only an explicit
+/// `HeaderAuthed(false)` opens a pre-auth session.
+fn authenticated_from_extensions(extensions: &rmcp::model::Extensions) -> bool {
+    extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<HeaderAuthed>())
+        .map(|h| h.0)
+        .unwrap_or(true)
 }
 
 fn to_call_tool_result(outcome: ToolOutcome) -> CallToolResult {
@@ -295,7 +352,28 @@ impl ServerHandler for PikvmMcpServer {
     ) -> Result<InitializeResult, McpError> {
         let mut info = self.get_info();
         info.protocol_version = request.protocol_version.clone();
-        let _ = context;
+
+        // Faithful port of http-server.ts's per-session auth seed: a
+        // validated header at connect authorizes the session for its
+        // whole lifetime; only when `allow_tool_login` is configured does
+        // a header-less `initialize` open a PRE-AUTH session instead of
+        // being rejected outright (the axum middleware in front of rmcp
+        // already refused every other header-less/wrong-header request
+        // before this ever runs — see http_server.rs). stdio has no HTTP
+        // context to read a header from (`extensions.get::<Parts>()` is
+        // `None`), so it always resolves `authenticated = true` — the
+        // gate stays inert there, matching its pre-existing behavior.
+        if self.auth.allow_tool_login {
+            if let Some(authorize) = &self.auth.authorize {
+                let authenticated = authenticated_from_extensions(&context.extensions);
+                let session =
+                    pikvm_mcp_foundation::session_auth::SessionAuthState::new(authenticated);
+                let gate =
+                    pikvm_mcp_foundation::session_auth::make_login_gate(authorize.clone(), session);
+                *self.session_gate.lock().unwrap() = Some(Arc::new(gate));
+            }
+        }
+
         Ok(info)
     }
 
@@ -368,7 +446,7 @@ impl ServerHandler for PikvmMcpServer {
         // expose ONLY the login tool — don't leak the full tool surface
         // before authentication. Faithful port of the TS `ListTools`
         // handler's gate check.
-        if let Some(gate) = &self.gate {
+        if let Some(gate) = self.gate() {
             if !gate.session.is_authenticated() {
                 return Ok(ListToolsResult {
                     tools: vec![login_tool()],
@@ -406,7 +484,7 @@ impl ServerHandler for PikvmMcpServer {
         // tool callable on a pre-auth session; everything else is refused
         // until it authenticates. Faithful port of index.ts's login-gate
         // block.
-        if let Some(gate) = &self.gate {
+        if let Some(gate) = self.gate() {
             if name == "login" {
                 let username = args.get("username").and_then(Value::as_str);
                 let password = args.get("password").and_then(Value::as_str);
@@ -597,5 +675,48 @@ mod tests {
         assert!(!sanitized.contains("hunter2"));
         assert!(sanitized.contains("password=[REDACTED]"));
         assert!(sanitized.contains("Source-side outage suspected")); // operator-hints.rs's 503+UnavailableError hint
+    }
+
+    // -- authenticated_from_extensions --
+
+    fn parts_with_header_authed(header_authed: Option<bool>) -> axum::http::request::Parts {
+        let mut parts = axum::http::Request::new(()).into_parts().0;
+        if let Some(v) = header_authed {
+            parts.extensions.insert(HeaderAuthed(v));
+        }
+        parts
+    }
+
+    #[test]
+    fn authenticated_from_extensions_defaults_true_for_stdio_with_no_http_context() {
+        // stdio never goes through http_server.rs's middleware, so no
+        // `Parts` is ever inserted into the rmcp `Extensions` at all.
+        let extensions = rmcp::model::Extensions::new();
+        assert!(authenticated_from_extensions(&extensions));
+    }
+
+    #[test]
+    fn authenticated_from_extensions_defaults_true_when_no_header_authed_marker_was_inserted() {
+        // Matches the valid-header-at-connect path: `require_auth` lets the
+        // request through via `next.run` WITHOUT ever inserting
+        // `HeaderAuthed` (only the pre-auth admission path does), so a
+        // `Parts` with no marker at all must still resolve to trusted.
+        let mut extensions = rmcp::model::Extensions::new();
+        extensions.insert(parts_with_header_authed(None));
+        assert!(authenticated_from_extensions(&extensions));
+    }
+
+    #[test]
+    fn authenticated_from_extensions_reads_an_explicit_false_marker() {
+        let mut extensions = rmcp::model::Extensions::new();
+        extensions.insert(parts_with_header_authed(Some(false)));
+        assert!(!authenticated_from_extensions(&extensions));
+    }
+
+    #[test]
+    fn authenticated_from_extensions_reads_an_explicit_true_marker() {
+        let mut extensions = rmcp::model::Extensions::new();
+        extensions.insert(parts_with_header_authed(Some(true)));
+        assert!(authenticated_from_extensions(&extensions));
     }
 }

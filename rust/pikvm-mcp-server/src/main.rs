@@ -20,7 +20,7 @@ use pikvm_mcp_server::cli::{
     help_text, parse_cli_options, resolve_hid_mode_source, HidModeSource, SecurityChoice,
     TargetKind, TransportKind,
 };
-use pikvm_mcp_server::server::{PikvmMcpServer, SharedState};
+use pikvm_mcp_server::server::{PikvmAuthConfig, PikvmMcpServer, SharedState};
 use rmcp::transport::stdio;
 use rmcp::ServiceExt;
 
@@ -97,8 +97,8 @@ async fn main() {
         }
         if options.allow_tool_login && security != SecurityChoice::No {
             eprintln!(
-                "Note: --allow-tool-login was requested but is not yet wired in this build (a later Module 6 \
-                 phase — see http_server.rs's own header comment). Every session still requires a valid header."
+                "Note: --allow-tool-login is ENABLED — a header-less initialize opens a pre-auth session gated \
+                 to the \"login\" tool until it authenticates."
             );
         } else if options.allow_tool_login {
             eprintln!("Note: --allow-tool-login has no effect with --security no (nothing to authenticate).");
@@ -239,11 +239,15 @@ async fn main() {
             )),
             _ => None,
         };
+        let auth_config = PikvmAuthConfig {
+            authorize,
+            allow_tool_login: options.allow_tool_login,
+        };
         if let Err(e) = pikvm_mcp_server::http_server::run_http_server(
             shared,
             &options.host,
             options.port,
-            authorize,
+            auth_config,
         )
         .await
         {
@@ -253,7 +257,7 @@ async fn main() {
         return;
     }
 
-    let server = PikvmMcpServer::new(shared, None);
+    let server = PikvmMcpServer::new(shared, Arc::new(PikvmAuthConfig::default()));
 
     eprintln!("PiKVM MCP Server running (stdio)");
     let service = match server.serve(stdio()).await {
