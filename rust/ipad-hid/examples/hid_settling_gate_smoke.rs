@@ -22,6 +22,22 @@
 //! switch and this harness has nothing to test against it). Switches back
 //! to the original mode at the end (best-effort).
 //!
+//! **Real experience, 2026-08-29**: the restore-to-original-mode step
+//! failed live (`POST /hidmode` returned HTTP 500), and a subsequent GET
+//! against the endpoint returned 403 for several retries — both
+//! transient (a plain retry of the POST a few seconds later succeeded
+//! cleanly, restoring `mouse.absolute=false` and a working relative
+//! cursor, confirmed behaviorally with a real HID move + screenshot, not
+//! just the flag). This is a real robustness gap in this harness's
+//! best-effort cleanup, not a defect in the settling gate itself (the
+//! actual test — auto-release without `clear_settling()` — passed
+//! cleanly at 15075ms). If the cleanup step ever fails, don't just leave
+//! the target on the switched-to mode: retry the restore POST once or
+//! twice with a short delay before giving up, and verify with a real
+//! HID move + screenshot after, not the endpoint's own reported status
+//! alone. Not fixed inline here — flagging for whoever next hardens this
+//! harness, since it's the cleanup path, not the thing being tested.
+//!
 //! Run:
 //!   PIKVM_HIDMODE_URL=http://pikvm01/api/hidmode \
 //!   PIKVM_USERNAME=... PIKVM_PASSWORD=... \
