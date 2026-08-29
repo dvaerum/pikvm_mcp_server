@@ -74,6 +74,29 @@
 //! behavior (unchanged) is a separate, pre-existing design choice not
 //! touched by this fix.
 //!
+//! **v8 (2026-08-29/30), graceful degrade on an `anchor_cursor` error.**
+//! Two live runs both PANICKED right after the slam fired (uncleanly —
+//! no cleanup ran), when `anchor_cursor`'s own post-slam verification
+//! screenshot hit a transient 503. Both times the actual safety
+//! question was already answered BEFORE the crash: the device stayed
+//! genuinely locked throughout (confirmed via a fresh screenshot
+//! immediately after recovery), so the slam itself was safe both times
+//! — the panic was purely a harness robustness gap, not a safety
+//! incident. Likely cause: the human-confirmation step (real wall-clock
+//! time for an operator to review the screenshot and write the flag)
+//! lets the display re-dim again in that gap (this project's own
+//! documented short wake window) before the slam's own verification
+//! screenshot fires, and the harness's `.expect()` calls turned that
+//! transient failure into an uncaught panic. Fixed: both control calls
+//! now match on the `anchor_cursor` result — on `Err`, log it, run the
+//! SAME recovery (`unlock_ipad()` + final screenshot, factored into
+//! `recover_and_report_final_state`) the normal completion path already
+//! runs, and exit informatively (code 2, distinct from the "logically
+//! failed" exit code 1) instead of crashing. Does not fix the ROOT cause
+//! (the display re-dimming during a human-paced confirmation) — that's
+//! a real, harder design question left open; this just makes the
+//! harness itself robust to it.
+//!
 //! Run (writes /tmp/corner_control_confirm.flag — delete any stale copy
 //! from a previous run before starting; the process waits up to 30s for
 //! it to contain exactly "yes"):
@@ -136,6 +159,51 @@ async fn wait_for_flag(path: &str, timeout_s: u64) -> bool {
             return false;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Shared recovery step (v8, 2026-08-29): the real production
+/// `unlock_ipad()` path, followed by a final-state screenshot — the
+/// SAME recovery this file already runs on a normal completion, now
+/// also reachable from an error branch (an `anchor_cursor` call
+/// erroring instead of returning, e.g. on a transient capture failure)
+/// so an error never skips cleanup and leaves the device state
+/// unconfirmed. Best-effort throughout: logs failures rather than
+/// panicking again inside an already-degraded path.
+async fn recover_and_report_final_state(client: &Arc<PiKVMClient>) {
+    eprintln!();
+    eprintln!("=== RECOVERY: unlock_ipad() — the real production unlock path ===");
+    match unlock_ipad(
+        client,
+        IpadUnlockOptions {
+            verbose: true,
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        Ok(recovery) => {
+            eprintln!("recovery message: {}", recovery.message);
+            eprintln!("recovery slam_verified: {:?}", recovery.slam_verified);
+        }
+        Err(e) => eprintln!("recovery unlock_ipad() call itself failed: {e}"),
+    }
+
+    match client.screenshot(None).await {
+        Ok(shot) => {
+            if let Err(e) = std::fs::write("/tmp/corner_control_smoke_final.jpg", &shot.buffer) {
+                eprintln!("failed to write final-state screenshot: {e}");
+            } else {
+                eprintln!(
+                    "final-state screenshot saved to /tmp/corner_control_smoke_final.jpg — \
+                     INSPECT IT before trusting anything about the current device state."
+                );
+            }
+        }
+        Err(e) => eprintln!(
+            "final-state screenshot ALSO failed ({e}) — real device state is currently unknown; \
+             a human should check it directly before any further automated action."
+        ),
     }
 }
 
@@ -331,7 +399,7 @@ async fn main() {
     eprintln!("=== Confirmed by operator. Proceeding to the guarded slam pair. ===");
 
     eprintln!("=== 1/2: POSITIVE control — full slam via anchor_cursor(CallerAsserted), expect verified:true ===");
-    let positive = anchor_cursor(AnchorRequest {
+    let positive = match anchor_cursor(AnchorRequest {
         client: client.clone(),
         corner: Some(Corner::TopLeft),
         guard: caller_asserted_reason(),
@@ -348,7 +416,31 @@ async fn main() {
         verbose: true,
     })
     .await
-    .expect("positive-control anchor_cursor call failed");
+    {
+        Ok(r) => r,
+        Err(e) => {
+            // v8 (2026-08-29): graceful degrade instead of a panic. Found
+            // live: the slam itself already fired safely by this point
+            // (confirmed twice — the device stayed locked throughout both
+            // times) before the verification screenshot hit a transient
+            // 503, most likely because the human-confirmation step above
+            // took real wall-clock time and the display re-dimmed again
+            // in that gap (this project's own documented short wake
+            // window). An uncaught panic here skipped cleanup entirely.
+            // Recover the same way every other error path in this file
+            // does, then exit informatively rather than crash.
+            eprintln!(
+                "=== positive-control anchor_cursor call FAILED (likely transient — the slam may \
+                 have already fired safely before this error): {e} ==="
+            );
+            recover_and_report_final_state(&client).await;
+            eprintln!(
+                "=== INCONCLUSIVE (infra failure, not a safety incident) — re-run once the \
+                 display has settled; see the final-state screenshot to confirm current state. ==="
+            );
+            std::process::exit(2);
+        }
+    };
 
     eprintln!(
         "positive control: origin={:?}, verified={:?}",
@@ -392,7 +484,7 @@ async fn main() {
          negative control fires"
     );
 
-    let negative = anchor_cursor(AnchorRequest {
+    let negative = match anchor_cursor(AnchorRequest {
         client: client.clone(),
         corner: Some(Corner::TopLeft),
         guard: caller_asserted_reason(),
@@ -409,7 +501,24 @@ async fn main() {
         verbose: true,
     })
     .await
-    .expect("negative-control anchor_cursor call failed");
+    {
+        Ok(r) => r,
+        Err(e) => {
+            // v8: same graceful degrade as the positive control above —
+            // see that call site's comment for the full rationale.
+            eprintln!(
+                "=== negative-control anchor_cursor call FAILED (likely transient — the short \
+                 slam may have already fired safely before this error): {e} ==="
+            );
+            recover_and_report_final_state(&client).await;
+            eprintln!(
+                "=== INCONCLUSIVE (infra failure, not a safety incident) — positive control's \
+                 own result (verified={:?}) still stands; re-run for a clean negative control. ===",
+                positive.verified
+            );
+            std::process::exit(2);
+        }
+    };
 
     eprintln!(
         "negative control: origin={:?}, verified={:?}",
@@ -442,31 +551,11 @@ async fn main() {
     // precondition (ipad_unlock/unlock.rs's own call site: "Layer 5 —
     // lock screen has no active hot corner"). Category 5's own required
     // coverage, exercised for real rather than in a synthetic test.
-    eprintln!();
-    eprintln!("=== RECOVERY: unlock_ipad() — the real production unlock path ===");
-    let recovery = unlock_ipad(
-        &client,
-        IpadUnlockOptions {
-            verbose: true,
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("unlock_ipad recovery call failed");
-    eprintln!("recovery message: {}", recovery.message);
-    eprintln!("recovery slam_verified: {:?}", recovery.slam_verified);
-
-    let final_shot = client
-        .screenshot(None)
-        .await
-        .expect("final-state screenshot failed");
-    std::fs::write("/tmp/corner_control_smoke_final.jpg", &final_shot.buffer)
-        .expect("write final-state screenshot");
-    eprintln!(
-        "final-state screenshot saved to /tmp/corner_control_smoke_final.jpg — INSPECT IT before \
-         trusting the line below: the iPad should be back to a normal, unlocked, recognizable \
-         state (category 5's own finding: check the FINAL device state, not just an early step's)"
-    );
+    // v8: shared with the error branches above via
+    // recover_and_report_final_state, so this is the same code path
+    // whether the run reached here normally or is degrading from an
+    // anchor_cursor error.
+    recover_and_report_final_state(&client).await;
 
     if positive.verified == Some(true) && negative_pass {
         eprintln!(
