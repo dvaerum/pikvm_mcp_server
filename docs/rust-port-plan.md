@@ -1545,3 +1545,49 @@ brightness-retry addition) before reaching a genuinely successful N=20
 completion. No safety incidents across the entire extended session; the
 iPad was left in a confirmed-safe, unlocked home-screen resting state
 throughout and at the end.
+
+---
+
+**§8 wake-key delay sweep run live, 2026-08-29 ~18:28-18:44 — third and
+final follow-up item from today's resumed session.** Manager gave the
+go-ahead ("run the wake-key delay sweep now too... it directly unblocks
+the final two E2E categories") after the category 3 + iPadCollector bench
+successes. Interleaved round-robin per the reviewed plan, 8 trials total:
+
+- **d2 (2s delay): 2/2 clean B** — no escalation needed.
+- **d8 (8s delay): 2 clean A + 1 inconclusive** (torn capture) — escalated
+  per the disagreement rule, both escalation trials came back clean A.
+  Leans A.
+- **d4 (4s delay): 3/3 INCONCLUSIVE** — every attempt's result screenshot
+  came back torn, including after escalating to a 3rd trial. Genuinely
+  unresolved; not chasing a 4th attempt (that's not what "escalate once"
+  means).
+
+Shape (2s→B, 8s→A, 4s→uninformative) is consistent with the timing-
+confound hypothesis nixos-dev flagged during review, but doesn't pin the
+threshold down precisely since the one value that would have narrowed it
+(4s) never resolved. Recommendation: the combined guard/slam gate should
+default to something closer to 8s than 2s for its wake step's delay; a
+finer follow-up sweep (5s/6s/7s, longer settle before the result
+screenshot) would be the real next step if a precise value is needed —
+not required before adopting "closer to 8s" as an interim default.
+
+**Real methodology finding, not anticipated going in**: `unlock_ipad()`'s
+own cleanup step can ITSELF escalate a genuine plain-lock-screen (A) into
+the Touch ID prompt (B) — caught directly in d8's 3rd trial (a clean,
+unambiguous A on screenshot #3, followed by a Touch ID cleanup screenshot
+moments later, after `unlock_ipad()`'s own key sequence ran). This means
+circumstantial reads from a cleanup screenshot are NOT a reliable stand-in
+for a torn/ambiguous screenshot #3 — flagged so a future session doesn't
+re-trust that shortcut (this session's own earlier informal circumstantial
+reads, e.g. on d8-r1/d4-r1/d4-r2, were reasonable guesses at the time but
+now carry this caveat). Committed `58769ef`.
+
+**All 3 follow-up items from today's resumed session are now closed**:
+category 3 passed, iPadCollector bench (category 1) completed N=20
+successfully, wake-key delay sweep run with a real (if partial) result.
+No safety incidents across the entire extended session — every real
+lock/Touch-ID escalation encountered was recovered cleanly via the
+established ladder, confirmed visually each time, never left in an
+unknown state. iPad left in a confirmed-safe, unlocked home-screen
+resting state at the end.
