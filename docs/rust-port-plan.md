@@ -962,6 +962,68 @@ suite"**:
    mind for every future example/gate invoked from `rust/` — and
    eventually for the real packaged deployment's own path resolution,
    which is pikvm-nixos's call, not decided here.
+7. **`legacy_move.rs`'s own live gate: PARTIAL — ran correctly end-to-end,
+   but caught a real (TS-inherited, not port-introduced) false-pairing
+   bug via screenshot inspection** (georgs-mac-mini, 2026-08-29) — via
+   `legacy_move_smoke.rs`, `strategy=detect-then-move` +
+   `forbidSlamFallback=true` against the live iPad (target 1050,850).
+
+   **Scope, decided before running**: this path's real production
+   default is desktop/absolute-mouse (`docs/rust-port-plan.md` v13); its
+   own live gate belongs on `it-03400`, a separate appliance this node
+   has no access to (`docs/adr/0002-...md`: "it-03400's OTG link doesn't
+   enumerate"). `slam-then-move` was therefore never exercised here —
+   `forbidSlamFallback=true` makes any detect-then-move failure throw
+   instead of falling back to slam, so this run structurally cannot
+   reach the hot-corner-risk code path. What it DOES exercise for real:
+   origin discovery (`locate_cursor`), the calibration probe, open-loop
+   emission, and the full open-loop/correction-pass detection cascade
+   (motion-diff achromatic filtering, ML-recovery, template fallback) —
+   all fired genuinely against the live iPad per the run's own verbose
+   log.
+
+   **The finding**: the run completed without crashing (5 gross
+   correction passes, budget-exhausted exit) and self-reported
+   `final_detected_position=(1092,979)`, residual 135.7px. Per the
+   screenshots-are-source-of-truth rule, saved and inspected the final
+   frame BEFORE trusting that number — and it's wrong. Cropping the
+   saved 1920×1080 frame at (1092,979) shows only dock icons (Notes/
+   Settings/app-drawer), no cursor. The REAL cursor (orange arrow,
+   confirmed visually) is sitting on the App Store icon at
+   approximately (1045,690) — a real ~160px miss from the (1050,850)
+   target, but nowhere near the algorithm's own claimed landing.
+
+   **Root cause, read from the run's own verbose trace**: the final
+   correction pass's `detect_motion` picked a pair whose post-cluster
+   sits at (1092,979) — nearly identical to an EARLIER pass's own
+   post-cluster at (1085,981), with a different, real ML-recovered
+   position (1020,662) observed in between. `wouldRejectAsStationary`
+   (the belief's static-feature lock-in guard) only compares a new
+   candidate against the SINGLE most recent observation — it caught
+   nothing here because the immediately-preceding observation (662) was
+   genuinely different, even though an EARLIER one (981) matches almost
+   exactly. This is the guard's own documented scope (single-prior-
+   observation, not full history) in both the TS source and this port —
+   faithfully reproduced, not a new defect introduced during porting.
+   Consistent with, and now a concrete hardware-confirmed instance of,
+   the legacy path's already-known lower reliability vs. the validated
+   `curve-one-shot` default (CLAUDE.md: "old iterative mover" ≈73px
+   median vs. curve-one-shot's ≈9px).
+
+   **What this run does and doesn't prove**: proves the port compiles
+   and runs correctly end-to-end against real hardware, with real
+   detection cascades firing as designed, AND that the port faithfully
+   reproduces the TS source's actual behavior — including its known
+   weaknesses, not just its successes. Does NOT prove (and N=1 was never
+   the goal here, per the standing no-verdicts-from-small-samples rule)
+   any accuracy claim for this path, and does NOT cover slam-then-move
+   or real absolute-mouse/desktop behavior — that gap stays open pending
+   `it-03400` access. Not a merge blocker in itself (the finding is a
+   faithful-port confirmation, not a regression), but worth a maintainer
+   decision on whether the stationary-lock-in guard's scope should
+   eventually be widened — flagged here, not silently fixed, since that
+   would be a behavior change beyond this port's own faithful-port
+   mandate.
 
 **Structural requirement, not just content**: per §7's build-then-validate
 sequence, each layer's live validation should happen as that layer lands,
