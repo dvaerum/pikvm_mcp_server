@@ -1088,3 +1088,52 @@ existing TypeScript implementation). Not scheduling that work now — this
 section defines WHAT must be re-validated and WHY, not WHEN, since no Rust
 implementation code exists yet to validate (this task is planning only,
 per ADR-0002 and the task's own explicit scope).
+
+---
+
+**§8 execution update (2026-08-29, georgs-mac-mini)** — per the split agreed
+with nixos-dev (they write categories 3/4 + the real-transport gate given no
+hardware access from their environment; georgs-mac-mini executes everything
+against the physical rig, plus owns categories 1/2/5 end to end):
+
+9. **Real-transport gate for `pikvm_mouse_move_to`/`pikvm_mouse_click_at`
+   (the manager's explicit §8 addition): RUN, PASSED.**
+   `move_to_click_at_mcp_smoke.rs` (cherry-picked from nixos-dev's branch,
+   commit 96d53b0, onto `rust-port/module-4-mover`) spawned the REAL
+   `pikvm-mcp-server` binary as a child process, completed a real `initialize`
+   handshake over real stdio JSON-RPC, and called `pikvm_mouse_move_to` via a
+   real `tools/call` — landed 10.8px from target (956, 536). Visually
+   confirmed via the tool's own returned screenshot: the orange cursor is
+   clearly on the intended UI element. This is the first time this session
+   the tool-registration/arg-parsing/dispatch layer itself (not just
+   `move_to_pixel` called directly) was proven against real hardware.
+10. **Category 4, PR93 cascade hint-narrowing: RUN, PASSED.**
+    `cascade_hint_narrowing_smoke.rs` (cherry-picked, commit f6517a6) against
+    the real `find_cursor_by_v8_full_frame`: no-hint baseline 1305ms; good
+    hint (cursor's own just-detected position) narrowed to 151ms, 2.2px
+    drift from baseline (same real cursor); bad-hint negative control
+    (opposite frame corner) correctly fell back to a full scan (1106ms, ~=
+    baseline cost) and still found the REAL cursor (1.4px drift from
+    baseline, not the wrong hint location). Visually confirmed against the
+    saved final frame — reported position matches the visible cursor.
+11. **Category 3 (hid_settling_gate_smoke.rs, the #51 stale-settle-latch
+    incident): BLOCKED, not run.** Requires a reachable `PIKVM_HIDMODE_URL`
+    for a real, disruptive `POST /hidmode` mode switch. `$PIKVM_HOST/api/
+    hidmode` 404s — per this node's own prior findings the real endpoint
+    (`pikvm-hidmode-endpoint`, 127.0.0.1:8083) is on-box only, behind a
+    front-door `pikvm-nixos@georgs-mac-mini` owns, not exposed to this
+    environment. Not guessing at a URL for a disruptive mode-switch test —
+    flagged to the manager for the right endpoint or a routing decision
+    rather than silently skipped.
+
+Remaining open work (categories 1/2/5, georgs-mac-mini's to execute):
+category 2 (cornerTargetFromBounds genuine short-slam negative control, not
+yet produced on the Rust port — only a guard-refusal exists so far, which is
+a different signal than "slam attempted, landed short, verified:false");
+category 5 (`ipad_unlock.rs`'s own live gate, specifically the genuine
+`CallerAsserted`-on-lock-screen positive path §8 item 5 explicitly deferred —
+no gate for this exists yet); category 1 (paired iPadCollector ground-truth,
+tracked separately as task_37374b4bce6d, real new infra, not started).
+Sequencing sanity-checked with the manager before running the higher-risk
+pieces, given this rig's own documented Touch-ID-lockout pattern under heavy
+slam/lock testing.
