@@ -34,6 +34,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{oneshot, Mutex};
@@ -60,8 +61,13 @@ pub struct IpadCollectorHello {
 pub struct CursorPos {
     pub x: f64,
     pub y: f64,
-    /// App-side wall-clock, ms since epoch.
-    pub t_ipad: u64,
+    /// App-side wall-clock, ms since epoch. `f64`, not an integer type —
+    /// found live 2026-08-29: the real app sends a fractional value
+    /// (`Date().timeIntervalSince1970 * 1000`-style, sub-millisecond
+    /// precision), and TS's own `t_ipad: number` was always a double too;
+    /// an earlier `u64` here was an unchecked assumption that rejected
+    /// every real reading with a deserialize error.
+    pub t_ipad: f64,
     pub tracked: Option<bool>,
 }
 
@@ -81,11 +87,21 @@ fn is_tracked_reading(cur: &CursorPos) -> bool {
     true
 }
 
+// `id` is a STRING on the wire, not a bare JSON number — found live
+// 2026-08-29: `ipad-app-ws.ts`'s reference protocol always uses
+// `randomUUID()` (a string) for request ids, and the real app's decode
+// almost certainly types its message-id field as `String`. Sending a
+// bare number here didn't error visibly, but the app never replied
+// (every `get-cursor` call timed out) — consistent with the app silently
+// dropping a message it couldn't decode. The u64 COUNTER underneath is
+// still fine to keep (this module's own header comment already
+// justifies not using real UUIDs for LOCAL correlation) — only the ON-
+// WIRE TYPE needs to match, so the counter is just stringified.
 #[derive(Debug, Serialize)]
 struct OutgoingFrame<'a> {
     #[serde(rename = "type")]
     kind: &'a str,
-    id: u64,
+    id: String,
     payload: serde_json::Value,
 }
 
@@ -94,13 +110,30 @@ struct IncomingFrame {
     #[serde(rename = "type")]
     kind: String,
     #[serde(default)]
-    id: Option<u64>,
+    id: Option<String>,
     #[serde(default)]
     payload: serde_json::Value,
 }
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A random UUID-v4-SHAPED string (`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`,
+/// `y` in `{8,9,a,b}` per the RFC 4122 variant bits). Hand-rolled rather
+/// than pulling in the `uuid` crate: nothing here needs real global
+/// uniqueness guarantees, only a shape the app's `UUID(uuidString:)`
+/// decode will accept — see the call site's comment for why that matters.
+fn random_uuid_v4_string() -> String {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    )
+}
 
 /// One connected iPad app session — the accepted WS stream, a pending-
 /// request map keyed by the generated request id (mirrors
@@ -110,7 +143,7 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct IpadCollectorSession {
     pub hello: IpadCollectorHello,
     write: Arc<Mutex<futures_util::stream::SplitSink<WebSocketStream<TcpStream>, WsMessage>>>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
+    pending: Arc<Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>>,
     next_id: Arc<AtomicU64>,
     /// Background task reading frames off the socket and resolving
     /// `pending` entries — held so it's dropped (and stops) when the
@@ -123,9 +156,9 @@ impl IpadCollectorSession {
     /// correlated `cursor` response. Faithful to `ipad-app-ws.ts`'s own
     /// RPC shape and timeout.
     pub async fn get_cursor(&self) -> anyhow::Result<CursorPos> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
+        self.pending.lock().await.insert(id.clone(), tx);
 
         let frame = OutgoingFrame {
             kind: "get-cursor",
@@ -172,7 +205,7 @@ pub async fn wait_for_ipad_collector_session(
     let ws = tokio_tungstenite::accept_async(stream).await?;
     let (write, mut read) = ws.split();
     let write = Arc::new(Mutex::new(write));
-    let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>> =
+    let pending: Arc<Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
     // Wait for `hello` inline (not yet spawning the steady-state reader
@@ -198,11 +231,34 @@ pub async fn wait_for_ipad_collector_session(
     .map_err(|_| anyhow::anyhow!("iPad app never sent hello within {HELLO_TIMEOUT:?}"))??;
 
     // hello-ack, matching ipad-app-ws.ts's own IpadSession constructor.
+    //
+    // Two real bugs found live 2026-08-29, in order of discovery (kept
+    // both fixes; see docs/rust-port-plan.md's journal for the fuller
+    // live-debugging trace):
+    // 1. `sessionId` MUST be a real UUID-v4-shaped string — a plain
+    //    "rust-bench" label made every subsequent get-cursor write fail
+    //    with a broken pipe almost immediately after hello-ack, most
+    //    likely because the app's Swift-side decode expects `UUID`.
+    //    Formatted by hand below (not the `uuid` crate — this module's
+    //    own header comment already explains why no `uuid` dependency)
+    //    since only the on-wire SHAPE matters, not real uniqueness.
+    // 2. The real underlying bug: every frame's top-level `id` (this
+    //    hello-ack's `id: 0` included, and get-cursor's request id) was
+    //    a bare JSON NUMBER. `ipad-app-ws.ts`'s reference protocol always
+    //    uses `randomUUID()` — a STRING — for ids; a live probe (connect
+    //    -> get-cursor immediately, no intervening app-backgrounding)
+    //    showed a clean 5s timeout with no reply at all once (1) was
+    //    fixed, consistent with the app silently dropping any frame it
+    //    can't decode because `id` doesn't match its expected `String`
+    //    type. Fixed by making `id` a `String` on the wire everywhere
+    //    (see `OutgoingFrame`/`IncomingFrame` above) while keeping the
+    //    cheap internal `u64` counter — only the wire TYPE needed to
+    //    match, not real global uniqueness.
     {
         let ack = OutgoingFrame {
             kind: "hello-ack",
-            id: 0,
-            payload: serde_json::json!({"sessionId": "rust-bench"}),
+            id: "0".to_string(),
+            payload: serde_json::json!({"sessionId": random_uuid_v4_string()}),
         };
         write
             .lock()
@@ -244,11 +300,35 @@ pub async fn wait_for_ipad_collector_session(
 mod tests {
     use super::*;
 
+    #[test]
+    fn random_uuid_v4_string_has_the_right_shape() {
+        for _ in 0..50 {
+            let id = random_uuid_v4_string();
+            assert_eq!(id.len(), 36, "wrong length: {id}");
+            let parts: Vec<&str> = id.split('-').collect();
+            assert_eq!(
+                parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
+                vec![8, 4, 4, 4, 12],
+                "wrong group lengths: {id}"
+            );
+            assert!(parts[2].starts_with('4'), "not version 4: {id}");
+            let variant_nibble = parts[3].chars().next().unwrap();
+            assert!(
+                matches!(variant_nibble, '8' | '9' | 'a' | 'b'),
+                "wrong RFC 4122 variant nibble: {id}"
+            );
+            assert!(
+                id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
+                "non-hex character: {id}"
+            );
+        }
+    }
+
     fn cur(x: f64, y: f64, tracked: Option<bool>) -> CursorPos {
         CursorPos {
             x,
             y,
-            t_ipad: 0,
+            t_ipad: 0.0,
             tracked,
         }
     }
@@ -292,26 +372,43 @@ mod tests {
     fn outgoing_get_cursor_frame_serializes_with_the_expected_shape() {
         let frame = OutgoingFrame {
             kind: "get-cursor",
-            id: 7,
+            id: "7".to_string(),
             payload: serde_json::json!({}),
         };
         let text = serde_json::to_string(&frame).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["type"], "get-cursor");
-        assert_eq!(parsed["id"], 7);
+        // `id` must be a JSON STRING on the wire, not a bare number —
+        // found live 2026-08-29 (see the hello-ack call site's comment):
+        // the real app silently drops any frame whose `id` doesn't
+        // decode as `String`, so this shape check is real regression
+        // coverage, not incidental.
+        assert_eq!(parsed["id"], "7");
         assert_eq!(parsed["payload"], serde_json::json!({}));
     }
 
     #[test]
     fn incoming_cursor_frame_deserializes_with_id_and_payload() {
-        let json = r#"{"type":"cursor","id":3,"payload":{"x":100.0,"y":200.0,"t_ipad":1234,"tracked":true}}"#;
+        let json = r#"{"type":"cursor","id":"3","payload":{"x":100.0,"y":200.0,"t_ipad":1234,"tracked":true}}"#;
         let frame: IncomingFrame = serde_json::from_str(json).unwrap();
         assert_eq!(frame.kind, "cursor");
-        assert_eq!(frame.id, Some(3));
+        assert_eq!(frame.id, Some("3".to_string()));
         let pos: CursorPos = serde_json::from_value(frame.payload).unwrap();
         assert_eq!(pos.x, 100.0);
         assert_eq!(pos.y, 200.0);
         assert_eq!(pos.tracked, Some(true));
+    }
+
+    #[test]
+    fn t_ipad_accepts_a_fractional_millisecond_timestamp() {
+        // Found live 2026-08-29: the real app sends fractional ms
+        // (`Date().timeIntervalSince1970 * 1000`-style), not a whole
+        // number — an earlier `u64` field type rejected every real
+        // reading with a deserialize error. Regression coverage for
+        // that specific shape, not just a round whole-number fixture.
+        let json = r#"{"x":1.0,"y":2.0,"t_ipad":1788010742940.043,"tracked":true}"#;
+        let pos: CursorPos = serde_json::from_str(json).unwrap();
+        assert!((pos.t_ipad - 1788010742940.043).abs() < 0.001);
     }
 
     #[tokio::test]

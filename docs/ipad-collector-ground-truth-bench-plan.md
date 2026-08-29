@@ -1,5 +1,85 @@
 # Plan: paired iPadCollector ground-truth bench (Rust port)
 
+## RESULTS (2026-08-29, run live per manager's standing authorization)
+
+**Status: RUN LIVE, 0/20 trials completed — NOT the bench's own success
+criteria, but real, valuable findings: 2 real protocol bugs found+fixed
+(confirmed working end-to-end via an isolated probe), plus a genuine
+architectural gap that blocks the full N=20 run and needs a redesign +
+review before retrying, not a quick patch.**
+
+### Bugs found and fixed in `rust/mover/src/ipad_collector.rs`
+
+Both found via live, reproducible failures against the real app — not
+guessed, not caught in offline review:
+
+1. **`sessionId` (hello-ack) must be a real UUID-v4-shaped string.** The
+   original `"rust-bench"` label made the app close the connection
+   (broken pipe on the next write) almost immediately after hello-ack —
+   consistent with a Swift-side `UUID` decode failing on a non-UUID
+   string. Fixed with a hand-rolled UUID-v4 formatter (no new `uuid`
+   dependency — only the wire SHAPE matters, not real uniqueness).
+2. **The real root cause: every frame's `id` was a bare JSON number, not
+   a string.** `ipad-app-ws.ts`'s reference protocol always uses
+   `randomUUID()` (a string) for ids. An isolated probe (connect ->
+   `get-cursor` immediately, before touching go-home/click-at) showed a
+   clean 5s timeout with zero reply once (1) was fixed — consistent with
+   the app silently dropping any frame it can't decode. Fixed by making
+   `id` a `String` on the wire everywhere (kept the cheap internal `u64`
+   counter, just stringified — only the wire TYPE needed to change).
+3. **Bonus bug caught by the same probe once (1)+(2) were fixed**:
+   `CursorPos.t_ipad` was typed `u64`; the real app sends a fractional-
+   millisecond timestamp (`Date().timeIntervalSince1970 * 1000`-style),
+   which failed to deserialize into an integer type. TS's own `t_ipad:
+   number` was always a double — the `u64` was an unchecked assumption.
+   Fixed to `f64`; would have silently broken EVERY real reading had the
+   bench gotten this far without it.
+
+All three confirmed fixed via `ipad_collector_ws_probe.rs` (new, small
+diagnostic example, committed): connect -> `get_cursor()` immediately ->
+clean `CursorPos { x: 0.0, y: 0.0, t_ipad: <real epoch ms>, tracked:
+Some(false) }` — a real, correctly-decoded "not tracked yet" reading
+(PointerTracker hadn't fired a hover yet), not an error.
+
+### The remaining architectural gap (why the full N=20 run still didn't complete)
+
+With all 3 bugs fixed, the FULL bench (`ipad_go_home` -> `click_at` ->
+`get_tracked_cursor`) reproduced the EXACT SAME broken-pipe failure on
+trial 1, unchanged. Root cause: `ipad_go_home` sends `Cmd+H` (backgrounds
+iPadCollector) before every trial's `click_at`, so the app is not
+foreground by the time `get_tracked_cursor` finally runs, several
+seconds later. iOS almost certainly suspends the app's WebSocket shortly
+after backgrounding (this app has no background-networking entitlement)
+— confirmed live: the isolated probe (app stays foreground throughout,
+no go-home/click-at in between) succeeds cleanly every time; the full
+per-trial sequence (which backgrounds the app first) fails every time.
+
+This is a genuine design mismatch, not a bug in the WS server code: this
+bench's design assumed iPadCollector could provide ground truth for
+clicks against the REAL home screen while backgrounded, but the app's
+WS session cannot survive being backgrounded at all. iPadCollector's own
+established historical usage (`bench-collect-synthetic.ts`,
+`bench-collect-trajectory.ts`) keeps the app foreground THE WHOLE TIME
+and renders its own synthetic `showScene` as the click surface — this
+bench deliberately chose the real-home-screen approach instead (to catch
+"the mover's self-report and its own diff both agree but are both wrong"
+against the REAL production click path, not a synthetic scene) without
+flagging that this requires the app to survive backgrounding, which it
+provably does not.
+
+**Not attempting a live patch for this today** — per this project's own
+"best practice, not quick hacks" standing rule, a real fix here (most
+likely: switch to iPadCollector's own `showScene` as the click target so
+the app never leaves the foreground, at the cost of no longer testing
+against the literal production home screen) is a genuine design change
+that needs its own write-up and nixos-dev review, same as every other
+design decision this session, before more live iPad time gets spent on
+retries that will keep reproducing the same failure. Filing this as a
+new follow-up item; task_37374b4bce6d stays open (not completed) pending
+that redesign.
+
+---
+
 **Status: DRAFT, for review by pikvm-mcp-server@nixos-developer-system before
 any implementation.** Not started, not run live today (task_37374b4bce6d).
 
