@@ -1,5 +1,77 @@
 # Plan: targeted live re-confirmation of the stationary-guard widening (K=4)
 
+## RESULTS (2026-08-29, run live per georg's explicit direction)
+
+**Status: RUN LIVE, 2 attempts — both genuine bucket-(C) non-events.
+The specific 2+-passes-back stale-cluster scenario was NOT reproduced,
+and the guard's own firing was not directly observed either way.**
+
+**Layout verification (step 1, nixos-dev's point)**: confirmed via a
+fresh health-check screenshot + a targeted crop near the original
+incident's dock-icon-area coordinates — the grid/app-drawer icon and
+folder cluster are still present in that vicinity. No visible drift.
+
+**Attempt 1**: 5 correction passes (4 gross, 1 linear), trajectory
+`(1052,942) → (644,491) → (764,798) → (1022,710)`. Every
+`[stationary-guard]` log line read `rejected=false` — zero rejections.
+Final claimed position (1022,710), 142.8px residual, explicitly flagged
+low-confidence by the algorithm itself (predicted-fallback pass since
+last verification). No cursor clearly visible in the final screenshot to
+independently cross-check.
+
+**Attempt 2** (escalated per the plan's own rule — bucket (C) on attempt
+1): 5 correction passes (5 gross, 0 linear, budget exhausted), a
+COMPLETELY different trajectory —
+`(914,812) → (735,309) → (771,427) → (810,461)` — driven by a
+substantially different open-loop calibration ratio this run (4.553 vs
+1.185 in attempt 1, itself a real illustration of the plan's own
+"correction-loop behavior is genuinely somewhat run-dependent" caveat).
+Again every `[stationary-guard]` line read `rejected=false`. Final
+position (810,461), 457.1px residual (a real, large miss) — but visually
+confirmed via the final screenshot: a real cursor IS visible near that
+claimed position, roughly matching it. Honest large miss, not a
+confidently-wrong stale-cluster case — consistent with the legacy path's
+already-documented lower reliability, not a new finding.
+
+**Why this is a genuine non-event, not an inconclusive shrug**: neither
+attempt's trajectory ever revisited a candidate anywhere near the
+original incident's dock-icon-area cluster
+(`(1085,981)`/`(1092,979)`) — both runs' open-loop landings and
+subsequent correction passes went to entirely different regions of the
+screen, driven by real calibration-ratio variance between runs. The
+guard had nothing to catch because the specific repeat-visit pattern
+simply never arose, in either attempt — not because the guard suppressed
+it early (bucket (B) — checked for and not observed; no rejections fired
+at all, early or late) and not because of an unrelated failure masking a
+real rejection (bucket (D) — also not applicable, since there were no
+rejections to check against).
+
+**Honest bottom line**: after 2 real attempts targeting the exact
+original conditions, the K=4 widening's own specific target scenario
+(a candidate matching an observation 2+ passes back, not the single most
+recent one) still has not been directly observed firing live. This is
+NOT evidence against the fix — the fix's own offline test suite
+(`does_not_reject_legitimate_observations_during_a_converging_pass_sequence`
+et al., 52/52 passing) already demonstrates the mechanism works in a
+controlled, engineered scenario; what remains genuinely unresolved is
+whether the REAL correction loop reliably reproduces the wild conditions
+that trigger it. Given the correction loop's real run-to-run trajectory
+variance (illustrated concretely by attempt 2's very different
+calibration ratio), reliably landing on the exact repeat-visit pattern by
+re-running the same target appears to require either more attempts than
+2, or a more deliberately engineered repro (e.g. directly staging
+`CursorBelief` observations rather than relying on the natural
+correction loop) — a real design question for whoever picks this up
+next, not resolved here. Not running a 3rd/4th attempt today given the
+day's now very substantial live-hardware volume — 2 matches the plan's
+own "1-2 more" escalation guidance.
+
+No safety incidents — `forbidSlamFallback=true` held throughout, moves
+only, as designed. iPad left in a confirmed-safe, unlocked home-screen
+resting state.
+
+---
+
 **Status: REVIEWED (nixos-dev, 2026-08-29) — ready to execute.** Follow-up to
 `docs/would-reject-as-stationary-widening-plan.md` (implemented,
 committed `097e4ec`) — that plan's own live re-validation attempt
