@@ -42,8 +42,8 @@ use crate::prompts as prompt_defs;
 use crate::tools::{self, ToolContent, ToolEntry, ToolOutcome};
 
 /// Module-global-equivalent state, shared across every session. Grows in
-/// later phases (cached_profile, recovery_trigger, udc_state_reader — see
-/// index.ts) as the tools that need them are ported in.
+/// later phases (recovery_trigger, udc_state_reader — see index.ts) as
+/// the tools that need them are ported in.
 pub struct SharedState {
     pub client: Arc<PiKVMClient>,
     pub lock: Mutex<BusyLock>,
@@ -58,6 +58,12 @@ pub struct SharedState {
     /// are all sync — a plain `std::sync::Mutex` is fine here (never held
     /// across an `.await`, unlike `hid_mode_resolver` above).
     pub scale_learner: Mutex<pikvm_mcp_mover::scale_learner::ScaleLearner>,
+    pub calibration_config: pikvm_mcp_foundation::config::CalibrationConfig,
+    /// Refreshed by `pikvm_measure_ballistics` on a successful measurement
+    /// (matching index.ts's own `cachedProfile = result.profile`); no
+    /// current reader — `pikvm_mouse_move_to`, its only real consumer, is
+    /// blocked on move-to.ts (see docs/rust-port-plan.md §7 item 6).
+    pub cached_profile: Mutex<Option<pikvm_mcp_mover::ballistics::BallisticsProfile>>,
     pub tools: Vec<ToolEntry>,
 }
 
@@ -66,12 +72,16 @@ impl SharedState {
         client: PiKVMClient,
         hid_mode_resolver: HidModeResolver,
         scale_learner: pikvm_mcp_mover::scale_learner::ScaleLearner,
+        calibration_config: pikvm_mcp_foundation::config::CalibrationConfig,
+        cached_profile: Option<pikvm_mcp_mover::ballistics::BallisticsProfile>,
     ) -> Self {
         Self {
             client: Arc::new(client),
             lock: Mutex::new(BusyLock::new()),
             hid_mode_resolver: tokio::sync::Mutex::new(hid_mode_resolver),
             scale_learner: Mutex::new(scale_learner),
+            calibration_config,
+            cached_profile: Mutex::new(cached_profile),
             tools: tools::tool_registry(),
         }
     }

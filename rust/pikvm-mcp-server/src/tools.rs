@@ -31,6 +31,8 @@ use serde_json::{Map, Value};
 
 use crate::server::SharedState;
 
+mod auto_calibrate;
+mod ballistics;
 mod basic;
 mod calibration;
 mod hid;
@@ -141,5 +143,7 @@ pub fn tool_registry() -> Vec<ToolEntry> {
     tools.extend(mouse::entries());
     tools.extend(hidmode::entries());
     tools.extend(mover_scale::entries());
+    tools.extend(ballistics::entries());
+    tools.extend(auto_calibrate::entries());
     tools
 }

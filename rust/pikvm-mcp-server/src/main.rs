@@ -146,7 +146,27 @@ async fn main() {
     pikvm_mcp_server::tools::scale_learner_load_warm_start(&scale_learner).await;
     let scale_learner = scale_learner.into_inner().unwrap();
 
-    let shared = Arc::new(SharedState::new(client, hid_mode_resolver, scale_learner));
+    // Load ballistics profile if present (used by pikvm_mouse_move_to,
+    // currently blocked on move-to.ts — see SharedState::cached_profile's
+    // own doc comment).
+    let profile_path = pikvm_mcp_mover::ballistics::default_profile_path();
+    let cached_profile = pikvm_mcp_mover::ballistics::load_profile(&profile_path)
+        .await
+        .unwrap_or(None);
+    if let Some(profile) = &cached_profile {
+        eprintln!(
+            "Loaded ballistics profile ({} samples).",
+            profile.samples.len()
+        );
+    }
+
+    let shared = Arc::new(SharedState::new(
+        client,
+        hid_mode_resolver,
+        scale_learner,
+        config.calibration,
+        cached_profile,
+    ));
     let server = PikvmMcpServer::new(shared, None);
 
     eprintln!("PiKVM MCP Server running (stdio)");
