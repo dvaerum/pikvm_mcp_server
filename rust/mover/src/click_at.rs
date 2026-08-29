@@ -67,7 +67,7 @@ impl Default for ClickAtDeps {
     }
 }
 
-pub struct ClickAtRequest {
+pub struct ClickAtRequest<'a> {
     pub client: Arc<PiKVMClient>,
     /// `None` means the dispatch preamble's mover gate would have refused
     /// this call already (unknown/settling HID mode) — `click_at` reports
@@ -100,8 +100,12 @@ pub struct ClickAtRequest {
     /// The MCP server's shared learner instance (#41, opt-in). Not a
     /// process-wide singleton in this port (unlike TS's module-level
     /// `scaleLearner`) — the real shared-state wiring lives in
-    /// `pikvm-mcp-server`'s `SharedState`, passed in here.
-    pub scale_learner: Arc<std::sync::Mutex<ScaleLearner>>,
+    /// `pikvm-mcp-server`'s `SharedState`, borrowed in here. A borrowed
+    /// reference (not `Arc<Mutex<_>>`) so the caller's real, shared
+    /// learner is read from and written back to directly — an owned
+    /// clone would silently lose whatever `record_move_sample` does
+    /// inside this call.
+    pub scale_learner: &'a std::sync::Mutex<ScaleLearner>,
 }
 
 pub enum ClickAtOutcome {
@@ -172,7 +176,7 @@ fn button_name(b: MouseButton) -> &'static str {
 }
 
 /// Faithful port of `clickAt()`.
-pub async fn click_at(req: ClickAtRequest, deps: ClickAtDeps) -> ClickAtOutcome {
+pub async fn click_at(req: ClickAtRequest<'_>, deps: ClickAtDeps) -> ClickAtOutcome {
     // ADR-0002 Phase 1: the dispatch preamble's mover gate already refuses
     // the call if the mode is unknown/settling before click_at is ever
     // reached in production — checked here too (not asserted) so a future
@@ -496,8 +500,10 @@ fn verify_opts_is_scoped(
 /// policy-derived DEFAULT) -> `move_to::MoveStrategy` (the full 4-value
 /// enum `moveToPixel`/`clickAt` actually accept). A caller-supplied
 /// `strategy` override always takes precedence over this — see
-/// `click_at`'s own `req.strategy.unwrap_or(...)`.
-fn move_strategy_from_policy(s: pikvm_mcp_ipad_hid::hid_mode::Strategy) -> MoveStrategy {
+/// `click_at`'s own `req.strategy.unwrap_or(...)`. `pub` (not just
+/// crate-local) because `pikvm_mouse_move_to`'s own tool handler needs
+/// the identical conversion for its own `strategy` argument default.
+pub fn move_strategy_from_policy(s: pikvm_mcp_ipad_hid::hid_mode::Strategy) -> MoveStrategy {
     match s {
         pikvm_mcp_ipad_hid::hid_mode::Strategy::CurveOneShot => MoveStrategy::CurveOneShot,
         pikvm_mcp_ipad_hid::hid_mode::Strategy::DetectThenMove => MoveStrategy::DetectThenMove,

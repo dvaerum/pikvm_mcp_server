@@ -165,7 +165,11 @@ fn frame_client(frame: Vec<u8>) -> (Arc<PiKVMClient>, Clicks) {
     (client, clicks)
 }
 
-fn base_request(client: Arc<PiKVMClient>, policy: Option<HidPolicy>) -> ClickAtRequest {
+fn base_request(
+    client: Arc<PiKVMClient>,
+    policy: Option<HidPolicy>,
+    scale_learner: &StdMutex<ScaleLearner>,
+) -> ClickAtRequest<'_> {
     ClickAtRequest {
         client,
         policy,
@@ -184,11 +188,12 @@ fn base_request(client: Arc<PiKVMClient>, policy: Option<HidPolicy>) -> ClickAtR
         min_brightness: None,
         max_residual_px: None,
         capture: None,
-        scale_learner: Arc::new(StdMutex::new(ScaleLearner::new(
-            ScaleLearnerOpts::default(),
-            true,
-        ))),
+        scale_learner,
     }
+}
+
+fn fresh_scale_learner() -> StdMutex<ScaleLearner> {
+    StdMutex::new(ScaleLearner::new(ScaleLearnerOpts::default(), true))
 }
 
 // -- mode-unknown --
@@ -197,7 +202,8 @@ fn base_request(client: Arc<PiKVMClient>, policy: Option<HidPolicy>) -> ClickAtR
 async fn reports_mode_unknown_and_never_calls_move_to_pixel_when_policy_is_none() {
     let (client, _clicks) = frame_client(bright_frame());
     let (deps, calls) = mock_deps(make_move_result(|_| {}));
-    let req = base_request(client, None);
+    let learner = fresh_scale_learner();
+    let req = base_request(client, None, &learner);
     let outcome = click_at(req, deps).await;
     assert!(matches!(outcome, ClickAtOutcome::ModeUnknown { .. }));
     assert!(calls.lock().unwrap().is_empty());
@@ -209,7 +215,8 @@ async fn reports_mode_unknown_and_never_calls_move_to_pixel_when_policy_is_none(
 async fn aborts_on_a_uniformly_dim_frame_without_moving_the_cursor() {
     let (client, _clicks) = frame_client(very_dim_frame());
     let (deps, calls) = mock_deps(make_move_result(|_| {}));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.min_brightness = Some(40.0);
     let outcome = click_at(req, deps).await;
     match outcome {
@@ -228,7 +235,8 @@ async fn aborts_on_a_uniformly_dim_frame_without_moving_the_cursor() {
 async fn does_not_abort_on_a_dark_but_contrasty_frame() {
     let (client, _clicks) = frame_client(contrasty_frame());
     let (deps, calls) = mock_deps(make_move_result(|_| {}));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.min_brightness = Some(40.0);
     let outcome = click_at(req, deps).await;
     assert!(!matches!(outcome, ClickAtOutcome::BrightnessAbort { .. }));
@@ -239,7 +247,8 @@ async fn does_not_abort_on_a_dark_but_contrasty_frame() {
 async fn skips_the_brightness_precheck_entirely_when_min_brightness_is_zero() {
     let (client, _clicks) = frame_client(very_dim_frame());
     let (deps, _calls) = mock_deps(make_move_result(|_| {}));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.min_brightness = Some(0.0);
     let outcome = click_at(req, deps).await;
     assert!(!matches!(outcome, ClickAtOutcome::BrightnessAbort { .. }));
@@ -252,7 +261,8 @@ async fn skips_the_click_and_reports_cursor_unverified_when_the_mover_could_not_
 ) {
     let (client, clicks) = frame_client(bright_frame());
     let (deps, _calls) = mock_deps(make_move_result(|r| r.final_detected_position = None));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.force = false;
     let outcome = click_at(req, deps).await;
     match outcome {
@@ -268,7 +278,12 @@ async fn skips_the_click_and_reports_cursor_unverified_when_the_mover_could_not_
 async fn does_not_apply_the_cursor_verified_gate_on_desktop_absolute_targets() {
     let (client, _clicks) = frame_client(bright_frame());
     let (deps, _calls) = mock_deps(make_move_result(|r| r.final_detected_position = None));
-    let req = base_request(client, Some(ipad_policy(|p| p.mouse_absolute = true)));
+    let learner = fresh_scale_learner();
+    let req = base_request(
+        client,
+        Some(ipad_policy(|p| p.mouse_absolute = true)),
+        &learner,
+    );
     let outcome = click_at(req, deps).await;
     assert!(matches!(outcome, ClickAtOutcome::Clicked { .. }));
 }
@@ -277,7 +292,8 @@ async fn does_not_apply_the_cursor_verified_gate_on_desktop_absolute_targets() {
 async fn force_true_fires_the_click_anyway_and_reports_it_forced_unverified() {
     let (client, _clicks) = frame_client(bright_frame());
     let (deps, _calls) = mock_deps(make_move_result(|r| r.final_detected_position = None));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.force = true;
     let outcome = click_at(req, deps).await;
     match outcome {
@@ -302,7 +318,8 @@ async fn skips_the_click_when_the_verified_cursor_lands_farther_than_max_residua
     let (deps, _calls) = mock_deps(make_move_result(|r| {
         r.final_detected_position = Some(Point { x: 200.0, y: 200.0 }); // ~141px from (100,100)
     }));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.max_residual_px = Some(25.0);
     let outcome = click_at(req, deps).await;
     match outcome {
@@ -326,7 +343,8 @@ async fn proceeds_to_click_when_the_residual_is_within_max_residual_px() {
     let (deps, _calls) = mock_deps(make_move_result(|r| {
         r.final_detected_position = Some(Point { x: 105.0, y: 105.0 }); // ~7px from (100,100)
     }));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.max_residual_px = Some(25.0);
     let outcome = click_at(req, deps).await;
     assert!(matches!(outcome, ClickAtOutcome::Clicked { .. }));
@@ -338,7 +356,8 @@ async fn the_gate_is_disabled_when_max_residual_px_is_zero() {
     let (deps, _calls) = mock_deps(make_move_result(|r| {
         r.final_detected_position = Some(Point { x: 900.0, y: 900.0 });
     }));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.max_residual_px = Some(0.0);
     let outcome = click_at(req, deps).await;
     assert!(matches!(outcome, ClickAtOutcome::Clicked { .. }));
@@ -354,7 +373,12 @@ async fn the_value_passed_to_move_to_pixel_accept_gate_px_is_identical_to_the_re
         r.final_detected_position = Some(Point { x: 128.0, y: 100.0 }); // 28px from (100,100)
     }));
     // apply_tap_bias:false so the aim point stays exactly (100,100).
-    let mut req = base_request(client, Some(ipad_policy(|p| p.apply_tap_bias = false)));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(
+        client,
+        Some(ipad_policy(|p| p.apply_tap_bias = false)),
+        &learner,
+    );
     req.max_residual_px = Some(28.0);
     // 28px residual against a 28px gate: not strictly greater than, so
     // this does NOT skip — proves the gate reads the exact same 28.
@@ -371,7 +395,8 @@ async fn falls_through_to_policy_max_residual_px_when_the_caller_does_not_overri
     let (deps, calls) = mock_deps(make_move_result(|r| {
         r.final_detected_position = Some(Point { x: 130.0, y: 100.0 }); // 30px, > policy's 25
     }));
-    let req = base_request(client, Some(ipad_policy(|_| {}))); // max_residual_px: None -> policy's 25
+    let learner = fresh_scale_learner();
+    let req = base_request(client, Some(ipad_policy(|_| {})), &learner); // max_residual_px: None -> policy's 25
     let outcome = click_at(req, deps).await;
     let calls = calls.lock().unwrap();
     assert_eq!(calls[0].1.accept_gate_px, Some(25.0));
@@ -391,7 +416,8 @@ async fn clicks_the_requested_button_and_reports_success_with_a_screenshot() {
     let (deps, _calls) = mock_deps(make_move_result(|r| {
         r.final_detected_position = Some(Point { x: 100.0, y: 100.0 });
     }));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.button = MouseButton::Right;
     let outcome = click_at(req, deps).await;
     assert_eq!(*clicks.lock().unwrap(), vec!["right".to_string()]);
@@ -412,7 +438,8 @@ async fn clicks_the_requested_button_and_reports_success_with_a_screenshot() {
 async fn single_tap_appends_its_advisory_note() {
     let (client, _clicks) = frame_client(bright_frame());
     let (deps, _calls) = mock_deps(make_move_result(|_| {}));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.single_tap = true;
     let outcome = click_at(req, deps).await;
     match outcome {
@@ -427,7 +454,12 @@ async fn single_tap_appends_its_advisory_note() {
 async fn desktop_absolute_targets_click_regardless_of_final_detected_position() {
     let (client, _clicks) = frame_client(bright_frame());
     let (deps, _calls) = mock_deps(make_move_result(|r| r.final_detected_position = None));
-    let req = base_request(client, Some(ipad_policy(|p| p.mouse_absolute = true)));
+    let learner = fresh_scale_learner();
+    let req = base_request(
+        client,
+        Some(ipad_policy(|p| p.mouse_absolute = true)),
+        &learner,
+    );
     let outcome = click_at(req, deps).await;
     match outcome {
         ClickAtOutcome::Clicked {
@@ -443,7 +475,8 @@ async fn desktop_absolute_targets_click_regardless_of_final_detected_position() 
 async fn captures_during_and_after_phases_when_a_capture_config_is_supplied() {
     let (client, _clicks) = frame_client(bright_frame());
     let (deps, _calls) = mock_deps(make_move_result(|_| {}));
-    let mut req = base_request(client, Some(ipad_policy(|_| {})));
+    let learner = fresh_scale_learner();
+    let mut req = base_request(client, Some(ipad_policy(|_| {})), &learner);
     req.capture = Some(pikvm_mcp_detection_vision::capture::CaptureConfig {
         phases: vec![
             pikvm_mcp_detection_vision::capture::CapturePhase::During,

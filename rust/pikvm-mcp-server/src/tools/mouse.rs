@@ -1,21 +1,45 @@
 //! Faithful port of `index.ts`'s `handle_pikvm_mouse_move`/
-//! `handle_pikvm_mouse_click`/`handle_pikvm_mouse_scroll`.
+//! `handle_pikvm_mouse_click`/`handle_pikvm_mouse_scroll`/
+//! `handle_pikvm_mouse_move_to`/`handle_pikvm_mouse_click_at` +
+//! `renderClickAtOutcome`.
 
 use std::sync::Arc;
 
 use pikvm_mcp_detection_vision::capture::{begin_capture, parse_capture_config, CaptureClient};
 use pikvm_mcp_kvmd_client::client::MouseButton;
+use pikvm_mcp_mover::click_at::{
+    click_at, move_strategy_from_policy, ClickAtDeps, ClickAtOutcome, ClickAtRequest,
+};
+use pikvm_mcp_mover::click_verify::RegionRect;
+use pikvm_mcp_mover::move_to::{move_to_pixel, MoveStrategy, MoveToOptions, Point};
+use pikvm_mcp_mover::scale_learner::{record_move_sample, Axis};
 
 use crate::server::SharedState;
 use crate::tool_helpers::{
     require_number, validate_boolean, validate_enum, validate_number, VALID_BUTTONS,
     VALID_KEY_STATES,
 };
-use crate::tools::{BoxFuture, ToolEntry, ToolOutcome};
+use crate::tools::{b64, BoxFuture, ToolEntry, ToolOutcome};
 
-/// M8: shared before/during/after capture schema, spread into `pikvm_mouse_move`'s
-/// input schema (also used by `pikvm_mouse_move_to`/`pikvm_mouse_click_at`,
-/// both still blocked on move-to.ts — see docs/rust-port-plan.md §7 item 6).
+const VALID_STRATEGIES: &[&str] = &[
+    "detect-then-move",
+    "slam-then-move",
+    "assume-at",
+    "curve-one-shot",
+];
+
+fn strategy_from_str(s: &str) -> MoveStrategy {
+    match s {
+        "slam-then-move" => MoveStrategy::SlamThenMove,
+        "assume-at" => MoveStrategy::AssumeAt,
+        "curve-one-shot" => MoveStrategy::CurveOneShot,
+        _ => MoveStrategy::DetectThenMove,
+    }
+}
+
+/// M8: shared before/during/after capture schema, spread into
+/// `pikvm_mouse_move`/`pikvm_mouse_move_to`/`pikvm_mouse_click_at`'s
+/// input schemas.
 fn capture_schema_props() -> serde_json::Value {
     serde_json::json!({
         "capture": {
@@ -33,6 +57,21 @@ fn capture_schema_props() -> serde_json::Value {
             },
             "required": ["x", "y", "width", "height"]
         }
+    })
+}
+
+/// Shared `strategy`/`assumeCursorAtX`/`assumeCursorAtY` schema, spread
+/// into `pikvm_mouse_move_to`/`pikvm_mouse_click_at`'s input schemas.
+fn strategy_schema_props() -> serde_json::Value {
+    serde_json::json!({
+        "strategy": {
+            "type": "string",
+            "enum": VALID_STRATEGIES,
+            "description": "Origin-discovery + correction strategy. Default: the target's mode-derived default \
+                (curve-one-shot on iPad/relative-mouse, detect-then-move on desktop/absolute)."
+        },
+        "assumeCursorAtX": {"type": "number", "description": "With assumeCursorAtY: strategy='assume-at' only — skip detection, trust this X."},
+        "assumeCursorAtY": {"type": "number", "description": "With assumeCursorAtX: strategy='assume-at' only — skip detection, trust this Y."}
     })
 }
 
@@ -97,6 +136,77 @@ pub fn entries() -> Vec<ToolEntry> {
                 "required": ["deltaY"]
             }),
             handler: Arc::new(|shared, args| Box::pin(mouse_scroll(shared, args))),
+        },
+        ToolEntry {
+            name: "pikvm_mouse_move_to",
+            description: "Move the pointer to a target HDMI pixel on a relative-mouse target (iPad). Default \
+                strategy on iPad is curve-one-shot: one detect + one deterministic curve emit (~11px). Use \
+                pikvm_mouse_click_at to move+click.".to_string(),
+            input_schema: merge_properties(
+                merge_properties(
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number", "description": "Target X (HDMI px)."},
+                            "y": {"type": "number", "description": "Target Y (HDMI px)."},
+                            "slamOriginX": {"type": "number", "description": "Explicit slam-then-move origin X — opts out of the Layer-3 iPad-slam guard."},
+                            "slamOriginY": {"type": "number", "description": "Explicit slam-then-move origin Y — opts out of the Layer-3 iPad-slam guard."},
+                            "fallbackPxPerMickey": {"type": "number", "description": "Fallback ratio when no measured profile applies."},
+                            "chunkMagnitude": {"type": "number", "description": "Per-call mickey magnitude for the open-loop emission."},
+                            "chunkPaceMs": {"type": "number", "description": "Inter-call pace (ms) for the open-loop emission."},
+                            "correct": {"type": "boolean", "description": "Enable closed-loop correction. Default true."},
+                            "maxCorrectionPasses": {"type": "number", "description": "Max correction passes."},
+                            "minResidualPx": {"type": "number", "description": "Early-exit tolerance (px)."},
+                            "warmupMickeys": {"type": "number", "description": "Warmup move before screenshot A."}
+                        },
+                        "required": ["x", "y"]
+                    }),
+                    strategy_schema_props(),
+                ),
+                capture_schema_props(),
+            ),
+            handler: Arc::new(|shared, args| Box::pin(mouse_move_to(shared, args))),
+        },
+        ToolEntry {
+            name: "pikvm_mouse_click_at",
+            description: "Move to a target HDMI pixel via pikvm_mouse_move_to then click (single attempt — no \
+                retry). verifyClick (default) reports whether the click changed the screen (advisory); the click \
+                is skipped (reported not-landed) if the cursor cannot be verified or lands beyond maxResidualPx \
+                of target; a brightness gate aborts on a dim iPad. If a click reports no change and you suspect \
+                an occluding popup, run pikvm_dismiss_popup then re-click.".to_string(),
+            input_schema: merge_properties(
+                merge_properties(
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number", "description": "Target X (HDMI px)."},
+                            "y": {"type": "number", "description": "Target Y (HDMI px)."},
+                            "button": {"type": "string", "enum": VALID_BUTTONS, "description": "Default left."},
+                            "verifyClick": {"type": "boolean", "description": "Diff pre/post screenshots to report whether the click visibly changed the screen. Default true."},
+                            "verifySettleMs": {"type": "number", "description": "Settle time (ms) before the post-click verification screenshot. Default 300."},
+                            "verifyRegionHalfPx": {"type": "number", "description": "Scope click-verification to a square window around target."},
+                            "verifyMinChangeFraction": {"type": "number", "description": "Minimum changed-pixel fraction for screenChanged=true."},
+                            "expectRegion": {
+                                "type": "object",
+                                "description": "Explicit rectangular ROI (HDMI px) for click verification — takes precedence over verifyRegionHalfPx.",
+                                "properties": {
+                                    "x": {"type": "number"}, "y": {"type": "number"},
+                                    "width": {"type": "number"}, "height": {"type": "number"}
+                                },
+                                "required": ["x", "y", "width", "height"]
+                            },
+                            "singleTap": {"type": "boolean", "description": "Tap once, no retry — use for keypads/PIN pads."},
+                            "force": {"type": "boolean", "description": "Click anyway even if the cursor can't be localized. Always reported UNVERIFIED."},
+                            "minBrightness": {"type": "number", "description": "Brightness-gate override (0-255). 0 disables."},
+                            "maxResidualPx": {"type": "number", "description": "Correct-element gate: skip the click if the verified cursor lands farther than this from target."}
+                        },
+                        "required": ["x", "y"]
+                    }),
+                    strategy_schema_props(),
+                ),
+                capture_schema_props(),
+            ),
+            handler: Arc::new(|shared, args| Box::pin(mouse_click_at(shared, args))),
         },
     ]
 }
@@ -212,22 +322,337 @@ fn mouse_scroll(
             ));
         }
 
-        if tx.is_some() && ty.is_some() {
-            // TS routes pane-targeting through moveToPixel (move-to.ts) —
-            // not assembled in this crate yet (georg's move-to.ts port,
-            // parked; see docs/rust-port-plan.md §7 item 6). Explicit stub
-            // with a clear error rather than a silent no-op or a wrong
-            // raw-absolute-move fallback (which index.ts's own M1 fix
-            // comment documents as a confirmed no-op on iPadOS).
-            return Ok(ToolOutcome::error_text(
-                "Error: pane-targeting (x/y) for pikvm_mouse_scroll needs moveToPixel, not yet ported in this \
-                 build (blocked on move-to.ts) — omit x/y to scroll in place, or use pikvm_mouse_move_to first.",
-            ));
+        let mut moved_note = String::new();
+        if let (Some(tx), Some(ty)) = (tx, ty) {
+            // M1 fix (live-verified broken 2026-07-27): a raw absolute-
+            // positioning move sent to /hid/events/send_mouse_move is
+            // IGNORED by iPadOS — it treats the USB-OTG HID as a relative
+            // trackpad, so the move was a no-op and the wheel fired
+            // wherever the cursor already was. Route through the SAME
+            // platform-aware positioning path click_at/move_to use.
+            //
+            // ADR-0002 Phase 1: this handler is in MODE_SENSITIVE_TOOLS,
+            // so the dispatch preamble's mover gate already refused the
+            // call if the mode were unknown/settling — checked here too,
+            // not asserted.
+            let policy = shared.hid_mode_resolver.lock().await.policy();
+            let Some(policy) = policy else {
+                return Ok(ToolOutcome::error_text(
+                    "Error: HID mode unknown or settling — refusing to position the pointer.",
+                ));
+            };
+            let cx = tx.round().max(0.0);
+            let cy = ty.round().max(0.0);
+            let cached_profile = shared.cached_profile.lock().unwrap().clone();
+            move_to_pixel(
+                &shared.client,
+                Point { x: cx, y: cy },
+                MoveToOptions {
+                    strategy: Some(move_strategy_from_policy(policy.strategy)),
+                    forbid_slam_fallback: policy.forbid_slam_fallback,
+                    forbid_slam_on_ipad: Some(policy.forbid_slam_on_ipad),
+                    profile: cached_profile,
+                    chunk_pace_ms: policy.chunk_pace_ms,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            moved_note = format!(" at ({cx}, {cy})");
         }
 
         shared.client.mouse_scroll(delta_x, delta_y).await?;
         Ok(ToolOutcome::text(format!(
-            "Scrolled ({delta_x}, {delta_y})"
+            "Scrolled ({delta_x}, {delta_y}){moved_note}"
         )))
     })
+}
+
+fn require_region(v: &serde_json::Value) -> anyhow::Result<RegionRect> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("expectRegion must be an object"))?;
+    let field = |name: &str| -> anyhow::Result<f64> {
+        obj.get(name)
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| anyhow::anyhow!("expectRegion.{name} is required and must be a number"))
+    };
+    Ok(RegionRect {
+        x: field("x")?,
+        y: field("y")?,
+        width: field("width")?,
+        height: field("height")?,
+    })
+}
+
+fn mouse_move_to(
+    shared: Arc<SharedState>,
+    args: serde_json::Map<String, serde_json::Value>,
+) -> BoxFuture<'static, anyhow::Result<ToolOutcome>> {
+    Box::pin(async move {
+        // ADR-0002 Phase 1: MODE_SENSITIVE_TOOLS' dispatch-level mover
+        // gate already refused the call if the mode were unknown/
+        // settling — policy() is non-null here in practice. Still
+        // checked explicitly (not asserted) so a future gate change
+        // can't silently let a null policy reach the mover.
+        let policy = shared.hid_mode_resolver.lock().await.policy();
+        let Some(policy) = policy else {
+            return Ok(ToolOutcome::error_text(
+                "Error: HID mode unknown or settling — refusing to move.",
+            ));
+        };
+
+        let target_x = require_number(&args, "x", "x", None, None).map_err(anyhow::Error::msg)?;
+        let target_y = require_number(&args, "y", "y", None, None).map_err(anyhow::Error::msg)?;
+
+        // M8: parse+validate capture up front so a bad request errors
+        // before any emit.
+        let capture_config = parse_capture_config(&serde_json::Value::Object(args.clone()))?;
+        let mut session = begin_capture(capture_client(&shared), capture_config);
+        session.before().await;
+
+        let strategy_str = validate_enum(
+            &args,
+            "strategy",
+            VALID_STRATEGIES,
+            match policy.strategy {
+                pikvm_mcp_ipad_hid::hid_mode::Strategy::CurveOneShot => "curve-one-shot",
+                pikvm_mcp_ipad_hid::hid_mode::Strategy::DetectThenMove => "detect-then-move",
+            },
+        );
+        let strategy = strategy_from_str(strategy_str);
+        let assume_x = validate_number(&args, "assumeCursorAtX", None, None);
+        let assume_y = validate_number(&args, "assumeCursorAtY", None, None);
+        let assume_cursor_at = match (assume_x, assume_y) {
+            (Some(x), Some(y)) => Some(Point { x, y }),
+            _ => None,
+        };
+
+        // (#41) apply + record the passive learner's scale (bare moves
+        // are valid samples too). Captured so the sample is recorded
+        // against the scale in force.
+        let (learn_scale_x, learn_scale_y) = {
+            let learner = shared.scale_learner.lock().unwrap();
+            (
+                learner.current_scale(Axis::X),
+                learner.current_scale(Axis::Y),
+            )
+        };
+
+        // F8 (Round 2 Phase 1): only construct slam_origin_px when the
+        // caller actually supplied at least one coordinate — Layer 3
+        // refuses an ambiguous slam UNLESS the caller explicitly passed
+        // an origin.
+        let slam_x = validate_number(&args, "slamOriginX", None, None);
+        let slam_y = validate_number(&args, "slamOriginY", None, None);
+        let slam_origin_px = if slam_x.is_some() || slam_y.is_some() {
+            Some(Point {
+                x: slam_x.unwrap_or(625.0),
+                y: slam_y.unwrap_or(65.0),
+            })
+        } else {
+            None
+        };
+
+        let cached_profile = shared.cached_profile.lock().unwrap().clone();
+        let result = move_to_pixel(
+            &shared.client,
+            Point {
+                x: target_x,
+                y: target_y,
+            },
+            MoveToOptions {
+                strategy: Some(strategy),
+                assume_cursor_at,
+                curve_scale_x: Some(learn_scale_x),
+                curve_scale_y: Some(learn_scale_y),
+                slam_origin_px,
+                fallback_px_per_mickey: validate_number(
+                    &args,
+                    "fallbackPxPerMickey",
+                    Some(0.01),
+                    Some(10.0),
+                ),
+                chunk_magnitude: validate_number(&args, "chunkMagnitude", Some(1.0), Some(127.0)),
+                chunk_pace_ms: validate_number(&args, "chunkPaceMs", Some(0.0), Some(500.0))
+                    .map(|v| v as u64),
+                correct: validate_boolean(&args, "correct"),
+                max_correction_passes: validate_number(
+                    &args,
+                    "maxCorrectionPasses",
+                    Some(0.0),
+                    Some(5.0),
+                )
+                .map(|v| v as u32),
+                min_residual_px: validate_number(&args, "minResidualPx", Some(1.0), Some(200.0)),
+                profile: cached_profile,
+                // On iPad (mouse.absolute=false), slam-to-corner triggers
+                // the hot-corner gesture and re-locks the screen. Refuse
+                // the silent slam fallback; force the caller to handle
+                // detection failure explicitly.
+                forbid_slam_fallback: policy.forbid_slam_fallback,
+                forbid_slam_on_ipad: Some(policy.forbid_slam_on_ipad),
+                ..Default::default()
+            },
+        )
+        .await?;
+        if !policy.mouse_absolute {
+            let mut learner = shared.scale_learner.lock().unwrap();
+            record_move_sample(
+                &mut learner,
+                result.learn_sample,
+                learn_scale_x,
+                learn_scale_y,
+                false,
+            );
+        }
+
+        // "during" = end-of-move cursor-alive frame (before the ~1-2s
+        // fade); "after" = a post-move frame confirming the landed state
+        // — reuse result.screenshot (move_to_pixel's own already-fetched
+        // final frame) instead of paying a second screenshot.
+        session.during().await;
+        session.after(Some(result.screenshot.clone())).await;
+
+        Ok(ToolOutcome::text_and_image(
+            format!("{}{}", result.message, session.lines()),
+            b64(&result.screenshot),
+            "image/jpeg",
+        ))
+    })
+}
+
+fn mouse_click_at(
+    shared: Arc<SharedState>,
+    args: serde_json::Map<String, serde_json::Value>,
+) -> BoxFuture<'static, anyhow::Result<ToolOutcome>> {
+    Box::pin(async move {
+        // ADR-0002 Phase 1: MODE_SENSITIVE_TOOLS' dispatch-level mover
+        // gate already refused the call if the mode were unknown/
+        // settling in practice — click_at() checks its own
+        // Option<HidPolicy> explicitly regardless (not asserted), so a
+        // future dispatch-gate change can't silently let a null policy
+        // reach the mover.
+        let policy = shared.hid_mode_resolver.lock().await.policy();
+
+        let target_x = require_number(&args, "x", "x", None, None).map_err(anyhow::Error::msg)?;
+        let target_y = require_number(&args, "y", "y", None, None).map_err(anyhow::Error::msg)?;
+        let button_str = validate_enum(&args, "button", VALID_BUTTONS, "left").to_string();
+        let button = button_from_str(&button_str);
+
+        // M8: parse capture up front (errors on a bad request, before
+        // any emit).
+        let capture = parse_capture_config(&serde_json::Value::Object(args.clone()))?;
+
+        let strategy = match args.get("strategy").and_then(serde_json::Value::as_str) {
+            Some(s) if VALID_STRATEGIES.contains(&s) => Some(strategy_from_str(s)),
+            _ => None,
+        };
+        let assume_x = validate_number(&args, "assumeCursorAtX", None, None);
+        let assume_y = validate_number(&args, "assumeCursorAtY", None, None);
+        let assume_cursor_at = match (assume_x, assume_y) {
+            (Some(x), Some(y)) => Some(Point { x, y }),
+            _ => None,
+        };
+        let verify_click = validate_boolean(&args, "verifyClick").unwrap_or(true);
+        let verify_settle_ms = validate_number(&args, "verifySettleMs", Some(0.0), Some(5000.0))
+            .unwrap_or(300.0) as u64;
+        let verify_region_half_px =
+            validate_number(&args, "verifyRegionHalfPx", Some(1.0), Some(1920.0));
+        let verify_min_change_fraction =
+            validate_number(&args, "verifyMinChangeFraction", Some(0.0001), Some(1.0));
+        // M6 expectRegion: caller-supplied rectangular verify box (HDMI
+        // px). Takes precedence over verify_region_half_px at the verify
+        // layer.
+        let expect_region = match args.get("expectRegion") {
+            Some(v) if !v.is_null() => Some(require_region(v)?),
+            _ => None,
+        };
+        // Retry removed (2026-07-28): every click is single-attempt.
+        // single_tap is retained only for its brightness default +
+        // advisory note.
+        let single_tap = validate_boolean(&args, "singleTap").unwrap_or(false);
+        // Escape hatch (2026-07-30): explicit opt-in to click at the
+        // predicted position even when the cursor can't be localized.
+        // Restores the capability #34 removed with requireVerifiedCursor
+        // — LOUD-and-honest, never a silent phantom success.
+        let force = validate_boolean(&args, "force").unwrap_or(false);
+        let min_brightness = validate_number(&args, "minBrightness", Some(0.0), Some(255.0));
+        // Preserved exactly as pre-extraction: NOT range-validated, just
+        // coerced — a malformed maxResidualPx becomes NaN rather than
+        // being rejected.
+        let max_residual_px = args.get("maxResidualPx").and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        });
+
+        let profile = shared.cached_profile.lock().unwrap().clone();
+
+        let outcome = click_at(
+            ClickAtRequest {
+                client: shared.client.clone(),
+                policy,
+                target: Point {
+                    x: target_x,
+                    y: target_y,
+                },
+                button,
+                strategy,
+                assume_cursor_at,
+                profile,
+                verify_click,
+                verify_settle_ms,
+                verify_region_half_px,
+                verify_min_change_fraction,
+                expect_region,
+                single_tap,
+                force,
+                min_brightness,
+                max_residual_px,
+                capture,
+                scale_learner: &shared.scale_learner,
+            },
+            ClickAtDeps::default(),
+        )
+        .await;
+
+        Ok(render_click_at_outcome(outcome))
+    })
+}
+
+/// `ClickAtOutcome` -> `ToolOutcome`. Pure protocol shaping — the human-
+/// readable message text (including whether capture-advisory lines are
+/// appended) is assembled inside `click_at` itself. Faithful port of
+/// `renderClickAtOutcome`; the `Error` arm is this port's own addition
+/// (see `ClickAtOutcome::Error`'s doc comment) rendered the same way as
+/// `ModeUnknown`/`BrightnessAbort`.
+fn render_click_at_outcome(outcome: ClickAtOutcome) -> ToolOutcome {
+    match outcome {
+        ClickAtOutcome::ModeUnknown { message } | ClickAtOutcome::Error { message } => {
+            ToolOutcome::error_text(message)
+        }
+        ClickAtOutcome::BrightnessAbort { message, .. } => ToolOutcome::error_text(message),
+        ClickAtOutcome::CursorUnverified {
+            message,
+            screenshot,
+            ..
+        } => {
+            let mut outcome = ToolOutcome::text_and_image(message, b64(&screenshot), "image/jpeg");
+            outcome.is_error = true;
+            outcome
+        }
+        ClickAtOutcome::ResidualSkip {
+            message,
+            screenshot,
+            ..
+        } => {
+            let mut outcome = ToolOutcome::text_and_image(message, b64(&screenshot), "image/jpeg");
+            outcome.is_error = true;
+            outcome
+        }
+        ClickAtOutcome::Clicked {
+            message,
+            screenshot,
+            ..
+        } => ToolOutcome::text_and_image(message, b64(&screenshot), "image/jpeg"),
+    }
 }
