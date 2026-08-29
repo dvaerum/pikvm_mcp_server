@@ -1024,6 +1024,52 @@ suite"**:
    eventually be widened — flagged here, not silently fixed, since that
    would be a behavior change beyond this port's own faithful-port
    mandate.
+8. **N=80 live click-bench: task_9bb80e84c948's own mandate, PASSED —
+   80/80 (100%) verified, residuals 1.5-5.7px** (georgs-mac-mini,
+   2026-08-29, `click_at_n80_bench.rs`). Real production path
+   (`click_at()`, safety gates included, `strategy='curve-one-shot'`)
+   against the real iPad, target = Settings icon. N=80 chosen over the
+   task's own stated N≥20 floor per this project's stricter standing
+   rule (noise floor ±10pp at N=20) — manager-approved before running.
+
+   **Target re-measurement, not reuse-by-assumption**: the established
+   bench protocol (`2026-05-11-phase-262-current-click-rate-bench.md`)
+   used Settings at (905, 800). A fresh health-check screenshot taken
+   immediately before this run showed the home-screen layout has
+   visibly changed since May (widgets added, icon grid shifted) — the
+   stale coordinate was confirmed off by ~120px via direct pixel
+   analysis on the live frame. Used the re-measured real coordinate,
+   (1027, 820), instead of trusting the old number. Manager's own
+   instruction ("confirm the exact established icon... don't guess")
+   is what prompted the re-measurement in the first place.
+
+   **Result**: every one of 80 trials (go-home → `click_at` → verify →
+   record) reported `verified=true`, residuals clustering at 1.5-5.7px —
+   at or better than the TS baseline's own established curve-one-shot
+   numbers (~98-99% production click-success, median ~9.1px, N=80,
+   `movement-accuracy-plan.md` 2026-07-20). Zero failed trials, so no
+   "every verified:false trial" screenshots existed to inspect (per the
+   manager's own condition) — instead visually inspected a spread of 5
+   samples across the full run (trials 5/20/40/60/80, saved as a "every
+   5th trial" periodic sample): all 5 show the real Settings app open
+   (specifically its "Home Screen & App Library" pane — consistent
+   with Settings remembering its last-viewed subpage across launches,
+   not evidence of anything wrong) with the orange cursor visibly
+   inside it. A clean, screenshot-confirmed pass, not just a trusted
+   number.
+
+   **Explicitly NOT covered by this bench** (tracked as its own
+   follow-up task, not silently dropped): paired iPadCollector
+   ground-truth. `click_at`'s own pre/post-click screenshot diff is the
+   real production signal `pikvm_mouse_click_at` gives a caller, but
+   it's not an independent ground-truth source — it can't catch "the
+   diff and the mover's self-report both agree but both are wrong" the
+   way iPadCollector's `getCursor` would (the exact class of bug item 6
+   above caught by screenshot alone). Also surfaced mid-scoping:
+   iPadCollector is architecturally a WS **server** this process would
+   have to host (with the iPad app connecting IN, not the reverse) —
+   real infrastructure, correctly scoped out of today's regression
+   check rather than silently assumed away.
 
 **Structural requirement, not just content**: per §7's build-then-validate
 sequence, each layer's live validation should happen as that layer lands,
