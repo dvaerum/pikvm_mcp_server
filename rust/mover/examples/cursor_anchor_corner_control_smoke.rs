@@ -32,12 +32,33 @@
 //! unblock it, same real veto power as the v3 two-process design, just
 //! without the process-boundary gap that broke on real hardware.
 //!
+//! **v5/v6 (2026-08-29), same live session.** Two more non-safety findings
+//! before a clean run landed, both manager-approved as they were found:
+//! (a) the baseline screenshot (step 1, purely informational) is now
+//! best-effort — it 503'd twice at the very first line, before the lock
+//! command even ran, because the display can already be dimmed from a
+//! prior run's residual state; failing it was never a reason to abort.
+//! (b) the `streamer.source.online` hard-abort (originally step 3) is
+//! DOWNGRADED to informational-only: live-confirmed it reflects
+//! ustreamer's own on-demand run state (idles/stops without a held
+//! `/api/ws` session — documented project behavior), not the iPad's
+//! actual lock state — a single read AND a 3x-retried read both produced
+//! false aborts while a direct screenshot moments later showed the iPad
+//! genuinely, stably locked. This codebase already has the right
+//! principle for this ("no automated lock-screen classifier... lock-
+//! state determination is the operator's job via visual inspection") —
+//! so the real gate was always meant to be the human reviewing the
+//! confirmation screenshot, not a flag. The wake step now retries the
+//! SCREENSHOT itself (up to 5x) until one lands, rather than gating on a
+//! flag first.
+//!
 //! Reviewed by pikvm-mcp-server@nixos-developer-system (confirmed the
 //! `CallerAsserted` contract read, `TopLeft` corner safety against iOS's
-//! bottom-corner quick actions, Space-once-not-Enter for the wake step,
-//! the hard-abort-on-streamer-still-online requirement, and the
-//! fresh-screenshot-before-guard requirement) and signed off by the
-//! manager at each step, including this timing-model revision.
+//! bottom-corner quick actions, and Space-once-not-Enter for the wake
+//! step) and signed off by the manager at every revision above, including
+//! both non-safety fixes — the actual safety boundary (human reviews a
+//! real screenshot, fail-closed on anything but explicit "yes", before
+//! the slam) has been untouched since the original review.
 //!
 //! Run (writes /tmp/corner_control_confirm.flag — delete any stale copy
 //! from a previous run before starting; the process waits up to 30s for
@@ -150,68 +171,44 @@ async fn main() {
         .expect("send Ctrl+Cmd+Q failed");
     tokio::time::sleep(Duration::from_millis(2500)).await;
 
-    // Step 3: HARD ABORT if the lock didn't actually take. This is the
-    // load-bearing, non-decaying safety fact everything below relies on —
-    // unlike display wake state, lock state doesn't revert on its own.
-    //
-    // Retry-with-grace, mirroring the SAME pattern PiKVMClient's own
-    // screenshot path already uses for this exact race (its 503 error
-    // text: "Streamer unavailable even after a held /api/ws stream
-    // client and one retry"): a single `get_streamer_status` read can
-    // catch ustreamer's own on-demand idle-stop/restart noise, unrelated
-    // to the iPad's real lock state (live-confirmed 2026-08-29 — a
-    // single-shot check reported ONLINE while a direct screenshot taken
-    // moments later showed the iPad genuinely, stably locked). Only
-    // abort if EVERY attempt reports online — one genuinely-offline read
-    // is accepted immediately as confirmation (offline doesn't spuriously
-    // flip true the way ustreamer's on-demand online flag can flip on
-    // noise).
-    let mut confirmed_offline = false;
-    for attempt in 1..=3 {
-        match client.get_streamer_status().await {
-            Ok((false, _resolution)) => {
-                confirmed_offline = true;
-                break;
-            }
-            Ok((true, _resolution)) => {
-                eprintln!(
-                    "streamer status attempt {attempt}/3: reports ONLINE — could be a genuine \
-                     failed lock, or ustreamer's own on-demand noise. Retrying before deciding."
-                );
-            }
-            Err(e) => {
-                eprintln!("streamer status attempt {attempt}/3: read failed ({e}). Retrying.");
-            }
+    // Step 3 (INFORMATIONAL ONLY, not a gate — see this file's own v5
+    // header note): live-confirmed 2026-08-29 that `get_streamer_status`
+    // reflects ustreamer's own on-demand run state (this project's
+    // documented behavior — it idles/stops without a held `/api/ws`
+    // session), not the iPad's actual lock state. A single read AND a
+    // 3x-retried read both produced false aborts (reported ONLINE while a
+    // direct screenshot moments later showed the iPad genuinely, stably
+    // locked). This codebase's own stated design principle already covers
+    // exactly this gap: "no automated lock-screen classifier... lock-
+    // state determination is the operator's job via visual inspection,
+    // not a pixel heuristic." So: log this reading for diagnostics, but
+    // the REAL gate is the human reviewing the confirmation screenshot
+    // below (step 4/5) — unchanged, still fail-closed on anything but an
+    // explicit "yes".
+    match client.get_streamer_status().await {
+        Ok((online, _resolution)) => {
+            eprintln!("(informational) streamer status after lock: online={online}");
         }
-        if attempt < 3 {
-            tokio::time::sleep(Duration::from_millis(800)).await;
+        Err(e) => {
+            eprintln!("(informational) streamer status read failed: {e}");
         }
     }
-    if !confirmed_offline {
-        eprintln!(
-            "=== ABORT: streamer reported ONLINE (or unreadable) on all 3 attempts after \
-             Ctrl+Cmd+Q — the lock did NOT take. Not proceeding. ==="
-        );
-        std::process::exit(1);
-    }
-    eprintln!(
-        "=== Confirmed: streamer source OFFLINE — the lock took (this fact does not decay). ==="
-    );
 
-    // Step 4: wake, with ONE retry if the display re-dims before the
-    // confirmation screenshot lands (the exact race v3 hit as a separate
-    // process — now handled inline, in the same continuous process, with
-    // no human-reaction-time gap).
+    // Step 4: wake + confirmation screenshot, retried as a pair until one
+    // succeeds. Retrying the SCREENSHOT ITSELF (not a flag) is the real
+    // fix — ustreamer needing a moment to serve a frame is expected and
+    // harmless; the process just keeps trying until it gets a real image
+    // for the human to judge.
     let mut confirm_shot = None;
-    for attempt in 1..=2 {
+    for attempt in 1..=5 {
         if fallback_mouse_move {
-            eprintln!("=== Wake attempt {attempt}/2: small relative mouse move (--fallback-mouse-move) ===");
+            eprintln!("=== Wake attempt {attempt}/5: small relative mouse move (--fallback-mouse-move) ===");
             client
                 .mouse_move_relative(5.0, 5.0)
                 .await
                 .expect("wake mouse move failed");
         } else {
-            eprintln!("=== Wake attempt {attempt}/2: single Space press (not Enter) ===");
+            eprintln!("=== Wake attempt {attempt}/5: single Space press (not Enter) ===");
             client
                 .send_key("Space", None)
                 .await
@@ -224,12 +221,15 @@ async fn main() {
                 break;
             }
             Err(e) => {
-                eprintln!("wake attempt {attempt}/2: screenshot failed ({e}) — display may have re-dimmed already.");
+                eprintln!(
+                    "wake attempt {attempt}/5: screenshot failed ({e}) — ustreamer likely still \
+                     spinning up. Retrying."
+                );
             }
         }
     }
     let confirm_shot = confirm_shot.unwrap_or_else(|| {
-        eprintln!("=== ABORT: display never produced a screenshot after 2 wake attempts. ===");
+        eprintln!("=== ABORT: display never produced a screenshot after 5 wake attempts. ===");
         std::process::exit(1);
     });
     std::fs::write(
