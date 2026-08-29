@@ -127,7 +127,9 @@ fn build_recovery_trigger() -> pikvm_mcp_ipad_hid::hid_recovery::RecoveryTrigger
     }
 }
 
-fn build_udc_state_reader() -> pikvm_mcp_ipad_hid::hid_recovery::UdcStateReaderFn {
+/// `pub(super)`: also reused by `tools/health_check.rs` (its own `udcState`
+/// input, matching index.ts's shared `getUdcStateReader()`).
+pub(super) fn build_udc_state_reader() -> pikvm_mcp_ipad_hid::hid_recovery::UdcStateReaderFn {
     let url = std::env::var("PIKVM_HID_RECOVERY_URL")
         .ok()
         .filter(|s| !s.trim().is_empty());

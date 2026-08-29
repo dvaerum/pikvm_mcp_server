@@ -35,6 +35,7 @@ mod auto_calibrate;
 mod ballistics;
 mod basic;
 mod calibration;
+mod health_check;
 mod hid;
 mod hid_recovery;
 mod hidmode;
@@ -147,5 +148,6 @@ pub fn tool_registry() -> Vec<ToolEntry> {
     tools.extend(ballistics::entries());
     tools.extend(auto_calibrate::entries());
     tools.extend(hid_recovery::entries());
+    tools.extend(health_check::entries());
     tools
 }
