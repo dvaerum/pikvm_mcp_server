@@ -1137,3 +1137,47 @@ tracked separately as task_37374b4bce6d, real new infra, not started).
 Sequencing sanity-checked with the manager before running the higher-risk
 pieces, given this rig's own documented Touch-ID-lockout pattern under heavy
 slam/lock testing.
+
+---
+
+**§8 category 2 — REAL INCIDENT + fix (2026-08-29, georgs-mac-mini).**
+
+`cursor_anchor_corner_control_smoke.rs` v1 (positive/negative control pair
+for `corner_target_from_bounds`'s verification math) called `slam_to_corner`
+DIRECTLY for both controls, bypassing `cursor_anchor.rs`'s `AnchorGuard`
+system entirely — exactly what `slam/motion.rs`'s own header warns against
+("No safety guard, no recovery policy — those live one layer up, in
+cursor_anchor"). The full-slam positive control LOCKED the real iPad: a
+health-check screenshot confirmed a normal Settings screen moments before
+the run; the post-slam screenshot showed a plain lock screen instead
+(cursor visible at the corner). Not a Touch-ID lockout — recovered cleanly
+via `unlock_ipad`'s key-press path (Esc→Enter→Space, no swipe/passcode
+needed), confirmed visually back to the EXACT starting screen. No data
+loss, but a real, avoidable incident, flagged immediately to the manager
+rather than downplayed or quietly worked around.
+
+**Root cause**: `AnchorRequest` had no way to override `slam_to_corner`'s
+own `calls` count, so there was no way to get a genuine short/incomplete
+slam through the GUARDED `anchor_cursor` path (the same `CallerAsserted`
+pattern `unlockIpad`/`ipadGoHome`/`cursor_anchor_smoke.rs` v3 already use
+safely) — the smoke test reached for the raw unguarded primitive instead
+of extending the guarded API to support what it needed.
+
+**Fix (manager-approved, commit fb80142)**: `AnchorRequest` gains
+`slam_calls: Option<u32>` (documented as NOT a TS port), threaded through
+`run_slam` into `SlamOptions.calls`. `None` (every real production call
+site) keeps `slam_to_corner`'s own corner-guaranteeing default unchanged —
+enforced by the compiler, since `AnchorRequest` has no `Default` impl and
+every construction site must name the field explicitly. 2 new unit tests
+prove the override changes REAL HID emit behavior (asserts the exact
+`mouse_move_relative` call count: `Some(3)`→4 calls, `None`→13), not just a
+stored-and-ignored field. `cursor_anchor_corner_control_smoke.rs` v2: full
+rewrite, no longer imports `slam_to_corner`/`nudge_from_edge` at all — both
+controls now go through `anchor_cursor(guard: CallerAsserted{...})`
+exclusively, re-confirming the precondition with a fresh screenshot before
+EACH call rather than reusing an earlier one.
+
+Not yet re-run against real hardware as of this entry — offline fix only,
+reviewed calmly per the manager's explicit "no rush, clear head matters
+more than speed" instruction before the next live attempt. Category 2
+remains open until the guarded retry actually runs and passes.
