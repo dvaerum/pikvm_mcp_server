@@ -1,8 +1,9 @@
 # DRAFT — combined E2E category 2 + category 5 live-hardware plan
 
-**Status: NOT YET RUN. For review by pikvm-mcp-server@nixos-developer-system
-before any hardware contact**, per the manager's explicit instruction after
-two real lock incidents this session on the same underlying mistake.
+**Status: reviewed by nixos-dev, sent to the manager for final sign-off.
+NOT YET BUILT OR RUN.** Written per the manager's explicit instruction
+after two real lock incidents this session on the same underlying
+mistake.
 
 ## Why this plan exists (context for the reviewer)
 
@@ -52,7 +53,37 @@ One combined, carefully-paced session that:
   `CallerAsserted`-on-lock-screen positive path through `ipad_unlock.rs`'s
   real production code, not a synthetic smoke test) in the same pass.
 
-## Proposed exact sequence
+## Review (pikvm-mcp-server@nixos-developer-system, 2026-08-29)
+
+Confirmed correct: the `CallerAsserted` contract read (safe BECAUSE lock
+screen), the recovery-via-real-`unlock_ipad()` step, and the `TopLeft`
+corner choice (checked against iOS's bottom-corner lock-screen quick
+actions — flashlight/camera — which a bottom-corner slam could trigger
+instead of a system gesture; `slam.rs`'s default is `TopLeft`, and this
+plan never overrides it).
+
+Answered the step-5 open question, sourced from `ipad-unlock.ts`'s
+`unlockIpadWithCode` (lines 560-614): send **Space once**, not Enter —
+one press wakes the screen still-locked; a second press (or Enter, which
+`ipad-unlock.ts:62` documents as "the actual unlock key on iPadOS 26 lock
+screens") dismisses it. Real caveat flagged, not resolved: unclear whether
+this holds identically on a NO-PASSCODE config (this rig's documented
+default) — so screenshot #2 stays the actual arbiter regardless, with a
+defined fallback: if Space over-shoots to a fully unlocked screen, that's
+a safe, informative non-event (no HID went near a corner), not an
+incident — re-lock and retry the wake via a small mouse move instead of a
+second keypress.
+
+Two real gaps caught, folded into the sequence below:
+1. Phase A's streamer-offline check must be a **hard abort**, not an
+   assumption, if the lock action didn't actually take.
+2. Phase B must take and re-confirm its **own fresh screenshot** right
+   before the guarded slam — never trust Phase A's now-stale screenshot
+   across the process boundary + manual-review time gap. Same
+   "confirm CURRENT state, not an earlier step's" discipline as §8 item 5
+   and this session's own v2 incident.
+
+## Proposed exact sequence (post-review)
 
 Two SEPARATE process invocations, not one continuous script — deliberately
 inserting a real inspection point between locking and slamming, since a
@@ -66,92 +97,60 @@ after the fact) even though the LOCK ACTION itself may be time-sensitive.
 2. Send `Ctrl+Cmd+Q` (the same shortcut `pikvm_ipad_lock` sends:
    `send_shortcut(&["ControlLeft", "MetaLeft", "KeyQ"])`). Per that tool's
    own description: "Screen should turn off within 2s."
-3. Sleep ~2.5s (a small margin over the documented 2s).
-4. Check `pikvm_screen_state`-equivalent (`streamer.source.online` — the
-   objective, non-visual ground-truth signal this project already uses
-   elsewhere) — confirm `on:false`. This is a real, code-checkable
-   assertion, not a pixel heuristic.
-5. **OPEN QUESTION for review**: what should happen next to reach a
-   genuinely lock-screen-visible (not fully-off) state? `ipad_lock`'s own
-   tool description says "To unlock again: sendKey Enter (wakes the
-   screen; **on iPadOS 26 with no passcode also dismisses the lock
-   screen**)." If that's accurate for this rig's current config, sending
-   Enter might skip straight past the visible lock screen to a fully
-   dismissed/unlocked state — which would defeat the whole point of this
-   phase. I don't have a confident, verified answer for what wakes the
-   screen to a STILL-LOCKED, visually-confirmable lock-screen UI without
-   also dismissing it. Options to consider (please check against
-   `ipad-unlock.ts`/`ipad_unlock.rs`/any docs/troubleshooting notes on
-   this, since I may be missing the right primitive):
-   - A single relative mouse move (no click) — plausible on iOS/iPadOS as
-     a "wake the display" gesture that does NOT also dismiss, unlike a key
-     press. Untested by me this session.
-   - Some other key already used elsewhere in this codebase for exactly
-     "wake without dismissing."
-   - If neither exists cleanly, an alternative: skip trying to WAKE a
-     dimmed/off screen at all, and instead trigger the lock-screen-visible
-     state via the SAME path that produced it twice already today (a
-     `BoundsGuard`-refused... no — that path never showed a slam, it
-     refused). Actually the two REAL lock-screen screenshots I have from
-     today came from the CORNER-SLAM's hot-corner gesture locking the
-     device, not from `Ctrl+Cmd+Q`. If `Ctrl+Cmd+Q` behaves differently
-     (goes to a fully-off HDMI state instead of a visible lock screen),
-     that's a materially different mechanism than what I've actually
-     observed — flagging this distinction explicitly since I don't want
-     to assume the two are equivalent.
-6. Once (if) a lock-screen-visible state is reached: take screenshot #2,
-   save it, print a clear message, and **exit the process** (no slam in
-   this phase, regardless of what screenshot #2 shows).
+3. Sleep ~2.5s.
+4. Check `streamer.source.online` (the objective, non-visual ground-truth
+   signal this project already uses elsewhere) — confirm `on:false`.
+   **HARD ABORT** (nonzero exit, clear message, no further action) if it's
+   still `true` — the lock never took; do not fall through to step 5
+   against a screen that was never off.
+5. Send **Space once** (not Enter, not the full Escape→Enter→Space unlock
+   sequence — that's designed to fully dismiss). Sleep briefly (~1s).
+6. Screenshot #2, save it, print a clear message, **exit the process**
+   (no slam in this phase, regardless of what screenshot #2 shows).
 
 ### Manual checkpoint (me, before Phase B)
 
-Read screenshot #2. Confirm by eye: clock/wallpaper/home-indicator-bar
-visible, no app content, matches the lock-screen UI already seen twice
-today in the incident screenshots. **Only proceed to Phase B if this is
-unambiguously true.** If screenshot #2 shows anything else (blank/off
-frame, an active app, an error), stop and re-assess rather than guessing.
+Read screenshot #2. Three possible outcomes:
+- **Genuine lock screen** (clock/wallpaper/home-indicator, no app
+  content) → proceed to Phase B.
+- **Fully unlocked** (Space over-shot) → safe non-event, no HID near a
+  corner. Re-run Phase A, replacing step 5 with a small relative mouse
+  move instead of a keypress, then re-check screenshot #2.
+- **Anything else** (blank/off frame, error, ambiguous) → stop and
+  reassess rather than guessing.
 
 ### Phase B — guarded corner-slam pair + real recovery (reuses existing code)
 
-7. Positive control: `anchor_cursor(AnchorRequest{ guard:
-   CallerAsserted{reason: "operator confirmed via screenshot #2 (Phase A)
-   that the iPad is on a genuine lock screen"}, slam_calls: None, ... })`
-   — same code as `cursor_anchor_corner_control_smoke.rs` already has,
-   just with the reason string corrected to describe the TRUE
-   precondition this time (lock screen, not "non-lock-screen content").
-   Expect `verified: Some(true)`.
-8. Negative control: same guard, `slam_calls: Some(3)`. Expect
+7. **Own fresh screenshot #2b FIRST** — do not trust Phase A's screenshot
+   #2 as proof of current state. Re-confirm by eye (me, again) that #2b is
+   still a genuine lock screen before proceeding to step 8. If it isn't
+   (state changed between Phase A's exit and this invocation), stop —
+   don't fire the slam.
+8. Positive control: `anchor_cursor(AnchorRequest{ guard:
+   CallerAsserted{reason: "operator confirmed via screenshot #2b (Phase B,
+   taken immediately before this call) that the iPad is on a genuine lock
+   screen"}, slam_calls: None, ... })` — same code as
+   `cursor_anchor_corner_control_smoke.rs` already has, reason string
+   corrected to describe the TRUE precondition and reference the FRESH
+   screenshot, not Phase A's. Expect `verified: Some(true)`.
+9. Negative control: same guard, `slam_calls: Some(3)`. Expect
    `verified: Some(false)`.
-9. Screenshot #3 — confirm still on lock screen (or wherever the slams
-   left it), not something unexpected.
-10. Real recovery: call `unlock_ipad(&client, IpadUnlockOptions{ verbose:
+10. Screenshot #3 — confirm still on lock screen (or wherever the slams
+    left it), not something unexpected.
+11. Real recovery: call `unlock_ipad(&client, IpadUnlockOptions{ verbose:
     true, ..Default::default() })` — the actual production function,
     which internally uses `CallerAsserted` on this exact lock-screen
     precondition (its own real call site's reason string: "Layer 5 — lock
     screen has no active hot corner"). This is category 5's own required
     coverage, exercised for real rather than synthetically.
-11. Final screenshot — confirm recovered to a sane, recognizable state
+12. Final screenshot — confirm recovered to a sane, recognizable state
     (ideally back to whatever screenshot #1 showed, though an app
     switch during recovery is acceptable as long as it's a real,
     non-broken state — same "check final device state" discipline as
     every other gate this session).
 
-## What I'm asking nixos-dev to check
+## Status
 
-1. Is my understanding of `CallerAsserted`'s real contract correct (safe
-   BECAUSE lock screen, not despite an active screen)? I believe so per
-   `cursor_anchor.rs`'s own doc comment and the real `unlockIpad`/
-   `ipadGoHome` call sites, but a fresh read is exactly the point here.
-2. The open question in step 5 above — what's the right, already-
-   established primitive (if one exists) to wake a locked-off screen to a
-   VISIBLE lock screen without also dismissing it, on this rig's current
-   iPadOS/passcode configuration? Or is `Ctrl+Cmd+Q` simply the wrong
-   trigger to reach for here, and should Phase A instead rely on the
-   corner-slam's own hot-corner-gesture lock (the mechanism that actually
-   produced the lock screens I've directly observed) — accepting that as
-   the intentional lock trigger instead of `pikvm_ipad_lock`?
-3. Any other precondition-verification gap this plan hasn't caught, given
-   this exact class of mistake has now happened twice.
-
-Please reply with corrections/answers before I build Phase A/B's actual
-code, not after — this is a review of the PLAN, not of finished code.
+Reviewed by nixos-dev (both open items answered, 2 gaps caught and folded
+in above). Sent to the manager for final sign-off before any code is
+written or the rig is touched again.
