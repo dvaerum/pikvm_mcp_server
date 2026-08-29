@@ -35,37 +35,63 @@ use crate::orientation::{detect_ipad_bounds_from_buffer, DetectOptions, IpadBoun
 /// against the actual worst real case found once measured.
 pub const CROSS_VALIDATION_TOLERANCE_FRACTION: f64 = 0.08;
 
-/// Known iPad logical-point screen aspect ratios (portrait
-/// width/height), used as a THIRD, independent safeguard beyond
-/// detector-vs-detector agreement — georgs-mac-mini's review addition
-/// (task_f04c3909db11 note 45 follow-up): two detectors could in
-/// principle agree on the same wrong box, and this catches that case
+/// Known iPad screen aspect ratios (portrait width/height — the pair's
+/// UNITS don't matter, points or physical pixels give the same ratio),
+/// grouped into shape FAMILIES rather than one entry per model, per the
+/// manager's own suggestion once the wider set was sourced: several
+/// distinct iPad models share (near-)identical panel ratios, so a
+/// per-family bucket is both a shorter list and more robust to an
+/// older/unlisted model that shares a family's shape without being
+/// individually enumerated here. Used as a THIRD, independent safeguard
+/// beyond detector-vs-detector agreement — georgs-mac-mini's review
+/// addition (task_f04c3909db11 note 45 follow-up): two detectors could
+/// in principle agree on the same wrong box, and this catches that case
 /// specifically, since a real iPad screen only ever has a handful of
 /// known shapes.
 ///
-/// Entry `[0]` is the ONLY one independently verified against this
-/// project's own real hardware: 820×1180 is `move-to.ts`'s own
+/// Entry `[0]`'s pair (820×1180) is the ONLY one independently verified
+/// against this project's own real hardware: it's `move-to.ts`'s own
 /// `POINTER_ACCEL_IPAD_LOGICAL_W/H`, sourced from a real trajectory-bench
 /// measurement of the actual iPad on `pikvm01` (this repo's one
 /// confirmed iPad rig — see docs/adr/0002-mcp-derives-hid-mode-from-
 /// appliance-endpoint.md for the `pikvm01`-vs-`it-03400` rig distinction;
-/// `it-03400` is a different, non-iPad appliance rig). This is the 10.9"
-/// panel shared by the iPad Air (4th/5th gen) and iPad (10th gen).
+/// `it-03400` is a different, non-iPad appliance rig).
 ///
-/// The remaining entries are from general knowledge of Apple's published
-/// point-resolution spec sheet, NOT independently re-verified against a
-/// live device in this session — this repo's own docs don't evidence any
-/// second iPad model in the rig fleet. Included per the design's own
-/// "don't hardcode a single guessed ratio, support a small known list"
-/// requirement in case a different model is ever attached to a rig;
-/// flag for a real online spec check (or a real device measurement)
-/// before treating these as equally authoritative to `[0]`.
+/// All three buckets' MEMBERSHIP (which models share which family) and
+/// the other two buckets' exact numbers were cross-confirmed 2026-08-29
+/// via a real sourced web search (manager, apple.com/ipad-11/specs +
+/// apple.com/ipad-pro/specs + itechguides.com's iPad display list) after
+/// this agent — which operates offline-only and could not do that lookup
+/// itself — flagged the original draft's remaining entries as unverified
+/// trained recall. The 11-inch bucket's sourced physical-pixel numbers
+/// (iPad 11" A16 and iPad Air 11" M4: 2360×1640, ratio 1.439) land
+/// almost exactly on `[0]`'s own real-hardware-verified ratio (1180/820 =
+/// 1.4396) — expected, since 820×1180 points × 2x scale = 1640×2360
+/// pixels, the same panel family under Apple's later "11-inch" rebrand of
+/// what was originally sold as "10.9-inch". iPad Pro 11" (M5)'s 2420×1668
+/// (ratio 1.451) also falls inside this bucket's existing tolerance
+/// without needing its own entry.
 const KNOWN_IPAD_ASPECT_RATIOS: &[(&str, f64, f64)] = &[
-    ("iPad (10th gen) / iPad Air 4th-5th gen, 10.9\" — VERIFIED against this project's own real hardware measurement (move-to.ts's POINTER_ACCEL_IPAD_LOGICAL_W/H)", 820.0, 1180.0),
-    ("iPad Pro / iPad Air 11\" — Apple published spec, not independently re-verified here", 834.0, 1194.0),
-    ("iPad mini (6th gen), 8.3\" — Apple published spec, not independently re-verified here", 744.0, 1133.0),
-    ("iPad (9th gen), 10.2\" — Apple published spec, not independently re-verified here", 810.0, 1080.0),
-    ("iPad Pro 12.9\"/13\" — Apple published spec, not independently re-verified here", 1024.0, 1366.0),
+    (
+        "10.9\"/11\" family (iPad 10th gen+, iPad Air 4th gen+, iPad Pro 11\" all gens) — \
+         anchor VERIFIED against this project's own real hardware; cluster cross-confirmed via \
+         sourced Apple specs 2026-08-29",
+        820.0,
+        1180.0,
+    ),
+    (
+        "12.9\"/13\" + classic 4:3 family (iPad Air 13\" M4: 2732x2048; iPad Pro 12.9\"/13\" all \
+         gens: 2752x2064; pre-Air/Pro-split classic iPads, also 4:3) — sourced Apple specs \
+         2026-08-29, not independently re-verified against a live device here",
+        2048.0,
+        2732.0,
+    ),
+    (
+        "iPad mini family (7th gen: 2266x1488) — sourced Apple specs 2026-08-29, not \
+         independently re-verified against a live device here",
+        1488.0,
+        2266.0,
+    ),
 ];
 
 /// Tolerance for the known-aspect-ratio check, as a fractional difference
@@ -370,6 +396,18 @@ mod tests {
         // A near-square box — not close to any entry in the known-ratio
         // table, portrait or landscape.
         assert!(!matches_a_known_ipad_aspect_ratio(1000.0, 1050.0));
+    }
+
+    #[test]
+    fn matches_the_sourced_129_13_inch_4_3_family_in_portrait() {
+        // iPad Pro 13" (M5): 2752x2064 physical px, sourced Apple spec.
+        assert!(matches_a_known_ipad_aspect_ratio(2064.0, 2752.0));
+    }
+
+    #[test]
+    fn matches_the_sourced_ipad_mini_family_in_landscape() {
+        // iPad mini (7th gen): 2266x1488 physical px, sourced Apple spec.
+        assert!(matches_a_known_ipad_aspect_ratio(2266.0, 1488.0));
     }
 
     #[test]
