@@ -1,7 +1,6 @@
 # Plan: targeted live re-confirmation of the stationary-guard widening (K=4)
 
-**Status: DRAFT, for review by pikvm-mcp-server@nixos-developer-system
-before any execution.** Follow-up to
+**Status: REVIEWED (nixos-dev, 2026-08-29) — ready to execute.** Follow-up to
 `docs/would-reject-as-stationary-widening-plan.md` (implemented,
 committed `097e4ec`) — that plan's own live re-validation attempt
 (2026-08-29, via a generic `legacy_move_smoke.rs` re-run) came back
@@ -90,8 +89,15 @@ conflating "guard fired correctly" with "the whole pass looked clean."
 
 ## Exact sequence
 
-1. Health-check: confirm the real, unlocked home screen via screenshot,
-   same discipline as every other live gate this session.
+1. **Health-check + layout verification (nixos-dev review, incorporated)**:
+   confirm the real, unlocked home screen via screenshot, AND visually
+   confirm the dock/icon layout still has a Notes/Settings/app-drawer-row
+   feature roughly where the original incident describes — don't assume
+   the layout is stable just because it seems obviously so (real
+   precedent today: the N=80 bench's own Settings-icon-moved-~120px
+   drift). If the layout has visibly drifted, note that up front — it
+   would explain a clean non-event as environment drift, not guard
+   behavior, and changes how any result below should be read.
 2. Add the two `eprintln!` lines described above to `legacy_move.rs`
    (code-only, reviewed before running).
 3. Run `legacy_move_smoke.rs -- 1050 850` (the exact original target),
@@ -100,23 +106,43 @@ conflating "guard fired correctly" with "the whole pass looked clean."
 4. **Regardless of outcome**, screenshot-confirm the real final cursor
    position (this project's own established discipline — never trust
    the algorithm's self-report alone).
-5. Read the log for every `would_reject_as_stationary` line:
-   - If the log shows `true` for a candidate near a previously-seen
-     position that ISN'T the single most-recent one (the exact 2+-
-     passes-back pattern) → the K=4 fix is DIRECTLY confirmed firing on
-     its own target scenario. Cross-check the final position is correct
-     (or at least not the specific stale-cluster position) to confirm
-     it had the intended effect.
-   - If the log shows no rejections at all, and the final position is
-     correct → the specific bug scenario simply didn't recur this run
-     (honest non-event, not a failure of the guard — report as such, not
-     as a "pass").
-   - If the log shows a rejection but the final position is STILL wrong
-     (for an unrelated reason, e.g. the motion-diff pairing failure the
-     previous attempt hit) → the guard fired correctly but something
-     else in the legacy path failed independently; report both facts
-     separately, don't let one obscure the other.
-6. No slam risk: `forbidSlamFallback=true` makes this structurally
+5. Read the log for every `would_reject_as_stationary` line. Four
+   outcome buckets now (nixos-dev review added a 4th, distinct from
+   "non-event"):
+   - **(A) Target scenario directly confirmed**: log shows `true` for a
+     candidate near a previously-seen position that ISN'T the single
+     most-recent one (the exact 2+-passes-back pattern) → the K=4 fix is
+     DIRECTLY confirmed firing on its own target scenario. Cross-check
+     the final position is correct (or at least not the specific
+     stale-cluster position) to confirm it had the intended effect.
+   - **(B) Early rejection — informative, NOT a non-event (nixos-dev's
+     key methodological point)**: log shows ANY rejection, even one that
+     doesn't match the precise 2+-passes-back pattern, occurring EARLY
+     in the pass sequence. Because the K=4 fix changes what
+     `CursorBelief` accepts mid-run, an early rejection could reroute
+     the whole correction-loop trajectory away from ever reaching a
+     scenario analogous to the original sequence — this would actually
+     be a STRONGER confirmation than the target scenario recurring
+     cleanly, not a weaker one. Check whether the rejection correlates
+     with the run's trajectory diverging from the original incident's
+     trace at the same pass number. Report this as its own distinct
+     bucket, not folded into (A) or (C).
+   - **(C) Genuine non-event**: log shows ZERO rejections anywhere, AND
+     the final position is correct, AND (per step 1) the layout was
+     confirmed NOT to have drifted → the specific bug scenario simply
+     didn't arise this run. Report as an honest non-event, not a "pass."
+   - **(D) Guard fired but final position still wrong for an unrelated
+     reason** (e.g. the motion-diff pairing failure the previous attempt
+     hit): report both facts separately — the guard's own firing is a
+     real result independent of whatever else went wrong in the legacy
+     path afterward.
+6. **Escalate on a clean non-event, don't stop at one (nixos-dev review,
+   incorporated)**: if the first attempt lands in bucket (C) with zero
+   rejections logged, run it 1-2 more times before concluding anything
+   for today — matches the "escalate only if ambiguous" pattern used
+   everywhere else this session (wake-key sweep, category 1's N-count).
+   Marginal cost is near-zero given point 7 below.
+7. No slam risk: `forbidSlamFallback=true` makes this structurally
    incapable of reaching `slam_to_corner`, same safety profile as the
    original v18 run and the previous re-validation attempt — this is
    LOWER risk than categories 2/5, not comparable to the corner-control
@@ -135,15 +161,16 @@ for) or anything about `curve-one-shot`/categories 2/5/the corner-control
 gate — entirely separate code paths, no shared mechanism (already
 confirmed via `grep`, see the sign-off plan's own §5).
 
-## What I'm asking nixos-dev to review
+## Review (nixos-dev, incorporated above) — status: REVIEWED, ready to execute
 
-1. Is re-using the exact original target/strategy the right call, or is
-   there a reason to suspect the home screen layout or detection
-   behavior has drifted enough since the original incident that this
-   specific repro is no longer likely to recur, making a different
-   approach more promising?
-2. Is logging at both call sites (open-loop AND correction-pass) the
-   right scope, or should this be narrower/wider?
-3. Anything about the "guard fired but final position still wrong for
-   an unrelated reason" outcome class that needs a different reporting
-   treatment than proposed above?
+1. **Target/strategy reuse**: valid AS LONG AS the layout-drift check
+   (step 1) actually happens first — don't skip it just because the
+   layout seems obviously stable. Incorporated as an explicit step.
+2. **Logging scope**: both call sites confirmed correct, no objection.
+3. **Guard-fired-but-still-wrong reporting**: the proposed "report both
+   facts separately" treatment is correct — with the addition that
+   bucket (B)'s early-rejection case now gets its OWN distinct bucket
+   too, not folded into either (A)/"confirmed" or (C)/"non-event" —
+   incorporated above as outcome bucket (B).
+
+No open questions remaining.
