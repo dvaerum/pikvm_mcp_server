@@ -153,14 +153,44 @@ async fn main() {
     // Step 3: HARD ABORT if the lock didn't actually take. This is the
     // load-bearing, non-decaying safety fact everything below relies on —
     // unlike display wake state, lock state doesn't revert on its own.
-    let (source_online, _resolution) = client
-        .get_streamer_status()
-        .await
-        .expect("get_streamer_status failed");
-    if source_online {
+    //
+    // Retry-with-grace, mirroring the SAME pattern PiKVMClient's own
+    // screenshot path already uses for this exact race (its 503 error
+    // text: "Streamer unavailable even after a held /api/ws stream
+    // client and one retry"): a single `get_streamer_status` read can
+    // catch ustreamer's own on-demand idle-stop/restart noise, unrelated
+    // to the iPad's real lock state (live-confirmed 2026-08-29 — a
+    // single-shot check reported ONLINE while a direct screenshot taken
+    // moments later showed the iPad genuinely, stably locked). Only
+    // abort if EVERY attempt reports online — one genuinely-offline read
+    // is accepted immediately as confirmation (offline doesn't spuriously
+    // flip true the way ustreamer's on-demand online flag can flip on
+    // noise).
+    let mut confirmed_offline = false;
+    for attempt in 1..=3 {
+        match client.get_streamer_status().await {
+            Ok((false, _resolution)) => {
+                confirmed_offline = true;
+                break;
+            }
+            Ok((true, _resolution)) => {
+                eprintln!(
+                    "streamer status attempt {attempt}/3: reports ONLINE — could be a genuine \
+                     failed lock, or ustreamer's own on-demand noise. Retrying before deciding."
+                );
+            }
+            Err(e) => {
+                eprintln!("streamer status attempt {attempt}/3: read failed ({e}). Retrying.");
+            }
+        }
+        if attempt < 3 {
+            tokio::time::sleep(Duration::from_millis(800)).await;
+        }
+    }
+    if !confirmed_offline {
         eprintln!(
-            "=== ABORT: streamer still ONLINE 2.5s after Ctrl+Cmd+Q — the lock did NOT take. Not \
-             proceeding. ==="
+            "=== ABORT: streamer reported ONLINE (or unreadable) on all 3 attempts after \
+             Ctrl+Cmd+Q — the lock did NOT take. Not proceeding. ==="
         );
         std::process::exit(1);
     }
