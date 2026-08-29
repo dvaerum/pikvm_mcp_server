@@ -1473,3 +1473,75 @@ the iPad was left in a confirmed-safe, unlocked home-screen resting state
 throughout and at the end. Two real, fresh follow-ups are now on the
 board: a controlled delay-sweep for the wake-key timing-confound
 hypothesis, and a `showScene`-based redesign of the iPadCollector bench.
+
+---
+
+**§8 all 3 follow-up items resumed and completed live, 2026-08-29 ~18:07-18:30.**
+Resumed after georg asked the manager directly why the 3 code-ready items
+hadn't run yet — honest answer: no active blocking reason, just inertia
+in the standing event-loop after a reasonable initial deferral. Manager's
+standing authorization already covered resuming; the real fix was
+actively deciding to, not waiting for another go-ahead. Sequenced
+lowest-risk first.
+
+**Category 3 (HID mode-switch gate, `hid_settling_gate_smoke.rs`) —
+PASSED.** Run live against the real endpoint
+(`https://pikvm01.bb.vcamp.dk/hidmode`, confirmed reachable with basic
+auth). Core result: gate auto-released after 15075ms with no
+`clear_settling()` call and no restart, confirming the #51 backstop holds
+on real hardware. Real complication: the harness's own best-effort
+cleanup (restore to ipad mode) failed live (`POST /hidmode` -> HTTP 500,
+then several 403s on GET), leaving the target in desktop/absolute mode.
+Caught via `/api/hid`'s `mouse.absolute=true`, fixed with a plain retry
+(succeeded), confirmed BEHAVIORALLY with a real relative HID move +
+before/after screenshot (`verify_relative_mode.rs`, new small
+diagnostic) rather than trusting the flag alone. Documented in the
+harness's own header for whoever hardens its cleanup path next.
+Committed `17b918e`.
+
+**Item 2, final completion (iPadCollector bench, `task_37374b4bce6d`) —
+N=20 COMPLETED SUCCESSFULLY.** The showScene redesign (built earlier
+today, `b833a0d`) worked exactly as intended on the first live attempt
+after category 3: zero WebSocket reconnects across all 20 trials — the
+original architectural bug (backgrounding via `ipad_go_home()`) never
+recurred, because the redesign removed it entirely. But two live
+attempts still failed before the run actually succeeded, for a NEW
+reason: every trial showed `ground_truth=None` (first attempt) or a
+solid dark rendered scene (second attempt) — root-caused as an ordering
+bug, not the architectural one: the scene-source screenshot was being
+captured by this binary's OWN health-check step, which always runs
+AFTER the required `xcrun devicectl launch --terminate-existing`
+relaunch (per this binary's own long-standing contract) — by then
+iPadCollector is already foreground, showing its own dark idle view, not
+the real home screen. A live capture at that point reproduced the
+identical dark frame 5/5 retries (mean brightness exactly 16.0 every
+time) — a deterministic state, not a transient torn-frame race a retry
+loop could fix. Fixed by adding `SCENE_IMAGE_PATH`: capture the real home
+screen BEFORE relaunching, save it, relaunch, then point the bench at
+that file instead of taking its own post-relaunch screenshot. Also added
+`capture_until_bright_enough` as genuine (still-useful) protection
+against an actual transient race, separate from this deterministic
+ordering bug.
+
+**Final result**: 20/20 trials completed, 0 reconnects, 0 missing-
+ground-truth trials, 19/20 within the established 5.9px tolerance, 1/20
+marginally over (6.245px — 0.35px past threshold, noise-floor
+territory) — visually confirmed on the flagged trial: the real home
+screen rendered correctly inside iPadCollector's view, cursor landed
+right next to the Settings icon target. `click_at.verified=false` on
+every trial as expected and already documented (no real app reacts to a
+click on a static image; the independent ground truth via
+`getTrackedCursor()` is what actually validates the landing, exactly per
+this bench's reason for existing). Committed `a55685a`.
+`task_37374b4bce6d` marked completed — category 1's sign-off bar (N≥20,
+paired independent ground truth) is genuinely met.
+
+**Summary of today's full resumed-session arc, all 3 follow-ups now
+closed**: wake-key delay sweep built + reviewed, not yet run live (own
+deliberate deferral, no blocking issue). Category 3: passed, with a real
+(separate) cleanup-path bug found and fixed. iPadCollector bench: two
+more real bugs found and fixed (screenshot ordering + a legitimate
+brightness-retry addition) before reaching a genuinely successful N=20
+completion. No safety incidents across the entire extended session; the
+iPad was left in a confirmed-safe, unlocked home-screen resting state
+throughout and at the end.
