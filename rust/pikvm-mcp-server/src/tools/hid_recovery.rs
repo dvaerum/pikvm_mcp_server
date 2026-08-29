@@ -2,17 +2,18 @@
 //! `handle_pikvm_usb_reconnect`.
 //!
 //! `describeHidDiagnosis(diagnoseHidFromClient(...))`'s failure-path
-//! diagnosis enrichment is NOT ported: `diagnose_hid_from_client` needs a
-//! full `CursorLocator` (its own large `CursorLocatorDeps` DI struct —
-//! screenshot/decode/mouse/sleep/template-cache/is-ml-disabled plus all
-//! 5 detector closures), which is move-to.ts-scale plumbing this crate
-//! doesn't build yet. The core recovery ladder (this file's actual job)
-//! is fully real — only the supplementary diagnostic message on a failed
-//! recovery is deferred, noted explicitly in both tools' output rather
-//! than silently dropped.
+//! diagnosis enrichment IS wired — correcting an earlier session's own
+//! mistaken assumption that `hid_diagnosis::CursorLocator` was the large
+//! multi-detector struct from `cursor_locator.rs`. It's actually the
+//! same simple `Fn(buffer) -> Option<{x,y}>` closure `health-check.ts`'s
+//! own `CursorLocator` type already uses — unblocked the moment
+//! `default_cursor_locator` landed for `pikvm_health_check`.
 
 use std::sync::Arc;
 
+use pikvm_mcp_ipad_hid::hid_diagnosis::{
+    default_cursor_locator, describe_hid_diagnosis, HidDiagnosisClient,
+};
 use pikvm_mcp_ipad_hid::hid_recovery::{
     make_behavioral_verifier, make_http_recovery_trigger, make_udc_state_reader, recover_hid,
     BehavioralVerifierOptions, HidRecoveryClient, RecoverOpts, ResetHidOpts,
@@ -89,6 +90,30 @@ fn hid_recovery_client(client: Arc<PiKVMClient>) -> HidRecoveryClient {
         move |dx: i32, dy: i32| {
             let client = move_client.clone();
             Box::pin(async move { Ok(client.mouse_move_relative(dx as f64, dy as f64).await?) })
+        },
+    )
+}
+
+/// Adapt the real `PiKVMClient` into `HidDiagnosisClient`'s injected-
+/// closure shape — same DI-adaptation pattern as `hid_recovery_client`.
+fn hid_diagnosis_client(client: Arc<PiKVMClient>) -> HidDiagnosisClient {
+    let shot_client = client.clone();
+    let profile_client = client;
+    HidDiagnosisClient::new(
+        move || {
+            let client = shot_client.clone();
+            Box::pin(async move { Ok(client.screenshot(None).await?.buffer) })
+        },
+        move || {
+            let client = profile_client.clone();
+            Box::pin(async move {
+                let p = client.get_hid_profile().await?;
+                Ok(pikvm_mcp_ipad_hid::hid_diagnosis::HidProfile {
+                    mouse_online: p.mouse_online,
+                    keyboard_online: p.keyboard_online,
+                    mouse_absolute: p.mouse_absolute,
+                })
+            })
         },
     )
 }
@@ -212,12 +237,22 @@ fn hid_recover(
         if let Some(human) = &result.human_action_required {
             lines.push(format!("R4 — HUMAN ACTION REQUIRED: {human}"));
         }
+        // (d): on failure, tell the operator WHICH failure mode this is —
+        // a dead input path (HID DOWN → the reboot rung / re-plug make
+        // sense) vs a gadget that's attached but whose pointer can't be
+        // localized (usb_reconnect/reboot won't help; wake the cursor or
+        // fix brightness instead).
         if !result.recovered && result.target_present {
-            lines.push(
-                "Diagnosis: not available in this build (describeHidDiagnosis needs a full CursorLocator, not \
-                 yet wired into pikvm-mcp-server — see this file's own header comment)."
-                    .to_string(),
-            );
+            let diag_client = hid_diagnosis_client(shared.client.clone());
+            let udc_reader = build_udc_state_reader();
+            let locate = default_cursor_locator();
+            let diagnosis = pikvm_mcp_ipad_hid::hid_diagnosis::diagnose_hid_from_client(
+                &diag_client,
+                &*udc_reader,
+                &locate,
+            )
+            .await;
+            lines.push(format!("Diagnosis: {}", describe_hid_diagnosis(&diagnosis)));
         }
         if !result.recovered && result.target_present && max_rung < 4 {
             lines.push(
