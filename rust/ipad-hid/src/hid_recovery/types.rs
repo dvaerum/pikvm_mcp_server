@@ -82,6 +82,10 @@ impl RecoveryTrigger {
 }
 
 /// Client surface the ladder needs (satisfied by the real kvmd client, module 2).
+/// `Clone` is cheap (every field is an `Arc<dyn Fn...>`) — needed so
+/// `make_behavioral_verifier`'s `HidVerifier::new` closure (called
+/// repeatedly, `Fn` not `FnOnce`) can hold its own owned copy.
+#[derive(Clone)]
 pub struct HidRecoveryClient {
     get_hid_profile_fn:
         Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<HidOnlineState>> + Send + Sync>,

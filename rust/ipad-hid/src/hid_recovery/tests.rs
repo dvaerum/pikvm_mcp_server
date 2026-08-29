@@ -396,3 +396,42 @@ fn make_ssh_udc_state_reader_rejects_unsafe_udc_name() {
     .unwrap();
     assert!(err.to_string().contains("unsafe"));
 }
+
+// -- make_behavioral_verifier --
+
+fn failing_screenshot_client() -> HidRecoveryClient {
+    HidRecoveryClient::new(
+        || Box::pin(async { anyhow::bail!("not used") }),
+        |_opts| Box::pin(async { anyhow::bail!("not used") }),
+        || Box::pin(async { anyhow::bail!("screenshot unavailable") }),
+        |_dx, _dy| Box::pin(async { Ok(()) }),
+    )
+}
+
+#[tokio::test]
+async fn behavioral_verifier_reports_unhealthy_when_the_first_screenshot_fails() {
+    // Doesn't need a real ONNX model — the client's own screenshot() call
+    // fails before find_cursor_by_v8_full_frame is ever reached.
+    let verifier = make_behavioral_verifier(
+        failing_screenshot_client(),
+        BehavioralVerifierOptions::default(),
+    );
+    let result = verifier.verify().await;
+    assert!(!result.healthy);
+    assert!(result.detail.contains("behavioral verify failed"));
+    assert!(result.detail.contains("screenshot unavailable"));
+}
+
+#[tokio::test]
+async fn behavioral_verifier_reports_unhealthy_when_the_mouse_emit_fails() {
+    let client = HidRecoveryClient::new(
+        || Box::pin(async { anyhow::bail!("not used") }),
+        |_opts| Box::pin(async { anyhow::bail!("not used") }),
+        || Box::pin(async { Ok(vec![0u8; 8]) }), // decode_to_rgb will fail on this — that's fine, locate() -> None
+        |_dx, _dy| Box::pin(async { anyhow::bail!("mouse emit failed") }),
+    );
+    let verifier = make_behavioral_verifier(client, BehavioralVerifierOptions::default());
+    let result = verifier.verify().await;
+    assert!(!result.healthy);
+    assert!(result.detail.contains("mouse emit failed"));
+}

@@ -36,6 +36,7 @@ mod ballistics;
 mod basic;
 mod calibration;
 mod hid;
+mod hid_recovery;
 mod hidmode;
 mod ipad_unlock;
 mod mouse;
@@ -145,5 +146,6 @@ pub fn tool_registry() -> Vec<ToolEntry> {
     tools.extend(mover_scale::entries());
     tools.extend(ballistics::entries());
     tools.extend(auto_calibrate::entries());
+    tools.extend(hid_recovery::entries());
     tools
 }
