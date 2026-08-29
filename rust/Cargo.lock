@@ -1247,6 +1247,7 @@ dependencies = [
  "pikvm-mcp-cursor-belief",
  "pikvm-mcp-detection-vision",
  "pikvm-mcp-foundation",
+ "pikvm-mcp-ipad-hid",
  "pikvm-mcp-ipad-primitives",
  "pikvm-mcp-kvmd-client",
  "rand 0.8.8",

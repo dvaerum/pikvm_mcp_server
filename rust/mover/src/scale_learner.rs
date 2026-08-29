@@ -45,9 +45,10 @@
 //!
 //! Split into `types` (the estimator's own data + constants),
 //! `learner` (the `ScaleLearner` state machine + its tests), and
-//! `move_sample` (`record_move_sample`, a temporary home — see its own
-//! doc) — idiomatic Rust 2018+ module layout, one responsibility per
-//! file, rather than one file mirroring the single TS source.
+//! `move_sample` (`record_move_sample`, re-exporting `move_to`'s
+//! `MoveLearnSample` rather than duplicating it) — idiomatic Rust 2018+
+//! module layout, one responsibility per file, rather than one file
+//! mirroring the single TS source.
 
 mod learner;
 mod move_sample;

@@ -14,6 +14,8 @@
 
 pub mod auto_calibrate;
 pub mod ballistics;
+pub mod click_at;
+pub mod click_verify;
 pub mod cursor_anchor;
 pub mod cursor_keepalive;
 pub mod curve_mover;
