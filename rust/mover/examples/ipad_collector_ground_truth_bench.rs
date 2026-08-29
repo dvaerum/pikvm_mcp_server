@@ -10,15 +10,28 @@
 //! project's own established independent ground truth for exactly this
 //! reason.
 //!
-//! **NOT RUN LIVE as of this commit** — built and compiled offline only,
-//! per the standing "rest the rig" call for this session. The iPad-side
-//! app relaunch (`xcrun devicectl device process launch --terminate-
-//! existing --device <UDID> com.bb.iPadCollector`) must happen BEFORE
-//! this binary runs, in a separate step (this binary only waits for the
-//! app to connect — it does not itself relaunch anything, matching the
-//! plan's own scoping and this project's established relaunch dance).
+//! The iPad-side app relaunch (`xcrun devicectl device process launch
+//! --terminate-existing --device <UDID> com.bb.iPadCollector`) must
+//! happen BEFORE this binary runs, in a separate step (this binary only
+//! waits for the app to connect — it does not itself relaunch anything,
+//! matching the plan's own scoping and this project's established
+//! relaunch dance).
 //!
-//! Per the reviewed plan:
+//! **REDESIGNED 2026-08-29** (see
+//! docs/ipad-collector-showscene-redesign-plan.md, reviewed by
+//! nixos-dev): the original per-trial `ipad_go_home()` call backgrounded
+//! iPadCollector (`Cmd+H`), and its WS session does not survive being
+//! backgrounded — confirmed live, every trial's `get_tracked_cursor`
+//! broke with a broken pipe. Fixed by sending the health-check screenshot
+//! as a ONE-TIME `show-scene` right after connecting, instead of
+//! `ipad_go_home()` per trial: iPadCollector stays foreground for the
+//! whole run, so its WS session never dies. Trade-off, stated plainly:
+//! this bench now clicks a STATIC RENDERING of the home screen, not the
+//! live interactive one — it proves detection/landing accuracy against
+//! independent ground truth (category 1's actual sign-off bar), not
+//! real app-interaction (already covered by `click_at_n80_bench.rs`).
+//!
+//! Per the reviewed plans:
 //! - Cache-freshness: the logical->HDMI mapping step calls
 //!   `clear_orientation_cache()` and takes its OWN fresh screenshot —
 //!   never trusts whatever `click_at()`'s internal cycle happened to
@@ -47,7 +60,6 @@ use pikvm_mcp_ipad_hid::hid_mode::{HidMode, HidPolicy, Strategy};
 use pikvm_mcp_kvmd_client::client::{MouseButton, PiKVMClient, PiKVMConfig};
 use pikvm_mcp_mover::click_at::{click_at, ClickAtDeps, ClickAtOutcome, ClickAtRequest};
 use pikvm_mcp_mover::ipad_collector::{wait_for_ipad_collector_session, IpadCollectorSession};
-use pikvm_mcp_mover::ipad_unlock::{ipad_go_home, IpadHomeOptions};
 use pikvm_mcp_mover::move_to::Point;
 use pikvm_mcp_mover::scale_learner::{ScaleLearner, ScaleLearnerOpts};
 
@@ -187,25 +199,27 @@ async fn main() {
     );
     let (logical_w, logical_h) = (session.hello.logical_w, session.hello.logical_h);
 
+    // ONE-TIME show-scene setup (redesign, 2026-08-29): the health-check
+    // screenshot IS the raw captured frame (client.screenshot(None) — no
+    // preview scaling), reused directly as the scene image per the
+    // reviewed plan. iPadCollector stays foreground for the rest of the
+    // run; no per-trial backgrounding, no per-trial re-sending.
+    session
+        .show_scene_image(&health.buffer)
+        .await
+        .expect("show-scene failed — see docs/ipad-collector-showscene-redesign-plan.md");
+    eprintln!("=== show-scene applied (health-check image, {} bytes) — iPadCollector stays foreground for all {N} trials ===", health.buffer.len());
+
     let scale_learner =
         std::sync::Mutex::new(ScaleLearner::new(ScaleLearnerOpts::default(), false));
     let mut results: Vec<TrialResult> = Vec::with_capacity(N as usize);
 
     for trial in 1..=N {
-        if let Err(e) = ipad_go_home(
-            &client,
-            IpadHomeOptions {
-                force_home_via_swipe: true,
-                verbose: false,
-                ..Default::default()
-            },
-        )
-        .await
-        {
-            eprintln!("trial {trial}/{N}: go-home failed: {e} — skipping, no ground-truth pairing possible");
-            continue;
-        }
-
+        // No per-trial ipad_go_home() — the show-scene setup above
+        // already put a static home-screen image on screen, and
+        // iPadCollector must stay foreground for the whole run (that's
+        // the entire point of the redesign: Cmd+H would background it
+        // and kill its WS session again).
         let outcome = click_at(
             ClickAtRequest {
                 client: client.clone(),

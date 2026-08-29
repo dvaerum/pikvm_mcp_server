@@ -19,11 +19,19 @@
 //! unique, so pulling in a `uuid` crate for it would be over-engineering)
 //! don't need to match TS's own implementation choices.
 //!
-//! Scope, per the reviewed plan: only the `hello` handshake +
-//! `get-cursor`/`cursor` RPC. `show-scene`, `subscribe-cursor`,
-//! `tap-event`/`lifecycle` streaming are explicitly OUT of scope — none
-//! of them are needed to pair a click landing against ground truth on
-//! the real home screen, only the one-shot cursor read is.
+//! Scope, per the reviewed plan (widened 2026-08-29, see
+//! docs/ipad-collector-showscene-redesign-plan.md): `hello` handshake,
+//! `get-cursor`/`cursor`, and `show-scene`/`ack` RPCs, plus `error`
+//! (rejection) handling for any request. `show-scene` was added because
+//! `ipad_go_home()`'s `Cmd+H` backgrounds the app and kills its WS
+//! session (found live) — sending a static home-screen image AS a scene
+//! keeps the app foreground for the whole bench run instead. This trades
+//! "click the literal live home screen" for "click a static rendering of
+//! it," which only affects detection/landing-accuracy claims, not app-
+//! interaction ones (already covered elsewhere, see the redesign plan).
+//! `subscribe-cursor`/`tap-event`/`lifecycle` streaming remain explicitly
+//! OUT of scope — not needed for a one-shot cursor read paired against
+//! one click.
 //!
 //! Real port: **8767** (matches `scripts/diag-move-to-on-synth.ts` and
 //! this project's own established iPadCollector convention).
@@ -135,15 +143,61 @@ fn random_uuid_v4_string() -> String {
     )
 }
 
+/// Decide which pending request (if any) an incoming frame resolves or
+/// rejects, and how — a free function (not inlined in the reader task)
+/// specifically so the `ack`/`cursor`/`error` correlation rules are
+/// unit-testable without a real socket, matching `is_tracked_reading`'s
+/// pattern above. Confirmed against `ipad-app-ws.ts`'s own `onMessage`
+/// switch (nixos-dev review, 2026-08-29): `cursor` correlates via the
+/// top-level `id`; `ack` (show-scene's response) correlates via
+/// `payload.ref` instead — a genuinely different field, not a bug if
+/// they don't match. `error` can reject either kind of request, so it
+/// checks `payload.ref` first and falls back to the top-level `id`.
+/// `time-pong`/`cursor-event`/`tap-event`/`lifecycle` are out of scope
+/// (this module never sends `time-ping`/`subscribe-cursor`, so the app
+/// has no reason to send them back) and fall through to `None`.
+fn correlate_incoming_frame(frame: IncomingFrame) -> Option<(String, PendingResponse)> {
+    match frame.kind.as_str() {
+        "cursor" => frame.id.map(|id| (id, Ok(frame.payload))),
+        "ack" => frame
+            .payload
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .map(|r| (r.to_string(), Ok(frame.payload.clone()))),
+        "error" => {
+            let ref_id = frame
+                .payload
+                .get("ref")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .or(frame.id)?;
+            let reason = frame
+                .payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown app error")
+                .to_string();
+            Some((ref_id, Err(reason)))
+        }
+        _ => None,
+    }
+}
+
 /// One connected iPad app session — the accepted WS stream, a pending-
 /// request map keyed by the generated request id (mirrors
 /// `ipad-app-ws.ts`'s `Map<string, PendingRequest>`, keyed by a `u64`
 /// counter here instead of a UUID string), and the parsed `hello`
 /// payload.
+/// A resolved (`cursor`/`ack` payload) or rejected (`error` reason)
+/// response, keyed by the request id/`ref` it correlates to.
+type PendingResponse = Result<serde_json::Value, String>;
+/// The shared table of in-flight requests awaiting a correlated response.
+type PendingMap = Arc<Mutex<HashMap<String, oneshot::Sender<PendingResponse>>>>;
+
 pub struct IpadCollectorSession {
     pub hello: IpadCollectorHello,
     write: Arc<Mutex<futures_util::stream::SplitSink<WebSocketStream<TcpStream>, WsMessage>>>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>>,
+    pending: PendingMap,
     next_id: Arc<AtomicU64>,
     /// Background task reading frames off the socket and resolving
     /// `pending` entries — held so it's dropped (and stops) when the
@@ -175,7 +229,8 @@ impl IpadCollectorSession {
         let payload = tokio::time::timeout(REQUEST_TIMEOUT, rx)
             .await
             .map_err(|_| anyhow::anyhow!("get-cursor timed out after {REQUEST_TIMEOUT:?}"))?
-            .map_err(|_| anyhow::anyhow!("get-cursor: session closed before a response arrived"))?;
+            .map_err(|_| anyhow::anyhow!("get-cursor: session closed before a response arrived"))?
+            .map_err(|reason| anyhow::anyhow!("get-cursor: app rejected: {reason}"))?;
         Ok(serde_json::from_value(payload)?)
     }
 
@@ -185,6 +240,42 @@ impl IpadCollectorSession {
     pub async fn get_tracked_cursor(&self) -> anyhow::Result<Option<CursorPos>> {
         let cur = self.get_cursor().await?;
         Ok(is_tracked_reading(&cur).then_some(cur))
+    }
+
+    /// `showScene()` — send `show-scene` with a base64-encoded image,
+    /// wait for the app's `ack` (correlated via `payload.ref`, NOT the
+    /// top-level `id` — see this module's header comment on why `ack`'s
+    /// correlation differs from `cursor`'s). One-time setup call (not a
+    /// hot path): sending the real home screen as a static scene keeps
+    /// iPadCollector in the FOREGROUND for the whole bench run, unlike
+    /// `ipad_go_home()`'s `Cmd+H`, which backgrounds it and kills the WS
+    /// session (found live 2026-08-29, see
+    /// docs/ipad-collector-showscene-redesign-plan.md).
+    pub async fn show_scene_image(&self, jpeg_or_png_bytes: &[u8]) -> anyhow::Result<()> {
+        use base64::Engine;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id.clone(), tx);
+
+        let image_b64 = base64::engine::general_purpose::STANDARD.encode(jpeg_or_png_bytes);
+        let frame = OutgoingFrame {
+            kind: "show-scene",
+            id,
+            payload: serde_json::json!({"kind": "image", "image": image_b64}),
+        };
+        let text = serde_json::to_string(&frame)?;
+        self.write
+            .lock()
+            .await
+            .send(WsMessage::Text(text.into()))
+            .await?;
+
+        tokio::time::timeout(REQUEST_TIMEOUT, rx)
+            .await
+            .map_err(|_| anyhow::anyhow!("show-scene timed out after {REQUEST_TIMEOUT:?}"))?
+            .map_err(|_| anyhow::anyhow!("show-scene: session closed before an ack arrived"))?
+            .map_err(|reason| anyhow::anyhow!("show-scene: app rejected: {reason}"))?;
+        Ok(())
     }
 }
 
@@ -205,8 +296,7 @@ pub async fn wait_for_ipad_collector_session(
     let ws = tokio_tungstenite::accept_async(stream).await?;
     let (write, mut read) = ws.split();
     let write = Arc::new(Mutex::new(write));
-    let pending: Arc<Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
 
     // Wait for `hello` inline (not yet spawning the steady-state reader
     // task — no requests are pending yet, so there's nothing to
@@ -274,14 +364,17 @@ pub async fn wait_for_ipad_collector_session(
             let Ok(frame) = serde_json::from_str::<IncomingFrame>(&text) else {
                 continue;
             };
-            // Only `cursor` (the `get-cursor` response) is in scope —
-            // ack/time-pong/cursor-event/tap-event/lifecycle/error are
-            // all explicitly out of scope per the reviewed plan.
-            if frame.kind == "cursor" {
-                if let Some(id) = frame.id {
-                    if let Some(tx) = pending_for_reader.lock().await.remove(&id) {
-                        let _ = tx.send(frame.payload);
-                    }
+            // `cursor` (get-cursor's response) and `error` (a rejected
+            // request, any kind) correlate via the top-level `id`; `ack`
+            // (show-scene's response) correlates via `payload.ref`
+            // instead — a genuinely different field, confirmed against
+            // `ipad-app-ws.ts`'s own `onMessage` switch (nixos-dev
+            // review, 2026-08-29). time-pong/cursor-event/tap-event/
+            // lifecycle remain explicitly out of scope per the reviewed
+            // plan — this module only speaks hello/get-cursor/show-scene.
+            if let Some((key, outcome)) = correlate_incoming_frame(frame) {
+                if let Some(tx) = pending_for_reader.lock().await.remove(&key) {
+                    let _ = tx.send(outcome);
                 }
             }
         }
@@ -299,6 +392,96 @@ pub async fn wait_for_ipad_collector_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn incoming(kind: &str, id: Option<&str>, payload: serde_json::Value) -> IncomingFrame {
+        IncomingFrame {
+            kind: kind.to_string(),
+            id: id.map(str::to_string),
+            payload,
+        }
+    }
+
+    #[test]
+    fn cursor_correlates_via_top_level_id() {
+        let frame = incoming("cursor", Some("7"), serde_json::json!({"x": 1.0}));
+        let (key, outcome) = correlate_incoming_frame(frame).expect("should correlate");
+        assert_eq!(key, "7");
+        assert_eq!(outcome.unwrap(), serde_json::json!({"x": 1.0}));
+    }
+
+    #[test]
+    fn cursor_with_no_id_does_not_correlate() {
+        // Real-world: shouldn't happen (the app always echoes an id for
+        // cursor responses), but the reader task must not panic if it
+        // somehow does.
+        let frame = incoming("cursor", None, serde_json::json!({}));
+        assert!(correlate_incoming_frame(frame).is_none());
+    }
+
+    #[test]
+    fn ack_correlates_via_payload_ref_not_top_level_id() {
+        // The real regression this test guards: ack's correlation key is
+        // payload.ref, NOT the top-level id (which the app may even
+        // leave absent on an ack) — confirmed against ipad-app-ws.ts's
+        // own onMessage switch during review.
+        let frame = incoming("ack", None, serde_json::json!({"ref": "3"}));
+        let (key, outcome) = correlate_incoming_frame(frame).expect("should correlate");
+        assert_eq!(key, "3");
+        assert!(outcome.is_ok());
+    }
+
+    #[test]
+    fn ack_with_no_ref_does_not_correlate() {
+        let frame = incoming("ack", Some("3"), serde_json::json!({}));
+        // Deliberately NOT keyed by the top-level id "3" — ack must use
+        // payload.ref, and there isn't one here, so no correlation.
+        assert!(correlate_incoming_frame(frame).is_none());
+    }
+
+    #[test]
+    fn error_correlates_via_payload_ref_and_rejects_with_the_reason() {
+        let frame = incoming(
+            "error",
+            None,
+            serde_json::json!({"ref": "5", "reason": "bad base64"}),
+        );
+        let (key, outcome) = correlate_incoming_frame(frame).expect("should correlate");
+        assert_eq!(key, "5");
+        assert_eq!(outcome.unwrap_err(), "bad base64");
+    }
+
+    #[test]
+    fn error_falls_back_to_top_level_id_when_payload_has_no_ref() {
+        let frame = incoming("error", Some("9"), serde_json::json!({}));
+        let (key, outcome) = correlate_incoming_frame(frame).expect("should correlate");
+        assert_eq!(key, "9");
+        assert_eq!(outcome.unwrap_err(), "unknown app error");
+    }
+
+    #[test]
+    fn unrecognized_frame_kind_does_not_correlate() {
+        let frame = incoming(
+            "lifecycle",
+            Some("1"),
+            serde_json::json!({"state": "active"}),
+        );
+        assert!(correlate_incoming_frame(frame).is_none());
+    }
+
+    #[test]
+    fn show_scene_frame_serializes_with_the_expected_shape() {
+        let frame = OutgoingFrame {
+            kind: "show-scene",
+            id: "2".to_string(),
+            payload: serde_json::json!({"kind": "image", "image": "aGVsbG8="}),
+        };
+        let text = serde_json::to_string(&frame).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["type"], "show-scene");
+        assert_eq!(parsed["id"], "2");
+        assert_eq!(parsed["payload"]["kind"], "image");
+        assert_eq!(parsed["payload"]["image"], "aGVsbG8=");
+    }
 
     #[test]
     fn random_uuid_v4_string_has_the_right_shape() {

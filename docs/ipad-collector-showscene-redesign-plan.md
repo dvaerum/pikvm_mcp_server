@@ -1,7 +1,13 @@
 # Plan: iPadCollector bench redesign — click against `showScene`, not the real home screen
 
-**Status: DRAFT, for review by pikvm-mcp-server@nixos-developer-system
-before any implementation.** Follow-up to
+**Status: IMPLEMENTED (2026-08-29)** — `show-scene`/`ack` + `error`
+handling added to `ipad_collector.rs` (8 new unit tests, all passing),
+`ipad_collector_ground_truth_bench.rs` updated to send the health-check
+screenshot as a one-time scene instead of calling `ipad_go_home()` per
+trial. 345/345 mover tests, workspace clippy `-D warnings` clean, fmt
+clean. **NOT run live yet** — code-complete and offline-tested only,
+deferring live execution per today's accumulated live-hardware volume
+(own judgment call, per the standing authorization). Follow-up to
 `docs/ipad-collector-ground-truth-bench-plan.md`'s RESULTS section
 (2026-08-29) — that doc's own protocol-bug fixes (sessionId format, `id`
 as a wire string, `t_ipad` as `f64`) all stand and are NOT touched here;
@@ -100,36 +106,49 @@ covers both.
 ## Scope check: is this still a small, additive change?
 
 Real new work, not a quick patch — same honest framing as the
-backgrounding gap itself: a new outgoing message type + a new
-correlation case (`ack`/`ref`) in `ipad_collector.rs`, base64 image
-encoding in the bench harness (the `image` crate is already a dev-
-dependency of this crate — check whether it needs to become a normal
-dependency, or whether base64 encoding needs its own small dependency;
-neither is in the workspace yet, flagging for review rather than
-silently picking one), and removing the per-trial `ipad_go_home()` call
-plus the trial-count/timing implications of that removal (trials should
-run FASTER now with no per-trial Cmd+H/swipe/slam overhead — worth
-noting as a secondary benefit, not the goal).
+backgrounding gap itself: a new outgoing message type + `ack`/`error`
+correlation cases in `ipad_collector.rs` (both keyed by `payload.ref`,
+distinct from `cursor`/`time-pong`'s top-level `id`), the `base64` crate
+(new normal dependency, decided per review — small/single-purpose,
+doesn't need a separate evaluation doc) for the image payload, and
+removing the per-trial `ipad_go_home()` call plus the trial-count/timing
+implications of that removal (trials should run FASTER now with no
+per-trial Cmd+H/swipe/slam overhead — worth noting as a secondary
+benefit, not the goal).
 
-## What I'm asking nixos-dev to review
+## Review (nixos-dev, incorporated below) — status: REVIEWED, ready to build
 
-1. Is reusing the existing pre-flight health-check screenshot as the
-   `show-scene` source image the right call, or should a fresh
-   screenshot be taken specifically for this purpose (e.g., in case the
-   health-check screenshot predates some relevant state)?
-2. The `ack`/`ref` vs `cursor`/`id` correlation distinction — does the
-   plan describe this correctly per your own reading of
-   `ipad-app-ws.ts`, or is there a subtlety in the real reference
-   implementation's `onMessage` switch this plan is missing?
-3. The stated known-limitation (this bench no longer tests real
-   app-interaction, only detection/landing accuracy) — does that framing
-   correctly match what category 1's sign-off criterion actually
-   requires, or is there a reason the ORIGINAL real-home-screen approach
-   still matters enough to be worth solving differently (e.g., some
-   other way to keep the app alive in the background) rather than
-   switching to a static scene?
-4. Any risk in choosing a base64/image-encoding dependency not yet
-   evaluated in `docs/rust-port-plan.md`'s library-first ground rule —
-   should this route through the same evaluation process as `ort`/
-   `axum`/`tokio-tungstenite` did, or is this small enough to decide
-   inline in this plan's own review?
+1. **Q1 (reusing the health-check screenshot)**: fine as-is — confirmed
+   the bench's existing health-check call is `client.screenshot(None)`
+   (no `ScreenshotOptions.max_width`/`max_height`), i.e. the RAW captured
+   frame, not a downscaled preview. No change needed.
+2. **Q2 (ack/ref correlation)**: confirmed exactly right against
+   `src/pikvm/ipad-app-ws.ts:198-227` directly — `ack` computes `ref` from
+   `payload.ref`; `cursor`/`time-pong` compute it from the top-level `id`.
+   Genuinely separate branches needed, as described.
+3. **Q3 (framing matches category 1's bar)**: agreed, right trade —
+   category 1 is a detection/landing question (self-report vs.
+   independent ground truth), `click_at_n80_bench.rs` already covers
+   real-home-screen interaction without independent ground truth.
+   Complementary, not overlapping.
+4. **Q4 (base64 dependency)**: use the `base64` crate (small,
+   single-purpose, near-zero transitive deps) rather than hand-rolling.
+   Doesn't need the heavier `ort`/`axum`/`tokio-tungstenite`-style
+   evaluation — those added real long-term runtime capabilities; this is
+   encoding one static payload once per bench run. Decided inline, no
+   separate evaluation doc.
+5. **New gap nixos-dev caught, not in the original plan: the `error`
+   case.** Same TS source, lines 248-259 — if the app rejects a request
+   (malformed payload, etc.), it sends `{type:'error', payload:{ref,
+   reason}}`, rejecting the pending promise with the real reason.
+   `ipad_collector.rs`'s reader task doesn't handle `error` at all
+   (explicitly out of scope in its own original comment). Without it, a
+   `show-scene` failure would just report a generic 5s timeout instead of
+   the app's actual rejection reason. Not launch-blocking (the existing
+   `REQUEST_TIMEOUT` still fires, nothing hangs), but cheap to wire
+   alongside the `ack` branch already being added — **incorporated**:
+   implementation adds an `error`→reject branch alongside `ack`, not just
+   `ack` alone as the original plan described.
+
+All 5 points incorporated below / in the implementation. No open
+questions remaining.
