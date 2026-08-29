@@ -1181,3 +1181,68 @@ Not yet re-run against real hardware as of this entry — offline fix only,
 reviewed calmly per the manager's explicit "no rush, clear head matters
 more than speed" instruction before the next live attempt. Category 2
 remains open until the guarded retry actually runs and passes.
+
+---
+
+**§8 categories 2/5 — combined live session, 2026-08-29, georgs-mac-mini.
+PAUSED, not yet completed.** Full arc:
+
+Two real incidents (guard-bypass, then guard-on-wrong-precondition — both
+documented above), fixed via `AnchorRequest.slam_calls` + a corrected
+`CallerAsserted` precondition, both reviewed by nixos-dev and approved by
+the manager. Live retry (v2, through the fix) locked the iPad a second
+time — root cause this time was genuinely `CallerAsserted` asserted on an
+ACTIVE screen instead of a lock screen (the guard never refuses on the
+safety question by design; going through it changed nothing about what
+HID reached the iPad). Recovered cleanly both times via `unlock_ipad`'s
+key-press path — no data loss, no lockout, in either case.
+
+Wrote a combined category-2/category-5 plan (deliberately lock → confirm
+via a real screenshot → guarded slam pair on the confirmed-safe
+precondition → real recovery), reviewed fresh by nixos-dev (confirmed the
+`CallerAsserted` contract read, `TopLeft` corner safety against iOS's
+bottom-corner lock-screen quick actions, sourced the Space-once-not-Enter
+wake mechanism from `ipad-unlock.ts`) and signed off by the manager.
+
+Building and live-testing this plan surfaced three further environmental
+findings, each fixed and manager-approved before the next attempt, none a
+safety incident (every fail-closed/hard-abort path fired correctly, zero
+unsafe HID at any point):
+1. A two-process split (lock+wake as one process, guarded slam as a
+   second) raced the iPad's own short wake-then-redim window — fixed by
+   merging into one continuous process with a file-based confirmation
+   gate (the saved screenshot doesn't decay, only the human veto is
+   time-bounded).
+2. The informational baseline screenshot (step 1) 503'd twice before the
+   lock command even ran — made best-effort instead of fatal, since it
+   was never safety-relevant.
+3. The `streamer.source.online` hard-abort produced FALSE aborts (live-
+   confirmed: reported ONLINE, including across a 3x retry, while a
+   direct screenshot moments later showed the iPad genuinely, stably
+   locked) — root-caused to ustreamer's own on-demand run state, not the
+   iPad's lock state. Downgraded to informational-only; the real gate
+   (per this codebase's own stated "no automated lock-screen classifier,
+   human judgment on the real image" principle) is the human review of
+   the confirmation screenshot, which was always the actual safety
+   boundary and stayed unchanged through all three fixes.
+
+With all three fixes applied, a live run finally got past the lock
+command and produced a confirmation screenshot — but it showed a Touch
+ID/passcode prompt, not the plain lock screen the plan was designed
+around. Per the harness's own explicit "if ambiguous, let it time out"
+instruction, did NOT confirm — correct fail-closed abort, zero HID near
+a corner. `unlock_ipad`'s standard key-press recovery did not clear this
+state (still showed the Touch ID prompt); root-caused as this rig's own
+previously-documented Touch-ID-style lockout pattern (repeated key/wake
+presses in a short window). Recovered via the pre-authorized
+`PIKVM_IPAD_PASSCODE` path (`unlock_ipad_with_code`) — confirmed visually
+back to the exact starting screen, no data loss.
+
+**Status: PAUSED, not resumed in this session** — given the real,
+sustained volume of live-hardware contact already made (multiple slams,
+many wake/key presses, one genuine passcode-recovery event), deliberately
+not stacking further attempts in the same sitting. Categories 2 and 5
+remain open: the harness design itself is now believed sound (three real
+environmental bugs found and fixed, the actual safety boundary never
+breached), but zero clean runs have yet reached the guarded slam pair
+itself. Resume in a fresh session per the manager's call.
