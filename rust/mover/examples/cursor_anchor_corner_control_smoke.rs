@@ -60,6 +60,20 @@
 //! real screenshot, fail-closed on anything but explicit "yes", before
 //! the slam) has been untouched since the original review.
 //!
+//! **v7 (2026-08-29), wake-delay fix from the isolated sweep.** This
+//! harness's own repeated Touch-ID escalations today are now explained,
+//! not just observed: v1-v6 all sent the wake `Space` press IMMEDIATELY
+//! after the lock+2.5s settle — exactly the SHORT-elapsed-delay condition
+//! `docs/wake-key-delay-sweep-plan.md`'s controlled sweep found leans
+//! Touch ID (2/2 clean B at a 2s delay). That same sweep found an 8s
+//! delay leans the other way (2/2 clean A after escalation). Fixed:
+//! `WAKE_DELAY_S` sleep inserted before the first wake attempt. Not a
+//! guaranteed fix (the sweep's own d4 data point came back inconclusive,
+//! so the exact threshold isn't pinned down) — an evidence-based default,
+//! not a proven guarantee. The retry loop's own per-attempt re-press
+//! behavior (unchanged) is a separate, pre-existing design choice not
+//! touched by this fix.
+//!
 //! Run (writes /tmp/corner_control_confirm.flag — delete any stale copy
 //! from a previous run before starting; the process waits up to 30s for
 //! it to contain exactly "yes"):
@@ -82,6 +96,13 @@ const CONFIRM_FLAG_PATH: &str = "/tmp/corner_control_confirm.flag";
 const CONFIRM_TIMEOUT_S: u64 = 30;
 const ALREADY_LOCKED_FLAG_PATH: &str = "/tmp/corner_control_already_locked.flag";
 const ALREADY_LOCKED_TIMEOUT_S: u64 = 15;
+/// Elapsed idle time on the confirmed-lit lock screen before the wake
+/// `Space` press — see this file's own v7 header note and
+/// `docs/wake-key-delay-sweep-plan.md`'s RESULTS: 2s leaned Touch ID
+/// (2/2 clean B), 8s leaned plain-lock (2/2 clean A after escalation).
+/// An evidence-based default, not a proven guarantee — the sweep's own
+/// middle data point (4s) never resolved.
+const WAKE_DELAY_S: u64 = 8;
 
 /// Both controls assert safety BECAUSE THIS process's OWN screenshot
 /// (saved just before the confirmation wait below, re-confirmed by the
@@ -221,6 +242,14 @@ async fn main() {
                 eprintln!("(informational) streamer status read failed: {e}");
             }
         }
+
+        // v7: sleep WAKE_DELAY_S before the wake press — see the header
+        // note and docs/wake-key-delay-sweep-plan.md. The screen is
+        // confirmed lit and locked at this point (Ctrl+Cmd+Q + 2.5s
+        // above); this holds it idle for a controlled duration before
+        // the Space press, matching the sweep's own condition (b).
+        eprintln!("=== sleeping WAKE_DELAY_S={WAKE_DELAY_S}s before the wake press (evidence-based default from the delay sweep) ===");
+        tokio::time::sleep(Duration::from_secs(WAKE_DELAY_S)).await;
 
         // Step 4: wake + confirmation screenshot, retried as a pair until
         // one succeeds. Retrying the SCREENSHOT ITSELF (not a flag) is the
