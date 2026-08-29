@@ -135,10 +135,21 @@ messages scattered across the session.
   done; its live confirmation (§2 item 6) remains open per the inventory
   above, and can be retried independently of the other three.
 
-**Must run in this order (hard dependency)**:
-1. Wake-key isolation experiment (small, low-risk, 3-5 trials) →
-2. Categories 2/5's combined gate retry (depends entirely on (1)'s
-   outcome — either retry as-designed or redesign the wake step first).
+**Must run in this order (hard dependency) — step 1 is now DONE, its
+outcome changes step 2's shape**:
+1. Wake-key isolation experiment — RAN (commit c13142e, 4 trials + 2
+   ad-hoc checks), result genuinely mixed (see §1's inventory row) →
+2. Categories 2/5's combined gate retry: per §2 item 5, a mixed result
+   means the ORIGINAL plan (retry `Space`-once as designed) is not
+   justified by this outcome — the gate's wake step should be redesigned
+   around the mouse-move fallback (already built into
+   `cursor_anchor_corner_control_smoke.rs` as `--fallback-mouse-move`)
+   as the default, not another retry of the same assumption. A
+   controlled 2s/4s/8s delay sweep (per the wake-key plan's own RESULTS
+   section) could still salvage `Space`-once if the timing-confound
+   theory holds — that sweep, if it happens, is itself a prerequisite
+   to retrying the combined gate with `Space`-once rather than jumping
+   straight to the mouse-move fallback.
 
 **Independent of everything else in this table**:
 - `task_4b034fc4e018` (it-03400) — different appliance, different
