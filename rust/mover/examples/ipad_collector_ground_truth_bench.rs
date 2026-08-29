@@ -43,16 +43,34 @@
 //! - Tolerance: the established detected->tap bias measurement, 5.9px,
 //!   as the noise floor — not a guessed threshold.
 //!
-//! Run (after relaunching iPadCollector and confirming a fresh
-//! health-check screenshot):
-//!   PIKVM_HOST=... PIKVM_USERNAME=... PIKVM_PASSWORD=... \
-//!   PIKVM_PROXY=http://127.0.0.1:8888 ORT_DYLIB_PATH=... \
-//!   PIKVM_ML_VERIFIER_MODEL=$(pwd)/../ml/crop-heatmap.onnx \
-//!   cargo run -p pikvm-mcp-mover --example ipad_collector_ground_truth_bench
+//! **Scene-image ordering, found live 2026-08-29**: the scene image MUST
+//! be captured BEFORE relaunching iPadCollector, not after. By the time
+//! THIS binary runs (per its own contract above, always after the
+//! relaunch), the app is already foreground showing its OWN dark idle
+//! view — a live capture at that point reproduces the SAME dark frame
+//! deterministically (confirmed: identical mean brightness across 5
+//! retries), not a transient torn-frame race `capture_until_bright_enough`
+//! can retry past. Pass `SCENE_IMAGE_PATH` pointing at a screenshot taken
+//! while the real home screen was still foreground (before the relaunch)
+//! to use that instead; omitting it falls back to a live capture, which
+//! only works if iPadCollector genuinely hasn't been relaunched yet.
+//!
+//! Run:
+//!   1. Take a screenshot of the real home screen (before relaunching).
+//!   2. `xcrun devicectl device process launch --terminate-existing \
+//!      --device <UDID> com.bb.iPadCollector`
+//!   3. PIKVM_HOST=... PIKVM_USERNAME=... PIKVM_PASSWORD=... \
+//!      PIKVM_PROXY=http://127.0.0.1:8888 ORT_DYLIB_PATH=... \
+//!      PIKVM_ML_VERIFIER_MODEL=$(pwd)/../ml/crop-heatmap.onnx \
+//!      SCENE_IMAGE_PATH=/path/to/step-1-screenshot.jpg \
+//!      cargo run -p pikvm-mcp-mover --example ipad_collector_ground_truth_bench
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use pikvm_mcp_detection_vision::brightness::{
+    analyze_brightness, AnalyzeBrightnessOptions, VERY_DIM_THRESHOLD,
+};
 use pikvm_mcp_detection_vision::orientation::{
     clear_orientation_cache, detect_ipad_bounds_from_buffer, DetectOptions, IpadBounds,
 };
@@ -83,7 +101,7 @@ fn ipad_policy() -> HidPolicy {
         forbid_slam_on_ipad: true,
         chunk_pace_ms: Some(100),
         max_residual_px: Some(15.0),
-        dim_threshold: pikvm_mcp_detection_vision::brightness::VERY_DIM_THRESHOLD,
+        dim_threshold: VERY_DIM_THRESHOLD,
         apply_tap_bias: true,
     }
 }
@@ -161,6 +179,53 @@ async fn get_ground_truth_with_reconnect(
     }
 }
 
+/// Capture a screenshot, retrying if it comes back too dark to be a real
+/// usable frame — found live 2026-08-29: `xcrun devicectl device process
+/// launch --terminate-existing` reliably produces a dark/torn capture on
+/// the VERY NEXT screenshot (reproduced 2/2 times), regardless of how
+/// bright the screen was moments before the relaunch. A single, unretried
+/// capture right after a relaunch is not trustworthy — this bit both the
+/// health-check AND the show-scene source image (the same dark frame got
+/// faithfully re-rendered by iPadCollector, then correctly triggered
+/// click_at's own brightness abort on all 20 trials — a safe result, but
+/// not a useful one). Checks whole-frame mean brightness against the
+/// established `VERY_DIM_THRESHOLD` (35.0) — not a guessed number, and
+/// not restricted to the detected content region (no bounds detected
+/// yet at this point) since a genuinely torn/black frame reads dark by
+/// ANY measure, region or not.
+async fn capture_until_bright_enough(
+    client: &PiKVMClient,
+    max_attempts: u32,
+    settle_ms: u64,
+) -> anyhow::Result<Vec<u8>> {
+    let mut last_mean = 0.0;
+    for attempt in 1..=max_attempts {
+        let shot = client.screenshot(None).await?;
+        let report = analyze_brightness(&shot.buffer, AnalyzeBrightnessOptions { region: None })?;
+        last_mean = report.mean;
+        if report.mean >= VERY_DIM_THRESHOLD {
+            if attempt > 1 {
+                eprintln!(
+                    "capture_until_bright_enough: attempt {attempt}/{max_attempts} OK (mean={:.1})",
+                    report.mean
+                );
+            }
+            return Ok(shot.buffer);
+        }
+        eprintln!(
+            "capture_until_bright_enough: attempt {attempt}/{max_attempts} too dark \
+             (mean={:.1} < {VERY_DIM_THRESHOLD}) — retrying after {settle_ms}ms",
+            report.mean
+        );
+        tokio::time::sleep(Duration::from_millis(settle_ms)).await;
+    }
+    anyhow::bail!(
+        "capture_until_bright_enough: still too dark after {max_attempts} attempts \
+         (last mean={last_mean:.1} < {VERY_DIM_THRESHOLD}) — a human should check the real \
+         device state before retrying"
+    )
+}
+
 #[tokio::main]
 async fn main() {
     let host = std::env::var("PIKVM_HOST").expect("set PIKVM_HOST");
@@ -177,11 +242,35 @@ async fn main() {
 
     std::fs::create_dir_all(OUT_DIR).expect("create output dir");
 
-    let health = client
-        .screenshot(None)
-        .await
-        .expect("health-check screenshot failed");
-    std::fs::write(format!("{OUT_DIR}/00-health-check.jpg"), &health.buffer)
+    // The scene-source image MUST come from BEFORE iPadCollector is
+    // relaunched — found live 2026-08-29: by the time this binary's own
+    // health-check screenshot runs (per this binary's own documented
+    // contract, the app relaunch already happened as a separate prior
+    // step), iPadCollector is ALREADY foreground, showing its own dark
+    // idle view, not the real home screen. Retrying a live capture at
+    // that point doesn't help — it's not a transient torn frame, it's
+    // the app's own genuinely-dark default view, reproduced identically
+    // (mean=16.0, five times in a row) — so `capture_until_bright_enough`
+    // stays as real protection against an actual transient race, but a
+    // human must supply an ALREADY-good image captured before relaunch.
+    let health_buffer = match std::env::var("SCENE_IMAGE_PATH") {
+        Ok(path) => {
+            eprintln!("=== using pre-captured scene image: {path} (must have been taken BEFORE relaunching iPadCollector) ===");
+            std::fs::read(&path)
+                .unwrap_or_else(|e| panic!("failed to read SCENE_IMAGE_PATH={path}: {e}"))
+        }
+        Err(_) => {
+            eprintln!(
+                "=== SCENE_IMAGE_PATH not set — falling back to a live capture, which is ONLY \
+                 valid if iPadCollector has NOT been relaunched yet (unusual for a normal run; \
+                 prefer capturing a screenshot BEFORE relaunching and passing its path) ==="
+            );
+            capture_until_bright_enough(&client, 5, 1500)
+                .await
+                .expect("health-check screenshot never came back bright enough to trust")
+        }
+    };
+    std::fs::write(format!("{OUT_DIR}/00-health-check.jpg"), &health_buffer)
         .expect("write health-check screenshot");
     eprintln!(
         "=== HEALTH CHECK: {OUT_DIR}/00-health-check.jpg — STOP AND INSPECT before trusting this \
@@ -205,10 +294,10 @@ async fn main() {
     // reviewed plan. iPadCollector stays foreground for the rest of the
     // run; no per-trial backgrounding, no per-trial re-sending.
     session
-        .show_scene_image(&health.buffer)
+        .show_scene_image(&health_buffer)
         .await
         .expect("show-scene failed — see docs/ipad-collector-showscene-redesign-plan.md");
-    eprintln!("=== show-scene applied (health-check image, {} bytes) — iPadCollector stays foreground for all {N} trials ===", health.buffer.len());
+    eprintln!("=== show-scene applied (health-check image, {} bytes) — iPadCollector stays foreground for all {N} trials ===", health_buffer.len());
 
     let scale_learner =
         std::sync::Mutex::new(ScaleLearner::new(ScaleLearnerOpts::default(), false));

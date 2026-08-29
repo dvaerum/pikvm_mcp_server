@@ -2,11 +2,23 @@
 
 ## RESULTS (2026-08-29, run live per manager's standing authorization)
 
-**Status: RUN LIVE, 0/20 trials completed — NOT the bench's own success
-criteria, but real, valuable findings: 2 real protocol bugs found+fixed
-(confirmed working end-to-end via an isolated probe), plus a genuine
-architectural gap that blocks the full N=20 run and needs a redesign +
-review before retrying, not a quick patch.**
+**FINAL STATUS: N=20 COMPLETED SUCCESSFULLY — category 1
+(task_37374b4bce6d) is done.** This section records the full arc: the
+initial 0/20 run below, the architectural fix
+(docs/ipad-collector-showscene-redesign-plan.md), a second real ordering
+bug that fix's own first live attempt surfaced, and the final successful
+run. Full final-run detail lives in the redesign plan doc's own RESULTS
+section (not duplicated here) — summary: 20/20 trials, zero reconnects,
+zero missing-ground-truth trials, 19/20 within the 5.9px tolerance, 1/20
+marginally over (6.245px, noise-floor territory) confirmed visually as a
+real, close, correct landing.
+
+**Initial run, preserved for the record (below): RUN LIVE, 0/20 trials
+completed** — NOT the bench's own success criteria, but real, valuable
+findings: 2 real protocol bugs found+fixed (confirmed working end-to-end
+via an isolated probe), plus a genuine architectural gap that blocked the
+full N=20 run and needed a redesign + review before retrying, not a
+quick patch.
 
 ### Bugs found and fixed in `rust/mover/src/ipad_collector.rs`
 

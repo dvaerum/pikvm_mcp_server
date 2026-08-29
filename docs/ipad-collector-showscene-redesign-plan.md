@@ -1,13 +1,45 @@
 # Plan: iPadCollector bench redesign — click against `showScene`, not the real home screen
 
-**Status: IMPLEMENTED (2026-08-29)** — `show-scene`/`ack` + `error`
-handling added to `ipad_collector.rs` (8 new unit tests, all passing),
-`ipad_collector_ground_truth_bench.rs` updated to send the health-check
-screenshot as a one-time scene instead of calling `ipad_go_home()` per
-trial. 345/345 mover tests, workspace clippy `-D warnings` clean, fmt
-clean. **NOT run live yet** — code-complete and offline-tested only,
-deferring live execution per today's accumulated live-hardware volume
-(own judgment call, per the standing authorization). Follow-up to
+**Status: RUN LIVE, SUCCESSFUL (2026-08-29) — the architectural gap this
+plan targeted is genuinely closed, and category 1 (task_37374b4bce6d) is
+now complete.** `show-scene`/`ack` + `error` handling added to
+`ipad_collector.rs` (8 new unit tests). The redesign itself worked
+exactly as intended: 20/20 trials completed with ZERO WebSocket
+disconnects (the original bug — `ipad_go_home()` backgrounding the app —
+never recurred, because it's gone).
+
+**A second, real bug surfaced and was fixed before the run could
+succeed**: the scene-source screenshot must be captured BEFORE
+relaunching iPadCollector, not after. The first two live attempts both
+came back with `ground_truth=None` (or a solid-black rendered scene) on
+every trial — not the architectural bug, but a deterministic ordering
+issue: by the time this binary's own health-check screenshot runs (always
+AFTER the required app relaunch, per this binary's own contract),
+iPadCollector is already foreground showing its own dark idle view, not
+the real home screen. A live capture at that point reproduced the
+identical dark frame 5/5 retries — not a transient torn-frame race,
+which `capture_until_bright_enough` (added as real, still-useful
+protection) correctly couldn't fix. Fixed by adding a `SCENE_IMAGE_PATH`
+input: capture the real home screen BEFORE relaunching, pass that file
+in, and the app relaunch itself no longer touches the scene source at
+all.
+
+**Final result, N=20**: all 20 trials completed, ZERO reconnects, ZERO
+missing-ground-truth trials (`getTrackedCursor()` returned a real reading
+every time, once the scene actually showed the real home screen). 19/20
+disagreement readings at 4.96px (well inside the 5.9px tolerance); 1/20
+at 6.245px (marginally over — 0.35px past threshold, consistent with
+this project's own established noise floor, not a real finding).
+Visually confirmed on the one flagged trial: the real home screen
+rendered correctly inside iPadCollector's view, cursor landed right next
+to the Settings icon target. `click_at.verified=false` on every trial —
+expected and already documented above: no real app reacts to a click on
+a static image, so `click_at`'s own diff-based verification can't fire;
+the independent ground truth is what actually validates the landing
+here, exactly per this bench's whole reason for existing.
+
+345/345 mover tests, workspace clippy `-D warnings` clean, fmt clean.
+Follow-up to
 `docs/ipad-collector-ground-truth-bench-plan.md`'s RESULTS section
 (2026-08-29) — that doc's own protocol-bug fixes (sessionId format, `id`
 as a wire string, `t_ipad` as `f64`) all stand and are NOT touched here;
