@@ -13,6 +13,7 @@
 //! along the way (per the plan's §3 magic-number examples and the ADR's
 //! own warning).
 
+pub mod auto_crop;
 pub mod brightness;
 pub mod capture;
 pub mod cursor_detect;

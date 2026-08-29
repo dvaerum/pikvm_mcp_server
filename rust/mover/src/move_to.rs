@@ -7,22 +7,26 @@
 //! **Built in parallel across two agents, reconciled via branch merge
 //! (2026-08-29)** — see `docs/rust-port-plan.md` §7 item 4 (v13, v16,
 //! v17) for the full planned layout. `correction_math`/`motion_diff`/
-//! `template_cache`/`wiggle_verify` are nixos-dev's; `types`/`origin`/
-//! `resolved_options` (and `legacy_move`, next) are georgs-mac-mini's.
-//! Each nixos-dev file shipped with its own provisional stand-in for
-//! `move_to::types`' shared types (documented inline in each file as
-//! "independently buildable/testable now, superseded once merged") —
-//! reconciled at merge time by switching each file to `super::types`'
-//! real shapes; see this crate's git history for the exact diffs.
-//! `pointer_accel_bridge` (the opt-in `PIKVM_USE_LEARNED_BALLISTICS`
-//! path) is still pending — `legacy_move.rs` doesn't need it (v13
-//! scoped it out of the initial port; off by default, gated behind a
-//! model file this repo doesn't bundle).
+//! `template_cache`/`wiggle_verify`/`pointer_accel_bridge` are
+//! nixos-dev's; `types`/`origin`/`resolved_options`/`legacy_move` are
+//! georgs-mac-mini's. Each nixos-dev file shipped with its own
+//! provisional stand-in for `move_to::types`' shared types (documented
+//! inline in each file as "independently buildable/testable now,
+//! superseded once merged") — reconciled at merge time by switching each
+//! file to `super::types`' real shapes; see this crate's git history for
+//! the exact diffs. `pointer_accel_bridge` (the opt-in
+//! `PIKVM_USE_LEARNED_BALLISTICS` path) is a deliberate stub —
+//! `legacy_move.rs` doesn't call it (v13 scoped the real forward-model
+//! query out of the initial port; off by default, gated behind a model
+//! file this repo doesn't bundle) — kept isolated in its own file per
+//! the original decomposition note so this opt-in path never entangles
+//! with the default path's files.
 
 mod correction_math;
 mod legacy_move;
 mod motion_diff;
 mod origin;
+pub mod pointer_accel_bridge;
 mod resolved_options;
 mod template_cache;
 mod types;

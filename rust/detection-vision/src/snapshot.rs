@@ -21,6 +21,25 @@ pub struct SavedSnapshot {
     pub bytes: usize,
 }
 
+/// Crop `buffer` to `region` and re-encode as JPEG. Extracted from
+/// `save_snapshot`'s own inline crop step (idle Phase, this session) so
+/// the auto-crop feature (`auto_crop.rs`, task_f04c3909db11) can reuse
+/// the exact same crop-and-reencode path for the in-memory
+/// `pikvm_screenshot` response instead of duplicating the
+/// `image::load_from_memory`/`crop_imm`/re-encode sequence.
+pub fn crop_jpeg(buffer: &[u8], region: SnapshotRegion) -> anyhow::Result<Vec<u8>> {
+    let img = image::load_from_memory(buffer)?;
+    let left = region.x.max(0.0).round() as u32;
+    let top = region.y.max(0.0).round() as u32;
+    let cropped = img.crop_imm(left, top, region.width, region.height);
+    let mut buf = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut buf);
+    cropped
+        .to_rgb8()
+        .write_to(&mut cursor, image::ImageFormat::Jpeg)?;
+    Ok(buf)
+}
+
 /// Optionally crop `buffer` to `region`, then write it to `save_path`
 /// (creating parent directories). Returns the resolved absolute path +
 /// byte count.
@@ -37,19 +56,9 @@ pub async fn save_snapshot(
     if save_path.trim().is_empty() {
         anyhow::bail!("save_snapshot: savePath is required");
     }
-    let out: Vec<u8> = if let Some(r) = region {
-        let img = image::load_from_memory(buffer)?;
-        let left = r.x.max(0.0).round() as u32;
-        let top = r.y.max(0.0).round() as u32;
-        let cropped = img.crop_imm(left, top, r.width, r.height);
-        let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        cropped
-            .to_rgb8()
-            .write_to(&mut cursor, image::ImageFormat::Jpeg)?;
-        buf
-    } else {
-        buffer.to_vec()
+    let out: Vec<u8> = match region {
+        Some(r) => crop_jpeg(buffer, r)?,
+        None => buffer.to_vec(),
     };
     // The parent dir may not exist yet (that's exactly the case we need to
     // create below), so resolve via std::path::absolute (pure path math, no
@@ -98,6 +107,24 @@ mod tests {
         assert_eq!(decoded.height(), 48);
 
         cleanup(&dir);
+    }
+
+    #[test]
+    fn crop_jpeg_returns_a_buffer_decoding_to_the_requested_region_dimensions() {
+        let buf = jpeg(100, 100, 128);
+        let cropped = crop_jpeg(
+            &buf,
+            SnapshotRegion {
+                x: 10.0,
+                y: 20.0,
+                width: 30,
+                height: 40,
+            },
+        )
+        .unwrap();
+        let decoded = image::load_from_memory(&cropped).unwrap();
+        assert_eq!(decoded.width(), 30);
+        assert_eq!(decoded.height(), 40);
     }
 
     #[tokio::test]
