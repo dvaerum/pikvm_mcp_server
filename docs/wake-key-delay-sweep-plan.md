@@ -1,7 +1,80 @@
 # Plan: wake-key delay sweep (2s/4s/8s idle-delay, controlled)
 
-**Status: REVIEWED (nixos-dev, 2026-08-29) — ready to build, not yet run
-live.** Follow-up to
+## RESULTS (2026-08-29, run live)
+
+**Status: RUN LIVE — genuinely informative, though d4 came back
+unresolved.** Interleaved round-robin per the reviewed design: 2/1,
+4/1, 2/1's own escalations as needed, ending at 8 trials total (2 each
+for d2, 3 each for d4 and d8 after escalation).
+
+**Final tally**:
+- **d2 (2s delay): 2/2 clean B** (Touch ID prompt), no disagreement, no
+  escalation needed.
+- **d8 (8s delay): 2 clean A + 1 inconclusive** (torn capture on
+  screenshot #3; circumstantial cleanup evidence leaned B, but see the
+  methodology note below on why that's now known unreliable) — escalated
+  to a 3rd trial per the disagreement rule, both round-2 and round-3
+  trials came back clean A. Leans A.
+- **d4 (4s delay): 3/3 INCONCLUSIVE** — every single attempt's
+  screenshot #3 came back torn (the documented capture-race artifact:
+  correct partial fragment + solid colour fill), including after
+  escalating to a 3rd trial. Genuinely unresolved after the plan's own
+  escalation budget; not chasing a 4th attempt today (open-ended
+  retrying isn't what "escalate once on disagreement" means). Whether
+  this is small-sample bad luck or something real about the 4s mark
+  landing on a capture-fragile moment is an open question, not resolved
+  here — reporting the shape honestly rather than forcing a guess.
+
+**Shape of the result**: short delay (2s) → clean B every time; long
+delay (8s) → clean A both times it could be classified; middle delay
+(4s) → uninformative (torn every time). This is CONSISTENT with the
+timing-confound hypothesis (a real threshold somewhere between 2s and
+8s) but does not pin down the threshold precisely, since the one value
+that could have narrowed it down (4s) never produced a classifiable
+result.
+
+**Free signal check (nixos-dev's Q3 answer, reviewed)**: screenshot #2
+(the confirm-lock shot) showed the SAME full-brightness, crisp
+appearance across every single trial, d2/d4/d8 alike — no visible
+relative dimming difference was ever observed at nominal t=0. This is a
+real (negative) data point: whatever the backlight-dim timer's real
+threshold is, it hadn't visibly started by the time screenshot #2 was
+captured in ANY trial, at least not detectably by eye.
+
+**Real methodology finding, not anticipated in the plan**: `unlock_ipad()`'s
+own cleanup step can ITSELF escalate a genuine plain-lock-screen (A) into
+the Touch ID prompt (B) — observed directly in d8's 3rd trial: screenshot
+#3 was unambiguously A (confirmed by eye), but the cleanup screenshot
+taken moments later (after `unlock_ipad()`'s own Escape→Enter→Space
+sequence ran) showed Touch ID. This means the cleanup/circumstantial
+screenshot is NOT a reliable stand-in for a torn screenshot #3 — a
+torn result must be reported as genuinely inconclusive, full stop, not
+inferred from what the cleanup step incidentally shows afterward (this
+plan's own earlier informal circumstantial reads on d8-r1/d4-r1/d4-r2
+should be read with this caveat — they were reasonable guesses at the
+time but are now known to rest on an unreliable signal).
+
+**Recommendation**: the shape (2s→B, 8s→A) is suggestive enough to
+recommend the combined guard/slam gate's wake step use a delay closer to
+8s than 2s before its `Space` press, but NOT to treat this as a fully
+pinned-down threshold — the 4s data point that would have narrowed it
+down never resolved. If the combined gate needs a precise value rather
+than "closer to 8s," a follow-up sweep at finer granularity (e.g. 5s/6s/
+7s) with a LONGER post-press settle before screenshot #3 (to reduce the
+torn-frame rate that sank d4 here) would be the next real step — not
+required before deciding "use something like 8s, not 2s" as an interim
+default.
+
+Committed alongside the harness at `<pending>` (see
+`docs/rust-port-plan.md`'s journal for the exact commit).
+
+---
+
+*(Below: the original reviewed plan, preserved as the historical record
+of what was designed and why — superseded by the RESULTS section above,
+not rewritten.)*
+
+Follow-up to
 `docs/wake-key-isolated-experiment-plan.md`'s RESULTS section
 (2026-08-29) — this plan does NOT re-litigate that experiment's own
 scope or recovery ladder, only the controlled follow-up it recommended.
