@@ -282,6 +282,44 @@ pub fn detect_bounds_from_buffer_or_null(
     detect_ipad_bounds_from_buffer(buffer, options).ok()
 }
 
+/// **NEW — not a port of any TS source.** True when `(x, y)` falls inside
+/// the HDMI frame but OUTSIDE the most-recently-detected iPad content
+/// bounds — i.e. in the known black letterbox. Backs the auto-crop
+/// design's dead-zone guard (task_f04c3909db11, added during review by
+/// `pikvm-mcp-server@georgs-mac-mini`): a forgotten `pikvm_screenshot`
+/// crop offset isn't a near-miss click, it's a ~600px miss (the iPad
+/// content inset) landing on a completely different, possibly
+/// destructive icon — and nobody legitimately targets the black bar, so
+/// a target inside it is a near-certain signature of exactly that bug.
+///
+/// Reads the SAME cache `detect_ipad_bounds_from_buffer` already
+/// maintains — zero new state, zero new computation on the hot path.
+/// Returns `false` (no warning) when no detection has landed yet this
+/// process, matching every other cache-reading caller's own
+/// fail-open-to-inert default; this is an advisory guard, not a hard
+/// refusal, so a cold cache should never block a legitimate first click.
+///
+/// Intended caller: `pikvm_mouse_move_to`/`pikvm_mouse_click_at`
+/// (`rust/mover`'s `move_to.rs`/`click_at.rs`, not yet merged into this
+/// branch as of this writing — see task_f04c3909db11's notes for the
+/// handoff to `pikvm-mcp-server@georgs-mac-mini`, who owns those call
+/// sites and their mandatory real-hardware gate).
+pub fn point_in_known_letterbox(x: f64, y: f64) -> bool {
+    let Some(bounds) = get_last_good_bounds() else {
+        return false;
+    };
+    let (frame_w, frame_h) = bounds.resolution;
+    let in_frame = x >= 0.0 && y >= 0.0 && x < frame_w as f64 && y < frame_h as f64;
+    if !in_frame {
+        return false; // off-frame entirely is a different (existing) validation concern
+    }
+    let in_content = x >= bounds.x as f64
+        && x < (bounds.x + bounds.width) as f64
+        && y >= bounds.y as f64
+        && y < (bounds.y + bounds.height) as f64;
+    !in_content
+}
+
 /// The iPad content rectangle as a crop region — the shape
 /// `analyze_brightness`/`save_snapshot` accept. The one place bounds are
 /// narrowed to a region, so the conversion isn't re-spelled at every call.
@@ -326,7 +364,7 @@ pub fn unlock_start_from_bounds(bounds: &IpadBounds) -> (u32, u32) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb};
     use std::sync::Mutex as StdMutex;
@@ -334,7 +372,13 @@ mod tests {
     // The orientation cache is process-wide static state (Mutex<Option<IpadBounds>>),
     // so tests that touch it must not interleave -- serialize via a lock, same
     // discipline as the TS test suite's own clearOrientationCache() calls between tests.
-    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
+    // `pub(crate)` (not private): `auto_crop.rs`'s own tests also call
+    // `detect_ipad_bounds_from_buffer` and need to serialize against THIS
+    // same cache, not a second independent lock that wouldn't actually
+    // exclude these tests from each other — same "one shared lock, not
+    // one per file" finding `mover`'s `test_support::GLOBAL_STATE_LOCK`
+    // already documents for itself.
+    pub(crate) static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     fn letterbox_jpeg(
         frame_w: u32,
@@ -506,5 +550,46 @@ mod tests {
             start.1, bounds.y,
             "must clamp to bounds.y, never go above the top edge"
         );
+    }
+
+    // -- point_in_known_letterbox --
+
+    #[test]
+    fn point_in_known_letterbox_false_when_no_bounds_are_cached_yet() {
+        let _g = TEST_LOCK.lock().unwrap();
+        clear_orientation_cache();
+        assert!(!point_in_known_letterbox(5.0, 5.0));
+    }
+
+    #[test]
+    fn point_in_known_letterbox_false_for_a_point_inside_the_content_region() {
+        let _g = TEST_LOCK.lock().unwrap();
+        clear_orientation_cache();
+        let jpeg = letterbox_jpeg(1920, 1080, 610, 1300, 40, 1040, 200);
+        detect_ipad_bounds_from_buffer(&jpeg, DetectOptions::default()).unwrap();
+        assert!(!point_in_known_letterbox(950.0, 400.0)); // well inside the detected content
+        clear_orientation_cache();
+    }
+
+    #[test]
+    fn point_in_known_letterbox_true_for_a_point_in_the_black_bar() {
+        let _g = TEST_LOCK.lock().unwrap();
+        clear_orientation_cache();
+        let jpeg = letterbox_jpeg(1920, 1080, 610, 1300, 40, 1040, 200);
+        detect_ipad_bounds_from_buffer(&jpeg, DetectOptions::default()).unwrap();
+        assert!(point_in_known_letterbox(50.0, 400.0)); // left of the detected content
+        assert!(point_in_known_letterbox(1800.0, 400.0)); // right of the detected content
+        clear_orientation_cache();
+    }
+
+    #[test]
+    fn point_in_known_letterbox_false_when_off_frame_entirely() {
+        let _g = TEST_LOCK.lock().unwrap();
+        clear_orientation_cache();
+        let jpeg = letterbox_jpeg(1920, 1080, 610, 1300, 40, 1040, 200);
+        detect_ipad_bounds_from_buffer(&jpeg, DetectOptions::default()).unwrap();
+        assert!(!point_in_known_letterbox(-10.0, 400.0));
+        assert!(!point_in_known_letterbox(400.0, 2000.0));
+        clear_orientation_cache();
     }
 }

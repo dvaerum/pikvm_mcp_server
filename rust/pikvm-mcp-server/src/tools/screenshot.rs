@@ -3,7 +3,8 @@
 
 use std::sync::Arc;
 
-use pikvm_mcp_detection_vision::snapshot::{save_snapshot, SnapshotRegion};
+use pikvm_mcp_detection_vision::auto_crop::{detect_cross_validated_crop, AutoCropOutcome};
+use pikvm_mcp_detection_vision::snapshot::{crop_jpeg, save_snapshot, SnapshotRegion};
 use pikvm_mcp_kvmd_client::client::ScreenshotOptions;
 
 use crate::server::SharedState;
@@ -27,7 +28,8 @@ pub fn entries() -> Vec<ToolEntry> {
                     "maxHeight": {"type": "number", "description": "Maximum height of the screenshot in pixels (optional, for preview)"},
                     "quality": {"type": "number", "description": "JPEG quality 1-100 (optional, default 80)"},
                     "keepCursorAlive": {"type": "boolean", "description": "Emit a ±1px mouse nudge immediately before the snapshot so the iPad cursor stays visible. Net displacement is zero. Default false."},
-                    "savePath": {"type": "string", "description": "Optional: ALSO write the JPEG to this file path (in addition to returning it inline)."}
+                    "savePath": {"type": "string", "description": "Optional: ALSO write the JPEG to this file path (in addition to returning it inline)."},
+                    "autoCrop": {"type": "boolean", "description": "Auto-detect and crop away black iPad letterboxing (cross-validated against two independent detectors; falls back to the full frame when they disagree). Default true. When cropped, the response reports a region offset — add it to reported coordinates before calling pikvm_mouse_move_to/pikvm_mouse_click_at, which always take real full-HDMI-frame pixels."}
                 }
             }),
             handler: Arc::new(|shared, args| Box::pin(screenshot(shared, args))),
@@ -101,8 +103,58 @@ fn screenshot(
         }
         info_text.push_str("). Mouse coordinates from this image will be auto-scaled.");
 
+        // Auto-crop (task_f04c3909db11): cross-validate two independent
+        // detectors before trusting a crop; fall back to the full frame
+        // on disagreement or any detection failure rather than risk a
+        // wrong crop silently cutting off real content. Stateless
+        // contract: pikvm_mouse_move_to/click_at ALWAYS take real HDMI
+        // pixels — this response reports the offset in text, the same
+        // idiom already used for the scale factor above, rather than a
+        // server-side coordinate translation that could go stale.
+        let mut image_bytes = result.buffer.clone();
+        if validate_boolean(&args, "autoCrop").unwrap_or(true) {
+            match detect_cross_validated_crop(&result.buffer) {
+                Ok(AutoCropOutcome::Cropped(bounds)) => {
+                    let region = SnapshotRegion {
+                        x: bounds.x as f64,
+                        y: bounds.y as f64,
+                        width: bounds.width,
+                        height: bounds.height,
+                    };
+                    match crop_jpeg(&result.buffer, region) {
+                        Ok(cropped) => {
+                            image_bytes = cropped;
+                            info_text.push_str(&format!(
+                                " Auto-cropped to iPad content region {{x:{}, y:{}, width:{}, height:{}}} — \
+                                 ADD region.x/region.y to any coordinate from THIS image before calling \
+                                 pikvm_mouse_move_to/pikvm_mouse_click_at.",
+                                region.x, region.y, region.width, region.height
+                            ));
+                        }
+                        Err(e) => {
+                            info_text.push_str(&format!(
+                                " Auto-crop detection succeeded but re-encoding failed ({e}) — returning the full frame."
+                            ));
+                        }
+                    }
+                }
+                Ok(AutoCropOutcome::Disagreement) => {
+                    info_text.push_str(
+                        " Auto-crop skipped: the two bounds detectors disagreed on where the iPad content is — returning the full frame rather than risk a wrong crop.",
+                    );
+                }
+                Err(e) => {
+                    info_text.push_str(&format!(
+                        " Auto-crop skipped: bounds detection failed ({e}) — returning the full frame."
+                    ));
+                }
+            }
+        }
+
         if let Some(save_path) = validate_string(&args, "savePath") {
-            let saved = save_snapshot(&result.buffer, &save_path, None).await?;
+            // Save whatever is being returned inline (post-auto-crop, if
+            // it happened) so the saved file matches what the caller sees.
+            let saved = save_snapshot(&image_bytes, &save_path, None).await?;
             info_text.push_str(&format!(
                 "\nSaved to {} ({} bytes).",
                 saved.path.display(),
@@ -110,7 +162,7 @@ fn screenshot(
             ));
         }
 
-        let data = b64(&result.buffer);
+        let data = b64(&image_bytes);
         Ok(ToolOutcome::text_and_image(info_text, data, "image/jpeg"))
     })
 }
