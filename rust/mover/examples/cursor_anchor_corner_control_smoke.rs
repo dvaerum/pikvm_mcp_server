@@ -1,4 +1,4 @@
-//! Phase B of the combined E2E category-2/category-5 live-hardware plan
+//! Combined E2E category-2/category-5 live-hardware gate
 //! (docs/troubleshooting/2026-08-29-category2-category5-combined-plan-
 //! draft.md). Live positive/negative control pair for `corner_target_
 //! from_bounds`'s verification math — E2E validation risk category 2,
@@ -7,43 +7,48 @@
 //! own flagged requirement (a genuine `CallerAsserted`-on-lock-screen
 //! positive path through `ipad_unlock.rs`'s real production code).
 //!
-//! **v3, post-SECOND-incident (2026-08-29).** v1 called `slam_to_corner`
-//! DIRECTLY, bypassing `AnchorGuard` entirely — full slam locked the
-//! iPad. Fixed via `AnchorRequest.slam_calls` so a short slam could go
-//! through the guarded `anchor_cursor` path (commit fb80142). v2, RETRIED
-//! THROUGH THAT FIX (`guard: CallerAsserted{...}`) — **locked the iPad
-//! AGAIN**. Real root cause: `CallerAsserted` never refuses on the safety
-//! question by design — it's the caller's promise, not a check. v2's own
-//! health-check confirmed an ACTIVE, unlocked Settings screen and
-//! asserted `CallerAsserted` safety anyway — inverting the guard's real
-//! contract (*"a lock screen has no active hot corner"* — safety is true
-//! BECAUSE the target is a genuine lock screen, not despite it), the
-//! exact mistake `docs/rust-port-plan.md` §8 item 5 already documented
-//! from `cursor_anchor_smoke.rs` v2.
-//!
-//! **This file must be run ONLY as Phase B**, after `ipad_lock_and_
-//! confirm.rs` (Phase A) has locked the iPad and the OPERATOR has visually
-//! confirmed Phase A's screenshot #2 is a genuine lock screen. This file
-//! does NOT trust that confirmation across the process boundary — its
-//! very first action is its own fresh screenshot (#2b), which the
-//! operator must ALSO confirm before this file proceeds past the health
-//! print (per nixos-dev's review: never trust an earlier step's/an
-//! earlier process's screenshot as proof of CURRENT state).
+//! **v4, single-continuous-process (2026-08-29).** v1 called
+//! `slam_to_corner` DIRECTLY, bypassing `AnchorGuard` entirely — locked
+//! the iPad. v2, through the `AnchorRequest.slam_calls` fix (guard:
+//! `CallerAsserted`) — locked the iPad AGAIN: `CallerAsserted` never
+//! refuses on the safety question by design, and v2 asserted it on the
+//! WRONG precondition (an active screen, not a genuine lock screen —
+//! inverting the guard's real contract, *"safe BECAUSE lock screen"*).
+//! v3 split lock+wake (Phase A) and the guarded slam (Phase B) into two
+//! SEPARATE process invocations with a manual read in between — but the
+//! iPad's screen auto-dims back to OFF within a few seconds of waking
+//! (this project's own documented short window), and Phase B's own first
+//! screenshot 503'd (`streamer.source.online:false`) by the time it ran
+//! as a second process. Not a safety incident (no HID went near a corner,
+//! clean fail-fast) — a timing-model bug: the lock-vs-dim distinction
+//! matters here. Locking (confirmed via the hard-abort streamer check
+//! below) does NOT decay over time; only the DISPLAY's wake state does.
+//! So this version merges lock+wake+confirm+guarded-slam into ONE
+//! continuous process (no inter-process human-reaction-time gap for the
+//! display to re-dim across), while keeping a REAL human veto: after
+//! saving the confirmation screenshot, the process polls a confirmation
+//! file rather than firing the slam unconditionally — the operator reads
+//! the (already-saved, non-decaying) screenshot and writes "yes" to
+//! unblock it, same real veto power as the v3 two-process design, just
+//! without the process-boundary gap that broke on real hardware.
 //!
 //! Reviewed by pikvm-mcp-server@nixos-developer-system (confirmed the
-//! `CallerAsserted` contract read, the `TopLeft` corner choice against
-//! iOS's bottom-corner lock-screen quick actions, and the real-recovery
-//! step) and signed off by the manager before this file was written.
+//! `CallerAsserted` contract read, `TopLeft` corner safety against iOS's
+//! bottom-corner quick actions, Space-once-not-Enter for the wake step,
+//! the hard-abort-on-streamer-still-online requirement, and the
+//! fresh-screenshot-before-guard requirement) and signed off by the
+//! manager at each step, including this timing-model revision.
 //!
-//! Two slams total (one full, one deliberately short via `slam_calls`) —
-//! well under the session's own documented Touch-ID-lockout threshold.
-//!
-//! Run (ONLY after Phase A + manual confirmation of a genuine lock screen):
+//! Run (writes /tmp/corner_control_confirm.flag — delete any stale copy
+//! from a previous run before starting; the process waits up to 30s for
+//! it to contain exactly "yes"):
+//!   rm -f /tmp/corner_control_confirm.flag
 //!   PIKVM_HOST=... PIKVM_USERNAME=... PIKVM_PASSWORD=... \
 //!   PIKVM_PROXY=http://127.0.0.1:8888 \
-//!   cargo run -p pikvm-mcp-mover --example cursor_anchor_corner_control_smoke
+//!   cargo run -p pikvm-mcp-mover --example cursor_anchor_corner_control_smoke -- [--fallback-mouse-move]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use pikvm_mcp_kvmd_client::client::{PiKVMClient, PiKVMConfig};
 use pikvm_mcp_mover::cursor_anchor::{
@@ -52,17 +57,39 @@ use pikvm_mcp_mover::cursor_anchor::{
 use pikvm_mcp_mover::ipad_unlock::{unlock_ipad, IpadUnlockOptions};
 use pikvm_mcp_mover::slam::ScreenshotMode;
 
-/// Both controls assert safety BECAUSE THIS file's OWN fresh screenshot
-/// #2b (taken immediately before each call, re-confirmed by the operator)
-/// showed a genuine lock screen — matches `CallerAsserted`'s real
-/// contract this time, rather than the inverted precondition v2 asserted.
+const CONFIRM_FLAG_PATH: &str = "/tmp/corner_control_confirm.flag";
+const CONFIRM_TIMEOUT_S: u64 = 30;
+
+/// Both controls assert safety BECAUSE THIS process's OWN screenshot
+/// (saved just before the confirmation wait below, re-confirmed by the
+/// operator via that file) showed a genuine lock screen — matches
+/// `CallerAsserted`'s real contract, not the inverted precondition v2
+/// asserted.
 fn caller_asserted_reason() -> AnchorGuard {
     AnchorGuard::CallerAsserted {
-        reason: "cursor_anchor_corner_control_smoke v3: operator confirmed via this file's own \
-                 fresh screenshot #2b, taken immediately before this call, that the iPad is on a \
-                 genuine lock screen (matches CallerAsserted's real contract — safe BECAUSE it's \
-                 locked, not despite an active screen)."
+        reason: "cursor_anchor_corner_control_smoke v4: operator confirmed via this run's own \
+                 saved confirmation screenshot, and by writing \"yes\" to the confirmation flag \
+                 file, that the iPad is on a genuine lock screen (matches CallerAsserted's real \
+                 contract — safe BECAUSE it's locked, not despite an active screen)."
             .to_string(),
+    }
+}
+
+/// Poll `CONFIRM_FLAG_PATH` for up to `CONFIRM_TIMEOUT_S` seconds. Returns
+/// `true` only if the file's trimmed contents are exactly "yes" — anything
+/// else (missing, timeout, different content) is treated as "do not
+/// proceed," matching the fail-closed discipline every other safety gate
+/// in this codebase uses.
+async fn wait_for_confirmation() -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(CONFIRM_TIMEOUT_S);
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(CONFIRM_FLAG_PATH) {
+            return contents.trim() == "yes";
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -72,6 +99,16 @@ async fn main() {
     let username = std::env::var("PIKVM_USERNAME").unwrap_or_else(|_| "admin".to_string());
     let password = std::env::var("PIKVM_PASSWORD").expect("set PIKVM_PASSWORD");
     let proxy_url = std::env::var("PIKVM_PROXY").ok();
+    let fallback_mouse_move = std::env::args().any(|a| a == "--fallback-mouse-move");
+
+    if std::path::Path::new(CONFIRM_FLAG_PATH).exists() {
+        eprintln!(
+            "=== ABORT: {CONFIRM_FLAG_PATH} already exists from a previous run — delete it first \
+             (rm -f {CONFIRM_FLAG_PATH}) so this run can't be silently pre-confirmed by stale \
+             state. ==="
+        );
+        std::process::exit(1);
+    }
 
     let config = PiKVMConfig {
         verify_ssl: false,
@@ -80,23 +117,103 @@ async fn main() {
     };
     let client = Arc::new(PiKVMClient::new(config, None));
 
-    // Own fresh screenshot #2b — NOT Phase A's screenshot #2. This is
-    // the actual precondition check nixos-dev's review demanded: don't
-    // trust an earlier process's/earlier step's screenshot as proof of
-    // CURRENT state.
-    let confirm = client
+    // Step 1: baseline screenshot — documents the starting state honestly,
+    // not a safety-relevant check (locking is unconditional below).
+    let baseline = client
         .screenshot(None)
         .await
-        .expect("screenshot #2b failed");
-    std::fs::write("/tmp/corner_control_smoke_2b.jpg", &confirm.buffer)
-        .expect("write screenshot #2b");
+        .expect("baseline screenshot failed");
+    std::fs::write("/tmp/corner_control_smoke_baseline.jpg", &baseline.buffer)
+        .expect("write baseline screenshot");
+    eprintln!("=== BASELINE: /tmp/corner_control_smoke_baseline.jpg saved (reference only). ===");
+
+    // Step 2: lock — same shortcut pikvm_ipad_lock sends.
+    eprintln!("=== Sending Ctrl+Cmd+Q — screen should turn off within 2s ===");
+    client
+        .send_shortcut(&["ControlLeft", "MetaLeft", "KeyQ"])
+        .await
+        .expect("send Ctrl+Cmd+Q failed");
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+
+    // Step 3: HARD ABORT if the lock didn't actually take. This is the
+    // load-bearing, non-decaying safety fact everything below relies on —
+    // unlike display wake state, lock state doesn't revert on its own.
+    let (source_online, _resolution) = client
+        .get_streamer_status()
+        .await
+        .expect("get_streamer_status failed");
+    if source_online {
+        eprintln!(
+            "=== ABORT: streamer still ONLINE 2.5s after Ctrl+Cmd+Q — the lock did NOT take. Not \
+             proceeding. ==="
+        );
+        std::process::exit(1);
+    }
     eprintln!(
-        "=== SCREENSHOT #2b: /tmp/corner_control_smoke_2b.jpg — STOP AND INSPECT before trusting \
-         this run. This must show a GENUINE LOCK SCREEN (clock/wallpaper/home-indicator, no app \
-         content) taken THIS INSTANT, not Phase A's earlier one. Only proceed if that's \
-         unambiguously true — CallerAsserted below takes your word for it, and it does NOT check \
-         anything itself. ==="
+        "=== Confirmed: streamer source OFFLINE — the lock took (this fact does not decay). ==="
     );
+
+    // Step 4: wake, with ONE retry if the display re-dims before the
+    // confirmation screenshot lands (the exact race v3 hit as a separate
+    // process — now handled inline, in the same continuous process, with
+    // no human-reaction-time gap).
+    let mut confirm_shot = None;
+    for attempt in 1..=2 {
+        if fallback_mouse_move {
+            eprintln!("=== Wake attempt {attempt}/2: small relative mouse move (--fallback-mouse-move) ===");
+            client
+                .mouse_move_relative(5.0, 5.0)
+                .await
+                .expect("wake mouse move failed");
+        } else {
+            eprintln!("=== Wake attempt {attempt}/2: single Space press (not Enter) ===");
+            client
+                .send_key("Space", None)
+                .await
+                .expect("wake Space press failed");
+        }
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        match client.screenshot(None).await {
+            Ok(shot) => {
+                confirm_shot = Some(shot);
+                break;
+            }
+            Err(e) => {
+                eprintln!("wake attempt {attempt}/2: screenshot failed ({e}) — display may have re-dimmed already.");
+            }
+        }
+    }
+    let confirm_shot = confirm_shot.unwrap_or_else(|| {
+        eprintln!("=== ABORT: display never produced a screenshot after 2 wake attempts. ===");
+        std::process::exit(1);
+    });
+    std::fs::write(
+        "/tmp/corner_control_smoke_confirm.jpg",
+        &confirm_shot.buffer,
+    )
+    .expect("write confirmation screenshot");
+
+    // Step 5: real human veto. The screenshot is already saved (a static
+    // file — it does not decay), so the operator's reading time doesn't
+    // race against the display. Fail closed: anything but an exact "yes"
+    // in the flag file aborts, including a timeout.
+    eprintln!(
+        "=== CONFIRMATION SCREENSHOT saved to /tmp/corner_control_smoke_confirm.jpg — waiting up \
+         to {CONFIRM_TIMEOUT_S}s for {CONFIRM_FLAG_PATH} to contain exactly \"yes\".\n\
+         INSPECT THE SCREENSHOT NOW. It must be an unambiguous lock screen (clock/wallpaper/\
+         home-indicator, no app content). If genuine: echo -n yes > {CONFIRM_FLAG_PATH}\n\
+         If NOT genuine, or ambiguous, or fully unlocked (over-shoot — a safe non-event, no HID \
+         near a corner yet): do nothing, let this time out, and re-run with \
+         --fallback-mouse-move if the wake over-shot to unlocked. ==="
+    );
+    if !wait_for_confirmation().await {
+        eprintln!(
+            "=== ABORT: no \"yes\" confirmation received within {CONFIRM_TIMEOUT_S}s — NOT firing \
+             the guarded slam pair. Fail-closed. ==="
+        );
+        std::process::exit(1);
+    }
+    eprintln!("=== Confirmed by operator. Proceeding to the guarded slam pair. ===");
 
     eprintln!("=== 1/2: POSITIVE control — full slam via anchor_cursor(CallerAsserted), expect verified:true ===");
     let positive = anchor_cursor(AnchorRequest {
@@ -149,9 +266,6 @@ async fn main() {
         "=== 2/2: NEGATIVE control — deliberately SHORT slam (slam_calls:3) via the SAME guarded \
          anchor_cursor(CallerAsserted) path, expect verified:false ==="
     );
-    // Re-confirm with a fresh screenshot rather than reusing the positive
-    // control's — CallerAsserted's contract is about THIS call's actual
-    // current state, not a stale assumption, even within the same process.
     let mid_check = client
         .screenshot(None)
         .await
@@ -163,11 +277,6 @@ async fn main() {
          negative control fires"
     );
 
-    // Default slam_to_corner would use ceil(1920/100)+8=28 calls to
-    // GUARANTEE reaching the corner. 3 calls x 127px is nowhere near
-    // enough to cross even a fraction of a 1920px-wide frame — a real,
-    // physically-incomplete slam, not a synthetic failure — reached ONLY
-    // through the guarded path via AnchorRequest.slam_calls.
     let negative = anchor_cursor(AnchorRequest {
         client: client.clone(),
         corner: Some(Corner::TopLeft),
@@ -216,10 +325,8 @@ async fn main() {
     // Real recovery — the actual production function, which internally
     // uses AnchorGuard::CallerAsserted on this exact lock-screen
     // precondition (ipad_unlock/unlock.rs's own call site: "Layer 5 —
-    // lock screen has no active hot corner"). This is category 5's own
-    // required coverage (a genuine CallerAsserted-on-lock-screen positive
-    // path through real production code), exercised for real here rather
-    // than in a synthetic smoke test.
+    // lock screen has no active hot corner"). Category 5's own required
+    // coverage, exercised for real rather than in a synthetic test.
     eprintln!();
     eprintln!("=== RECOVERY: unlock_ipad() — the real production unlock path ===");
     let recovery = unlock_ipad(
