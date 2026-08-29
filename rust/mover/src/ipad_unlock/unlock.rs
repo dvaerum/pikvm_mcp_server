@@ -237,6 +237,7 @@ pub async fn unlock_ipad(
             nudge: None,
             pace_ms: options.slam_pace_ms,
             slam_origin_px: Some(slam_origin_px),
+            slam_calls: None,
             verbose: options.verbose,
         })
         .await?;

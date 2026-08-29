@@ -163,6 +163,20 @@ pub struct AnchorRequest {
     /// for where the slam lands, so the iPad-letterbox refusal doesn't
     /// apply.
     pub slam_origin_px: Option<(i64, i64)>,
+    /// **NEW — not a port of any TS source.** Overrides `slam_to_corner`'s
+    /// own `calls` default (which always guarantees reaching the corner).
+    /// `None` (every real production call site) keeps that guarantee.
+    /// Added post-incident (2026-08-29,
+    /// `cursor_anchor_corner_control_smoke.rs`'s E2E category-2 gate):
+    /// before this field existed, there was no way to exercise a
+    /// deliberately-incomplete slam through the GUARDED `anchor_cursor`
+    /// path, so the gate called `slam_to_corner` directly — bypassing the
+    /// guard entirely and locking the iPad on a target the guard would
+    /// likely have protected. The fix is this field, not a workaround: a
+    /// test that needs an incomplete slam now still goes through
+    /// `AnchorGuard::CallerAsserted`, the same safety contract every real
+    /// caller uses, rather than the raw unguarded primitive.
+    pub slam_calls: Option<u32>,
     pub verbose: bool,
 }
 
@@ -314,6 +328,7 @@ async fn run_slam(
     Ok(slam_to_corner(
         &req.client,
         SlamOptions {
+            calls: req.slam_calls,
             pace_ms: req.pace_ms,
             corner: Some(corner),
             verbose: req.verbose,

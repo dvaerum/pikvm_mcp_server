@@ -89,6 +89,7 @@ async fn main() {
         nudge: None,
         pace_ms: None,
         slam_origin_px: None,
+        slam_calls: None,
         verbose: true,
     })
     .await;
@@ -160,6 +161,7 @@ async fn main() {
         }),
         pace_ms: None,
         slam_origin_px: Some(result.origin),
+        slam_calls: None,
         verbose: true,
     })
     .await

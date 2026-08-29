@@ -211,6 +211,7 @@ pub(super) async fn discover_origin(
         slam_origin_px: options
             .slam_origin_px
             .map(|p| (p.x.round() as i64, p.y.round() as i64)),
+        slam_calls: None,
         verbose: options.verbose,
     })
     .await?;

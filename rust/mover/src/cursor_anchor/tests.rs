@@ -206,6 +206,7 @@ fn default_req(client: Arc<PiKVMClient>, guard: AnchorGuard) -> AnchorRequest {
         nudge: None,
         pace_ms: Some(0),
         slam_origin_px: None,
+        slam_calls: None,
         verbose: false,
     }
 }
@@ -823,5 +824,72 @@ mod none_calibration {
             let result = anchor_cursor(req).await.unwrap();
             assert_eq!(result.verified, Some(false));
         }
+    }
+}
+
+/// `AnchorRequest.slam_calls` (added 2026-08-29 post-incident — see its own
+/// doc comment): proves the override is actually threaded into
+/// `slam_to_corner`'s real `calls` count, not just stored and ignored, AND
+/// that it's reachable ONLY through the guarded `anchor_cursor` entry point
+/// — closing the exact gap that let `cursor_anchor_corner_control_smoke.rs`
+/// v1 reach for the raw unguarded `slam_to_corner` primitive instead.
+mod slam_calls_override {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_small_override_reduces_the_real_relative_move_count() {
+        let _guard = TEST_LOCK.lock().await;
+        clear_orientation_cache();
+        let black = solid_jpeg(400, 300, [0, 0, 0]);
+        let frozen = solid_jpeg(400, 300, [50, 50, 50]);
+        let (client, moves, _keys, _shots) = stub_client(
+            (400, 300),
+            vec![black.clone(), black, frozen.clone(), frozen],
+        );
+        let mut req = default_req(
+            client,
+            AnchorGuard::CallerAsserted {
+                reason: "test".to_string(),
+            },
+        );
+        req.capture_verification = true;
+        req.slam_calls = Some(3);
+        anchor_cursor(req).await.unwrap();
+        // 3 override calls + slam_to_corner's own final small in-corner
+        // nudge before the verification screenshot (motion.rs:187) = 4 —
+        // NOT the (400,300) frame's default of ceil(400/100)+8=12 (+1=13).
+        // This is the real, load-bearing assertion: the override changes
+        // actual HID emit behavior, not just a stored-but-unused field.
+        assert_eq!(
+            moves.lock().unwrap().len(),
+            4,
+            "slam_calls:Some(3) must cut the real relative-move count to 3+1, not the default 12+1"
+        );
+    }
+
+    #[tokio::test]
+    async fn none_keeps_the_full_default_call_count() {
+        let _guard = TEST_LOCK.lock().await;
+        clear_orientation_cache();
+        let black = solid_jpeg(400, 300, [0, 0, 0]);
+        let frozen = solid_jpeg(400, 300, [50, 50, 50]);
+        let (client, moves, _keys, _shots) = stub_client(
+            (400, 300),
+            vec![black.clone(), black, frozen.clone(), frozen],
+        );
+        let mut req = default_req(
+            client,
+            AnchorGuard::CallerAsserted {
+                reason: "test".to_string(),
+            },
+        );
+        req.capture_verification = true;
+        req.slam_calls = None;
+        anchor_cursor(req).await.unwrap();
+        // (400,300) frame -> slam_to_corner's own default:
+        // ceil(max(400,300)/100)+8 = 4+8 = 12, +1 for the final in-corner
+        // nudge = 13. Confirms `None` is still every real call site's
+        // untouched, corner-guaranteeing default.
+        assert_eq!(moves.lock().unwrap().len(), 13);
     }
 }

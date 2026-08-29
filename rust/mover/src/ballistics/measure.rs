@@ -135,6 +135,7 @@ async fn measure_cell(
         }),
         pace_ms: None,
         slam_origin_px: None,
+        slam_calls: None,
         verbose: false,
     })
     .await?;

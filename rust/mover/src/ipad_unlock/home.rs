@@ -103,6 +103,7 @@ pub async fn ipad_go_home(
             nudge: None,
             pace_ms: None,
             slam_origin_px: None,
+            slam_calls: None,
             verbose: options.verbose,
         })
         .await?;
