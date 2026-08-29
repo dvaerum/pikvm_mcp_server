@@ -454,7 +454,7 @@ impl ServerHandler for PikvmMcpServer {
                 });
             }
         }
-        let tools = self
+        let mut tools: Vec<Tool> = self
             .shared
             .tools
             .iter()
@@ -466,6 +466,7 @@ impl ServerHandler for PikvmMcpServer {
                 )
             })
             .collect();
+        tools.extend(prompt_defs::skill_tools::skill_tools());
         Ok(ListToolsResult {
             tools,
             ..Default::default()
@@ -581,6 +582,22 @@ impl ServerHandler for PikvmMcpServer {
                 "Error: tool '{name}' requires relative-mode mouse. {RELATIVE_MOUSE_NOTE}"
             )))
             .into());
+        }
+
+        // Skill tools (skill_*) route through the prompts module, not
+        // `shared.tools` — faithful port of index.ts's `isSkillTool`
+        // check inside the same try/catch as the registry dispatch below,
+        // so an unknown-skill-tool error flows through the identical
+        // sanitize_error/operator-hint path as "Unknown tool: ...".
+        if prompt_defs::skill_tools::is_skill_tool(&name) {
+            return match prompt_defs::skill_tools::handle_skill_tool_call(&name, &args) {
+                Ok(text) => Ok(to_call_tool_result(ToolOutcome::text(text)).into()),
+                Err(err) => Ok(to_call_tool_result(ToolOutcome::error_text(format!(
+                    "Error: {}",
+                    sanitize_error(&err)
+                )))
+                .into()),
+            };
         }
 
         let entry = self.shared.tools.iter().find(|t| t.name == name);
