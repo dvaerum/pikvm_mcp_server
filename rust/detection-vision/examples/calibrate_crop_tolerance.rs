@@ -11,10 +11,24 @@
 //! needed, it runs entirely against the real frames already checked into
 //! `data/` and `benches/fixtures/` from prior real-hardware sessions.
 //!
+//! **Real bug found while building this**: `detect_ipad_bounds_from_buffer`
+//! caches its last SANE detection process-wide and falls back to it when
+//! a later frame's own detection looks aspect-insane. Measuring many
+//! frames in one process without clearing that cache between them means
+//! a later frame's "bounds" can silently be an EARLIER frame's cached
+//! value, not its own detection — this script explicitly
+//! `clear_orientation_cache()`s before every single frame so each
+//! measurement reflects that frame in isolation (the same cold-cache
+//! condition a real first-call `pikvm_screenshot` sees), not a
+//! best-case warm cache carried over from whatever frame happened to
+//! sort before it alphabetically.
+//!
 //! Run: cargo run -p pikvm-mcp-detection-vision --example calibrate_crop_tolerance
 
 use pikvm_mcp_detection_vision::ipad_region_detect::detect_ipad_region;
-use pikvm_mcp_detection_vision::orientation::{detect_ipad_bounds_from_buffer, DetectOptions};
+use pikvm_mcp_detection_vision::orientation::{
+    clear_orientation_cache, detect_ipad_bounds_from_buffer, DetectOptions,
+};
 
 fn repo_root() -> std::path::PathBuf {
     std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
@@ -66,6 +80,10 @@ fn main() {
     let mut region_fallback_count = 0usize;
 
     for path in &frames {
+        // Every frame measured in isolation — see this file's header on
+        // why a warm cache from a PRIOR frame in this loop would silently
+        // contaminate this one's result.
+        clear_orientation_cache();
         let Ok(buf) = std::fs::read(path) else {
             skipped += 1;
             continue;

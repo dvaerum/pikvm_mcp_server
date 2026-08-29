@@ -35,23 +35,87 @@ use crate::orientation::{detect_ipad_bounds_from_buffer, DetectOptions, IpadBoun
 /// against the actual worst real case found once measured.
 pub const CROSS_VALIDATION_TOLERANCE_FRACTION: f64 = 0.08;
 
+/// Known iPad logical-point screen aspect ratios (portrait
+/// width/height), used as a THIRD, independent safeguard beyond
+/// detector-vs-detector agreement — georgs-mac-mini's review addition
+/// (task_f04c3909db11 note 45 follow-up): two detectors could in
+/// principle agree on the same wrong box, and this catches that case
+/// specifically, since a real iPad screen only ever has a handful of
+/// known shapes.
+///
+/// Entry `[0]` is the ONLY one independently verified against this
+/// project's own real hardware: 820×1180 is `move-to.ts`'s own
+/// `POINTER_ACCEL_IPAD_LOGICAL_W/H`, sourced from a real trajectory-bench
+/// measurement of the actual iPad on `pikvm01` (this repo's one
+/// confirmed iPad rig — see docs/adr/0002-mcp-derives-hid-mode-from-
+/// appliance-endpoint.md for the `pikvm01`-vs-`it-03400` rig distinction;
+/// `it-03400` is a different, non-iPad appliance rig). This is the 10.9"
+/// panel shared by the iPad Air (4th/5th gen) and iPad (10th gen).
+///
+/// The remaining entries are from general knowledge of Apple's published
+/// point-resolution spec sheet, NOT independently re-verified against a
+/// live device in this session — this repo's own docs don't evidence any
+/// second iPad model in the rig fleet. Included per the design's own
+/// "don't hardcode a single guessed ratio, support a small known list"
+/// requirement in case a different model is ever attached to a rig;
+/// flag for a real online spec check (or a real device measurement)
+/// before treating these as equally authoritative to `[0]`.
+const KNOWN_IPAD_ASPECT_RATIOS: &[(&str, f64, f64)] = &[
+    ("iPad (10th gen) / iPad Air 4th-5th gen, 10.9\" — VERIFIED against this project's own real hardware measurement (move-to.ts's POINTER_ACCEL_IPAD_LOGICAL_W/H)", 820.0, 1180.0),
+    ("iPad Pro / iPad Air 11\" — Apple published spec, not independently re-verified here", 834.0, 1194.0),
+    ("iPad mini (6th gen), 8.3\" — Apple published spec, not independently re-verified here", 744.0, 1133.0),
+    ("iPad (9th gen), 10.2\" — Apple published spec, not independently re-verified here", 810.0, 1080.0),
+    ("iPad Pro 12.9\"/13\" — Apple published spec, not independently re-verified here", 1024.0, 1366.0),
+];
+
+/// Tolerance for the known-aspect-ratio check, as a fractional difference
+/// in width:height ratio. Wider than a pixel-perfect match (to tolerate
+/// the crop detectors' own edge-quantization noise — the same class of
+/// noise `calibrate_crop_tolerance.rs` measured directly for the
+/// two-detector cross-validation), but meaningfully tighter than
+/// `orientation::aspect_looks_sane`'s existing `[0.55, 0.85]` band, which
+/// exists to accept ANY roughly-iPad-shaped rectangle generically. This
+/// check is deliberately more specific — a genuine third signal, not a
+/// restatement of the first.
+const KNOWN_ASPECT_TOLERANCE_FRACTION: f64 = 0.03;
+
+/// True when a `width`×`height` rectangle (in any consistent unit —
+/// screenshot pixels are fine, aspect ratio is unit-independent) matches
+/// a known iPad screen shape (in EITHER orientation) within tolerance.
+pub fn matches_a_known_ipad_aspect_ratio(width: f64, height: f64) -> bool {
+    if width <= 0.0 || height <= 0.0 {
+        return false;
+    }
+    let ratio = width / height;
+    KNOWN_IPAD_ASPECT_RATIOS.iter().any(|(_, w, h)| {
+        let portrait_ratio = w / h;
+        let landscape_ratio = h / w;
+        let close = |known: f64| ((ratio - known).abs() / known) <= KNOWN_ASPECT_TOLERANCE_FRACTION;
+        close(portrait_ratio) || close(landscape_ratio)
+    })
+}
+
 /// Result of attempting a cross-validated auto-crop.
 #[derive(Debug, Clone, Copy)]
 pub enum AutoCropOutcome {
-    /// Safe to crop to `IpadBounds` — either both detectors agree within
-    /// tolerance, or the secondary detector had no independent opinion to
-    /// offer (see [`detect_cross_validated_crop`]'s fallback handling).
+    /// Safe to crop to `IpadBounds` — the detectors agree (or the
+    /// secondary had no opinion) AND the resulting box matches a known
+    /// iPad screen shape.
     Cropped(IpadBounds),
     /// The two detectors produced genuinely different sub-frame regions
-    /// beyond tolerance — refuse to guess; the caller should ship the
-    /// full, uncropped frame instead.
-    Disagreement,
+    /// beyond tolerance — refuse to guess; ship the full frame instead.
+    DetectorDisagreement,
+    /// The detectors agreed (or the secondary had no opinion) but the
+    /// resulting box doesn't match any known iPad screen shape — the
+    /// third safeguard catching a case where both algorithms could have
+    /// made the SAME wrong call. Ship the full frame instead.
+    UnknownAspectRatio(IpadBounds),
 }
 
 /// Attempt a cross-validated auto-crop of `screenshot_jpeg`. Only a
 /// genuine decode/detection failure propagates as `Err` — an inability
 /// to safely CROP is a normal, expected, non-error outcome
-/// ([`AutoCropOutcome::Disagreement`]), the same way "letterbox bounds
+/// ([`AutoCropOutcome::DetectorDisagreement`]/[`AutoCropOutcome::UnknownAspectRatio`]), the same way "letterbox bounds
 /// look insane, fall back to the cache" is a normal path inside
 /// `detect_ipad_bounds_from_buffer` itself, not a thrown error.
 ///
@@ -88,7 +152,7 @@ fn detect_cross_validated_crop_with_tolerance(
     let region_is_fallback =
         region.x == 0 && region.y == 0 && region.w == region.frame_w && region.h == region.frame_h;
     if region_is_fallback {
-        return Ok(AutoCropOutcome::Cropped(bounds));
+        return Ok(cropped_if_known_shape(bounds));
     }
 
     let frame_w = bounds.resolution.0 as f64;
@@ -106,9 +170,22 @@ fn detect_cross_validated_crop_with_tolerance(
     ];
 
     if edge_deltas.into_iter().all(|d| d <= tolerance_fraction) {
-        Ok(AutoCropOutcome::Cropped(bounds))
+        Ok(cropped_if_known_shape(bounds))
     } else {
-        Ok(AutoCropOutcome::Disagreement)
+        Ok(AutoCropOutcome::DetectorDisagreement)
+    }
+}
+
+/// Third safeguard, applied uniformly regardless of how `bounds` was
+/// reached (detector agreement or a fallback-to-primary): the two
+/// detectors agreeing (or one having no opinion) doesn't rule out both
+/// being wrong the SAME way — a real iPad screen only has a handful of
+/// known shapes, so check that too before trusting the crop.
+fn cropped_if_known_shape(bounds: IpadBounds) -> AutoCropOutcome {
+    if matches_a_known_ipad_aspect_ratio(bounds.width as f64, bounds.height as f64) {
+        AutoCropOutcome::Cropped(bounds)
+    } else {
+        AutoCropOutcome::UnknownAspectRatio(bounds)
     }
 }
 
@@ -162,8 +239,14 @@ mod tests {
                 assert!((bounds.x as i64 - 610).abs() <= 10);
                 assert!(((bounds.x + bounds.width) as i64 - 1300).abs() <= 10);
             }
-            AutoCropOutcome::Disagreement => {
+            AutoCropOutcome::DetectorDisagreement => {
                 panic!("expected agreement on a clean letterboxed frame")
+            }
+            AutoCropOutcome::UnknownAspectRatio(bounds) => {
+                panic!(
+                    "expected a known-iPad-shaped crop, got {}x{}",
+                    bounds.width, bounds.height
+                )
             }
         }
         clear_orientation_cache();
@@ -190,10 +273,40 @@ mod tests {
         // Real calibration finding: this plain icon-grid home-screen
         // capture trips `detect_ipad_region`'s own <30%-area fallback
         // (13/35 real frames did, all `data/bg-real/*`) while the full-res
-        // detector still finds a perfectly good crop.
-        let jpeg = repo_asset("data/bg-real/appstore.jpg");
+        // detector still finds a good, known-iPad-shaped crop in
+        // isolation (cold cache — see calibrate_crop_tolerance.rs's own
+        // header on why measuring this required clearing the cache
+        // between frames: several of the 13 fallback frames, e.g.
+        // appstore.jpg, ONLY look like a good crop when a PRIOR frame's
+        // cache leaks into them, and are correctly caught by the third
+        // safeguard when measured cold — see the test right below this
+        // one for that exact case).
+        let jpeg = repo_asset("data/bg-real/photos.jpg");
         let outcome = detect_cross_validated_crop(&jpeg).unwrap();
         assert!(matches!(outcome, AutoCropOutcome::Cropped(_)));
+        clear_orientation_cache();
+    }
+
+    #[test]
+    fn third_safeguard_catches_a_genuinely_bad_cold_cache_fallback_detection() {
+        let _g = TEST_LOCK.lock().unwrap();
+        clear_orientation_cache();
+        // Real regression case found while building THIS safeguard, not
+        // hypothesized in advance: measured with a cold (just-cleared)
+        // cache, appstore.jpg's own full-res detection is a genuinely bad
+        // 0.87-ratio shape (nowhere near any known iPad panel) — a single
+        // frame this poorly lit apparently doesn't give the full-res
+        // scanner enough edge signal on its own. The region detector has
+        // NO opinion here either (its own <30%-area fallback also fires),
+        // so cross-validation alone has nothing to catch this with — the
+        // known-aspect-ratio safeguard is the ONLY thing standing between
+        // this frame and a badly wrong crop shipped to a real caller.
+        let jpeg = repo_asset("data/bg-real/appstore.jpg");
+        let outcome = detect_cross_validated_crop(&jpeg).unwrap();
+        assert!(
+            matches!(outcome, AutoCropOutcome::UnknownAspectRatio(_)),
+            "expected the aspect-ratio safeguard to reject this cold-cache bad detection"
+        );
         clear_orientation_cache();
     }
 
@@ -216,7 +329,7 @@ mod tests {
         // constant.
         let jpeg = repo_asset("data/bg-real/tv.jpg");
         let outcome = detect_cross_validated_crop_with_tolerance(&jpeg, 0.03).unwrap();
-        assert!(matches!(outcome, AutoCropOutcome::Disagreement));
+        assert!(matches!(outcome, AutoCropOutcome::DetectorDisagreement));
         clear_orientation_cache();
     }
 
@@ -230,6 +343,63 @@ mod tests {
         let jpeg = repo_asset("data/bg-real/tv.jpg");
         let outcome = detect_cross_validated_crop(&jpeg).unwrap();
         assert!(matches!(outcome, AutoCropOutcome::Cropped(_)));
+        clear_orientation_cache();
+    }
+
+    // -- matches_a_known_ipad_aspect_ratio / the third safeguard --
+
+    #[test]
+    fn matches_the_verified_pikvm01_ipad_ratio_in_portrait() {
+        assert!(matches_a_known_ipad_aspect_ratio(820.0, 1180.0));
+    }
+
+    #[test]
+    fn matches_the_verified_pikvm01_ipad_ratio_in_landscape() {
+        assert!(matches_a_known_ipad_aspect_ratio(1180.0, 820.0));
+    }
+
+    #[test]
+    fn matches_within_tolerance_of_a_known_ratio() {
+        // A crop a few px off the exact 820x1180 panel shape (real
+        // detector quantization noise) should still match.
+        assert!(matches_a_known_ipad_aspect_ratio(825.0, 1180.0));
+    }
+
+    #[test]
+    fn rejects_a_shape_that_matches_no_known_ipad() {
+        // A near-square box — not close to any entry in the known-ratio
+        // table, portrait or landscape.
+        assert!(!matches_a_known_ipad_aspect_ratio(1000.0, 1050.0));
+    }
+
+    #[test]
+    fn rejects_zero_or_negative_dimensions() {
+        assert!(!matches_a_known_ipad_aspect_ratio(0.0, 1180.0));
+        assert!(!matches_a_known_ipad_aspect_ratio(820.0, 0.0));
+    }
+
+    #[test]
+    fn crops_when_the_agreed_box_is_a_known_ipad_shape() {
+        let _g = TEST_LOCK.lock().unwrap();
+        clear_orientation_cache();
+        // 690x1000 ≈ 0.69 ratio, within 3% of the verified 820:1180 (≈0.6949).
+        let jpeg = letterbox_jpeg(1920, 1080, 610, 1300, 40, 1040, 200);
+        let outcome = detect_cross_validated_crop(&jpeg).unwrap();
+        assert!(matches!(outcome, AutoCropOutcome::Cropped(_)));
+        clear_orientation_cache();
+    }
+
+    #[test]
+    fn refuses_to_crop_when_the_agreed_box_matches_no_known_ipad_shape() {
+        let _g = TEST_LOCK.lock().unwrap();
+        clear_orientation_cache();
+        // Both detectors will agree on this box (it's a clean, large,
+        // unambiguous content block) but it's roughly SQUARE — not close
+        // to any known iPad panel — so the third safeguard must refuse it
+        // even though the first two signals agree.
+        let jpeg = letterbox_jpeg(1920, 1080, 460, 1460, 40, 1040, 200); // 1000x1000
+        let outcome = detect_cross_validated_crop(&jpeg).unwrap();
+        assert!(matches!(outcome, AutoCropOutcome::UnknownAspectRatio(_)));
         clear_orientation_cache();
     }
 }

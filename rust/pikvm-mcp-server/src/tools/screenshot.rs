@@ -29,7 +29,7 @@ pub fn entries() -> Vec<ToolEntry> {
                     "quality": {"type": "number", "description": "JPEG quality 1-100 (optional, default 80)"},
                     "keepCursorAlive": {"type": "boolean", "description": "Emit a ±1px mouse nudge immediately before the snapshot so the iPad cursor stays visible. Net displacement is zero. Default false."},
                     "savePath": {"type": "string", "description": "Optional: ALSO write the JPEG to this file path (in addition to returning it inline)."},
-                    "autoCrop": {"type": "boolean", "description": "Auto-detect and crop away black iPad letterboxing (cross-validated against two independent detectors; falls back to the full frame when they disagree). Default true. When cropped, the response reports a region offset — add it to reported coordinates before calling pikvm_mouse_move_to/pikvm_mouse_click_at, which always take real full-HDMI-frame pixels."}
+                    "autoCrop": {"type": "boolean", "description": "Auto-detect and crop away black iPad letterboxing (cross-validated against two independent detectors plus a known-iPad-screen-shape check; falls back to the full frame if any of the three disagree). Default true. When cropped, the response reports a region offset — add it to reported coordinates before calling pikvm_mouse_move_to/pikvm_mouse_click_at, which always take real full-HDMI-frame pixels."}
                 }
             }),
             handler: Arc::new(|shared, args| Box::pin(screenshot(shared, args))),
@@ -138,10 +138,16 @@ fn screenshot(
                         }
                     }
                 }
-                Ok(AutoCropOutcome::Disagreement) => {
+                Ok(AutoCropOutcome::DetectorDisagreement) => {
                     info_text.push_str(
                         " Auto-crop skipped: the two bounds detectors disagreed on where the iPad content is — returning the full frame rather than risk a wrong crop.",
                     );
+                }
+                Ok(AutoCropOutcome::UnknownAspectRatio(bounds)) => {
+                    info_text.push_str(&format!(
+                        " Auto-crop skipped: detected region ({}x{}) doesn't match any known iPad screen shape — returning the full frame rather than risk a wrong crop.",
+                        bounds.width, bounds.height
+                    ));
                 }
                 Err(e) => {
                     info_text.push_str(&format!(
