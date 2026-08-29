@@ -746,6 +746,52 @@ before it):
    the loop-body are separable without an awkward parameter-passing
    seam. Judgment call for whoever implements it, informed by how it
    actually reads once transcribed, not decided in the abstract here.
+
+   **v17 resolution (2026-08-29, georgs-mac-mini) — read `moveToPixel`'s
+   full 1,245-line body (line 1467-2711) before writing any code, per
+   the same rule.** `origin.rs` (discoverOrigin/makeLocatorDeps) is done
+   and merged; the remaining split is between five files
+   (`correction_math`/`template_cache`/`motion_diff`/`wiggle_verify`/
+   `pointer_accel_bridge`, dispatched to nixos-dev) and `legacy_move.rs`
+   (kept, alongside `origin.rs`, since `discoverOrigin`'s result threads
+   directly into the whole correction loop).
+
+   Judgment call on `legacy_move.rs`'s own internal shape: the
+   correction-pass `while(true)` loop genuinely is NOT cleanly
+   separable from the open-loop landing cascade that precedes it — both
+   read and mutate the same ~15 local variables (`currentPos`,
+   `prevPos`, `prevShot`, `observedRatioX/Y`, `passesSinceLastVerification`,
+   `lastTemplateMatch`, `diagnostics`, `corrections`, `totalPasses`,
+   `linearEntered`, etc.) in one continuous sequence. Threading that
+   many fields through a shared mutable context struct across multiple
+   files would relocate the coupling, not reduce it — an "awkward
+   parameter-passing seam" exactly as flagged above, and the kind of
+   decomposition-for-line-count-optics CLAUDE.md's "best practice, not
+   quick hacks" rule exists to rule out. Two pieces of `moveToPixel` ARE
+   genuinely separable — pure functions of already-finalized state, no
+   back-coupling into the loop:
+   - Option resolution (the `const x = options.foo ?? default` block +
+     ballistics-profile freshness check, ~L1487-1560) → its own
+     `resolved_options.rs`, unit-testable with no client/async at all.
+   - Bail-to-best-pass + the V8 authoritative fallback + the
+     `parts.join(' ')` message assembly + `MoveToResult` construction
+     (the tail, ~L2590-2711) → its own `finalize.rs`, same shape.
+   Everything between them — calibration probe, open-loop emission +
+   landing cascade, and the correction-pass loop itself — stays as ONE
+   function in `legacy_move.rs`, matching the TS reality (the original
+   code never split it internally either, for the same real-coupling
+   reason). Estimated ~900-1,100 lines once transcribed with Rust error
+   handling/doc comments; still the single largest file in the port,
+   consistent with v13's own "may need further internal splitting"
+   caveat turning out NOT to apply once the actual coupling was read in
+   full, not assumed.
+
+   **Open discrepancy, not yet resolved**: this doc and my own proposal
+   message both said 5 files dispatched to nixos-dev; the manager's
+   confirmation (2026-08-29 04:02) says 4. Which one was held back is
+   unconfirmed as of this entry — flagging here rather than guessing,
+   since `origin.rs`'s `get_cached_templates` STOPGAP specifically
+   depends on `template_cache.rs` landing.
 6. **MCP protocol surface** (~3,100 LOC: `index.ts` — 2,575 LOC, the tool
    registry/dispatch, plus `cli.ts`, `http-server.ts`, `prompts/*`) — built
    LAST, on top of everything above, using `rmcp` per §6. `index.ts`'s size
