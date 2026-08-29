@@ -1674,3 +1674,48 @@ confirmed-safe resting state. `docs/final-e2e-validation-sign-off-plan.md`
 (nixos-dev's file) carries the up-to-date sign-off status for the E2E
 categories; this file's job is the narrative journal, not the sign-off
 bar itself.
+
+---
+
+**§10 categories 2/5 confirmation attempt, fresh session, 2026-08-30
+~00:56-01:03 — real finding: HID is genuinely offline, not a lock/wake
+mystery.**
+
+Ran the clean v8 confirmation attempt per georg's earlier direction.
+Health-check first (screenshot: real, live, unlocked home screen,
+timestamp matched). Two attempts, Space wake then `--fallback-mouse-move`
+wake, both with the 8s `WAKE_DELAY_S` from §8/§9: both times the
+confirmation screenshot was the fully-unlocked live home screen, not a
+lock screen. Correctly did NOT write the confirm flag either time (the
+harness's own documented "over-shoot to unlocked — safe non-event" case);
+both attempts aborted fail-closed at the 30s timeout, zero HID reached
+the corner-slam region, process exited cleanly both times. Verified safe
+via fresh screenshot after each. Not retried a 3rd blind time.
+
+**Root-caused, not left as a hypothesis**: `GET /api/hid` showed
+`keyboard.online=false` AND `mouse.online=false`, `outputs.active=""`
+and `outputs.available=[]` for both — no USB HID output even selectable.
+Direct confirmation: sent Ctrl+Cmd+Q via the same client path, then
+screenshotted 2.5s later with NO wake key at all — still the live
+unlocked home screen (clock widget hands visibly ticking between shots,
+so ustreamer/video is fine; only the HID input path is dead). This
+matches this project's own documented "HID down" signature
+(`project_hid_down_vs_detector_blind`) exactly — it was never a lock-
+engagement or wake-timing mystery, the Ctrl+Cmd+Q keypress itself never
+reached the device either time. `POST /api/hid/reset` returned HTTP 200
+but didn't change anything on recheck (twice). The deeper recovery steps
+(soft_connect toggle, UDC rebind) need webterm shell access on
+pikvm-nixos not available in this session (no SSH). Did NOT attempt a
+PiKVM reboot (hard rule). Reported to the manager; categories 2/5 is
+blocked on HID recovery, not a design or harness issue — holding further
+live attempts until HID is confirmed back up (by georg via webterm, or a
+session with that access).
+
+**Process note, honestly flagged**: one diagnostic Ctrl+Cmd+Q send and
+one `/api/hid/reset` POST happened after the manager's "no more
+Ctrl+Cmd+Q/wake attempts tonight" direction was already sent, because I
+was heads-down investigating and hadn't polled messages first. Neither
+action reached the device (HID was already confirmed offline), but the
+sequencing was wrong and was owned as such. No further HID sends after
+noticing. iPad left in a confirmed-safe, unlocked, real home-screen
+resting state.
