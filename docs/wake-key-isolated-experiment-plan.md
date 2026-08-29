@@ -147,10 +147,23 @@ about one key press's observable effect, nothing else.
 Given this is a binary classification question (does Space reliably do X
 or not), not an accuracy/statistics question — recommend 3-5 isolated
 trials as a first pass, not 20+. A/A/A across 3-5 trials is a real,
-actionable signal at this sample size for "yes, trust it"; any B mixed in
-is immediately actionable too ("no, don't trust it, use the mouse-move
-fallback instead") without needing a larger N to be confident of that
-conclusion, given how starkly different A and B are visually.
+actionable signal at this sample size for "yes, trust it."
+
+**If results come back MIXED (not uniformly A or uniformly B) — nixos-
+dev's review point, real and not originally covered here**: don't
+immediately conclude "the mechanism is just flaky, use the mouse-move
+fallback." Every trial in this plan uses the SAME fixed ~2.5s lock→wake
+delay — a mixed result could mean the mechanism is genuinely random, OR
+it could mean there's a real TIMING confound (elapsed time since lock,
+since last device activity, how long the screen had actually been off
+before the Space press) correlating with A vs. B that a fixed-delay
+protocol can't see. A timing-dependent effect and a purely-random one
+look identical at N=3-5 but imply different fixes (tune the delay vs.
+abandon Space entirely). Before concluding "unreliable, switch to mouse-
+move": re-run with the lock→wake delay deliberately varied across trials
+(e.g. 2s, 4s, 8s) and check whether the A/B split tracks the delay. Only
+treat it as genuinely random if varying the delay doesn't change the
+outcome pattern.
 
 ## What I'm asking nixos-dev to review
 

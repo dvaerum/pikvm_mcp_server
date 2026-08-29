@@ -159,7 +159,17 @@ loop, adds the ground-truth read):
    `ipad_content_region_from_buffer` — logical→HDMI scaling is exactly
    what those functions' callers already do elsewhere, e.g.
    `slam_origin_from_bounds`/`unlock_start_from_bounds`'s own coordinate
-   mapping convention).
+   mapping convention). **Cache-freshness requirement (nixos-dev's
+   review, sourced from today's own `calibrate_crop_tolerance.rs`
+   cache-staleness bug — a later frame silently inheriting an EARLIER
+   frame's cached bounds because nothing cleared it between
+   measurements)**: do NOT trust whatever bounds happen to be cached
+   from `click_at()`'s own internal screenshot/detection cycle a moment
+   earlier. Call `clear_orientation_cache()` and take a FRESH screenshot
+   specifically for this mapping step before computing bounds for each
+   trial's ground-truth read. It would be a real irony for the
+   ground-truth side of this exact comparison to carry the same class of
+   staleness bug this bench exists to catch on `click_at`'s side.
 4. Record: target, `click_at`'s own self-reported final position (its
    existing screenshot-diff-based `verified`), AND iPadCollector's
    independent HDMI-mapped reading. Three numbers, not two — the whole
@@ -172,6 +182,27 @@ loop, adds the ground-truth read):
    guessed threshold) — THIS is the specific bug class this bench exists
    to catch, and it's exactly what the click-bench alone structurally
    cannot.
+
+## Mid-bench WS disconnect policy (nixos-dev's review — was unaddressed)
+
+Across N≥20 trials on real hardware, the iPadCollector app can plausibly
+background or drop the WS connection mid-run (network blip, iPadOS
+backgrounding it, etc.) — the pseudocode above didn't state a policy for
+this, which risks it being decided live under time pressure when it
+actually happens. Stated policy: on a detected disconnect (the session's
+`connected` check going false, or a `get_cursor`/`get_tracked_cursor`
+call erroring with a closed-socket error), attempt **exactly one**
+reconnect (wait for a new `hello` on the same port, same 10s handoff
+window the server already uses) before giving up. Any trial whose
+ground-truth read spans a reconnect (i.e., the reconnect happened between
+that trial's `click_at()` call and its `get_tracked_cursor()` call) gets
+explicitly FLAGGED in the recorded results as "spans reconnect" rather
+than silently trusted — a reading taken right after a fresh reconnect
+carries its own uncertainty (clock re-sync not yet done, `hello`'s
+logical dimensions not yet re-confirmed) that a mid-steady-state reading
+doesn't. If the one reconnect attempt also fails, abort the whole bench
+run rather than continuing with N-k stale/no-ground-truth trials silently
+folded into the same result set.
 
 ## Scope and sample size
 
