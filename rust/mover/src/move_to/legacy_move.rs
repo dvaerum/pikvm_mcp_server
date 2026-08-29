@@ -375,17 +375,27 @@ pub(super) async fn move_to_pixel_legacy(
 
     // Phase 212/213: reject a motion-diff pair that lands on a static
     // feature already observed at the same spot.
+    //
+    // Verbose logging here (docs/stationary-guard-targeted-
+    // reconfirmation-plan.md, reviewed by nixos-dev): makes the K=4
+    // widening's own firing directly observable in a run's log, rather
+    // than inferable only from whether the final position looks right.
     let open_motion_rejected_as_stationary = motion_result
         .as_ref()
         .and_then(|r| r.pair.as_ref())
         .map(|p| {
-            client.would_reject_as_stationary(
-                BeliefPoint {
-                    x: p.post.centroid_x as f64,
-                    y: p.post.centroid_y as f64,
-                },
-                None,
-            )
+            let candidate = BeliefPoint {
+                x: p.post.centroid_x as f64,
+                y: p.post.centroid_y as f64,
+            };
+            let rejected = client.would_reject_as_stationary(candidate, None);
+            if verbose {
+                eprintln!(
+                    "[stationary-guard] open-loop candidate ({:.0},{:.0}) rejected={rejected}",
+                    candidate.x, candidate.y
+                );
+            }
+            rejected
         })
         .unwrap_or(false);
 
@@ -739,17 +749,29 @@ pub(super) async fn move_to_pixel_legacy(
             let mut pass_mode = DetectionMode::Predicted;
             let mut pass_reason: Option<String> = None;
 
+            // Verbose logging (docs/stationary-guard-targeted-
+            // reconfirmation-plan.md, reviewed by nixos-dev): same
+            // rationale as the open-loop-phase log above, plus the pass
+            // number so a rejection can be correlated against where the
+            // original incident's own trace diverged.
             let motion_rejected_as_stationary = c_result
                 .pair
                 .as_ref()
                 .map(|p| {
-                    client.would_reject_as_stationary(
-                        BeliefPoint {
-                            x: p.post.centroid_x as f64,
-                            y: p.post.centroid_y as f64,
-                        },
-                        None,
-                    )
+                    let candidate = BeliefPoint {
+                        x: p.post.centroid_x as f64,
+                        y: p.post.centroid_y as f64,
+                    };
+                    let rejected = client.would_reject_as_stationary(candidate, None);
+                    if verbose {
+                        eprintln!(
+                            "[stationary-guard] pass {}: candidate ({:.0},{:.0}) rejected={rejected}",
+                            total_passes + 1,
+                            candidate.x,
+                            candidate.y
+                        );
+                    }
+                    rejected
                 })
                 .unwrap_or(false);
 
