@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use pikvm_mcp_detection_vision::capture::{begin_capture, parse_capture_config, CaptureClient};
+use pikvm_mcp_detection_vision::orientation::point_in_known_letterbox;
 use pikvm_mcp_kvmd_client::client::MouseButton;
 use pikvm_mcp_mover::click_at::{
     click_at, move_strategy_from_policy, ClickAtDeps, ClickAtOutcome, ClickAtRequest,
@@ -19,7 +20,7 @@ use crate::tool_helpers::{
     require_number, validate_boolean, validate_enum, validate_number, VALID_BUTTONS,
     VALID_KEY_STATES,
 };
-use crate::tools::{b64, BoxFuture, ToolEntry, ToolOutcome};
+use crate::tools::{b64, BoxFuture, ToolContent, ToolEntry, ToolOutcome};
 
 const VALID_STRATEGIES: &[&str] = &[
     "detect-then-move",
@@ -27,6 +28,42 @@ const VALID_STRATEGIES: &[&str] = &[
     "assume-at",
     "curve-one-shot",
 ];
+
+/// task_f04c3909db11 dead-zone guard: `point_in_known_letterbox`
+/// (`detection-vision`'s `orientation.rs`, built on
+/// `rust-port/module-3-cursor-locator-anchor`) reads the same last-good
+/// bounds cache `pikvm_screenshot`'s auto-crop already maintains. A target
+/// landing in the black letterbox is the near-certain signature of a
+/// caller re-adding a `pikvm_screenshot` auto-crop offset that was never
+/// applied (or double-applying one) — a forgotten offset is a ~600px miss
+/// onto a different, possibly destructive icon, not a near-miss, and
+/// nobody legitimately targets the black bar. Advisory only (prepended
+/// text, never a refusal) — cache is fail-open (false) until a detection
+/// has landed this process, so a cold cache never blocks a legitimate
+/// first move/click.
+fn dead_zone_warning(x: f64, y: f64) -> Option<&'static str> {
+    point_in_known_letterbox(x, y).then_some(
+        "\u{26A0} WARNING: this target falls inside the iPad's black letterbox bar, not its \
+         visible content area. Nobody legitimately targets the letterbox — this usually means a \
+         pikvm_screenshot autoCrop region offset was forgotten (or double-applied) when computing \
+         these coordinates. pikvm_mouse_move_to/click_at always take raw HDMI-frame pixels, never \
+         cropped ones.\n",
+    )
+}
+
+/// Prepends `dead_zone_warning`'s text to the outcome's first content
+/// block (always `Text`, per every `ToolOutcome` constructor above) when
+/// present — leaves the outcome, including `is_error`, otherwise
+/// unchanged.
+fn with_dead_zone_warning(mut outcome: ToolOutcome, warning: Option<&'static str>) -> ToolOutcome {
+    let Some(warning) = warning else {
+        return outcome;
+    };
+    if let Some(ToolContent::Text(text)) = outcome.content.first_mut() {
+        *text = format!("{warning}{text}");
+    }
+    outcome
+}
 
 fn strategy_from_str(s: &str) -> MoveStrategy {
     match s {
@@ -403,6 +440,7 @@ fn mouse_move_to(
 
         let target_x = require_number(&args, "x", "x", None, None).map_err(anyhow::Error::msg)?;
         let target_y = require_number(&args, "y", "y", None, None).map_err(anyhow::Error::msg)?;
+        let dead_zone = dead_zone_warning(target_x, target_y);
 
         // M8: parse+validate capture up front so a bad request errors
         // before any emit.
@@ -513,10 +551,13 @@ fn mouse_move_to(
         session.during().await;
         session.after(Some(result.screenshot.clone())).await;
 
-        Ok(ToolOutcome::text_and_image(
-            format!("{}{}", result.message, session.lines()),
-            b64(&result.screenshot),
-            "image/jpeg",
+        Ok(with_dead_zone_warning(
+            ToolOutcome::text_and_image(
+                format!("{}{}", result.message, session.lines()),
+                b64(&result.screenshot),
+                "image/jpeg",
+            ),
+            dead_zone,
         ))
     })
 }
@@ -536,6 +577,7 @@ fn mouse_click_at(
 
         let target_x = require_number(&args, "x", "x", None, None).map_err(anyhow::Error::msg)?;
         let target_y = require_number(&args, "y", "y", None, None).map_err(anyhow::Error::msg)?;
+        let dead_zone = dead_zone_warning(target_x, target_y);
         let button_str = validate_enum(&args, "button", VALID_BUTTONS, "left").to_string();
         let button = button_from_str(&button_str);
 
@@ -615,7 +657,10 @@ fn mouse_click_at(
         )
         .await;
 
-        Ok(render_click_at_outcome(outcome))
+        Ok(with_dead_zone_warning(
+            render_click_at_outcome(outcome),
+            dead_zone,
+        ))
     })
 }
 
@@ -654,5 +699,49 @@ fn render_click_at_outcome(outcome: ClickAtOutcome) -> ToolOutcome {
             screenshot,
             ..
         } => ToolOutcome::text_and_image(message, b64(&screenshot), "image/jpeg"),
+    }
+}
+
+#[cfg(test)]
+mod dead_zone_tests {
+    // `point_in_known_letterbox` itself (cache semantics, in/out-of-frame
+    // edges) is already covered by detection-vision's own orientation.rs
+    // tests — these cover only `with_dead_zone_warning`'s pure wrapping
+    // contract, which is this file's own responsibility.
+    use super::{with_dead_zone_warning, ToolContent, ToolOutcome};
+
+    const WARNING: &str = "WARN ";
+
+    #[test]
+    fn none_leaves_the_outcome_untouched() {
+        let outcome = ToolOutcome::text("hello");
+        let result = with_dead_zone_warning(outcome, None);
+        match &result.content[0] {
+            ToolContent::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("expected Text content"),
+        }
+        assert!(!result.is_error);
+    }
+
+    #[test]
+    fn some_prepends_to_the_first_text_block_only() {
+        let outcome = ToolOutcome::text_and_image("clicked", "b64data", "image/jpeg");
+        let result = with_dead_zone_warning(outcome, Some(WARNING));
+        match &result.content[0] {
+            ToolContent::Text(t) => assert_eq!(t, "WARN clicked"),
+            _ => panic!("expected Text content first"),
+        }
+        match &result.content[1] {
+            ToolContent::Image { data, .. } => assert_eq!(data, "b64data"),
+            _ => panic!("image block must be untouched"),
+        }
+    }
+
+    #[test]
+    fn preserves_is_error_in_both_directions() {
+        let err_outcome = with_dead_zone_warning(ToolOutcome::error_text("bad"), Some(WARNING));
+        assert!(err_outcome.is_error);
+        let ok_outcome = with_dead_zone_warning(ToolOutcome::text("ok"), Some(WARNING));
+        assert!(!ok_outcome.is_error);
     }
 }
