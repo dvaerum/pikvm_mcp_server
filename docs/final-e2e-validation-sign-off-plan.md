@@ -152,8 +152,16 @@ for the path that IS fully testable today.
 - Priority order among categories 1/3 (both fully open, both
   parallel-safe, both need someone to actually build+run them) — whoever
   picks these up next, which first?
-- Whether the stationary-guard widening should be treated as a
-  prerequisite for calling category 2's live gate "representative" (it
-  touches the same correction-loop code category 2's guard sits inside),
-  or is genuinely independent enough to land on its own schedule as §2
-  item 6 assumes.
+- None, on reflection: confirmed with georgs-mac-mini (direct grep of
+  `slam/motion.rs` and `cursor_anchor.rs` for any
+  `CursorBelief`/`would_reject_as_stationary` reference — zero hits) that
+  category 2's guard (`corner_target_from_bounds` + `slam_to_corner`'s
+  `verify_motion`, invoked from `cursor_anchor.rs`'s `run_slam`) and the
+  stationary-widening (`CursorBelief::would_reject_as_stationary`, called
+  only from `legacy_move.rs`'s correction-pass motion-diff pairing) are
+  different mechanisms on different code paths with zero cross-reference.
+  §2 item 6's "independent, non-blocking" call stands for a cleaner
+  reason than originally stated here: not "it's independent enough to
+  treat that way," but there is no shared code between the two at all —
+  category 2's sign-off is not contingent on or informed by the
+  widening's status on either side.
