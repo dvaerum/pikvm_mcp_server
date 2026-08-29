@@ -80,6 +80,8 @@ use pikvm_mcp_mover::slam::ScreenshotMode;
 
 const CONFIRM_FLAG_PATH: &str = "/tmp/corner_control_confirm.flag";
 const CONFIRM_TIMEOUT_S: u64 = 30;
+const ALREADY_LOCKED_FLAG_PATH: &str = "/tmp/corner_control_already_locked.flag";
+const ALREADY_LOCKED_TIMEOUT_S: u64 = 15;
 
 /// Both controls assert safety BECAUSE THIS process's OWN screenshot
 /// (saved just before the confirmation wait below, re-confirmed by the
@@ -96,15 +98,17 @@ fn caller_asserted_reason() -> AnchorGuard {
     }
 }
 
-/// Poll `CONFIRM_FLAG_PATH` for up to `CONFIRM_TIMEOUT_S` seconds. Returns
-/// `true` only if the file's trimmed contents are exactly "yes" — anything
-/// else (missing, timeout, different content) is treated as "do not
-/// proceed," matching the fail-closed discipline every other safety gate
-/// in this codebase uses.
-async fn wait_for_confirmation() -> bool {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(CONFIRM_TIMEOUT_S);
+/// Poll `path` for up to `timeout_s` seconds. Returns `true` only if the
+/// file's trimmed contents are exactly "yes" — anything else (missing,
+/// timeout, different content) is treated as "do not proceed," matching
+/// the fail-closed discipline every other safety gate in this codebase
+/// uses. Shared by both flag gates in this file (the pre-lock "already
+/// locked?" check and the pre-slam confirmation) — same semantics, only
+/// the path/timeout differ.
+async fn wait_for_flag(path: &str, timeout_s: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_s);
     loop {
-        if let Ok(contents) = std::fs::read_to_string(CONFIRM_FLAG_PATH) {
+        if let Ok(contents) = std::fs::read_to_string(path) {
             return contents.trim() == "yes";
         }
         if tokio::time::Instant::now() >= deadline {
@@ -122,13 +126,14 @@ async fn main() {
     let proxy_url = std::env::var("PIKVM_PROXY").ok();
     let fallback_mouse_move = std::env::args().any(|a| a == "--fallback-mouse-move");
 
-    if std::path::Path::new(CONFIRM_FLAG_PATH).exists() {
-        eprintln!(
-            "=== ABORT: {CONFIRM_FLAG_PATH} already exists from a previous run — delete it first \
-             (rm -f {CONFIRM_FLAG_PATH}) so this run can't be silently pre-confirmed by stale \
-             state. ==="
-        );
-        std::process::exit(1);
+    for path in [CONFIRM_FLAG_PATH, ALREADY_LOCKED_FLAG_PATH] {
+        if std::path::Path::new(path).exists() {
+            eprintln!(
+                "=== ABORT: {path} already exists from a previous run — delete it first \
+                 (rm -f {path}) so this run can't be silently pre-confirmed by stale state. ==="
+            );
+            std::process::exit(1);
+        }
     }
 
     let config = PiKVMConfig {
@@ -138,112 +143,136 @@ async fn main() {
     };
     let client = Arc::new(PiKVMClient::new(config, None));
 
-    // Step 1: baseline screenshot — documents the starting state honestly,
-    // NOT a safety-relevant check (locking is unconditional below and
-    // doesn't care whether the pre-lock state was awake or already
-    // dimmed). Best-effort: two live attempts hit this exact display
-    // already being dimmed from a moment earlier (the display's wake
-    // window is short enough that even the gap between an external wake
-    // probe and this process's own startup can close it) — a real
-    // 503 here is informational-step noise, not grounds to abort before
-    // the actual safety-relevant step (the lock command) has even run.
+    // Step 1: baseline screenshot — documents the starting state honestly.
+    // Best-effort: two live attempts hit this exact display already being
+    // dimmed from a moment earlier (the display's wake window is short
+    // enough that even the gap between an external wake probe and this
+    // process's own startup can close it) — a real 503 here just means
+    // "unknown starting state," not grounds to abort.
+    let mut baseline_shot = None;
     match client.screenshot(None).await {
         Ok(baseline) => {
             std::fs::write("/tmp/corner_control_smoke_baseline.jpg", &baseline.buffer)
                 .expect("write baseline screenshot");
             eprintln!(
-                "=== BASELINE: /tmp/corner_control_smoke_baseline.jpg saved (reference only). ==="
+                "=== BASELINE: /tmp/corner_control_smoke_baseline.jpg saved. If this is ALREADY \
+                 an unambiguous genuine lock screen (clock/wallpaper/home-indicator, no app \
+                 content), you can skip the lock+wake steps below entirely — write \"yes\" to \
+                 {ALREADY_LOCKED_FLAG_PATH} within {ALREADY_LOCKED_TIMEOUT_S}s to do that. \
+                 Otherwise do nothing and the normal lock+wake sequence runs next. ==="
             );
+            baseline_shot = Some(baseline);
         }
         Err(e) => {
             eprintln!(
-                "=== BASELINE screenshot failed ({e}) — non-fatal, informational only. Proceeding \
-                 to the lock command regardless. ==="
+                "=== BASELINE screenshot failed ({e}) — non-fatal, unknown starting state. \
+                 Proceeding to the lock command (can't skip it — no baseline image to judge). ==="
             );
         }
     }
 
-    // Step 2: lock — same shortcut pikvm_ipad_lock sends.
-    eprintln!("=== Sending Ctrl+Cmd+Q — screen should turn off within 2s ===");
-    client
-        .send_shortcut(&["ControlLeft", "MetaLeft", "KeyQ"])
-        .await
-        .expect("send Ctrl+Cmd+Q failed");
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    // Step 1.5 (NEW — moves "check the real state before acting" one step
+    // earlier, per the manager's framing): if the baseline already looks
+    // like a genuine lock screen, skip lock+wake entirely rather than
+    // risk escalating an already-locked device toward the Touch ID/
+    // passcode prompt. Live-confirmed 2026-08-29 (twice): sending
+    // Ctrl+Cmd+Q + one Space to a device that was ALREADY on a plain lock
+    // screen behaves like a "second press" relative to its actual state
+    // and lands on the Touch ID prompt instead of the plain lock screen —
+    // not a safety incident (fail-closed correctly both times, zero HID
+    // near a corner), but pointless HID churn against a device already at
+    // the target precondition.
+    let should_skip_lock = if baseline_shot.is_some() {
+        wait_for_flag(ALREADY_LOCKED_FLAG_PATH, ALREADY_LOCKED_TIMEOUT_S).await
+    } else {
+        false
+    };
+    let confirm_shot = if let Some(shot) = baseline_shot.filter(|_| should_skip_lock) {
+        eprintln!("=== Operator confirmed the baseline is already a genuine lock screen — skipping lock+wake. ===");
+        shot
+    } else {
+        // Step 2: lock — same shortcut pikvm_ipad_lock sends.
+        eprintln!("=== Sending Ctrl+Cmd+Q — screen should turn off within 2s ===");
+        client
+            .send_shortcut(&["ControlLeft", "MetaLeft", "KeyQ"])
+            .await
+            .expect("send Ctrl+Cmd+Q failed");
+        tokio::time::sleep(Duration::from_millis(2500)).await;
 
-    // Step 3 (INFORMATIONAL ONLY, not a gate — see this file's own v5
-    // header note): live-confirmed 2026-08-29 that `get_streamer_status`
-    // reflects ustreamer's own on-demand run state (this project's
-    // documented behavior — it idles/stops without a held `/api/ws`
-    // session), not the iPad's actual lock state. A single read AND a
-    // 3x-retried read both produced false aborts (reported ONLINE while a
-    // direct screenshot moments later showed the iPad genuinely, stably
-    // locked). This codebase's own stated design principle already covers
-    // exactly this gap: "no automated lock-screen classifier... lock-
-    // state determination is the operator's job via visual inspection,
-    // not a pixel heuristic." So: log this reading for diagnostics, but
-    // the REAL gate is the human reviewing the confirmation screenshot
-    // below (step 4/5) — unchanged, still fail-closed on anything but an
-    // explicit "yes".
-    match client.get_streamer_status().await {
-        Ok((online, _resolution)) => {
-            eprintln!("(informational) streamer status after lock: online={online}");
-        }
-        Err(e) => {
-            eprintln!("(informational) streamer status read failed: {e}");
-        }
-    }
-
-    // Step 4: wake + confirmation screenshot, retried as a pair until one
-    // succeeds. Retrying the SCREENSHOT ITSELF (not a flag) is the real
-    // fix — ustreamer needing a moment to serve a frame is expected and
-    // harmless; the process just keeps trying until it gets a real image
-    // for the human to judge.
-    let mut confirm_shot = None;
-    for attempt in 1..=5 {
-        if fallback_mouse_move {
-            eprintln!("=== Wake attempt {attempt}/5: small relative mouse move (--fallback-mouse-move) ===");
-            client
-                .mouse_move_relative(5.0, 5.0)
-                .await
-                .expect("wake mouse move failed");
-        } else {
-            eprintln!("=== Wake attempt {attempt}/5: single Space press (not Enter) ===");
-            client
-                .send_key("Space", None)
-                .await
-                .expect("wake Space press failed");
-        }
-        // 1.5s, not 800ms: this project's own documented finding is that
-        // a screenshot taken immediately after a UI-dismissing keypress
-        // can be a genuinely torn/glitched capture frame (solid-colour
-        // fill with a small correct render in one corner) — a streamer
-        // mid-transition artifact, not real device state. Live-confirmed
-        // 2026-08-29: an 800ms wait produced exactly that (a real, correct
-        // lock-screen fragment in the top strip, solid green filling the
-        // rest) — caught by the human step below (correctly did NOT
-        // confirm it), not by this retry loop, since a torn frame is
-        // still a successful `Ok(shot)`, not an `Err` this loop retries
-        // on. Longer settle reduces how often that happens; the human
-        // step remains the real backstop either way.
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        match client.screenshot(None).await {
-            Ok(shot) => {
-                confirm_shot = Some(shot);
-                break;
+        // Step 3 (INFORMATIONAL ONLY, not a gate — see this file's own v5
+        // header note): live-confirmed 2026-08-29 that `get_streamer_status`
+        // reflects ustreamer's own on-demand run state (this project's
+        // documented behavior — it idles/stops without a held `/api/ws`
+        // session), not the iPad's actual lock state. A single read AND a
+        // 3x-retried read both produced false aborts (reported ONLINE while
+        // a direct screenshot moments later showed the iPad genuinely,
+        // stably locked). This codebase's own stated design principle
+        // already covers exactly this gap: "no automated lock-screen
+        // classifier... lock-state determination is the operator's job via
+        // visual inspection, not a pixel heuristic." So: log this reading
+        // for diagnostics, but the REAL gate is the human reviewing the
+        // confirmation screenshot below (step 4/5) — unchanged, still
+        // fail-closed on anything but an explicit "yes".
+        match client.get_streamer_status().await {
+            Ok((online, _resolution)) => {
+                eprintln!("(informational) streamer status after lock: online={online}");
             }
             Err(e) => {
-                eprintln!(
+                eprintln!("(informational) streamer status read failed: {e}");
+            }
+        }
+
+        // Step 4: wake + confirmation screenshot, retried as a pair until
+        // one succeeds. Retrying the SCREENSHOT ITSELF (not a flag) is the
+        // real fix — ustreamer needing a moment to serve a frame is
+        // expected and harmless; the process just keeps trying until it
+        // gets a real image for the human to judge.
+        let mut confirm_shot = None;
+        for attempt in 1..=5 {
+            if fallback_mouse_move {
+                eprintln!("=== Wake attempt {attempt}/5: small relative mouse move (--fallback-mouse-move) ===");
+                client
+                    .mouse_move_relative(5.0, 5.0)
+                    .await
+                    .expect("wake mouse move failed");
+            } else {
+                eprintln!("=== Wake attempt {attempt}/5: single Space press (not Enter) ===");
+                client
+                    .send_key("Space", None)
+                    .await
+                    .expect("wake Space press failed");
+            }
+            // 1.5s, not 800ms: this project's own documented finding is that
+            // a screenshot taken immediately after a UI-dismissing keypress
+            // can be a genuinely torn/glitched capture frame (solid-colour
+            // fill with a small correct render in one corner) — a streamer
+            // mid-transition artifact, not real device state. Live-confirmed
+            // 2026-08-29: an 800ms wait produced exactly that (a real, correct
+            // lock-screen fragment in the top strip, solid green filling the
+            // rest) — caught by the human step below (correctly did NOT
+            // confirm it), not by this retry loop, since a torn frame is
+            // still a successful `Ok(shot)`, not an `Err` this loop retries
+            // on. Longer settle reduces how often that happens; the human
+            // step remains the real backstop either way.
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            match client.screenshot(None).await {
+                Ok(shot) => {
+                    confirm_shot = Some(shot);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!(
                     "wake attempt {attempt}/5: screenshot failed ({e}) — ustreamer likely still \
                      spinning up. Retrying."
                 );
+                }
             }
         }
-    }
-    let confirm_shot = confirm_shot.unwrap_or_else(|| {
-        eprintln!("=== ABORT: display never produced a screenshot after 5 wake attempts. ===");
-        std::process::exit(1);
-    });
+        confirm_shot.unwrap_or_else(|| {
+            eprintln!("=== ABORT: display never produced a screenshot after 5 wake attempts. ===");
+            std::process::exit(1);
+        })
+    };
     std::fs::write(
         "/tmp/corner_control_smoke_confirm.jpg",
         &confirm_shot.buffer,
@@ -263,7 +292,7 @@ async fn main() {
          near a corner yet): do nothing, let this time out, and re-run with \
          --fallback-mouse-move if the wake over-shot to unlocked. ==="
     );
-    if !wait_for_confirmation().await {
+    if !wait_for_flag(CONFIRM_FLAG_PATH, CONFIRM_TIMEOUT_S).await {
         eprintln!(
             "=== ABORT: no \"yes\" confirmation received within {CONFIRM_TIMEOUT_S}s — NOT firing \
              the guarded slam pair. Fail-closed. ==="
