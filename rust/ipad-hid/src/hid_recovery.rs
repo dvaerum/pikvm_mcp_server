@@ -30,11 +30,13 @@
 //! API unchanged: every item below is re-exported from this root exactly as
 //! it was when the whole module lived in one file.
 
+mod behavioral;
 mod http;
 mod ladder;
 mod ssh;
 mod types;
 
+pub use behavioral::{make_behavioral_verifier, BehavioralVerifierOptions};
 pub use http::{make_http_recovery_trigger, make_udc_state_reader};
 pub use ladder::{check_target_present, recover_hid, wait_for_recovery};
 pub use ssh::{make_ssh_recovery_trigger, make_ssh_udc_state_reader, SshExecFn, SshExecResult};

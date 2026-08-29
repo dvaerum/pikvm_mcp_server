@@ -1,19 +1,14 @@
 //! Barrel module for all MCP prompts.
 //!
 //! Faithful port of `src/prompts/index.ts`. Split into one file per
-//! logical group (types/skill_docs/tool_guides/workflows) from the
-//! start, matching this port's own established layout — the TS source
-//! was already split this way, so no crate-placement or file-structure
-//! finding was needed here, just a straightforward multi-file port.
-//!
-//! `skill_tools.rs` (`src/prompts/skill-tools.ts`) is NOT ported yet:
-//! it auto-generates MCP `Tool` definitions from these prompts (so
-//! skill/guide content is also discoverable via `tools/list`), which
-//! needs the real `rmcp` `Tool` type — not yet wired into this crate.
-//! Deferred until the tool-registry skeleton lands, rather than
-//! building a throwaway placeholder type now.
+//! logical group (types/skill_docs/tool_guides/workflows/skill_tools)
+//! from the start, matching this port's own established layout — the TS
+//! source was already split this way, so no crate-placement or
+//! file-structure finding was needed here, just a straightforward
+//! multi-file port.
 
 mod skill_docs;
+pub mod skill_tools;
 mod tool_guides;
 mod types;
 mod workflows;

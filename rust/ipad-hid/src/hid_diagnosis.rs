@@ -52,6 +52,27 @@ pub struct CursorPoint {
 pub type CursorLocator =
     Arc<dyn Fn(Vec<u8>) -> BoxFuture<'static, Option<CursorPoint>> + Send + Sync>;
 
+/// Faithful port of `defaultCursorLocator`, now that `find_cursor_by_v8_full_frame`
+/// (module 3) has landed. Same detector the mover/click paths use — and
+/// the same one `hid_recovery::make_behavioral_verifier` wires — so
+/// "localizable" here means exactly what it means at click time.
+pub fn default_cursor_locator() -> CursorLocator {
+    Arc::new(|buffer: Vec<u8>| {
+        Box::pin(async move {
+            let dec = pikvm_mcp_detection_vision::decode::decode_to_rgb(&buffer).ok()?;
+            let hit = pikvm_mcp_detection_vision::cursor_ml_detect::find_cursor_by_v8_full_frame(
+                &buffer,
+                dec.width,
+                dec.height,
+                pikvm_mcp_detection_vision::cursor_ml_detect::V8FullFrameOptions::default(),
+            )
+            .ok()
+            .flatten()?;
+            Some(CursorPoint { x: hit.x, y: hit.y })
+        })
+    })
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum HidDiagnosis {
     Healthy {

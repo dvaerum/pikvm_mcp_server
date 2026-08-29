@@ -12,15 +12,13 @@
 //! not a singleton: concurrent HTTP clients must not share one `Server`'s
 //! JSON-RPC request-id space.
 //!
-//! Phase A (this increment) wires: `get_info`, `list_prompts`/`get_prompt`
-//! (delegating to the already-ported `prompts` crate module), and
-//! `list_tools`/`call_tool` with the busy-lock gate + the try/sanitize
-//! wrapper around dispatch. NOT yet wired (later phases, see
-//! docs/rust-port-plan.md §7 item 6): the login gate's `ListTools`
-//! filtering (stdio never passes a gate, so `gate` is always `None` until
-//! http-server.rs lands), the HID-mode mover gate, and the
-//! absolute/relative-mouse gate (both need `HidModeResolver`, not ported
-//! into this crate yet).
+//! Wires: `get_info`, `list_prompts`/`get_prompt` (delegating to the
+//! already-ported `prompts` crate module), and `list_tools`/`call_tool`
+//! with the busy-lock gate, the HID-mode mover gate, the absolute/
+//! relative-mouse gate, and the try/sanitize wrapper around dispatch. NOT
+//! yet wired (a later phase, see docs/rust-port-plan.md §7 item 6): the
+//! login gate's `ListTools` filtering — stdio never passes a gate, so
+//! `gate` is always `None` until `http-server.rs` lands.
 
 use std::sync::{Arc, Mutex};
 
@@ -35,28 +33,56 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
 
+use pikvm_mcp_foundation::auth::HeaderAuthorizer;
 use pikvm_mcp_foundation::lock::BusyLock;
 use pikvm_mcp_foundation::session_auth::LoginGate;
+use pikvm_mcp_ipad_hid::hid_mode::HidModeResolver;
 use pikvm_mcp_kvmd_client::client::PiKVMClient;
 
 use crate::prompts as prompt_defs;
 use crate::tools::{self, ToolContent, ToolEntry, ToolOutcome};
 
 /// Module-global-equivalent state, shared across every session. Grows in
-/// later phases (hid_mode_resolver, cached_profile, recovery_trigger,
-/// udc_state_reader — see index.ts) as the tools that need them are
-/// ported in.
+/// later phases (recovery_trigger, udc_state_reader — see index.ts) as
+/// the tools that need them are ported in.
 pub struct SharedState {
     pub client: Arc<PiKVMClient>,
     pub lock: Mutex<BusyLock>,
+    /// `tokio::sync::Mutex` (not `std::sync::Mutex`): `resolve()`/`set()`
+    /// are `async fn`s that need the lock held across their whole `.await`
+    /// chain (a real HTTP round-trip for the endpoint-derived case) — a
+    /// std `MutexGuard` held across an await point is a real footgun
+    /// (blocks the executor thread, risks deadlock), which is exactly why
+    /// tokio ships its own async-aware `Mutex` for this shape.
+    pub hid_mode_resolver: tokio::sync::Mutex<HidModeResolver>,
+    /// EXPERIMENTAL (#41), off by default. `ScaleLearner`'s own methods
+    /// are all sync — a plain `std::sync::Mutex` is fine here (never held
+    /// across an `.await`, unlike `hid_mode_resolver` above).
+    pub scale_learner: Mutex<pikvm_mcp_mover::scale_learner::ScaleLearner>,
+    pub calibration_config: pikvm_mcp_foundation::config::CalibrationConfig,
+    /// Refreshed by `pikvm_measure_ballistics` on a successful measurement
+    /// (matching index.ts's own `cachedProfile = result.profile`); no
+    /// current reader — `pikvm_mouse_move_to`, its only real consumer, is
+    /// blocked on move-to.ts (see docs/rust-port-plan.md §7 item 6).
+    pub cached_profile: Mutex<Option<pikvm_mcp_mover::ballistics::BallisticsProfile>>,
     pub tools: Vec<ToolEntry>,
 }
 
 impl SharedState {
-    pub fn new(client: PiKVMClient) -> Self {
+    pub fn new(
+        client: PiKVMClient,
+        hid_mode_resolver: HidModeResolver,
+        scale_learner: pikvm_mcp_mover::scale_learner::ScaleLearner,
+        calibration_config: pikvm_mcp_foundation::config::CalibrationConfig,
+        cached_profile: Option<pikvm_mcp_mover::ballistics::BallisticsProfile>,
+    ) -> Self {
         Self {
             client: Arc::new(client),
             lock: Mutex::new(BusyLock::new()),
+            hid_mode_resolver: tokio::sync::Mutex::new(hid_mode_resolver),
+            scale_learner: Mutex::new(scale_learner),
+            calibration_config,
+            cached_profile: Mutex::new(cached_profile),
             tools: tools::tool_registry(),
         }
     }
@@ -91,19 +117,75 @@ fn login_tool() -> Tool {
     )
 }
 
+/// Deployment-wide auth config, shared (immutably) by every session's
+/// `PikvmMcpServer` instance minted from the same `StreamableHttpService`
+/// factory. `None` `authorize` = `--security no`. `allow_tool_login` is
+/// only meaningful when `authorize` is `Some` (matches
+/// `http-server.ts`'s own `allowToolLogin = Boolean(opts.allowToolLogin)
+/// && Boolean(authorize)` guard).
+#[derive(Clone, Default)]
+pub struct PikvmAuthConfig {
+    pub authorize: Option<HeaderAuthorizer>,
+    pub allow_tool_login: bool,
+}
+
+/// A custom axum request extension `http_server.rs`'s auth middleware
+/// inserts, carrying whether THIS request's `Authorization` header was
+/// valid — read back inside `initialize()` via `RequestContext::extensions`
+/// (which nests axum's own `Extension` data inside the propagated
+/// `http::request::Parts`, per rmcp's own documented pattern) to seed the
+/// session's initial `SessionAuthState` without re-running the
+/// authorizer a second time.
+#[derive(Clone, Copy, Debug)]
+pub struct HeaderAuthed(pub bool);
+
 #[derive(Clone)]
 pub struct PikvmMcpServer {
     shared: Arc<SharedState>,
-    /// `None` for stdio and for header-only HTTP auth; `Some` only for a
-    /// Streamable-HTTP session opened under `--allow-tool-login` (wired in
-    /// a later phase — always `None` today).
-    gate: Option<Arc<LoginGate>>,
+    auth: Arc<PikvmAuthConfig>,
+    /// Populated once, in `initialize()` — the ONLY place a session's
+    /// initial authenticated state is known. `None` for stdio (no HTTP
+    /// context to read a header from) and for HTTP sessions where
+    /// `allow_tool_login` isn't configured (the strict header-at-connect
+    /// path already fully gates those at the axum middleware layer,
+    /// before rmcp is ever reached — nothing left for the tool layer to
+    /// enforce). Interior-mutable (not a constructor param) because the
+    /// factory that mints this struct has no per-request context to hand
+    /// it — see `http_server.rs`'s own header comment on why the auth
+    /// decision has to happen this late.
+    session_gate: Arc<Mutex<Option<Arc<LoginGate>>>>,
 }
 
 impl PikvmMcpServer {
-    pub fn new(shared: Arc<SharedState>, gate: Option<Arc<LoginGate>>) -> Self {
-        Self { shared, gate }
+    pub fn new(shared: Arc<SharedState>, auth: Arc<PikvmAuthConfig>) -> Self {
+        Self {
+            shared,
+            auth,
+            session_gate: Arc::new(Mutex::new(None)),
+        }
     }
+
+    fn gate(&self) -> Option<Arc<LoginGate>> {
+        self.session_gate.lock().unwrap().clone()
+    }
+}
+
+/// Derives a session's initial authenticated state from the rmcp
+/// `initialize` request's [`rmcp::model::Extensions`] — pulled out of
+/// `initialize()` as its own pure function so the extraction logic (nested
+/// `Parts`-inside-`Extensions` lookup, `HeaderAuthed`, and the "no HTTP
+/// context ⇒ trust it" default) is unit-testable without needing a full
+/// `RequestContext`. Defaults to `authenticated = true` both for stdio (no
+/// `Parts` present at all) and for a valid-header HTTP connect (`Parts`
+/// present, but `require_auth` only ever inserts `HeaderAuthed` on the
+/// pre-auth admission path — see `http_server.rs`) — only an explicit
+/// `HeaderAuthed(false)` opens a pre-auth session.
+fn authenticated_from_extensions(extensions: &rmcp::model::Extensions) -> bool {
+    extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<HeaderAuthed>())
+        .map(|h| h.0)
+        .unwrap_or(true)
 }
 
 fn to_call_tool_result(outcome: ToolOutcome) -> CallToolResult {
@@ -181,6 +263,73 @@ fn regex_replace_password(input: &str) -> String {
     )
 }
 
+/// Pointer-driving tools whose correctness depends on the HID mode: in
+/// endpoint mode these are REFUSED while the mode is unknown (unreachable)
+/// or settling (post-switch re-enumeration). Keyboard/screenshot/health/
+/// recovery are deliberately excluded — they work regardless of mouse
+/// mode. Faithful port of index.ts's `MODE_SENSITIVE_TOOLS` — cross-
+/// checked there by `mcp-hidmode-gate.test.ts` so a new pointer-driving
+/// tool can't slip in unguarded; this port doesn't have that meta-test
+/// yet (deferred with the rest of the gate/schema-exposure test family,
+/// see the Phase B batch 1 commit message), so this list is the single
+/// source of truth for now — keep it in sync by hand.
+const MODE_SENSITIVE_TOOLS: &[&str] = &[
+    "pikvm_mouse_move",
+    "pikvm_mouse_click",
+    "pikvm_mouse_scroll",
+    "pikvm_mouse_move_to",
+    "pikvm_mouse_click_at",
+    "pikvm_calibrate",
+    "pikvm_auto_calibrate",
+    "pikvm_measure_ballistics",
+    "pikvm_seed_cursor_template",
+    "pikvm_ipad_unlock",
+    "pikvm_ipad_unlock_with_code",
+    "pikvm_ipad_lock",
+    "pikvm_ipad_home",
+    "pikvm_ipad_app_switcher",
+    "pikvm_ipad_launch_app",
+    "pikvm_dismiss_popup",
+];
+
+const ABSOLUTE_MOUSE_NOTE: &str = "This target reports mouse.absolute=false (typical for iPad / boot-mouse HID). \
+     Use the relative-mode tools instead: pikvm_ipad_unlock, pikvm_mouse_move with relative:true, \
+     pikvm_mouse_click_at, pikvm_mouse_move_to, pikvm_mouse_click. See docs/skills/ipad-keyboard-workflow.md \
+     for the recommended pattern.";
+
+const RELATIVE_MOUSE_NOTE: &str = "This target reports mouse.absolute=true (desktop, dual absolute+relative gadget). \
+     A forced relative:true emit here is a documented silent no-op (see ADR 0002: relative reports into an \
+     absolute-assembled gadget are accepted by kvmd but never delivered) — pass absolute pixel coordinates \
+     instead (omit relative, or pass relative:false), or use pikvm_mouse_move_to / pikvm_mouse_click_at, which \
+     already select the correct strategy for this mode.";
+
+/// The single source of truth for "which calls need mouse.absolute=true".
+/// Faithful port of index.ts's `ABSOLUTE_MOUSE_GATE`/`requiresAbsoluteMouse`.
+fn requires_absolute_mouse(name: &str, args: &serde_json::Map<String, Value>) -> bool {
+    match name {
+        "pikvm_calibrate"
+        | "pikvm_set_calibration"
+        | "pikvm_get_calibration"
+        | "pikvm_clear_calibration"
+        | "pikvm_auto_calibrate" => true,
+        // Absolute unless relative:true.
+        "pikvm_mouse_move" => args.get("relative").and_then(Value::as_bool) != Some(true),
+        // The SHAPE of the call decides: x/y mean absolute pixels.
+        "pikvm_mouse_click" => {
+            args.get("x").and_then(Value::as_f64).is_some()
+                && args.get("y").and_then(Value::as_f64).is_some()
+        }
+        _ => false,
+    }
+}
+
+/// The mirror of `requires_absolute_mouse`: "which calls need
+/// mouse.absolute=false" (an explicit FORCED relative emit). Faithful
+/// port of index.ts's `RELATIVE_MOUSE_GATE`/`requiresRelativeMouse`.
+fn requires_relative_mouse(name: &str, args: &serde_json::Map<String, Value>) -> bool {
+    name == "pikvm_mouse_move" && args.get("relative").and_then(Value::as_bool) == Some(true)
+}
+
 impl ServerHandler for PikvmMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
@@ -203,7 +352,28 @@ impl ServerHandler for PikvmMcpServer {
     ) -> Result<InitializeResult, McpError> {
         let mut info = self.get_info();
         info.protocol_version = request.protocol_version.clone();
-        let _ = context;
+
+        // Faithful port of http-server.ts's per-session auth seed: a
+        // validated header at connect authorizes the session for its
+        // whole lifetime; only when `allow_tool_login` is configured does
+        // a header-less `initialize` open a PRE-AUTH session instead of
+        // being rejected outright (the axum middleware in front of rmcp
+        // already refused every other header-less/wrong-header request
+        // before this ever runs — see http_server.rs). stdio has no HTTP
+        // context to read a header from (`extensions.get::<Parts>()` is
+        // `None`), so it always resolves `authenticated = true` — the
+        // gate stays inert there, matching its pre-existing behavior.
+        if self.auth.allow_tool_login {
+            if let Some(authorize) = &self.auth.authorize {
+                let authenticated = authenticated_from_extensions(&context.extensions);
+                let session =
+                    pikvm_mcp_foundation::session_auth::SessionAuthState::new(authenticated);
+                let gate =
+                    pikvm_mcp_foundation::session_auth::make_login_gate(authorize.clone(), session);
+                *self.session_gate.lock().unwrap() = Some(Arc::new(gate));
+            }
+        }
+
         Ok(info)
     }
 
@@ -276,7 +446,7 @@ impl ServerHandler for PikvmMcpServer {
         // expose ONLY the login tool — don't leak the full tool surface
         // before authentication. Faithful port of the TS `ListTools`
         // handler's gate check.
-        if let Some(gate) = &self.gate {
+        if let Some(gate) = self.gate() {
             if !gate.session.is_authenticated() {
                 return Ok(ListToolsResult {
                     tools: vec![login_tool()],
@@ -284,7 +454,7 @@ impl ServerHandler for PikvmMcpServer {
                 });
             }
         }
-        let tools = self
+        let mut tools: Vec<Tool> = self
             .shared
             .tools
             .iter()
@@ -296,6 +466,7 @@ impl ServerHandler for PikvmMcpServer {
                 )
             })
             .collect();
+        tools.extend(prompt_defs::skill_tools::skill_tools());
         Ok(ListToolsResult {
             tools,
             ..Default::default()
@@ -314,7 +485,7 @@ impl ServerHandler for PikvmMcpServer {
         // tool callable on a pre-auth session; everything else is refused
         // until it authenticates. Faithful port of index.ts's login-gate
         // block.
-        if let Some(gate) = &self.gate {
+        if let Some(gate) = self.gate() {
             if name == "login" {
                 let username = args.get("username").and_then(Value::as_str);
                 let password = args.get("password").and_then(Value::as_str);
@@ -367,9 +538,67 @@ impl ServerHandler for PikvmMcpServer {
             }
         }
 
-        // TODO(Module 6 later phase): HID-mode mover gate + absolute/
-        // relative-mouse gate — both need HidModeResolver, not ported
-        // into this crate yet (see docs/rust-port-plan.md §7 item 6).
+        // (#51) HID-mode mover gate: pointer-driving tools need the mode
+        // KNOWN and the HID settled before they move. Faithful port of
+        // index.ts's `MODE_SENSITIVE_TOOLS`/`refreshHidMode()` gate.
+        if MODE_SENSITIVE_TOOLS.contains(&name.as_str()) {
+            let mut resolver = self.shared.hid_mode_resolver.lock().await;
+            resolver.resolve().await;
+            let gate = resolver.mover_gate();
+            if !gate.allowed {
+                let reason = gate.reason.unwrap_or_default();
+                return Ok(to_call_tool_result(ToolOutcome::error_text(format!(
+                    "Error: {reason}"
+                )))
+                .into());
+            }
+        }
+
+        // ADR-0002 Phase 1: read policy() once instead of a module global.
+        // Non-null for MODE_SENSITIVE_TOOLS (the gate above just confirmed
+        // it); for the handful of non-mover calibration CRUD tools outside
+        // that set it falls back to `false` — same safe default index.ts
+        // itself starts from.
+        let current_mouse_absolute = self
+            .shared
+            .hid_mode_resolver
+            .lock()
+            .await
+            .policy()
+            .map(|p| p.mouse_absolute)
+            .unwrap_or(false);
+
+        if !current_mouse_absolute && requires_absolute_mouse(&name, &args) {
+            return Ok(to_call_tool_result(ToolOutcome::error_text(format!(
+                "Error: tool '{name}' requires absolute-mode mouse. {ABSOLUTE_MOUSE_NOTE}"
+            )))
+            .into());
+        }
+        // Mirror of the above (#3): a FORCED relative emit into an
+        // absolute/desktop gadget is a documented silent no-op (ADR 0002)
+        // — refuse rather than report a false success.
+        if current_mouse_absolute && requires_relative_mouse(&name, &args) {
+            return Ok(to_call_tool_result(ToolOutcome::error_text(format!(
+                "Error: tool '{name}' requires relative-mode mouse. {RELATIVE_MOUSE_NOTE}"
+            )))
+            .into());
+        }
+
+        // Skill tools (skill_*) route through the prompts module, not
+        // `shared.tools` — faithful port of index.ts's `isSkillTool`
+        // check inside the same try/catch as the registry dispatch below,
+        // so an unknown-skill-tool error flows through the identical
+        // sanitize_error/operator-hint path as "Unknown tool: ...".
+        if prompt_defs::skill_tools::is_skill_tool(&name) {
+            return match prompt_defs::skill_tools::handle_skill_tool_call(&name, &args) {
+                Ok(text) => Ok(to_call_tool_result(ToolOutcome::text(text)).into()),
+                Err(err) => Ok(to_call_tool_result(ToolOutcome::error_text(format!(
+                    "Error: {}",
+                    sanitize_error(&err)
+                )))
+                .into()),
+            };
+        }
 
         let entry = self.shared.tools.iter().find(|t| t.name == name);
         let Some(entry) = entry else {
@@ -463,5 +692,48 @@ mod tests {
         assert!(!sanitized.contains("hunter2"));
         assert!(sanitized.contains("password=[REDACTED]"));
         assert!(sanitized.contains("Source-side outage suspected")); // operator-hints.rs's 503+UnavailableError hint
+    }
+
+    // -- authenticated_from_extensions --
+
+    fn parts_with_header_authed(header_authed: Option<bool>) -> axum::http::request::Parts {
+        let mut parts = axum::http::Request::new(()).into_parts().0;
+        if let Some(v) = header_authed {
+            parts.extensions.insert(HeaderAuthed(v));
+        }
+        parts
+    }
+
+    #[test]
+    fn authenticated_from_extensions_defaults_true_for_stdio_with_no_http_context() {
+        // stdio never goes through http_server.rs's middleware, so no
+        // `Parts` is ever inserted into the rmcp `Extensions` at all.
+        let extensions = rmcp::model::Extensions::new();
+        assert!(authenticated_from_extensions(&extensions));
+    }
+
+    #[test]
+    fn authenticated_from_extensions_defaults_true_when_no_header_authed_marker_was_inserted() {
+        // Matches the valid-header-at-connect path: `require_auth` lets the
+        // request through via `next.run` WITHOUT ever inserting
+        // `HeaderAuthed` (only the pre-auth admission path does), so a
+        // `Parts` with no marker at all must still resolve to trusted.
+        let mut extensions = rmcp::model::Extensions::new();
+        extensions.insert(parts_with_header_authed(None));
+        assert!(authenticated_from_extensions(&extensions));
+    }
+
+    #[test]
+    fn authenticated_from_extensions_reads_an_explicit_false_marker() {
+        let mut extensions = rmcp::model::Extensions::new();
+        extensions.insert(parts_with_header_authed(Some(false)));
+        assert!(!authenticated_from_extensions(&extensions));
+    }
+
+    #[test]
+    fn authenticated_from_extensions_reads_an_explicit_true_marker() {
+        let mut extensions = rmcp::model::Extensions::new();
+        extensions.insert(parts_with_header_authed(Some(true)));
+        assert!(authenticated_from_extensions(&extensions));
     }
 }
