@@ -55,7 +55,12 @@ pub(super) struct ResolvedMoveOptions {
     pub icon_tolerance_residual_px: f64,
     /// `None` when the caller passed no profile, or passed one whose
     /// resolution doesn't match the current device (dropped with a
-    /// verbose warning, same as TS).
+    /// verbose warning, same as TS). Kept on the struct for fidelity to
+    /// TS's own `profile` local even though `legacy_move.rs` — like TS's
+    /// `moveToPixel` — only ever reads it indirectly, via the
+    /// `px_per_mickey_x/y` lookup already performed above; nothing reads
+    /// the profile itself again afterward in either implementation.
+    #[allow(dead_code)]
     pub profile: Option<BallisticsProfile>,
     /// Initial px/mickey estimate per axis — profile lookup at
     /// `chunk_magnitude`/`Pace::Slow` when a fresh profile is present,

@@ -20,6 +20,7 @@
 //! model file this repo doesn't bundle).
 
 mod correction_math;
+mod legacy_move;
 mod motion_diff;
 mod origin;
 mod resolved_options;
@@ -31,3 +32,36 @@ pub use types::{
     Axis, CorrectionPass, DetectionMode, MoveLearnSample, MovePassDiagnostic, MoveStrategy,
     MoveToOptions, MoveToResult, Point,
 };
+
+use std::sync::Arc;
+
+use pikvm_mcp_kvmd_client::client::PiKVMClient;
+
+/// Public entry point. Faithful port of `moveToPixel`'s own first
+/// branch (move-to.ts:1467-1485): `strategy==='curve-one-shot'` (the
+/// validated, "do NOT touch it" iPad-default mover) delegates entirely
+/// to `curve_mover`; every other strategy runs the legacy iterative
+/// correction-loop path.
+pub async fn move_to_pixel(
+    client: &Arc<PiKVMClient>,
+    target: Point,
+    options: MoveToOptions,
+) -> anyhow::Result<MoveToResult> {
+    if options.strategy == Some(MoveStrategy::CurveOneShot) {
+        return crate::curve_mover::move_by_curve_one_shot(
+            client,
+            target,
+            crate::curve_mover::CurveOneShotOptions {
+                min_presence: options.min_presence,
+                correct_gate_px: options.one_shot_correct_gate_px,
+                accept_gate_px: options.accept_gate_px,
+                curve_scale_x: options.curve_scale_x,
+                curve_scale_y: options.curve_scale_y,
+                ..Default::default()
+            },
+            crate::curve_mover::CurveOneShotDeps::default(),
+        )
+        .await;
+    }
+    legacy_move::move_to_pixel_legacy(client, target, &options).await
+}

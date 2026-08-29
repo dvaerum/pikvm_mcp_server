@@ -17,6 +17,14 @@ use super::types::{DetectionMode, MovePassDiagnostic};
 /// `pick_nearest_plausible_match` is generic over. Mirrors the TS
 /// source's own structural bound (`T extends { position: {x,y}; score:
 /// number }`) as a small trait, since Rust has no structural typing.
+///
+/// `pickNearestPlausibleMatch` (and this trait) are exported by
+/// `move-to.ts` but have no real caller anywhere in that codebase either
+/// (confirmed via grep — only its own declaration and test file) —
+/// faithfully ported since it's one of the "pure, already-well-tested
+/// math helpers" this file hosts, genuinely unused in both
+/// implementations, not a porting gap.
+#[allow(dead_code)]
 pub trait ScoredPosition {
     fn position(&self) -> (f64, f64);
     fn score(&self) -> f64;
@@ -37,7 +45,9 @@ pub fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
 /// `radius_px` of that prior over far high-scoring matches. When
 /// `expected_near` is `None`, OR when no candidates fall within the
 /// radius, falls back to global highest-score selection. Faithful port
-/// of `pickNearestPlausibleMatch`.
+/// of `pickNearestPlausibleMatch` — genuinely unused in both this port
+/// and the TS source (see `ScoredPosition`'s doc comment).
+#[allow(dead_code)]
 pub fn pick_nearest_plausible_match<T: ScoredPosition + Clone>(
     matches: &[T],
     expected_near: Option<(f64, f64)>,

@@ -12,9 +12,14 @@ use pikvm_mcp_detection_vision::cursor_detect::{
     DecodedScreenshot, DetectionConfig, FindCursorOptions, Point, DEFAULT_DETECTION_CONFIG,
 };
 
-/// Faithful port of `MotionPair`.
+/// Faithful port of `MotionPair`. `pre` mirrors the TS shape (`{pre,
+/// post, displacement, livePxPerMickey}`) but isn't itself read by
+/// `legacy_move.rs` — same as TS's own `moveToPixel`, which only ever
+/// reads `.post`/`.displacement`/`.livePxPerMickey` off a resolved
+/// pair, never `.pre`.
 #[derive(Debug, Clone)]
 pub struct MotionPair {
+    #[allow(dead_code)]
     pub pre: Cluster,
     pub post: Cluster,
     pub displacement: (f64, f64),
@@ -24,16 +29,24 @@ pub struct MotionPair {
 /// Return shape for `detect_motion`. On success carries the pair; on
 /// failure carries a structured reason so callers can surface it in
 /// diagnostics rather than silently trusting prediction. Faithful port
-/// of `MotionDiffResult`.
+/// of `MotionDiffResult`. The four cluster-count fields are diagnostic
+/// bookkeeping TS's own `moveToPixel` never reads back off the result
+/// either (only `.pair`/`.reason`) — kept for parity with the source
+/// shape and any future caller that wants the counts (e.g. verbose
+/// logging), not currently consumed.
 #[derive(Debug, Clone)]
 pub struct MotionDiffResult {
     pub pair: Option<MotionPair>,
     /// Compact human-readable failure reason; `None` on success.
     pub reason: Option<String>,
     /// Cluster bookkeeping for diagnostics.
+    #[allow(dead_code)]
     pub raw_clusters: usize,
+    #[allow(dead_code)]
     pub sized_clusters: usize,
+    #[allow(dead_code)]
     pub pre_candidates: usize,
+    #[allow(dead_code)]
     pub post_candidates: usize,
 }
 
