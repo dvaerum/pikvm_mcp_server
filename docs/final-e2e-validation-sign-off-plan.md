@@ -41,16 +41,26 @@ today's earlier 56-vs-38 tool-count reconciliation):
 lock-in guard, closing the specific bug category 1's own design doc
 cites as its motivating example. Reviewed (nixos-dev), implemented
 (097e4ec, 5/5 tests including a required convergence-false-positive
-regression test), and re-run live once (part of the same live session as
-the two items above) — **the live re-run came back INCONCLUSIVE on the
-specific K=4 mechanism this plan targets**: it ran clean, but surfaced a
-DIFFERENT, already-known legacy-path weakness (a motion-diff pairing
-failure, not the stale-cluster-match this widening was built to catch),
-not a confirmation either way of the K=4 fix's own real-world effect.
-The implementation and its offline tests stand as reviewed; the specific
-live confirmation §2 item 6 asks for has not actually happened yet —
-tracked as still open, not silently counted as passed just because SOME
-live run occurred.
+regression test). **Three live attempts now, all INCONCLUSIVE on the
+specific K=4 mechanism**: (1) a generic `legacy_move_smoke.rs` re-run
+surfaced a different, already-known legacy-path weakness (motion-diff
+pairing failure) instead. (2)+(3) a deliberately targeted reconfirmation
+plan (`docs/stationary-guard-targeted-reconfirmation-plan.md`, reviewed —
+reused the exact original bug's target/strategy, added guard-firing
+log lines, verified the dock layout hadn't drifted before trusting the
+repro) ran twice, both genuine non-events (zero rejections logged either
+run, trajectories never got near the original dock-icon cluster — wildly
+different calibration ratios, 1.185 vs 4.553, explain why). Stopped at 2
+per the "escalate once, don't retry open-endedly" pattern used
+throughout today. **Recommended next step, not yet designed**: stage
+`CursorBelief` observations directly (or script a HID-emit sequence)
+rather than hoping the real detector cascade organically reproduces the
+same trajectory twice — the real cascade has too much run-to-run
+variance (confirmed twice now) to reliably land on the exact repro
+conditions by re-running the same target. The implementation and its
+offline tests stand as reviewed; the specific live confirmation §2 item
+6 asks for has not happened in 3 real attempts — tracked as still open,
+not silently counted as passed just because SOME live run occurred.
 
 ## 2. Explicit sign-off criteria — what must be true before "done"
 
@@ -96,20 +106,27 @@ necessary, not sufficient").
    prerequisite.
 6. **The stationary-guard widening (`would-reject-as-stationary-
    widening-plan.md`) is now implemented (097e4ec)**, so its own live
-   gate (a re-run confirming the specific 2-passes-back stale-repeat bug
-   no longer reproduces) is what item 6 actually asks for now — implemented
-   is no longer the open question, CONFIRMATION is. One live re-run has
-   happened and came back inconclusive on this specific mechanism
-   (surfaced a different known legacy-path weakness instead) — this item
-   is not satisfied yet, needs another live attempt that actually
-   exercises the 2-passes-back scenario, not just any legacy-path run. If
-   that confirmation genuinely can't be produced by the time everything
-   else in this list is done, signing off WITHOUT it remains acceptable
-   — it's a documented pre-existing reliability gap in an
+   gate (directly observing the K=4 ring reject a 2+-passes-back stale
+   candidate) is what item 6 actually asks for now — implemented is no
+   longer the open question, CONFIRMATION is. THREE live attempts have
+   now happened, all inconclusive: a generic re-run surfaced an unrelated
+   failure mode; a deliberately targeted re-run (same target/strategy as
+   the original incident, verified dock layout unchanged, guard-firing
+   logged directly) came back a genuine non-event twice, with no
+   rejections logged at all — the real detector cascade's own run-to-run
+   variance (confirmed: two attempts' calibration ratios differed by 4x)
+   is too high to reliably reproduce the exact repro conditions by
+   re-running the same target. This item is NOT satisfied, and the
+   recommended path forward has changed: a future attempt should stage
+   `CursorBelief` observations directly (or a scripted HID-emit sequence)
+   rather than a 4th attempt at re-triggering the same organic scenario.
+   If that confirmation genuinely can't be produced by the time
+   everything else in this list is done, signing off WITHOUT it remains
+   acceptable — it's a documented pre-existing reliability gap in an
    already-lower-priority path (`legacy_move.rs`, not `curve-one-shot`),
    not a NEW regression introduced by the port — but that's now a
-   deliberate exception being taken, not an unstarted item being
-   deferred.
+   deliberate exception being taken after 3 real attempts, not an
+   unstarted item being deferred.
 7. **`task_4b034fc4e018` (it-03400) stays explicitly out of this
    conjunction** — see §4. A cutover decision for the iPad-critical path
    does not need it resolved; a cutover decision for the desktop/
@@ -134,8 +151,9 @@ sequence" picture below.
 **Remaining open items, parallel-safe, no ordering constraint between
 them**:
 - The stationary-guard widening — implementation + offline tests are
-  done; its live confirmation (§2 item 6) remains open per the inventory
-  above, and can be retried independently of everything else.
+  done; its live confirmation (§2 item 6) remains open after 3 real
+  attempts, needs a redesigned repro approach (staged observations, not
+  another organic re-run) before a 4th attempt is worth making.
 - Categories 2/5's combined gate, once its wake-step redesign (below) is
   settled.
 
