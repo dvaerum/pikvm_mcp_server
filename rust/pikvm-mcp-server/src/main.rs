@@ -1,24 +1,24 @@
 //! Entry point. Faithful (partial) port of `src/index.ts`'s `main()`.
 //!
-//! Phase A of the Module 6 rmcp integration (see docs/rust-port-plan.md
-//! §7 item 6): the stdio transport is wired end-to-end against a
-//! representative subset of `index.ts`'s 37 tools (`server.rs`/
-//! `tools.rs`). The Streamable HTTP transport (`http-server.ts`: axum +
-//! Basic/kvmd auth + the login gate + `skill_*` dynamic tools) is NOT yet
-//! wired — `--transport http` exits with a clear "not yet implemented"
-//! message rather than silently pretending to serve.
+//! Both transports are wired: stdio (Module 6 Phase A) and Streamable
+//! HTTP (Phase C1/C2 — see `http_server.rs`'s own header comment for
+//! what's not yet wired there: `--allow-tool-login`'s pre-auth session
+//! and the `skill_*` dynamic tools).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use pikvm_mcp_foundation::config::load_config;
+use pikvm_mcp_foundation::auth::{make_static_authorizer, HeaderAuthorizer};
+use pikvm_mcp_foundation::config::{load_config, resolve_http_auth, CliAuthArgs};
+use pikvm_mcp_foundation::kvmd_auth::{make_kvmd_authorizer, KvmdAuthDeps, KvmdAuthOptions};
 use pikvm_mcp_ipad_hid::hid_mode::{
     make_http_hid_mode_endpoint, HidMode, HidModeHttpConfig, HidModeHttpDeps, HidModeResolver,
     HidModeResolverOpts,
 };
 use pikvm_mcp_kvmd_client::client::{create_default_belief, PiKVMClient, PiKVMConfig};
 use pikvm_mcp_server::cli::{
-    help_text, parse_cli_options, resolve_hid_mode_source, HidModeSource, TargetKind, TransportKind,
+    help_text, parse_cli_options, resolve_hid_mode_source, HidModeSource, SecurityChoice,
+    TargetKind, TransportKind,
 };
 use pikvm_mcp_server::server::{PikvmMcpServer, SharedState};
 use rmcp::transport::stdio;
@@ -51,13 +51,58 @@ async fn main() {
         }
     };
 
+    // In http mode the security posture is an EXPLICIT, required choice
+    // (the endpoint drives real input on a physical machine). Resolve it
+    // before doing any work so a misconfiguration fails fast.
+    let mut static_http_auth = None;
     if options.transport == TransportKind::Http {
-        eprintln!(
-            "pikvm-mcp-server: --transport http is not yet implemented (http-server.ts's axum \
-             transport + auth is a later Module 6 phase — see docs/rust-port-plan.md §7 item 6). \
-             Use stdio for now."
-        );
-        std::process::exit(1);
+        let Some(security) = options.security else {
+            eprintln!(
+                "--security is required in http mode — pass --security yes (static credential), \
+                 --security kvmd (validate clients against PiKVM/kvmd users), or --security no \
+                 (serve it with NO authentication). See --help."
+            );
+            std::process::exit(2);
+        };
+        match security {
+            SecurityChoice::Yes => {
+                let auth_args = CliAuthArgs {
+                    auth_username: options.auth_username.clone(),
+                    auth_password: options.auth_password.clone(),
+                    auth_password_file: options.auth_password_file.clone(),
+                };
+                let Some(auth) = resolve_http_auth(&env, &auth_args) else {
+                    eprintln!(
+                        "--security yes requires an auth password — set --auth-password, \
+                         --auth-password-file, PIKVM_MCP_AUTH_PASSWORD[_FILE], or the \
+                         \"pikvm-mcp-auth-password\" systemd credential."
+                    );
+                    std::process::exit(2);
+                };
+                eprintln!(
+                    "HTTP auth: ENABLED (static Basic, user \"{}\").",
+                    auth.username
+                );
+                static_http_auth = Some(auth);
+            }
+            SecurityChoice::Kvmd => {
+                eprintln!("HTTP auth: ENABLED (kvmd-backed — clients log in with their PiKVM username/password).");
+            }
+            SecurityChoice::No => {
+                eprintln!(
+                    "⚠ HTTP auth: DISABLED (--security no). Anyone who can reach {}:{} can control the machine.",
+                    options.host, options.port
+                );
+            }
+        }
+        if options.allow_tool_login && security != SecurityChoice::No {
+            eprintln!(
+                "Note: --allow-tool-login was requested but is not yet wired in this build (a later Module 6 \
+                 phase — see http_server.rs's own header comment). Every session still requires a valid header."
+            );
+        } else if options.allow_tool_login {
+            eprintln!("Note: --allow-tool-login has no effect with --security no (nothing to authenticate).");
+        }
     }
 
     // Load configuration (deferred to here for proper error handling,
@@ -72,6 +117,8 @@ async fn main() {
     // second time).
     let config_username = config.pikvm.username.clone();
     let config_password = config.pikvm.password.clone();
+    let config_host = config.pikvm.host.clone();
+    let config_verify_ssl = config.pikvm.verify_ssl;
     let config_proxy_url =
         (!config.pikvm.proxy_url.is_empty()).then(|| config.pikvm.proxy_url.clone());
     let client_config = PiKVMConfig {
@@ -167,6 +214,45 @@ async fn main() {
         config.calibration,
         cached_profile,
     ));
+
+    if options.transport == TransportKind::Http {
+        // Build the /mcp header authorizer now that config (the PiKVM
+        // host/TLS/proxy the kvmd backend validates against) is
+        // available. `None` = open (--security no).
+        let authorize: Option<HeaderAuthorizer> = match options.security {
+            Some(SecurityChoice::Yes) => {
+                let auth =
+                    static_http_auth.expect("--security yes already validated a password above");
+                Some(make_static_authorizer(auth))
+            }
+            Some(SecurityChoice::Kvmd) => Some(make_kvmd_authorizer(
+                KvmdAuthOptions {
+                    host: config_host,
+                    verify_ssl: config_verify_ssl,
+                    proxy_url: config_proxy_url,
+                    ttl_ms: None,
+                },
+                KvmdAuthDeps {
+                    check: None,
+                    now: None,
+                },
+            )),
+            _ => None,
+        };
+        if let Err(e) = pikvm_mcp_server::http_server::run_http_server(
+            shared,
+            &options.host,
+            options.port,
+            authorize,
+        )
+        .await
+        {
+            eprintln!("Fatal error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let server = PikvmMcpServer::new(shared, None);
 
     eprintln!("PiKVM MCP Server running (stdio)");
