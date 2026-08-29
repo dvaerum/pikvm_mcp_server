@@ -5,11 +5,16 @@
 //! largest file in the codebase).
 //!
 //! **Split under construction** — see `docs/rust-port-plan.md` §7 item 4
-//! (v13) for the full planned layout and the real dependency-gap
-//! findings (`find_cursor_by_v8_full_frame` now built; `locate_cursor`/
-//! `find_cursor_by_ml_multi_hint` still pending) discovered while
-//! reading the file in full before writing any of this.
+//! (v13, v16) for the full planned layout. Dependency gaps
+//! (`find_cursor_by_v8_full_frame`/`locate_cursor`/
+//! `find_cursor_by_ml_multi_hint`) found while reading the file in full
+//! are now all resolved. Remaining files
+//! (`correction_math`/`template_cache`/`motion_diff`/`wiggle_verify`/
+//! `pointer_accel_bridge`) split to nixos-dev (2026-08-29) — `origin`
+//! and `legacy_move` stay here since `discover_origin`'s result threads
+//! directly into the whole correction loop.
 
+mod origin;
 mod types;
 
 pub use types::{
