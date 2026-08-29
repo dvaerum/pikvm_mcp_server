@@ -440,4 +440,56 @@ mod tests {
         assert!(matches!(outcome, AutoCropOutcome::UnknownAspectRatio(_)));
         clear_orientation_cache();
     }
+
+    // -- composition with the dead-zone guard (point_in_known_letterbox) --
+    //
+    // Auto-crop (this file) and the dead-zone guard
+    // (orientation::point_in_known_letterbox, wired into pikvm_mouse_
+    // move_to/click_at on rust-port/module-4-mover) were built
+    // independently, on separate branches, by two different agents, and
+    // had never actually run in the same binary until this branch merge
+    // (task_f04c3909db11's own history). Both read/write the SAME
+    // process-wide last-good-bounds cache in orientation.rs, but nothing
+    // had ever proven that end-to-end — this test does, using a real
+    // captured frame rather than assuming the two features compose
+    // correctly just because they share a function.
+    #[test]
+    fn auto_crop_and_the_dead_zone_guard_agree_on_the_same_cached_bounds() {
+        let _g = TEST_LOCK.lock().unwrap();
+        clear_orientation_cache();
+
+        // Step 1: the auto-crop path (pikvm_screenshot's real call),
+        // against a real captured frame — populates the shared cache as
+        // a side effect, exactly as it does in production.
+        let jpeg = repo_asset("data/bg-real/photos.jpg");
+        let outcome = detect_cross_validated_crop(&jpeg).unwrap();
+        let bounds = match outcome {
+            AutoCropOutcome::Cropped(b) => b,
+            other => panic!("expected a validated crop to seed the shared cache, got {other:?}"),
+        };
+
+        // Step 2: the dead-zone guard (pikvm_mouse_move_to/click_at's
+        // real call) reads the SAME cache auto-crop just populated — no
+        // re-detection, no separate state. A point well inside the
+        // cropped content region must NOT be flagged...
+        let inside_x = bounds.x as f64 + (bounds.width as f64 / 2.0);
+        let inside_y = bounds.y as f64 + (bounds.height as f64 / 2.0);
+        assert!(
+            !crate::orientation::point_in_known_letterbox(inside_x, inside_y),
+            "a point inside auto-crop's own reported content region must not be flagged as a dead zone"
+        );
+
+        // ...and a point in the letterbox auto-crop just cropped AWAY
+        // must BE flagged — this is the actual real-world failure this
+        // guard exists to catch: an agent that forgot to add auto-crop's
+        // reported region offset back onto a click coordinate.
+        let dead_zone_x = 5.0; // near the left HDMI edge, outside any real iPad panel
+        let dead_zone_y = inside_y;
+        assert!(
+            crate::orientation::point_in_known_letterbox(dead_zone_x, dead_zone_y),
+            "a point in the letterbox auto-crop just cropped away must be flagged as a dead zone"
+        );
+
+        clear_orientation_cache();
+    }
 }
