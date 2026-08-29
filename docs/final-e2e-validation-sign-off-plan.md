@@ -29,8 +29,8 @@ today's earlier 56-vs-38 tool-count reconciliation):
 |---|----------|--------|----------|
 | 4 | PR93 cascade hint-narrowing | **PASSED** | `cascade_hint_narrowing_smoke.rs`: no-hint 1305ms baseline; good hint 151ms/2.2px drift; bad-hint negative control correctly falls back to full scan (1106ms) and still finds the real cursor. §8 item 10. |
 | — | Real-MCP-transport gate (`pikvm_mouse_move_to`/`click_at`) | **PASSED** | `move_to_click_at_mcp_smoke.rs` against the real spawned binary over real stdio JSON-RPC, landed 10.8px from target, visually confirmed. §8 item 9. |
-| 3 | HID recovery / #51 stale-settle-latch | **OPEN — unblocked, not executed** | Real endpoint now known; `hid_settling_gate_smoke.rs` not yet run against it. Lower-risk than 2/5 (disruptive but not a lock/slam sequence). |
-| 1 | Paired iPadCollector ground-truth bench | **OPEN — run live, blocked on a new design gap, not a bug** | `task_37374b4bce6d`. Run live (commit 82617c1): found+fixed 2 real protocol bugs (`hello-ack`'s `sessionId` needs a real UUID-v4 shape; `id` must be a wire string not a number — the actual silent-drop root cause) plus a bonus fix (`t_ipad` f64 not u64). All 3 confirmed fixed via an isolated probe. But the full N=20 bench fails on trial 1 for an architectural reason: `ipad_go_home`'s `Cmd+H` backgrounds iPadCollector before the ground-truth read, and its WS session does not survive backgrounding. Needs a redesign (likely clicking against the app's own `showScene` instead of the real home screen) + review before another live attempt — not a quick patch. |
+| 3 | HID recovery / #51 stale-settle-latch | **PASSED** | Run live against the real endpoint (commit 17b918e): gate auto-released after 15075ms with no `clear_settling()` call and no process restart — the #51 backstop holds on real hardware. Real finding: the harness's own best-effort cleanup step (restore-to-original-mode) failed once (500 then several 403s), recovered manually via a plain retry, confirmed behaviorally with a real HID move + screenshot. Documented as a cleanup-path robustness gap for whoever next hardens the harness — not a defect in the mechanism under test, which passed cleanly. |
+| 1 | Paired iPadCollector ground-truth bench | **PASSED** | `task_37374b4bce6d`, now complete (commit a55685a). After the showScene redesign (reviewed) plus 2 more real bugs found live (a transient-torn-frame brightness retry; the actual root cause — the scene-source screenshot must be captured BEFORE relaunching iPadCollector, not after, since the app is already foreground showing its own dark idle view by the time a post-relaunch capture runs) — N=20 completed, zero WS reconnects, zero missing-ground-truth trials, 19/20 within the established 5.9px tolerance, 1/20 marginally over (6.245px, noise-floor territory, visually confirmed as a real close correct landing). |
 | 2 | `cornerTargetFromBounds`/anchor-verification positive+negative control | **OPEN — partial live evidence, PAUSED** | Guard-refusal proven; a genuine short-slam-through-the-guard `verified:false` control has not yet been reached cleanly. Two real incidents (guard-bypass, then guard-on-wrong-precondition) fixed and reviewed; combined run paused 3x on an unrelated wake-key question (see category 5). |
 | 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **OPEN — partial live evidence, PAUSED** | Same combined run as category 2. Safety boundary held 3/3 real attempts (fail-closed correctly every time, zero unsafe HID at any corner); the actual positive path (reach a plain lock screen, then a guarded slam) has never been cleanly reached. Blocked on the wake-key question below, not on the guard/slam logic itself, which is believed sound. |
 | — | Wake-key mechanism (`Space`-once wake-without-dismiss) | **OPEN — run live, genuinely MIXED result, one premise correction** | The precondition categories 2/5's combined gate depends on. Run live under manager's standing authorization (commit c13142e, 4 real trials + 2 ad-hoc checks): result A/B/inconclusive/A/A — mixed, not clean. Two real findings: (1) **this rig is NOT no-passcode as originally assumed** — it has Touch ID + a working passcode, confirmed via `unlock_ipad_with_code()` recovering it twice; the plan's opening premise (sourced from `ipad-unlock.ts`, flagged uncertain for this rig specifically during review) was wrong. (2) The A-vs-B split does not track press count (falsified by trial 1) but circumstantially tracks elapsed idle time before the press — confirming the timing-confound concern raised during review. N=4 is informal, not a controlled sweep; next step is an explicit 2s/4s/8s delay-varied protocol, not concluding "random." |
@@ -61,22 +61,23 @@ confidence the TS original built up incident-by-incident (per
 `docs/rust-port-plan.md` §8's own framing: "a green Rust test suite is
 necessary, not sufficient").
 
-1. **Category 1 (paired ground-truth) run to completion**, N≥20 per its
-   own design doc's negotiated floor, with a stated per-trial tolerance
-   (starting point: the established 5.9px detected→tap bias as the noise
-   floor) and every disagreeing trial's screenshot saved and inspected.
-   Escalate to N≥80 only if the first N≥20 shows real disagreement worth
-   characterizing further.
+1. **Category 1 (paired ground-truth) run to completion — SATISFIED**
+   (commit a55685a). N=20 completed, 19/20 within the 5.9px tolerance,
+   1/20 marginal (noise-floor, visually confirmed correct). No
+   disagreement severe enough to warrant escalating to N≥80.
 2. **Category 2 positive+negative control pair actually run and passed**
    on the guarded path (`anchor_cursor` with a real `CallerAsserted`
    asserted against a genuine, screenshot-confirmed lock screen) —
    `verified:true` for a correct-corner landing, `verified:false` for a
    deliberately-short slam, both through the guard, not the raw
    primitive.
-3. **Category 3 run against the real endpoint** — force a real
-   `POST /hidmode` mode switch, confirm the mover gate releases within
-   the expected window without a process restart, matching the #51
-   incident's exact failure shape.
+3. **Category 3 run against the real endpoint — SATISFIED** (commit
+   17b918e). Forced a real `POST /hidmode` mode switch, gate released at
+   15075ms with no restart, matching the #51 incident's exact failure
+   shape. A cleanup-path robustness gap was found and documented (not
+   fixed) — doesn't affect this item's own sign-off, since the mechanism
+   under test passed cleanly; worth someone hardening the harness's own
+   restore step before it's reused unattended.
 4. **Category 5's positive path reached and passed** — a genuine
    `CallerAsserted`-on-lock-screen run through `unlock_ipad()`/
    `ipad_go_home()`'s real production call sites, not an isolated
@@ -119,21 +120,17 @@ messages scattered across the session.
 
 ## 3. Sequencing — parallel vs. dependent
 
-**Can run in parallel, no ordering constraint between them**:
-- Category 1 (paired ground-truth) — independent of categories 2/3/5's
-  rig state. Update: protocol-level work is done (2 real bugs fixed,
-  live-confirmed); what's left is a redesign of the ground-truth-read
-  step itself (the backgrounding gap) + review, then a retry — still
-  parallel-safe with everything else, just no longer "hasn't started."
-- Category 3 (HID mode-switch gate) — disruptive to the HID session but
-  not a lock/slam sequence; doesn't touch the same risk surface as
-  categories 2/5. Still fully unblocked and not yet attempted — the
-  live session that ran categories 1's bench, the wake-key experiment,
-  and the stationary-guard re-check did NOT include this one; still the
-  best candidate to go first among the open hardware items.
+**Categories 1 and 3 are DONE** (§2 items 1 and 3, both SATISFIED as of
+commits a55685a/17b918e) — no longer part of the "what's left to
+sequence" picture below.
+
+**Remaining open items, parallel-safe, no ordering constraint between
+them**:
 - The stationary-guard widening — implementation + offline tests are
   done; its live confirmation (§2 item 6) remains open per the inventory
-  above, and can be retried independently of the other three.
+  above, and can be retried independently of everything else.
+- Categories 2/5's combined gate, once its wake-step redesign (below) is
+  settled.
 
 **Must run in this order (hard dependency) — step 1 is now DONE, its
 outcome changes step 2's shape**:
@@ -177,9 +174,8 @@ for the path that IS fully testable today.
 
 ## 5. Open questions for the manager, not decided here
 
-- Priority order among categories 1/3 (both fully open, both
-  parallel-safe, both need someone to actually build+run them) — whoever
-  picks these up next, which first?
+- Categories 1 and 3 are now both done — the priority-order question this
+  section originally asked is moot, left here only as a historical note.
 - None, on reflection: confirmed with georgs-mac-mini (direct grep of
   `slam/motion.rs` and `cursor_anchor.rs` for any
   `CursorBelief`/`would_reject_as_stationary` reference — zero hits) that
