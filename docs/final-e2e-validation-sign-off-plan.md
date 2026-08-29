@@ -30,21 +30,27 @@ today's earlier 56-vs-38 tool-count reconciliation):
 | 4 | PR93 cascade hint-narrowing | **PASSED** | `cascade_hint_narrowing_smoke.rs`: no-hint 1305ms baseline; good hint 151ms/2.2px drift; bad-hint negative control correctly falls back to full scan (1106ms) and still finds the real cursor. §8 item 10. |
 | — | Real-MCP-transport gate (`pikvm_mouse_move_to`/`click_at`) | **PASSED** | `move_to_click_at_mcp_smoke.rs` against the real spawned binary over real stdio JSON-RPC, landed 10.8px from target, visually confirmed. §8 item 9. |
 | 3 | HID recovery / #51 stale-settle-latch | **OPEN — unblocked, not executed** | Real endpoint now known; `hid_settling_gate_smoke.rs` not yet run against it. Lower-risk than 2/5 (disruptive but not a lock/slam sequence). |
-| 1 | Paired iPadCollector ground-truth bench | **OPEN — design only, zero execution** | `task_37374b4bce6d`. Design plan written today (`docs/ipad-collector-ground-truth-bench-plan.md`), under review as of this doc. Real new infra (a WS server this process hosts on port 8767). |
+| 1 | Paired iPadCollector ground-truth bench | **OPEN — run live, blocked on a new design gap, not a bug** | `task_37374b4bce6d`. Run live (commit 82617c1): found+fixed 2 real protocol bugs (`hello-ack`'s `sessionId` needs a real UUID-v4 shape; `id` must be a wire string not a number — the actual silent-drop root cause) plus a bonus fix (`t_ipad` f64 not u64). All 3 confirmed fixed via an isolated probe. But the full N=20 bench fails on trial 1 for an architectural reason: `ipad_go_home`'s `Cmd+H` backgrounds iPadCollector before the ground-truth read, and its WS session does not survive backgrounding. Needs a redesign (likely clicking against the app's own `showScene` instead of the real home screen) + review before another live attempt — not a quick patch. |
 | 2 | `cornerTargetFromBounds`/anchor-verification positive+negative control | **OPEN — partial live evidence, PAUSED** | Guard-refusal proven; a genuine short-slam-through-the-guard `verified:false` control has not yet been reached cleanly. Two real incidents (guard-bypass, then guard-on-wrong-precondition) fixed and reviewed; combined run paused 3x on an unrelated wake-key question (see category 5). |
 | 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **OPEN — partial live evidence, PAUSED** | Same combined run as category 2. Safety boundary held 3/3 real attempts (fail-closed correctly every time, zero unsafe HID at any corner); the actual positive path (reach a plain lock screen, then a guarded slam) has never been cleanly reached. Blocked on the wake-key question below, not on the guard/slam logic itself, which is believed sound. |
-| — | Wake-key mechanism (`Space`-once wake-without-dismiss) | **OPEN — isolation experiment designed, not run** | The precondition categories 2/5's combined gate depends on. 3/3 live attempts today escalated to a Touch ID/passcode prompt instead of the expected plain-lock-screen state, regardless of starting state. Design for an isolated experiment exists (`docs/wake-key-isolated-experiment-plan.md`), explicitly NOT to run until a genuinely fresh session (rig is being deliberately rested after today's real, sustained live-hardware contact: multiple slams, many key presses, one passcode recovery, three Touch-ID escalations — all recovered cleanly, zero unsafe HID, but real wear on a rig with a documented Touch-ID-lockout pattern under heavy testing). |
+| — | Wake-key mechanism (`Space`-once wake-without-dismiss) | **OPEN — run live, genuinely MIXED result, one premise correction** | The precondition categories 2/5's combined gate depends on. Run live under manager's standing authorization (commit c13142e, 4 real trials + 2 ad-hoc checks): result A/B/inconclusive/A/A — mixed, not clean. Two real findings: (1) **this rig is NOT no-passcode as originally assumed** — it has Touch ID + a working passcode, confirmed via `unlock_ipad_with_code()` recovering it twice; the plan's opening premise (sourced from `ipad-unlock.ts`, flagged uncertain for this rig specifically during review) was wrong. (2) The A-vs-B split does not track press count (falsified by trial 1) but circumstantially tracks elapsed idle time before the press — confirming the timing-confound concern raised during review. N=4 is informal, not a controlled sweep; next step is an explicit 2s/4s/8s delay-varied protocol, not concluding "random." |
 | — | it-03400 desktop/absolute gate (`task_4b034fc4e018`) | **BLOCKED, separately, not on this pass's critical path** | Physical cable/OTG-enumeration issue on `it-03400` itself — a hardware problem on a different appliance, unrelated to any Rust-port code question. See §4. |
 
-**Also newly surfaced today, not yet reviewed/scoped for execution**:
-`docs/would-reject-as-stationary-widening-plan.md` — a real production
-behavior change to `legacy_move.rs`'s stationary-lock-in guard, closing
-the specific bug category 1's own design doc cites as its motivating
-example. Currently under critical review (nixos-dev), explicitly scoped
-to the Rust port's legacy (non-`curve-one-shot`) path only. Tracked here
-because its own "done" bar includes a live-hardware re-run of
-`legacy_move_smoke.rs`, which touches the same rig as everything else in
-this table — sequencing note in §3.
+**Also newly surfaced today**: `docs/would-reject-as-stationary-widening-plan.md`
+— a real production behavior change to `legacy_move.rs`'s stationary-
+lock-in guard, closing the specific bug category 1's own design doc
+cites as its motivating example. Reviewed (nixos-dev), implemented
+(097e4ec, 5/5 tests including a required convergence-false-positive
+regression test), and re-run live once (part of the same live session as
+the two items above) — **the live re-run came back INCONCLUSIVE on the
+specific K=4 mechanism this plan targets**: it ran clean, but surfaced a
+DIFFERENT, already-known legacy-path weakness (a motion-diff pairing
+failure, not the stale-cluster-match this widening was built to catch),
+not a confirmation either way of the K=4 fix's own real-world effect.
+The implementation and its offline tests stand as reviewed; the specific
+live confirmation §2 item 6 asks for has not actually happened yet —
+tracked as still open, not silently counted as passed just because SOME
+live run occurred.
 
 ## 2. Explicit sign-off criteria — what must be true before "done"
 
@@ -80,16 +86,22 @@ necessary, not sufficient").
    the combined gate as originally designed), or disproves it (the
    combined gate's design changes to default to the mouse-move fallback
    instead of retrying the same assumption a 4th time).
-6. **If the stationary-guard widening (`would-reject-as-stationary-
-   widening-plan.md`) is implemented before sign-off**, its own live
-   gate (a re-run of `legacy_move_smoke.rs` or equivalent, confirming the
-   specific 2-passes-back stale-repeat bug no longer reproduces) must
-   also pass. If it is NOT implemented by the time everything else above
-   is done, that's an acceptable state to sign off in — it's a
-   documented pre-existing reliability gap in an already-lower-priority
-   path (`legacy_move.rs`, not `curve-one-shot`), not a NEW regression
-   introduced by the port. Flag it as known-open in the sign-off, don't
-   let it silently block everything else.
+6. **The stationary-guard widening (`would-reject-as-stationary-
+   widening-plan.md`) is now implemented (097e4ec)**, so its own live
+   gate (a re-run confirming the specific 2-passes-back stale-repeat bug
+   no longer reproduces) is what item 6 actually asks for now — implemented
+   is no longer the open question, CONFIRMATION is. One live re-run has
+   happened and came back inconclusive on this specific mechanism
+   (surfaced a different known legacy-path weakness instead) — this item
+   is not satisfied yet, needs another live attempt that actually
+   exercises the 2-passes-back scenario, not just any legacy-path run. If
+   that confirmation genuinely can't be produced by the time everything
+   else in this list is done, signing off WITHOUT it remains acceptable
+   — it's a documented pre-existing reliability gap in an
+   already-lower-priority path (`legacy_move.rs`, not `curve-one-shot`),
+   not a NEW regression introduced by the port — but that's now a
+   deliberate exception being taken, not an unstarted item being
+   deferred.
 7. **`task_4b034fc4e018` (it-03400) stays explicitly out of this
    conjunction** — see §4. A cutover decision for the iPad-critical path
    does not need it resolved; a cutover decision for the desktop/
@@ -108,15 +120,20 @@ messages scattered across the session.
 ## 3. Sequencing — parallel vs. dependent
 
 **Can run in parallel, no ordering constraint between them**:
-- Category 1 (paired ground-truth) — new infra, independent of
-  categories 2/3/5's rig state.
+- Category 1 (paired ground-truth) — independent of categories 2/3/5's
+  rig state. Update: protocol-level work is done (2 real bugs fixed,
+  live-confirmed); what's left is a redesign of the ground-truth-read
+  step itself (the backgrounding gap) + review, then a retry — still
+  parallel-safe with everything else, just no longer "hasn't started."
 - Category 3 (HID mode-switch gate) — disruptive to the HID session but
   not a lock/slam sequence; doesn't touch the same risk surface as
-  categories 2/5. Lower-risk, could reasonably go FIRST among the open
-  hardware items given it's fully unblocked and just needs building.
-- The stationary-guard widening's implementation + offline tests (not
-  its live gate) — pure code, no rig contact needed until the live
-  re-run step.
+  categories 2/5. Still fully unblocked and not yet attempted — the
+  live session that ran categories 1's bench, the wake-key experiment,
+  and the stationary-guard re-check did NOT include this one; still the
+  best candidate to go first among the open hardware items.
+- The stationary-guard widening — implementation + offline tests are
+  done; its live confirmation (§2 item 6) remains open per the inventory
+  above, and can be retried independently of the other three.
 
 **Must run in this order (hard dependency)**:
 1. Wake-key isolation experiment (small, low-risk, 3-5 trials) →
