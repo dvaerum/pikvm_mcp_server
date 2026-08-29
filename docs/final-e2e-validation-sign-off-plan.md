@@ -33,7 +33,7 @@ today's earlier 56-vs-38 tool-count reconciliation):
 | 1 | Paired iPadCollector ground-truth bench | **PASSED** | `task_37374b4bce6d`, now complete (commit a55685a). After the showScene redesign (reviewed) plus 2 more real bugs found live (a transient-torn-frame brightness retry; the actual root cause — the scene-source screenshot must be captured BEFORE relaunching iPadCollector, not after, since the app is already foreground showing its own dark idle view by the time a post-relaunch capture runs) — N=20 completed, zero WS reconnects, zero missing-ground-truth trials, 19/20 within the established 5.9px tolerance, 1/20 marginally over (6.245px, noise-floor territory, visually confirmed as a real close correct landing). |
 | 2 | `cornerTargetFromBounds`/anchor-verification positive+negative control | **OPEN — partial live evidence, PAUSED** | Guard-refusal proven; a genuine short-slam-through-the-guard `verified:false` control has not yet been reached cleanly. Two real incidents (guard-bypass, then guard-on-wrong-precondition) fixed and reviewed; combined run paused 3x on an unrelated wake-key question (see category 5). |
 | 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **OPEN — partial live evidence, PAUSED** | Same combined run as category 2. Safety boundary held 3/3 real attempts (fail-closed correctly every time, zero unsafe HID at any corner); the actual positive path (reach a plain lock screen, then a guarded slam) has never been cleanly reached. Blocked on the wake-key question below, not on the guard/slam logic itself, which is believed sound. |
-| — | Wake-key mechanism (`Space`-once wake-without-dismiss) | **OPEN — run live, genuinely MIXED result, one premise correction** | The precondition categories 2/5's combined gate depends on. Run live under manager's standing authorization (commit c13142e, 4 real trials + 2 ad-hoc checks): result A/B/inconclusive/A/A — mixed, not clean. Two real findings: (1) **this rig is NOT no-passcode as originally assumed** — it has Touch ID + a working passcode, confirmed via `unlock_ipad_with_code()` recovering it twice; the plan's opening premise (sourced from `ipad-unlock.ts`, flagged uncertain for this rig specifically during review) was wrong. (2) The A-vs-B split does not track press count (falsified by trial 1) but circumstantially tracks elapsed idle time before the press — confirming the timing-confound concern raised during review. N=4 is informal, not a controlled sweep; next step is an explicit 2s/4s/8s delay-varied protocol, not concluding "random." |
+| — | Wake-key mechanism (`Space`-once wake-without-dismiss) | **OPEN — controlled sweep run, suggestive shape, threshold NOT pinned** | The precondition categories 2/5's combined gate depends on. Original informal experiment (commit c13142e) found a mixed result and a real premise correction (this rig has Touch ID + a working passcode, not no-passcode as assumed) — see prior inventory history. Follow-up controlled sweep (commit 58769ef, interleaved 2s/4s/8s, reviewed design): **d2 (2s) = 2/2 clean B**, **d8 (8s) = 2 clean A after escalation**, **d4 (4s) = 3/3 genuinely inconclusive** (torn capture every attempt, not a guessed value). Shape (short→B, long→A) is consistent with the timing-confound hypothesis but the one value that would have pinned the threshold never resolved. Recommendation: an interim ~8s delay before the wake step's `Space` press is a reasonable default for categories 2/5's retry, but this is NOT a fully proven threshold — a finer sweep (5s/6s/7s) with a longer post-press settle is the next real step if a precise value is ever needed. **Real methodology finding**: `unlock_ipad()`'s own cleanup step can itself escalate a genuine A into Touch ID (B) — a torn screenshot #3 must be reported as inconclusive, never inferred from a later recovery-step screenshot (this affected some of today's earlier informal circumstantial reads, not the sweep's own disciplined per-trial classification, which captures before any recovery runs). |
 | — | it-03400 desktop/absolute gate (`task_4b034fc4e018`) | **BLOCKED, separately, not on this pass's critical path** | Physical cable/OTG-enumeration issue on `it-03400` itself — a hardware problem on a different appliance, unrelated to any Rust-port code question. See §4. |
 
 **Also newly surfaced today**: `docs/would-reject-as-stationary-widening-plan.md`
@@ -82,11 +82,18 @@ necessary, not sufficient").
    `CallerAsserted`-on-lock-screen run through `unlock_ipad()`/
    `ipad_go_home()`'s real production call sites, not an isolated
    synthetic smoke test.
-5. **The wake-key isolation experiment run and its outcome incorporated**
-   — either confirms `Space`-once as reliable (categories 2/5 can retry
-   the combined gate as originally designed), or disproves it (the
-   combined gate's design changes to default to the mouse-move fallback
-   instead of retrying the same assumption a 4th time).
+5. **The wake-key isolation experiment run and its outcome incorporated
+   — PARTIALLY SATISFIED.** Both the informal experiment (c13142e) and
+   the controlled follow-up sweep (58769ef) have run. Outcome: `Space`-
+   once is neither cleanly confirmed nor cleanly disproved — short delays
+   reliably escalate to Touch ID, long delays reliably don't, but the
+   precise threshold is unresolved (the 4s value came back inconclusive
+   3/3). This item is satisfied enough to UNBLOCK categories 2/5's retry
+   with an interim ~8s delay before the wake step's `Space` press (a
+   reasonable, evidence-backed default, not a guess) — full confidence in
+   a precise threshold is not required to proceed, only a defensible
+   default. A finer sweep remains open as a nice-to-have, not a
+   prerequisite.
 6. **The stationary-guard widening (`would-reject-as-stationary-
    widening-plan.md`) is now implemented (097e4ec)**, so its own live
    gate (a re-run confirming the specific 2-passes-back stale-repeat bug
@@ -132,21 +139,18 @@ them**:
 - Categories 2/5's combined gate, once its wake-step redesign (below) is
   settled.
 
-**Must run in this order (hard dependency) — step 1 is now DONE, its
-outcome changes step 2's shape**:
-1. Wake-key isolation experiment — RAN (commit c13142e, 4 trials + 2
-   ad-hoc checks), result genuinely mixed (see §1's inventory row) →
-2. Categories 2/5's combined gate retry: per §2 item 5, a mixed result
-   means the ORIGINAL plan (retry `Space`-once as designed) is not
-   justified by this outcome — the gate's wake step should be redesigned
-   around the mouse-move fallback (already built into
-   `cursor_anchor_corner_control_smoke.rs` as `--fallback-mouse-move`)
-   as the default, not another retry of the same assumption. A
-   controlled 2s/4s/8s delay sweep (per the wake-key plan's own RESULTS
-   section) could still salvage `Space`-once if the timing-confound
-   theory holds — that sweep, if it happens, is itself a prerequisite
-   to retrying the combined gate with `Space`-once rather than jumping
-   straight to the mouse-move fallback.
+**This dependency is now RESOLVED — step 1 ran twice (informal
+experiment + controlled sweep), categories 2/5 are unblocked**:
+1. Wake-key isolation experiment — RAN (c13142e) then a controlled
+   follow-up sweep — RAN (58769ef): short delays reliably escalate to
+   Touch ID, long delays reliably don't, precise threshold unresolved
+   (see §1's inventory row) →
+2. Categories 2/5's combined gate retry: per §2 item 5, use an interim
+   ~8s delay before the wake step's `Space` press as the evidence-backed
+   default — not a guess, and not requiring the mouse-move fallback as a
+   fallback-of-last-resort either, though that option remains available
+   if an ~8s delay still proves unreliable in practice. The combined
+   gate can now be retried; nothing further blocks it structurally.
 
 **Independent of everything else in this table**:
 - `task_4b034fc4e018` (it-03400) — different appliance, different
