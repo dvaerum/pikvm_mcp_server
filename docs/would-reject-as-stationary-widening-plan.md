@@ -72,6 +72,11 @@ tight correction loop with a real per-call budget). Recommend **K = 4**:
   see `move-to.rs`'s own pass budget), so a 4-slot window covers a
   meaningful fraction of a single call's realistic pass count without
   needing to be "the whole call's history."
+- **K=4 is untied to `legacy_move.rs`'s actual max-pass budget** — a
+  fixed constant, not derived from it (nixos-dev's review point). Leave
+  an explicit comment on the constant noting this, so if that pass
+  budget ever changes materially, someone checks whether K's intended
+  coverage silently under/over-shoots rather than assuming it still does.
 - Cheap: `[Point; 4]` (or a `VecDeque<Point>` capped at 4) with O(K)
   comparison per `would_reject_as_stationary` call — negligible next to
   the actual detection/screenshot cost per pass.
@@ -198,6 +203,35 @@ to a NEW capability, not just a port.
 4. Re-run all 13 existing tests unmodified (K=1-equivalent behavior) to
    directly demonstrate the widening is backward-compatible, not just
    argued to be.
+5. **`does_not_reject_legitimate_observations_during_a_converging_pass_sequence`
+   — required, flagged by nixos-dev's review, not originally in this
+   plan.** The opposite failure mode K=4 introduces that K=1 structurally
+   cannot: near the end of a genuinely successful correction sequence, the
+   cursor is REPEATEDLY observed within a few px of the target as it
+   converges — "close to a reading from a few passes back" is also
+   exactly what real convergence looks like, not just a stale-cluster
+   repeat. K=1 can't false-positive this way (only ever compares to the
+   single immediately-preceding reading, and a converging sequence is
+   monotonically approaching, not literally repeating a point); K=4 can.
+   None of tests 1-4 above exercise this — they prove the guard catches
+   the bug and stays bounded, not that it leaves legitimate convergence
+   alone. No real recorded multi-pass legacy-path trace was found in this
+   repo to build this from directly (checked: no saved
+   `legacy_move_smoke.rs` diagnostics/verbose log survives past its
+   original live run; the N=80 bench used curve-one-shot, which doesn't
+   call this guard at all, so it has no relevant intermediate-observation
+   data either) — build from a realistic SYNTHETIC converging trace
+   instead, e.g. target ~(500, 500) with passes at (550, 540) → (510,
+   505) → (502, 501) → (498, 499) → (500.5, 500.2), each pass separated
+   by a real emit ≥30 mickeys (the default `min_emit_mickeys`) so the
+   emit gate doesn't trivially suppress the check. By the last 2-3
+   passes, consecutive AND non-consecutive readings are legitimately
+   within `drift_px` (5px default) of each other purely because the
+   trajectory has converged — assert every one of these observations is
+   ACCEPTED (not rejected) by `observe(..., ObserveOptions{reject_stationary:
+   true, ..})`. This is the test that actually proves "changes real
+   behavior" doesn't mean "regresses currently-successful convergence,"
+   which was this plan's real gap, not just an unproven bug fix.
 
 ## Scope boundary — explicitly NOT touched
 
