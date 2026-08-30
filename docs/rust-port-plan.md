@@ -2958,3 +2958,32 @@ completing categories 2/5, once live-verified: the post-slam
 verification screenshot can now self-heal a stuck `source.online` via a
 real keypress instead of the previously-shown-ineffective mouse-move,
 specifically in the one context reasoned through and approved.
+
+---
+
+**§39 self-caught gap: the top-level flag was never actually flipped —
+§38's "real path to completing categories 2/5" claim was premature,
+2026-08-30 ~19:12.**
+
+Manager's honest check-in asked whether it was worth running the live
+verification now. Before answering, re-checked the harness's own client
+construction to make sure the fix was actually wired end-to-end — and
+found it wasn't: `cursor_anchor_corner_control_smoke.rs`'s
+`PiKVMConfig` never set `source_online_wake_nudge: true`. The whole
+escalation mechanism (mouse-move OR keypress) is gated behind that
+TOP-LEVEL flag — `AnchorRequest.allow_keyboard_wake_after: true` (§38)
+has zero effect without it. §38's report to the team that this was
+"the real path to finally completing categories 2/5" was premature —
+the escalation was still completely dormant.
+
+Fixed: flipped `source_online_wake_nudge: true` in this harness's own
+client config specifically (commit `e4ff0f2`, rebased onto nixos-dev's
+concurrent sign-off-doc update). Build confirmed clean after the
+rebase. This is now genuinely, actually wired end-to-end for the first
+time.
+
+Real lesson, worth stating plainly: "the pieces are built and reviewed"
+is not the same claim as "the pieces are actually connected" — should
+have verified the full wiring chain before reporting it as done, not
+after. Self-caught before running live verification, not during or
+after — no live hardware contact wasted on a no-op test.
