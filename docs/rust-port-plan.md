@@ -3424,3 +3424,60 @@ one genuinely open mechanical question; everything else about the
 escalation's wiring, safety scope, and config-gating is now proven
 correct by direct construction and by two independent live runs
 reaching the point where it would fire.
+
+---
+
+**§50 category 5 CLOSED — stored-passcode completion reaches the real
+home screen; sign-off doc fully reconciled; §2 items 1/2/3/5/6 all now
+SATISFIED, 2026-08-30 ~21:19-21:35.**
+
+Manager approved carrying run #9 further: "same already-established
+stored-passcode path... not a new sensitive action." Before acting,
+took a fresh, PURELY PASSIVE screenshot (no HID sent) to see the actual
+current state rather than assume run #9's Touch-ID landing still held —
+correctly caught that the device had re-locked to the plain lock screen
+in the interim (~3 minutes had passed while writing the previous
+report). That happened to be exactly `unlock_ipad_with_code`'s designed
+starting state (Space→Space→digits→Enter), so no sequence adaptation
+was needed — but this was confirmed by looking, not assumed by luck.
+
+Ran `unlock_ipad_with_code(PIKVM_IPAD_PASSCODE)` against the confirmed
+lock screen. Real, screenshot-confirmed result: genuine iPad home
+screen — real widgets (Clock/Notes/Calendar/Maps/Weather), real app
+icons, real dock, no lock icon, no partial/glitched state. Committed
+`bb11ec4`.
+
+Category 5 (`docs/final-e2e-validation-sign-off-plan.md` item 4) is now
+genuinely reached AND passed, end-to-end, live — closing the last open
+item from that doc's own §2 checklist. Went further than just adding
+the new PASSED rows: reconciled the WHOLE doc (commit `bd8f988`) — the
+table rows for categories 5 and 6, §2's checklist items 4 and 6, §3's
+sequencing summary, and the closing paragraph under §1's stationary-
+guard entry all still said "still open" in places even after the new
+evidence existed elsewhere in the same doc. Uniform phrasing over
+non-uniform evidence reads as rigour and isn't — fixed all of it in one
+pass rather than leaving stale claims standing next to fresh ones.
+
+**Sign-off doc status after this cycle**: §2 items 1 (ground-truth),
+2 (corner-control), 3 (HID stale-latch), 5 (unlock positive path), and
+6 (stationary-guard widening) are all SATISFIED. Item 8 (workspace
+green) was last verified fresh this session (989/989, before this
+cycle's doc-only commits). Genuinely remaining: item 5's precise
+wake-key threshold (nice-to-have, not a prerequisite), item 7
+(it-03400, explicitly out of this conjunction), and the one purely
+mechanical question that spans categories 2 and 5 alike — the keyboard-
+wake escalation mechanism has still never been observed actually firing
+mid-slam in any live run to date, because every run's own screenshots
+happened to succeed without needing it. That's the last thing anyone
+would need real bad luck (a mid-slam idle-stop) to ever directly
+observe; not something more design or review work can force.
+
+Reported to the manager at each step (asked before assuming the
+passcode action was in scope; manager confirmed and directed proceeding
+once nixos-dev-adjacent risk was weighed). This closes out tonight's
+active work list from the manager's own "fix everything now" directive
+- three real, independent live confirmations landed this session
+(§48 stationary-guard, §49+§50 category 5), each with an honest
+self-caught bug along the way (PIKVM_PROXY not persisting across shell
+calls; the config-wiring gap repeated once more and caught again before
+it mattered) rather than a clean narrative pretending otherwise.
