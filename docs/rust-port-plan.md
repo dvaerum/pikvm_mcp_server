@@ -1888,3 +1888,42 @@ mover tests, clippy `-D warnings` and fmt clean. Committed `5e9f9fc`
 (plan) and `0ef76f7` (implementation) on `rust-port/module-4-mover`.
 Code-only — not yet exercised live; the next categories-2/5 attempt is
 the real test of whether the 3-attempt/1s defaults are enough.
+
+---
+
+**§15 second live attempt after the slam-verify fix, 2026-08-30 ~07:41-
+07:44 — the fix didn't get exercised; new evidence for the before/after
+scope decision.**
+
+Manager directed another live attempt to test the §14 fix. Health-check
+503'd (cold-poll, matches §11); wake confirmed a genuine lock screen.
+
+**Torn-frame detection fired correctly again**: attempt 1 came back
+26.7% uniform rows (torn), retried without re-wake, attempt 2 came back
+clean. Confirmed and unblocked the guarded slam.
+
+**Positive control fired** (`[slam] TopLeft x 25 calls @ 60ms`), but the
+503 hit again. Checked the log for `take_screenshot_with_retry`'s own
+log line (fires on every attempt, success or failure) — zero
+occurrences (`grep -c` confirmed). The §14 fix never actually ran: the
+failure happened upstream, almost certainly at the `before` screenshot,
+which the reviewed design deliberately left un-retried specifically
+because there was "no evidence-based need to touch it." This run
+supplies exactly that evidence — `before` can fail too, not just
+`after`. Not a failure of the fix; this run exercised a different code
+path than the one fixed.
+
+v8 graceful-degrade worked again (no panic, clean recovery). Recovery
+left the device on the Touch ID sheet again; Escape recovered it again,
+though the FIRST recheck screenshot was itself torn (correctly not
+trusted — retried and got a genuine clean lock screen). Device safe
+throughout.
+
+**Not unilaterally changing the before/after asymmetry** — that was a
+deliberate, reviewed safety tradeoff (avoiding widening the confirmed-
+precondition-to-slam gap), and one data point doesn't automatically
+override it. Flagged as new evidence for nixos-dev/the manager to weigh
+on whether `before` needs its own (likely lighter-touch) treatment.
+Categories 2/5 still has not completed cleanly through this harness —
+now blocked on a DIFFERENT specific failure point than before, which is
+itself real progress (each attempt narrows the remaining gap).
