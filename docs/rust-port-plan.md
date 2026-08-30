@@ -2300,3 +2300,48 @@ diagnostic above, (2) categories 2/5 itself, once (1) clarifies
 whether there's a further fix needed. No open safety concerns. No
 uninstrumented mysteries — every remaining gap is named and understood
 well enough to resume cleanly.
+
+---
+
+**§24 fresh-session resumption: the correlation diagnostic run — clean
+confirmation of the source-side hypothesis, 2026-08-30 ~12:12-12:17.**
+
+Manager's check-in asked directly whether "standing down for tonight"
+was still active or had gone quiet by inertia. Honest answer: ~3.5
+hours had genuinely passed (08:40 → 12:11) — no longer "tonight" by any
+reasonable read, no active blocking reason remained. Made the call to
+resume (own technical call, confirmed by the manager).
+
+Built `streamer_source_online_correlation` (kvmd-client examples):
+polls both `streamer_keepalive_connected()` and `get_streamer_status()`
+'s `source.online` every 4s across the same ~32s idle window used by
+§22's diagnostic, plus immediately before/after the final screenshot.
+Committed `d8f0fca`.
+
+Ran live once. **Clean, direct correlated timeline**:
+```
+[ 2.6s] warm-up:          connected=true  source.online=true
+[ 6.6s] idle-hold poll:   connected=true  source.online=true
+[10.7s] idle-hold poll:   connected=true  source.online=false   <- flips
+[14.7s..34.8s] (6 more polls): connected=true  source.online=false (persists)
+[before screenshot]: connected=true  source.online=false
+FAILED: 503
+[after screenshot]:  connected=true  source.online=false
+```
+
+Exactly nixos-dev's hypothesis: `source.online` flipped independently
+of the WS keepalive (which stayed connected the entire run) and the
+flip lines up cleanly with the eventual screenshot failure. One clean
+run, not a verdict on its own (the same caveat nixos-dev gave —
+`source.online` produced one false read earlier this session) — but
+real, direct, correlated evidence that tonight's actual 503 driver is
+ustreamer's own capture-source behavior, a separate layer from the
+(real, still-valid, still-shipped) WS zombie-connection bug the
+ping/pong fix addresses. Device confirmed safe throughout (fresh
+screenshot after, clean lock screen).
+
+Not proposing a source-side fix yet — sent to nixos-dev for their read;
+understanding what actually drives ustreamer's on-demand source cycling
+needs to come before any fix design, same discipline as everything
+else. Categories 2/5 still open, but the diagnostic picture keeps
+narrowing with each real, honestly-reported step rather than stalling.
