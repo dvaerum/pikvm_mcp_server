@@ -3265,3 +3265,44 @@ predict" pairing. Also noted `reset_belief` leaves the ring at 1 entry
 
 Both proposals in flight, neither implemented yet. No live hardware
 contact this round — pure code tracing + design writing.
+
+---
+
+**§47 unlock_ipad's internal-slam extension approved and implemented —
+category 5's real, final unlock now built, 2026-08-30 ~20:40.**
+
+nixos-dev approved the `unlock_ipad` extension in full: confirmed
+option (b) is symmetric with `unlock.rs`'s own existing `!= Some(false)`
+check for the key-press-first branch (exact, principled pairing, not
+just locally simpler); confirmed `before`+`after` together is correctly
+justified for this one call site. Asked for one explicit addition —
+stating plainly that this deliberately does NOT extend to
+`unlock_ipad()`'s default configuration (key press attempted, whether
+it succeeded or failed) — added to the doc.
+
+Implemented: `unlock.rs`'s internal `AnchorRequest` now computes
+`allow_keyboard_wake_for_internal_slam = options.try_key_press_first ==
+Some(false)` and uses it for both fields, replacing the two hardcoded
+`false`s.
+
+2 new tests, with a real debugging round worth recording: the second
+test (default config, key-press-first forced to fail at Escape) first
+failed because `cursor_anchor`'s own KeySequenceRetry recovery — which
+fires on a verify failure and sends its OWN Escape — collided with the
+simulated Escape failure being tested. Fixed by staging a genuinely
+VERIFYING before/after pair (matching this file's own established
+pattern) so the recovery path never fires. Also had to add a "black"
+bounds-detection frame as screenshots[0] in both tests — discovered
+`cursor_anchor`'s own internal bounds-detection screenshot runs as a
+separate call regardless of `unlock_ipad`'s own explicit `start_x`/
+`start_y`, a real, non-obvious wiring detail this file's OTHER tests
+already account for but I'd initially missed.
+
+mover: 357/357 (was 355). Full workspace: all green, zero regressions.
+Clippy `-D warnings` + fmt clean. Committed `bd4c448`, pushed. Decision
+doc updated to approved-and-implemented.
+
+Per nixos-dev: "probably the real, final unlock for item 4" — category
+5's own positive path is now genuinely buildable; live verification
+(a fresh `try_key_press_first: false` attempt with the escalation
+actually wired) is the natural next live step, not yet run this round.
