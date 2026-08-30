@@ -1995,3 +1995,33 @@ has not completed cleanly end-to-end through this harness after 3 live
 attempts today, but each attempt has narrowed the remaining gap and
 produced a genuine, verified-safe non-event with a specific, understood
 reason every time — zero unsafe HID across all attempts.
+
+---
+
+**§18 fourth live attempt, repeat-check, 2026-08-30 ~07:56-07:57 —
+the before-outage recurred identically. 2/2, no longer N=1.**
+
+Manager: "agreed, don't tune off N=1 — go ahead with another attempt to
+see if this repeats or was a one-off." Health-check 503'd (cold-poll);
+wake confirmed a genuine lock screen.
+
+**Torn-frame detection fired correctly again**: 88.4% uniform → retried
+without re-wake → clean. Confirmed and unblocked the guarded slam.
+
+**Positive control fired, before-retry engaged again, identical
+outcome to §17**: `attempt 1/2 failed`, `attempt 2/2 failed` — both
+attempts of the lighter 2-attempt/300ms budget exhausted, same pattern
+exactly. v8 graceful-degrade worked again: no panic, clean recovery.
+Touch ID sheet → Escape → confirmed clean lock screen. Device safe
+throughout.
+
+**This is now 2/2 consecutive occurrences**, not a one-off longer
+outage — a real, repeating characteristic of this specific failure
+window, not noise. Reported to the manager; recommending nixos-dev's
+input on whether to bump `before`'s budget (keeping it lighter than
+`after`'s, per the original safety reasoning) or take a different
+approach, rather than changing it unilaterally. Categories 2/5 still
+has not completed cleanly end-to-end after 4 live attempts today — but
+every attempt has been a genuine, verified-safe non-event with an
+increasingly well-understood, narrowing cause. Zero unsafe HID across
+all 4 attempts.
