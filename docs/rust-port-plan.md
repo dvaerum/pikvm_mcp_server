@@ -2496,3 +2496,43 @@ plan.md` — independently converged on the same root cause) before pushing.
 Committed `a1eeafe`. Sent to nixos-dev for review; reported to the manager
 that this is built+tested offline exactly as directed, live verification
 deliberately deferred.
+
+---
+
+**§28 wake-nudge fix made corner-aware, per nixos-dev's review —
+a real safety catch, 2026-08-30 ~13:10.**
+
+nixos-dev's review of §27's fix (msg_3bc825f77d713e2e) caught a real
+issue before it could bite: the fixed `(+5,+5)` nudge direction was
+validated in `--fallback-mouse-move`'s OWN context (a neutral resting
+position), but the call site that actually motivated this whole
+investigation — `slam_to_corner`'s "after" verification screenshot —
+fires right after the cursor has been intentionally parked AT a screen
+corner. A fixed direction fired from a bottom corner could move FURTHER
+into it (toward the documented flashlight/camera quick-action
+affordances) instead of away — exactly the class of incident this whole
+session has been fighting.
+
+Fixed: `wake_nudge_toward_center` reads the held `CursorBelief`'s
+`position` + `bounds` and nudges 5px toward whichever half of center is
+on each axis — safe from any corner, not just `TopLeft` (which is why
+the original fixed `(+5,+5)` happened to look safe in every test that
+used the default belief position). Falls back to the fixed default only
+when `bounds` is `None`. 6 new tests, including an end-to-end one that
+resets belief to a BottomRight-style position and asserts the actual
+HID request sent carries NEGATIVE deltas, not the corner-agnostic
+default — pins the exact case flagged.
+
+nixos-dev's second point (possible `verify_motion` measurement
+contamination from the nudge) is real but not a code-level fix — logged
+in the design doc as a live-verification checklist item:
+`verify_motion`'s own tolerance (80px default) is an order of magnitude
+larger than the 5px nudge, and it already fires its own small pre-verify
+nudge for an unrelated reason, so this is likely fine but not proven —
+check whether the reported residual differs measurably nudge-vs-no-nudge
+before ever enabling this flag near a `slam_to_corner` call path.
+
+kvmd-client: 75/75 (was 69, +6 this round). Full workspace clippy
+`-D warnings` and fmt clean. Committed `4931d25`, pushed. Still gated
+off by default throughout — this round changed the nudge's DIRECTION
+logic, not whether it fires.
