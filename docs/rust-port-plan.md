@@ -1961,3 +1961,37 @@ mirroring the existing after-recovery one. 350/350 mover tests, clippy
 exercised live — both screenshots in `slam_to_corner` now have retry
 coverage, closing whatever's left of the post-slam capture-reliability
 gap identified in §13.
+
+---
+
+**§17 third live attempt with both retry fixes in place, 2026-08-30
+~07:52-07:54 — both fixes fired correctly, but this outage outlasted
+the lighter before-budget. Real calibration data, not a bug.**
+
+Manager: "good work, both sides covered now — go ahead." Health-check
+503'd (cold-poll pattern); wake confirmed a genuine lock screen.
+
+**Torn-frame detection fired correctly again**: 30.5% uniform → retried
+without re-wake → clean. Confirmed and unblocked the guarded slam.
+
+**Positive control fired** (`[slam] TopLeft x 25 calls @ 60ms`). This
+time the 503 hit `before` — and the new retry visibly engaged for the
+first time live: `[slam] before-screenshot retry: attempt 1/2 failed`,
+then `attempt 2/2 failed` too. Both attempts of the lighter 2-attempt/
+300ms budget were exhausted — the real outage this time lasted roughly
+~6s across both attempts (each with the client's own 1500ms internal
+grace), longer than the deliberately-smaller before-budget covers. v8
+graceful-degrade worked again: no panic, clean recovery, informative
+exit. Recovery: Touch ID sheet again, Escape again, confirmed clean
+lock screen. Device safe throughout.
+
+**Read**: not a fix failure — the fix is provably firing and logging
+correctly, which was the actual point of today's design work. This is
+real calibration data showing the transient outage duration is more
+variable than assumed, sometimes exceeding even the lighter retry
+budget. Not proposing a threshold bump yet — reported to the manager,
+want to see if this recurs before tuning further. Categories 2/5 still
+has not completed cleanly end-to-end through this harness after 3 live
+attempts today, but each attempt has narrowed the remaining gap and
+produced a genuine, verified-safe non-event with a specific, understood
+reason every time — zero unsafe HID across all attempts.
