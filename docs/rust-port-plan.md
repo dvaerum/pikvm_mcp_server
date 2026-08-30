@@ -1804,3 +1804,46 @@ mover tests, 198/198 detection-vision tests, clippy `-D warnings` and
 fmt clean. Committed `2d5b8e9` (plan) and `719e2e1` (implementation) on
 `rust-port/module-4-mover`. Code-only — not yet exercised live; the next
 categories-2/5 attempt will be its first real test.
+
+---
+
+**§13 first live exercise of v9 (torn-frame fix) + v8 (graceful degrade),
+2026-08-30 ~07:23-07:26 — real progress, still no clean PASS.**
+
+georg asked directly for a live attempt; manager relayed. Health-check
+503'd repeatedly (cold poll, matches §11's flag-behavior finding); a
+wake-key check confirmed a genuine lock screen. Ran the harness.
+
+**Torn-frame detection fired live for the first time and worked
+correctly**: attempt 1's capture came back `uniform_row_fraction=0.998`
+(clearly torn), automatically retried WITHOUT re-sending the wake key;
+attempt 2 came back clean (`0.000`). Inspected the resulting screenshot —
+genuine, unambiguous lock screen — and confirmed it. First real
+validation of §12's design.
+
+**Positive control fired for real** — `[slam] TopLeft x 25 calls @
+60ms` — the first time any HID reached the corner-slam region today.
+But the post-slam verification screenshot hit the SAME transient 503
+pattern that caused the original v1-v6 panics and the v7 panics behind
+the v8 fix — a 3rd distinct occurrence of this exact failure point.
+Whether the slam actually landed correctly is still unverified; the
+measurement categories 2/5 exists to make has still never completed
+cleanly through this harness.
+
+**v8 graceful-degrade validated live, worked exactly as designed**: no
+panic — logged the error, ran the shared recovery, exited cleanly (code
+2, "INCONCLUSIVE"). Real proof of the fix built earlier today.
+
+**Recovery detail**: `unlock_ipad()`'s own Enter press left the device
+on a Touch ID/passcode challenge sheet (safely locked, not home) instead
+of fully unlocking. Rather than guess with an untested swipe gesture,
+sent a single `Escape` (already part of this codebase's own recovery
+vocabulary) — confirmed via fresh screenshot: clean plain lock screen,
+device safe. Never reached the negative control.
+
+**Read, reported to the manager**: the 503-right-after-slam pattern
+recurring a 3rd time looks systemic, not incidental — the error message
+itself points at the post-slam verification screenshot needing the same
+"held /api/ws stream client" retry treatment the baseline screenshot
+already has. Not fixed blind — flagged for a targeted look before the
+next attempt. No safety incident; device left safely locked throughout.
