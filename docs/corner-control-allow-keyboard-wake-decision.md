@@ -218,7 +218,36 @@ approved corner-control-smoke sites; `false` everywhere else. mover:
 falls back to mouse, the cross-shot interaction). Full workspace green,
 clippy `-D warnings` + fmt clean.
 
-Live verification, once the fix is actually exercised (the first live
-attempt was blocked one step earlier than expected — see above), is a
+## Second live run (2026-08-30 ~19:32-19:33) — categories 2/5 PASSED end-to-end for the first time this session, but the escalation itself STILL wasn't exercised
+
+Health-check, lock, wake (one torn-frame retry, correctly handled — no
+re-wake), confirmation screenshot all visually confirmed genuine. Both
+the positive control (full slam, `TopLeft`) and negative control
+(deliberately short slam, same guarded path) completed cleanly:
+
+- Positive: `origin=(516, 58), verified=Some(true)` — a real corner
+  landing correctly matched.
+- Negative: `origin=(516, 58), verified=Some(false)` — a real short
+  slam correctly NOT matched.
+- Real `unlock_ipad()` recovery ran. Exit code 0 — PASSED.
+
+All three screenshots this run needed (`before`/`after` × 2 controls)
+succeeded on their FIRST raw attempt — `source.online` happened to stay
+healthy throughout the whole slam sequence this time, so **the wake-
+nudge escalation (keyboard or mouse) never actually fired in this run
+either.** Categories 2/5 is now genuinely, verifiably PASSING
+end-to-end for the first time this whole session — a real milestone —
+but this specific run provides NO live evidence about the escalation
+mechanism itself, which remains untested against a real mid-slam
+`source.online` stall. That would need a run where the stall actually
+coincides with a `before`/`after` screenshot attempt — not something
+that can be forced deterministically, only waited for.
+
+All screenshots (confirmation, positive, negative, final) inspected
+directly: genuine, clean, safe states throughout — zero incident.
+
+Live verification of the escalation mechanism specifically remains
+open, pending a future run where the timing happens to line up (or a
+deliberately-constructed live test that forces the condition) — a
 separate, later, deliberately-timed decision per the manager's standing
 instruction.
