@@ -2536,3 +2536,54 @@ kvmd-client: 75/75 (was 69, +6 this round). Full workspace clippy
 `-D warnings` and fmt clean. Committed `4931d25`, pushed. Still gated
 off by default throughout — this round changed the nudge's DIRECTION
 logic, not whether it fires.
+
+---
+
+**§29 live verification of the wake-nudge fix — NEGATIVE, flag stays off,
+2026-08-30 ~13:29.**
+
+Manager's check-in asked whether now was reasonable timing; judged yes —
+the device happened to be sitting in the exact real 503-idle state this
+fix targets right now (confirmed via a read-only precheck through the
+actual production `fetch_snapshot_with_retry` path, flag off — genuine
+current state, not synthetic). Ran three steps on the real device:
+
+1. Precheck (flag off): confirmed genuine `source.online=false` — the
+   existing two-attempt retry alone still failed.
+2. Fix under test (flag on, nothing else changed): still failed after
+   the full 14.8s three-attempt path. Error text confirms the mouse-move
+   nudge DID fire — the escalation logic ran correctly, it just didn't
+   recover the device.
+3. Disambiguation: sent ONE `Space` keypress (the mechanism the earlier
+   root-cause chase, §22-§26, actually validated) through a fresh client
+   — first wake attempt this idle episode, none of the documented
+   second-press risk applied. REVIVED — confirmed via
+   `get_streamer_status()` and a direct screenshot, visually inspected:
+   a genuine, clean, plain lock screen (13:29, 100% Charged), zero
+   incident.
+
+Real, important finding: the fix's mouse-move mechanism was inherited
+from `--fallback-mouse-move`'s OWN validated property (SAFE — doesn't
+dismiss a lock screen), never independently proven EFFECTIVE at reviving
+`source.online`. This live test directly contradicts that inherited
+assumption — mouse-move failed where an otherwise-identical Space
+keypress, moments later on the exact same stuck state, succeeded. N=1
+each side, not proof mouse-move never works, but real evidence the
+current design can't be trusted to actually fix the case it targets.
+
+Flag stays off. Not attempting a redesign in this pass — needs its own
+fresh design + review cycle, same discipline as everything else tonight,
+not a rushed fix bolted on immediately after a negative result. The
+underlying root-cause finding (iPad display needs a genuine redraw event,
+not connection bookkeeping) still stands unchanged; what's now open is
+narrower and more specific: whether a relative mouse-move ever reliably
+counts as that redraw event, or whether only a keypress does.
+
+This is exactly why the flag defaulted off and why live verification was
+held as its own separately-timed decision rather than bundled into
+landing the code: the caution was justified, and it caught a real gap
+before the flag could ever have shipped enabled. Docs updated
+(docs/streamer-source-online-wake-nudge-plan.md), commit `ea7fafe`.
+Zero incidents throughout — device confirmed safe by direct screenshot
+at every step. Reporting the honest negative result to nixos-dev and the
+manager now, not glossing over it.
