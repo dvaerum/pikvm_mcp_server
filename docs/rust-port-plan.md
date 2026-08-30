@@ -2025,3 +2025,43 @@ has not completed cleanly end-to-end after 4 live attempts today — but
 every attempt has been a genuine, verified-safe non-event with an
 increasingly well-understood, narrowing cause. Zero unsafe HID across
 all 4 attempts.
+
+---
+
+**§19 keepalive diagnostic: designed, implemented, run live, 2026-08-30
+~08:00-08:08 — real data rules out the reconnect-backoff hypothesis.**
+
+nixos-dev's response to the 2/2 pattern (§18): before picking a retry
+number, checked `kvmd-client/src/streamer_keepalive/` — `PiKVMClient`
+holds a `StreamerKeepalive` built specifically to survive exactly this
+kind of long gap (the ~30s human-confirmation wait), with a background
+reconnect on exponential backoff (capped at `RECONNECT_MAX_MS`). If the
+keepalive died and its backoff hadn't caught up yet, no amount of
+outer-retry tuning would fix it — a fundamentally different problem than
+"budget too small." Asked for a one-line diagnostic accessor
+(`streamer_keepalive_connected()`) logged before/after `before`'s retry,
+to distinguish the two cases before choosing a fix.
+
+Implemented: `PiKVMClient::streamer_keepalive_connected()` (thin
+pass-through to `StreamerKeepalive::connected()`), logged around
+`before`'s retry in `slam_to_corner`. Diagnostic-only, no behavior
+change. 60/60 kvmd-client tests, 350/350 mover tests, clippy
+`-D warnings` and fmt clean. Committed `ac0370f` on
+`rust-port/module-4-mover`.
+
+Ran live once. Real answer: `streamer_keepalive_connected=true` BOTH
+before and after the retry (with `ok=false` on the after-check) — the
+keepalive was reporting connected the entire time this still 503'd
+twice. **Rules out the reconnect-backoff hypothesis** — per nixos-dev's
+own framing, this means the empirically-justified next move is
+retry-tuning (bumping `before`'s attempt count to match the now-3/2
+observed failure rate), not further keepalive investigation. Torn-frame
+detection this run only needed 1 attempt (5.7%, just under threshold).
+Recovery worked again (v8, no panic); the final-state screenshot was
+itself torn — correctly not trusted, retried, confirmed device
+genuinely safe (clean plain lock screen). Sent the real data to
+nixos-dev for their read on the actual budget fix now that the
+keepalive branch is closed. Categories 2/5 still not complete
+end-to-end after 5 live attempts today, but the remaining cause is now
+concretely identified (retry budget, not an unknown infra mystery) —
+real, converging progress. Zero unsafe HID across all 5 attempts.
