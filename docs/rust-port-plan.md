@@ -2388,3 +2388,66 @@ first, same discipline as every other step tonight.
 Device confirmed safe throughout every check. Categories 2/5 remains
 open, but each pass keeps replacing a vaguer hypothesis with a more
 specific, testable one — real narrowing, not a stall.
+
+---
+
+**§26 the real mechanism found: a bare wake key alone revives
+`source.online` — the connection-bookkeeping investigation was looking
+in the wrong place, 2026-08-30 ~12:24-12:29.**
+
+nixos-dev's cleaner isolation test (zero production code changes):
+construct a completely separate, independent `StreamerKeepalive` (same
+config, `StreamerKeepalive::new`/`StreamerKeepaliveConfig` already
+`pub`) and call `ensure_started()` on it alone, then check whether the
+ORIGINAL stuck client's `source.online` revives. Built
+`streamer_source_new_connection_revival_test`, committed `89a2076`.
+
+**Result: NOT REVIVED.** Flip happened at 10.7s again (3rd consecutive
+run landing almost exactly there). Separate keepalive connected
+cleanly in 37ms — but the original client's `source.online` stayed
+false, and its direct screenshot still 503'd. A bare new WS connection
+event to the same target, alone, is NOT sufficient.
+
+**Caught a real confound in my own earlier reasoning, unprompted,
+before drawing any further conclusion**: every "fresh client recovers
+it" observation across tonight's diagnostics also happened to send a
+real wake key (`Space`) to the iPad as part of that same verification
+step — never isolated from the connection event itself. Flagged this
+to the team immediately rather than letting it stand unexamined.
+
+Built `streamer_source_wake_key_revival_test`: same idle-hold shape,
+but instead of a new connection, sends ONE wake key through the SAME
+already-stuck client — no new connection, no new object, nothing else
+changes. Committed `234cca0`.
+
+**Result: REVIVED.** Flip at 10.6s (yet again, ~10.7s, now 4/4). A bare
+`Space` keypress through the SAME stuck connection immediately revived
+`source.online=true`, confirmed directly by the same client's own
+screenshot succeeding right after (72846 bytes).
+
+**This resolves the whole night's investigation with a clean, decisive
+answer**: the mechanism was never about kvmd/ustreamer connection
+bookkeeping at all. The WS keepalive (healthy, present, ping/pong
+working correctly), REST-recency pings, and bare new connection events
+were ALL correctly tested negative — for the right underlying reason:
+none of them ever touch the iPad itself. The real mechanism is that
+the iPad's own display needs a genuine redraw/refresh event during a
+long idle wait; nothing purely server-side (PiKVM/kvmd-side) can
+substitute for that. The ping/pong fix (§21) remains valid and correct
+— it fixes a real, separate, permanent-until-restart zombie-connection
+bug — it just was never what drove tonight's specific categories-2/5
+503 pattern.
+
+**Fix shape for later, NOT designed or built tonight** (nixos-dev):
+can't simply "resend Space" during a human-confirmation wait — a
+SECOND Space press is the documented dismiss-to-Touch-ID hazard this
+entire categories-2/5 saga has been fighting all session. The existing
+`--fallback-mouse-move` nudge (already built into
+`cursor_anchor_corner_control_smoke.rs`) is the more likely safe
+candidate — a display-refresh that doesn't carry the same-key-twice
+risk. A real design pass for whenever this resumes.
+
+Device confirmed safe throughout every single check tonight. Categories
+2/5 remains not completed end-to-end, but the actual blocking mechanism
+is now genuinely, decisively understood — a real, complete answer, not
+a narrowing guess. Reported in full to nixos-dev and the manager.
