@@ -229,6 +229,33 @@ presence signal but does NOT advance to the next stage on a second press)
 is the concrete open question for a fresh design pass, not resolved by
 what's in the codebase today.
 
+## Candidate lead for the open question (manager, via web search — 2026-08-30, UNTESTED against this rig)
+
+Apple documents that since iPadOS 16.4, an external keyboard key press at
+the lock screen wakes the display AND jumps straight to the passcode
+field — matching exactly what's been observed here. There's a specific
+device setting: **Settings → Face ID & Passcode → Allow Access When
+Locked → Keyboard**. If that's off, a key press plausibly only wakes
+without advancing — which would be exactly the "wake-only, never-
+advances" behavior this doc's own review thread said doesn't currently
+exist anywhere in the codebase or documented iPadOS behavior.
+
+**Not verified against this specific rig.** Two concrete checks needed
+whenever this is picked back up: (a) what that setting currently is on
+the test iPad, (b) whether toggling it actually changes the observed
+`Space`-press behavior (wake-only vs. wake-then-advance). If confirmed,
+this could be a real, simple, CONFIG-level fix — no code changes needed
+at all, just confirming/setting a device setting correctly.
+
+Deliberately not executed in this session: checking/toggling this
+setting means navigating into Settings on the real device (itself
+gated behind re-entering the passcode, per iOS convention) — a deeper,
+more invasive live interaction than anything else in this doc, and one
+that deserves the same assert-before-every-click harness discipline
+this project already requires for on-UI navigation, not a freehand
+attempt bolted onto an already long session. A fresh pass, properly
+built, is the right way to check this — not decided or attempted here.
+
 ## Status
 
 Reviewed by nixos-dev; both substantive review points addressed in code.
@@ -238,6 +265,8 @@ redraw event, not connection bookkeeping) still stands; what's now in
 question is specifically whether a relative mouse-move is a sufficient
 redraw event, or whether only a keypress reliably is — and, per the above,
 the working assumption is now that it needs a keypress, with the open
-design question being WHICH key is both effective and safe. Needs a fresh
-design pass (through the same review process) before any further live
-testing — not decided in this pass.
+design question being WHICH key is both effective and safe. A real,
+concrete, untested lead exists for that question (see above — the
+"Allow Access When Locked → Keyboard" setting). Needs a fresh design
+pass + that setting checked on-device (through the same review process)
+before any further live testing — not decided in this pass.
