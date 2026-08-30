@@ -3544,3 +3544,58 @@ isn't to check whether the individual facts are true (they were) — it's
 to check whether the SYNTHESIS across facts is honest. Both bb11ec4 and
 run #9 were accurately reported on their own; the error was only in how
 they were combined into a single verdict.
+
+---
+
+**§52 item 5's reachable next step attempted — did NOT succeed, but the
+real root cause is now precisely traced, 2026-08-30 ~21:42-21:52.**
+
+Manager greenlit attempting the next step §51 identified: a run where
+the internal slam's own motion verification actually succeeds in the
+same continuous `unlock_ipad()` call that reaches home. Checked current
+device state first (purely passive screenshot — still on the real home
+screen from §50's completion, ~20 min later, hadn't auto-locked yet).
+No lock primitive exists yet in the Rust port, so re-established a
+fresh lock precondition directly via `send_shortcut(&["ControlLeft",
+"MetaLeft", "KeyQ"])` — the same Ctrl+Cmd+Q shortcut already used
+elsewhere in this exact codebase (`ipad_unlock/home.rs` and others use
+the `send_shortcut` primitive; this specific combo is used in
+`wake_key_experiment.rs`/`cursor_anchor_corner_control_smoke.rs`).
+HDMI went dark as expected (documented ~2s blackout); one wake key,
+screenshot-confirmed a genuine fresh lock screen.
+
+Ran `unlock_ipad(try_key_press_first: Some(false))` immediately after.
+Result: same failure shape as run #9 — bounds detection 503'd twice,
+fell back to the legacy origin, slam verification failed twice again
+(0 clusters within 80px of expected origin, even after the key-sequence
+retry). This time strictly worse than run #9: screenshot-confirmed the
+swipe did NOT dismiss the lock screen at all (still on the plain lock
+screen, cursor visible near where the slam landed) — the WARNING about
+a possibly-wrong cursor origin was accurate this time, not just a
+detector-side gap.
+
+**Traced the real root cause precisely rather than guessing again**:
+`detect_ipad_bounds` (`detection-vision/src/orientation.rs:232`) calls
+`client.screenshot(None)` — `ScreenshotOptions::default()`, i.e.
+`allow_keyboard_wake: false`. Bounds detection's own screenshot call is
+architecturally OUTSIDE the keyboard-wake escalation's scope, by the
+original design — the escalation was only ever approved for the
+corner-control-smoke sites and `unlock_ipad`'s own before/after slam
+screenshots, never bounds detection itself. So whenever `source.online`
+is flaky specifically during bounds detection (evidently common on this
+rig), it falls back to `LAST_GOOD_BOUNDS`/the legacy origin, and that
+fallback isn't accurate enough for slam verification — or, this
+attempt, the swipe itself — to reliably succeed. This is now 2/2 with
+the IDENTICAL failure shape, not two unrelated flukes.
+
+Reported honestly to the manager, including the real next candidate fix
+(extend the keyboard-wake escalation to bounds detection's own
+screenshot call — likely the same causal-safety argument transfers,
+since bounds detection also happens before any keys/clicks on an
+already-confirmed-locked device, but that needs its own explicit review
+before building, same discipline as the two already-approved sites).
+Did NOT re-attempt a 3rd time blindly with no new information — a
+precisely-understood root cause is worth more than another undirected
+try. Device left safe: back on the plain lock screen, no unlock
+occurred. Item 5 stays OPEN. Awaiting manager's call on whether to
+draft the bounds-detection escalation proposal tonight or hold here.
