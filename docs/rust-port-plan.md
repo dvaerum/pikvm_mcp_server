@@ -2622,3 +2622,35 @@ explicit request — a future reader skimming only the Design section
 could otherwise wrongly assume this is close to flippable. Committed
 `f6ba7a1`, pushed. No live hardware contact this round — pure code
 reading in response to a design question.
+
+---
+
+**§31 a real, concrete, untested lead for the open wake-key question —
+Allow Access When Locked → Keyboard, 2026-08-30 ~13:42.**
+
+Manager ran a real web search against §30's exact open question (does a
+key exist that wakes without advancing the lock-screen state machine)
+and found a genuine Apple-documented mechanism: since iPadOS 16.4, an
+external keyboard key press at the lock screen wakes the display AND
+jumps straight to the passcode field — matching everything observed
+tonight. Controlled by a real device setting: Settings → Face ID &
+Passcode → Allow Access When Locked → Keyboard. If off, a key press
+plausibly only wakes without advancing — exactly the missing "wake-only,
+never-advances" behavior.
+
+Manager's own caveat, repeated here: not verified against this specific
+rig. Two concrete checks needed whenever this is picked back up: (a)
+what the setting currently is on the test iPad, (b) whether toggling it
+actually changes the observed `Space`-press behavior. If confirmed, this
+could be a real, simple CONFIG-level fix — no code changes at all.
+
+Deliberately NOT executed this session: checking/toggling it means
+navigating into Settings on the real device (itself gated behind
+re-entering the passcode) — a deeper, more invasive live interaction
+than anything else in this thread, and one that deserves the same
+assert-before-every-click harness discipline this project already
+requires for on-UI navigation, built properly in a fresh pass rather
+than freehand on top of an already long session. Documented in
+docs/streamer-source-online-wake-nudge-plan.md (commit `78d0e55`) as the
+concrete next step, not attempted here. No live hardware contact this
+round.
