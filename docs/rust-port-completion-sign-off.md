@@ -84,10 +84,16 @@ a real second reviewer rather than shipped uncorrected.
    Same calibration as run #8 ("guard reached, didn't refuse" is real
    positive evidence but is NOT "reached and passed"), now with one more
    data point: an ACTIVE verification failure, not just an unreached
-   guard. **Reachable next step, not yet attempted**: a run where the
-   internal slam's own motion verification actually succeeds
-   (`slam_verified: Some(true)`) in the same continuous `unlock_ipad()`
-   call that reaches home.
+   guard. **Run #10**: re-locked fresh (screenshot-confirmed), re-ran
+   immediately — identical failure shape, this time strictly worse (the
+   swipe didn't unlock at all). Root cause now precisely traced:
+   `detect_ipad_bounds` (`detection-vision/src/orientation.rs:232`)
+   calls `client.screenshot(None)` — its own screenshot is
+   architecturally outside the keyboard-wake escalation's scope by
+   original design, so a flaky `source.online` there forces a
+   legacy-origin fallback that isn't accurate enough. 2/2 identical
+   failure. **Real next candidate fix, not yet reviewed or built**:
+   extend the escalation to bounds detection's own screenshot call.
 
 6. **The stationary-guard widening
    (`would_reject_as_stationary` K=4 ring) — SATISFIED (2026-08-30,
