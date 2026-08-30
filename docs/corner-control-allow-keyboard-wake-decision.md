@@ -159,15 +159,52 @@ safe, known, recoverable, not mid-navigation in any app.
 fix itself** — it was never reached. The actual blocker was the
 `before` screenshot, which this decision deliberately left unaddressed.
 
-**Natural follow-up, not decided or implemented here**: the same safety
-reasoning above arguably applies to `before` at least as well as
-`after` — if anything, `before` is a SAFER context (even less time has
-elapsed since the human's confirmation, nothing has moved yet at all).
-Extending `allow_keyboard_wake` to `before` too would need its own
-explicit review before any implementation, per this project's own
-process — flagged here as the concrete next step, not assumed.
+## Addendum: extending to `before` — proposal (nixos-dev review, correction applied)
+
+**First draft above got the timing direction backward — corrected
+here.** `before` fires strictly EARLIER in wall-clock time than
+`after` — before the slam loop's own ~1.5s+ of movement even runs, let
+alone the pre-verify nudge/settle afterward. So elapsed time since the
+last keyboard key is actually SMALLER at `before` than at `after`, not
+larger — the opposite of what the first draft claimed. In practice this
+likely doesn't change the verdict (this session's own confirmation
+windows have run tens of seconds to minutes, comfortably past the 20s
+quiet-window margin either way), but the stated justification needs to
+say that plainly, not claim the wrong direction.
+
+**The actual transferable argument is causal, not timing-based**: does
+anything in the harness's own control flow send a key or click to the
+device between the human's confirmation and this specific screenshot
+call? For `before`, same answer as `after`: no — nothing happens in
+that gap except the confirmation mechanism itself (operator reading a
+file, not a device-side action). That's the real basis for extending
+the argument from `after` to `before`, and it holds independent of the
+(corrected, now-irrelevant) timing framing.
+
+**One genuine asymmetry, not a blocker, worth stating plainly**: `after`
+is the LAST screenshot in the sequence — nothing downstream depends on
+the device's exact resulting state once it succeeds. `before` is
+different: if its escalation fires and re-wakes the display, the slam's
+own movement + corner-detection logic runs immediately afterward
+against a screen just freshly re-illuminated by that same wake event.
+Not a safety concern (still the same locked device; a fresh Space press
+wakes, it doesn't dismiss) — but a real, low-probability ACCURACY
+question: could corner-target detection be less reliable against a
+frame captured moments after a wake/redraw transition than an already-
+stable one? Flagged, not resolved — the same detection logic already
+handles post-wake frames elsewhere in this project (e.g. the
+confirmation-screenshot loop's own torn-frame retry), which is
+reassuring precedent but not a proof for this specific case.
+
+**Status**: proposal only, sent to nixos-dev for its own explicit
+review — not decided or implemented. If approved: extend
+`SlamOptions`/`AnchorRequest`'s single `allow_keyboard_wake_after` field
+into two independent fields (`_before`/`_after`, or rename to drop the
+`_after` suffix and add a sibling), threading `before`'s own escalation
+choice through the same call sites already touched, defaulting `false`
+everywhere except the two approved corner-control-smoke sites.
 
 Live verification, once the fix is actually exercised (needs `before`
-addressed first, or a run where `before` happens to succeed on its
-own), is a separate, later, deliberately-timed decision per the
-manager's standing instruction.
+addressed, or a run where `before` happens to succeed on its own), is a
+separate, later, deliberately-timed decision per the manager's standing
+instruction.
