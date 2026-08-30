@@ -3365,3 +3365,62 @@ firing mid-slam in a live run (every real stall so far has hit it at a
 call site where it was deliberately unwired, or been resolved by a
 separate throwaway diagnostic before the guarded harness's own
 escalation had a chance to fire).
+
+---
+
+**§49 category 5 run #9 — the internal-slam extension's live positive-
+path attempt: real forward progress, real outcome is Touch ID (not
+home), still open by the item's own literal bar, 2026-08-30 ~21:10-21:17.**
+
+Manager check-in asked whether to run this now or rest; judged it safe
+(built, unit-tested, nixos-dev-approved, last open sign-off item) and
+proceeded per the standing "be proactive" discipline.
+
+Built `rust/mover/examples/category5_unlock_live.rs` — a genuine
+`unlock_ipad(try_key_press_first: Some(false))` call against a
+visually-confirmed lock screen (health-check split into its own
+throwaway example specifically so the confirmation happens as a real,
+separate step before the unlock fires, not skipped inside one
+continuous binary). First attempt errored on the pre-swipe `before`
+screenshot with "the wake-nudge escalation is disabled" — traced to
+the exact same "built but not wired" bug caught earlier for the corner-
+control-smoke harness (abc2f27): my new harness's own `PiKVMConfig`
+never set `source_online_wake_nudge: true`. Self-caught before drawing
+any conclusion, fixed, re-confirmed a fresh lock screen, re-ran.
+
+Real result this time: bounds detection failed twice (503, tried its
+own mouse-move nudge, didn't recover — expected, outside the approved
+scope), fell back to the legacy slam origin. The internal slam's own
+before/after screenshots then both succeeded on attempt 1/3 — meaning
+**the escalation was correctly available (both config flags true) but
+never actually needed to fire**, since neither screenshot hit a 503
+this run. Slam motion verification failed twice (0 clusters within
+80px of the expected origin, even after a key-sequence retry) —
+reported honestly in the result's own message, not suppressed.
+`unlock_ipad` executed the swipe anyway (verification failure is
+advisory by design, not a hard abort). Screenshot-confirmed real
+outcome: the swipe genuinely dismissed the lock screen but landed on
+the Touch ID / "Use Passcode" prompt, not the home screen — consistent
+with the already-documented short-delay-escalates-to-Touch-ID pattern
+(the wake-key delay sweep), not a new failure mode. Left the device in
+this benign state; deliberately did NOT attempt passcode entry — a
+separate, more sensitive action outside what was asked, flagged for
+the team rather than assumed.
+
+Committed `b8fc3d9` (harness + honest result in the commit message),
+`6cc8822` (sign-off doc's category-5 row updated to reflect run #9).
+Both pushed to `rust-port/module-4-mover`. Cleaned up every throwaway
+file used to get there.
+
+Calibration, explicit: this is real forward progress over run #8 (the
+guard now runs all the way through a real swipe instead of erroring on
+the pre-swipe screenshot), but by category 5's own literal wording
+("reached AND PASSED" meaning the unlock itself succeeds) it remains
+open — the real outcome was Touch ID, not home screen. The keyboard-
+wake escalation mechanism itself has STILL never been observed actually
+firing mid-slam in any live run across categories 2 or 5 — both runs'
+screenshots happened to succeed without needing it. That remains the
+one genuinely open mechanical question; everything else about the
+escalation's wiring, safety scope, and config-gating is now proven
+correct by direct construction and by two independent live runs
+reaching the point where it would fire.
