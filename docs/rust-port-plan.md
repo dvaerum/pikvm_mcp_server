@@ -3057,3 +3057,47 @@ Addendum written (docs/corner-control-allow-keyboard-wake-decision.md,
 commit `e7b219c`) and sent back to nixos-dev for its own explicit
 review — proposal only, not decided or implemented. No live hardware
 contact this round.
+
+---
+
+**§42 before-extension approved and implemented — categories 2/5's
+actual practical blocker now covered too, 2026-08-30 ~19:25.**
+
+nixos-dev approved §41's corrected addendum, plus confirmed a valuable
+cross-shot property by construction: if `before`'s escalation fires a
+real `Space`, `after`'s escalation moments later (same run, well within
+the quiet window) must see that recent emit and fall back to mouse —
+even with `allow_keyboard_wake_after: true` also set. Exactly right (a
+real second `Space` within the window genuinely is the dismiss-risk
+case), falls out of the existing per-client `last_keyboard_emit`
+tracking for free — asked for a unit test proving it, not just an
+assertion it's fine.
+
+Implemented: `SlamOptions`/`AnchorRequest` now carry two independent
+fields, `allow_keyboard_wake_before` and `allow_keyboard_wake_after`,
+threaded through the same call sites as the original `after`-only
+change. Both `true` at exactly the two approved corner-control-smoke
+sites; `false` everywhere else (9 construction sites, same explicit-at-
+every-site discipline as before — no `Default` derive on
+`AnchorRequest`).
+
+3 new tests: `before` recovers via keypress when opted in, `before`
+falls back to mouse when not, and — the one nixos-dev specifically
+asked for — the cross-shot interaction: `before`'s escalation fires
+keyboard (first-ever emit, safe), `after`'s escalation in the SAME run
+correctly falls back to mouse (a keyboard emit landed moments ago,
+inside the quiet window) even though `after` also has
+`allow_keyboard_wake_after: true`. This is now a verified property, not
+an accidental one.
+
+mover: 355/355 (was 352). Full workspace: all green, zero regressions.
+Clippy `-D warnings` + fmt clean. Committed `90f444d`, pushed. Design
+doc updated to approved-and-implemented
+(docs/corner-control-allow-keyboard-wake-decision.md).
+
+Both the `before` and `after` verification screenshots in the
+categories-2/5 corner-control harness are now covered by the keypress
+escalation — the actual practical blocker the first live run surfaced
+should now be addressed. Not live-verified yet — next live attempt
+would be the real test of whether this actually closes categories 2/5
+end-to-end, timing per the manager's own standing instruction.
