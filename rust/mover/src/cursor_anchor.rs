@@ -179,13 +179,17 @@ pub struct AnchorRequest {
     pub slam_calls: Option<u32>,
     /// Default `false`. Threaded straight through to `SlamOptions.
     /// allow_keyboard_wake_after` — see
-    /// docs/corner-control-allow-keyboard-wake-decision.md for the one
-    /// call site currently approved for `true`
+    /// docs/corner-control-allow-keyboard-wake-decision.md for the two
+    /// call sites currently approved for `true`
     /// (`cursor_anchor_corner_control_smoke.rs`'s guarded slam pair).
     /// Every other caller must set this explicitly (no `Default` derive
     /// on this struct — `guard` has no sensible default either), which
     /// is deliberate: a new call site can't silently inherit `true`.
     pub allow_keyboard_wake_after: bool,
+    /// Same semantics, threaded to `SlamOptions.allow_keyboard_wake_
+    /// before` — see the decision doc's addendum for the (causal, not
+    /// timing-based) argument approving this too.
+    pub allow_keyboard_wake_before: bool,
     pub verbose: bool,
 }
 
@@ -345,6 +349,7 @@ async fn run_slam(
             screenshot: Some(req.screenshot),
             bounds_hint: Some(bounds_hint),
             allow_keyboard_wake_after: req.allow_keyboard_wake_after,
+            allow_keyboard_wake_before: req.allow_keyboard_wake_before,
             ..Default::default()
         },
     )

@@ -192,6 +192,7 @@ pub(super) async fn discover_origin(
     let result = anchor_cursor(AnchorRequest {
         client: client.clone(),
         allow_keyboard_wake_after: false, // see docs/corner-control-allow-keyboard-wake-decision.md
+        allow_keyboard_wake_before: false, // see docs/corner-control-allow-keyboard-wake-decision.md
         corner: Some(Corner::TopLeft),
         guard: AnchorGuard::BoundsGuard {
             allow_on_undetermined: options.forbid_slam_on_ipad == Some(false),

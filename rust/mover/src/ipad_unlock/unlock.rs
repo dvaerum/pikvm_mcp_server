@@ -228,6 +228,7 @@ pub async fn unlock_ipad(
         let slam_result = anchor_cursor(AnchorRequest {
             client: client.clone(),
             allow_keyboard_wake_after: false, // see docs/corner-control-allow-keyboard-wake-decision.md
+            allow_keyboard_wake_before: false, // see docs/corner-control-allow-keyboard-wake-decision.md
             corner: Some(Corner::TopLeft),
             guard: AnchorGuard::CallerAsserted {
                 reason: "Layer 5 — lock screen has no active hot corner".to_string(),

@@ -199,6 +199,7 @@ fn default_req(client: Arc<PiKVMClient>, guard: AnchorGuard) -> AnchorRequest {
     AnchorRequest {
         client,
         allow_keyboard_wake_after: false,
+        allow_keyboard_wake_before: false,
         corner: None,
         guard,
         screenshot: ScreenshotMode::Raw,

@@ -145,16 +145,32 @@ pub struct SlamOptions {
     /// full-struct `Option` is the more idiomatic Rust shape; flagged as
     /// an individually-justified simplification rather than a silent one.
     pub detection: Option<DetectionConfig>,
-    /// Default `false`. Permits the `after` verification screenshot
-    /// (NOT `before` — a deliberately separate, undecided question) to
+    /// Default `false`. Permits the `after` verification screenshot to
     /// use the v2 wake-nudge escalation's keyboard `Space` path instead
     /// of always falling back to a mouse-move nudge, if
     /// `PiKVMConfig::source_online_wake_nudge` is also enabled. Only set
     /// `true` when the caller has reasoned through its own specific
     /// context — see docs/corner-control-allow-keyboard-wake-decision.md
-    /// for the one call site currently approved for this
+    /// for the two call sites currently approved for this
     /// (`cursor_anchor_corner_control_smoke.rs`'s guarded slam pair).
+    /// Independent of `allow_keyboard_wake_before` — if `before`'s own
+    /// escalation fires a `Space`, `keyboard_wake_is_safe`'s shared
+    /// per-client clock correctly makes `after`'s escalation (later in
+    /// the SAME run, well within the quiet window) fall back to
+    /// mouse-move instead, for free — a real second `Space` within the
+    /// window genuinely IS the dismiss-risk case, so this is exactly
+    /// right, not an accident of the shared-state design.
     pub allow_keyboard_wake_after: bool,
+    /// Same semantics as `allow_keyboard_wake_after`, but for the
+    /// `before` shot. Approved as its own explicit decision (nixos-dev
+    /// review, docs/corner-control-allow-keyboard-wake-decision.md's
+    /// addendum): the transferable argument is causal (nothing sends a
+    /// key/click between the human's confirmation and either shot), not
+    /// timing-based. One flagged, unresolved asymmetry: `before`'s
+    /// escalation, if it fires, wakes the display right before the
+    /// slam's own movement+detection logic runs against that freshly-
+    /// illuminated frame — an accuracy question, not a safety one.
+    pub allow_keyboard_wake_before: bool,
 }
 
 /// Result of `slam_to_corner`'s optional post-slam motion check
@@ -277,11 +293,7 @@ pub async fn slam_to_corner(
             VERIFY_SCREENSHOT_RETRY_SETTLE_MS,
             options.verbose,
             "before",
-            // Always false — the AFTER-only decision in
-            // docs/corner-control-allow-keyboard-wake-decision.md was
-            // deliberately scoped to just the after shot; before is a
-            // separate, undecided question.
-            false,
+            options.allow_keyboard_wake_before,
         )
         .await;
         if options.verbose {
@@ -1444,11 +1456,11 @@ mod tests {
 
     /// Pins the plumbing behind
     /// docs/corner-control-allow-keyboard-wake-decision.md:
-    /// `SlamOptions.allow_keyboard_wake_after` must reach the `after`
-    /// screenshot's `ScreenshotOptions.allow_keyboard_wake`, and NEVER
-    /// the `before` screenshot's (a deliberately separate, undecided
-    /// question) — regardless of what the caller passes.
-    mod allow_keyboard_wake_after_tests {
+    /// `SlamOptions.allow_keyboard_wake_before`/`_after` must reach the
+    /// matching shot's `ScreenshotOptions.allow_keyboard_wake`
+    /// independently — each defaults `false` regardless of what the
+    /// other is set to.
+    mod allow_keyboard_wake_tests {
         use super::*;
 
         /// `before` (raw call 1) succeeds immediately — no escalation
@@ -1574,6 +1586,195 @@ mod tests {
             // Not opted in (the default) — falls back to the mouse-move
             // nudge instead, even though `after` is the shot escalating.
             assert_eq!(*escalations.lock().unwrap(), vec!["mouse"]);
+        }
+
+        /// Mirror of `stub_with_escalation_tracking`, but `before` (raw
+        /// calls 1-2) is the one that 503s twice then succeeds on the
+        /// 3rd; `after` (raw call 4) always succeeds immediately.
+        /// Isolates the assertions to `before` alone.
+        fn stub_with_before_escalation_tracking(
+            shot: Vec<u8>,
+        ) -> (PiKVMClient, Arc<StdMutex<Vec<&'static str>>>) {
+            let snapshot_calls: Arc<StdMutex<u32>> = Arc::new(StdMutex::new(0));
+            let escalations: Arc<StdMutex<Vec<&'static str>>> = Arc::new(StdMutex::new(Vec::new()));
+            let shot = Arc::new(shot);
+            let snapshot_calls_bg = snapshot_calls.clone();
+            let escalations_bg = escalations.clone();
+            let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+                let snapshot_calls = snapshot_calls_bg.clone();
+                let escalations = escalations_bg.clone();
+                let shot = shot.clone();
+                Box::pin(async move {
+                    if args.path.starts_with("/streamer/snapshot") {
+                        let mut i = snapshot_calls.lock().unwrap();
+                        *i += 1;
+                        if *i == 1 || *i == 2 {
+                            return Err(ClientError::Api(
+                                pikvm_mcp_kvmd_client::client::PiKVMApiError {
+                                    status: 503,
+                                    message: "Service Unavailable".to_string(),
+                                },
+                            ));
+                        }
+                        return Ok(ResponseBody::Image((*shot).clone()));
+                    }
+                    if args.path.starts_with("/hid/events/send_key") {
+                        escalations.lock().unwrap().push("keyboard");
+                        return Ok(ResponseBody::Empty);
+                    }
+                    if args.path.starts_with("/hid/events/send_mouse_relative") {
+                        if args.path.contains("delta_x=5") || args.path.contains("delta_x=-5") {
+                            escalations.lock().unwrap().push("mouse");
+                        }
+                        return Ok(ResponseBody::Empty);
+                    }
+                    if args.path == "/streamer" {
+                        return Ok(ResponseBody::Json(serde_json::json!({
+                            "ok": true,
+                            "result": { "streamer": { "source": { "online": true, "resolution": { "width": 4, "height": 4 } } } }
+                        })));
+                    }
+                    Ok(ResponseBody::Empty)
+                })
+            });
+            let config = PiKVMConfig {
+                source_online_wake_nudge: true,
+                ..PiKVMConfig::new("http://127.0.0.1:1", "admin", "pw")
+            };
+            (
+                PiKVMClient::with_request_fn(config, None, request_fn),
+                escalations,
+            )
+        }
+
+        #[tokio::test]
+        async fn allow_keyboard_wake_before_true_escalates_the_before_shot_with_a_keypress() {
+            let _guard = TEST_LOCK.lock().await;
+            clear_orientation_cache();
+            let shot = jpeg_encode(&[0u8; 3 * 4 * 4], 4, 4);
+            let (client, escalations) = stub_with_before_escalation_tracking(shot);
+            let result = slam_to_corner(
+                &client,
+                SlamOptions {
+                    pace_ms: Some(0),
+                    verify_motion: true,
+                    screenshot: Some(ScreenshotMode::Raw),
+                    corner: Some(Corner::TopLeft),
+                    bounds_hint: Some(None),
+                    allow_keyboard_wake_before: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(result.is_ok(), "expected recovery, got {result:?}");
+            assert_eq!(*escalations.lock().unwrap(), vec!["keyboard"]);
+        }
+
+        #[tokio::test]
+        async fn allow_keyboard_wake_before_false_escalates_the_before_shot_with_mouse_only() {
+            let _guard = TEST_LOCK.lock().await;
+            clear_orientation_cache();
+            let shot = jpeg_encode(&[0u8; 3 * 4 * 4], 4, 4);
+            let (client, escalations) = stub_with_before_escalation_tracking(shot);
+            let result = slam_to_corner(
+                &client,
+                SlamOptions {
+                    pace_ms: Some(0),
+                    verify_motion: true,
+                    screenshot: Some(ScreenshotMode::Raw),
+                    corner: Some(Corner::TopLeft),
+                    bounds_hint: Some(None),
+                    allow_keyboard_wake_before: false, // the default
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(result.is_ok(), "expected recovery, got {result:?}");
+            assert_eq!(*escalations.lock().unwrap(), vec!["mouse"]);
+        }
+
+        /// nixos-dev review: confirms the shared per-client
+        /// `last_keyboard_emit` clock produces the right cross-shot
+        /// behavior "for free" — if `before`'s escalation fires a real
+        /// `Space`, `after`'s escalation (moments later, the same run,
+        /// well within `KEYBOARD_WAKE_QUIET_WINDOW_MS`) must see that
+        /// recent emit and fall back to mouse-move, even though `after`
+        /// also has `allow_keyboard_wake_after: true` — a genuine second
+        /// `Space` within the window IS the dismiss-risk case.
+        #[tokio::test]
+        async fn a_before_keypress_makes_the_same_runs_after_escalation_fall_back_to_mouse() {
+            let _guard = TEST_LOCK.lock().await;
+            clear_orientation_cache();
+            let snapshot_calls: Arc<StdMutex<u32>> = Arc::new(StdMutex::new(0));
+            let escalations: Arc<StdMutex<Vec<&'static str>>> = Arc::new(StdMutex::new(Vec::new()));
+            let shot = Arc::new(jpeg_encode(&[0u8; 3 * 4 * 4], 4, 4));
+            let snapshot_calls_bg = snapshot_calls.clone();
+            let escalations_bg = escalations.clone();
+            let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+                let snapshot_calls = snapshot_calls_bg.clone();
+                let escalations = escalations_bg.clone();
+                let shot = shot.clone();
+                Box::pin(async move {
+                    if args.path.starts_with("/streamer/snapshot") {
+                        let mut i = snapshot_calls.lock().unwrap();
+                        *i += 1;
+                        // Both before (calls 1-2) and after (calls 4-5)
+                        // need their own escalation — only calls 3 and 6
+                        // succeed.
+                        if *i != 3 && *i != 6 {
+                            return Err(ClientError::Api(
+                                pikvm_mcp_kvmd_client::client::PiKVMApiError {
+                                    status: 503,
+                                    message: "Service Unavailable".to_string(),
+                                },
+                            ));
+                        }
+                        return Ok(ResponseBody::Image((*shot).clone()));
+                    }
+                    if args.path.starts_with("/hid/events/send_key") {
+                        escalations.lock().unwrap().push("keyboard");
+                        return Ok(ResponseBody::Empty);
+                    }
+                    if args.path.starts_with("/hid/events/send_mouse_relative") {
+                        if args.path.contains("delta_x=5") || args.path.contains("delta_x=-5") {
+                            escalations.lock().unwrap().push("mouse");
+                        }
+                        return Ok(ResponseBody::Empty);
+                    }
+                    if args.path == "/streamer" {
+                        return Ok(ResponseBody::Json(serde_json::json!({
+                            "ok": true,
+                            "result": { "streamer": { "source": { "online": true, "resolution": { "width": 4, "height": 4 } } } }
+                        })));
+                    }
+                    Ok(ResponseBody::Empty)
+                })
+            });
+            let config = PiKVMConfig {
+                source_online_wake_nudge: true,
+                ..PiKVMConfig::new("http://127.0.0.1:1", "admin", "pw")
+            };
+            let client = PiKVMClient::with_request_fn(config, None, request_fn);
+            let result = slam_to_corner(
+                &client,
+                SlamOptions {
+                    pace_ms: Some(0),
+                    verify_motion: true,
+                    screenshot: Some(ScreenshotMode::Raw),
+                    corner: Some(Corner::TopLeft),
+                    bounds_hint: Some(None),
+                    allow_keyboard_wake_before: true,
+                    allow_keyboard_wake_after: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(result.is_ok(), "expected recovery, got {result:?}");
+            // before: first-ever keyboard emit -> safe -> keyboard.
+            // after: a real keyboard emit landed moments ago (before's
+            // own escalation), well within the quiet window -> not safe
+            // -> mouse, even though allow_keyboard_wake_after is true.
+            assert_eq!(*escalations.lock().unwrap(), vec!["keyboard", "mouse"]);
         }
     }
 }

@@ -515,6 +515,10 @@ async fn main() {
         // pure mouse movement (no keys, no clicks), so mouse movement
         // alone cannot have changed that state.
         allow_keyboard_wake_after: true,
+        // Approved via the decision doc's addendum (nixos-dev review,
+        // 2026-08-30): same causal argument as `after` (nothing sends a
+        // key/click between the human's confirmation and this shot).
+        allow_keyboard_wake_before: true,
         verbose: true,
     })
     .await
@@ -605,6 +609,7 @@ async fn main() {
         // above this call) — see docs/corner-control-allow-keyboard-
         // wake-decision.md.
         allow_keyboard_wake_after: true,
+        allow_keyboard_wake_before: true,
         verbose: true,
     })
     .await

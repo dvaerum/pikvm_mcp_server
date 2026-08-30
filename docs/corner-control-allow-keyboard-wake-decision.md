@@ -196,15 +196,29 @@ handles post-wake frames elsewhere in this project (e.g. the
 confirmation-screenshot loop's own torn-frame retry), which is
 reassuring precedent but not a proof for this specific case.
 
-**Status**: proposal only, sent to nixos-dev for its own explicit
-review — not decided or implemented. If approved: extend
-`SlamOptions`/`AnchorRequest`'s single `allow_keyboard_wake_after` field
-into two independent fields (`_before`/`_after`, or rename to drop the
-`_after` suffix and add a sibling), threading `before`'s own escalation
-choice through the same call sites already touched, defaulting `false`
-everywhere except the two approved corner-control-smoke sites.
+**Cross-shot interaction, confirmed by construction (nixos-dev)**: if
+`before`'s escalation fires a real `Space` and `after`'s ALSO wants to
+escalate shortly after (well within the slam's own runtime, comfortably
+inside `KEYBOARD_WAKE_QUIET_WINDOW_MS`), `keyboard_wake_is_safe`'s
+shared per-client `last_keyboard_emit` clock correctly sees that recent
+emit and makes `after` fall back to mouse-move instead — even with
+`allow_keyboard_wake_after: true` also set. This is exactly right (a
+real second `Space` within the window genuinely IS the dismiss-risk
+case) and falls out of the existing per-client tracking for free, no
+extra logic needed. Unit-tested explicitly
+(`a_before_keypress_makes_the_same_runs_after_escalation_fall_back_to_mouse`)
+so this is a verified property, not an accidental one.
 
-Live verification, once the fix is actually exercised (needs `before`
-addressed, or a run where `before` happens to succeed on its own), is a
+**Status: approved and implemented.** `SlamOptions`/`AnchorRequest` now
+carry two independent fields, `allow_keyboard_wake_before` and
+`allow_keyboard_wake_after`, threaded through the same call sites as
+the original `after`-only change. Both `true` at exactly the two
+approved corner-control-smoke sites; `false` everywhere else. mover:
+355/355 (was 352, +3: `before` recovers via keypress, `before` false
+falls back to mouse, the cross-shot interaction). Full workspace green,
+clippy `-D warnings` + fmt clean.
+
+Live verification, once the fix is actually exercised (the first live
+attempt was blocked one step earlier than expected — see above), is a
 separate, later, deliberately-timed decision per the manager's standing
 instruction.

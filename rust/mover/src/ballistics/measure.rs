@@ -119,6 +119,7 @@ async fn measure_cell(
     let anchor_result = anchor_cursor(AnchorRequest {
         client: client.clone(),
         allow_keyboard_wake_after: false, // see docs/corner-control-allow-keyboard-wake-decision.md
+        allow_keyboard_wake_before: false, // see docs/corner-control-allow-keyboard-wake-decision.md
         corner: Some(Corner::TopLeft),
         guard: AnchorGuard::NoneCalibration,
         // ADR 0001: this module's own non-nudging capture — the same one
