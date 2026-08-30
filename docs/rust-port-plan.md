@@ -2587,3 +2587,38 @@ before the flag could ever have shipped enabled. Docs updated
 Zero incidents throughout — device confirmed safe by direct screenshot
 at every step. Reporting the honest negative result to nixos-dev and the
 manager now, not glossing over it.
+
+---
+
+**§30 confirmed WHY mouse-move likely can't substitute for a keypress
+here — a real, deliberate two-stage lock-screen state machine we already
+exploit, 2026-08-30 ~13:36.**
+
+nixos-dev's mechanistic hypothesis for §29's negative result: iPadOS
+treats pointer input as comparatively passive (this project already
+documents the on-screen pointer fading after idle) while keyboard input
+is a stronger "user present" signal to the OS's display management — a
+keypress plausibly clears a higher bar than a mouse nudge.
+
+Checked this against the codebase itself (reading only, zero live
+contact): confirmed, and it's stronger than a hypothesis.
+`mover/src/ipad_unlock/unlock_with_code.rs`'s own header documents Space
+used TWICE ON PURPOSE as the first two stages of the passcode-unlock
+sequence: "Space → wait: wakes the screen" then "Space → wait: dismisses
+the lock screen, brings up the passcode prompt." A real, deliberate
+two-stage state machine this project already exploits elsewhere, not an
+incidental side effect of "any second keypress in a window." `unlock_ipad`
+(unlock.rs) separately documents `Enter` as "the actual unlock key on
+iPadOS 26 lock screens" — its own distinct advancing role.
+
+Neither file documents any key proven wake-only / never-advancing. So the
+concrete open question for a fresh design pass is specifically: does such
+a key exist at all? Not resolved by anything in the codebase today — would
+need real investigation or careful live experimentation, not guessing.
+
+Updated docs/streamer-source-online-wake-nudge-plan.md's own header to
+lead with "core mechanism disproven, not just unverified" per nixos-dev's
+explicit request — a future reader skimming only the Design section
+could otherwise wrongly assume this is close to flippable. Committed
+`f6ba7a1`, pushed. No live hardware contact this round — pure code
+reading in response to a design question.
