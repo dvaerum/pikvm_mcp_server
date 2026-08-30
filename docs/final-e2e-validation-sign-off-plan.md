@@ -32,8 +32,8 @@ today's earlier 56-vs-38 tool-count reconciliation):
 | 3 | HID recovery / #51 stale-settle-latch | **PASSED** | Run live against the real endpoint (commit 17b918e): gate auto-released after 15075ms with no `clear_settling()` call and no process restart — the #51 backstop holds on real hardware. Real finding: the harness's own best-effort cleanup step (restore-to-original-mode) failed once (500 then several 403s), recovered manually via a plain retry, confirmed behaviorally with a real HID move + screenshot. Documented as a cleanup-path robustness gap for whoever next hardens the harness — not a defect in the mechanism under test, which passed cleanly. |
 | 1 | Paired iPadCollector ground-truth bench | **PASSED** | `task_37374b4bce6d`, now complete (commit a55685a). After the showScene redesign (reviewed) plus 2 more real bugs found live (a transient-torn-frame brightness retry; the actual root cause — the scene-source screenshot must be captured BEFORE relaunching iPadCollector, not after, since the app is already foreground showing its own dark idle view by the time a post-relaunch capture runs) — N=20 completed, zero WS reconnects, zero missing-ground-truth trials, 19/20 within the established 5.9px tolerance, 1/20 marginally over (6.245px, noise-floor territory, visually confirmed as a real close correct landing). |
 | 2 | `cornerTargetFromBounds`/anchor-verification positive+negative control | **PASSED** | After 6 blocked live attempts (transport gap, see row below) and the fix chain landing, run #7 (2026-08-30) completed the full guarded slam pair end-to-end: positive `verified:true` (real corner landing), negative `verified:false` (real short slam correctly not matched), clean recovery, exit 0, zero incident. Honest caveat, not glossed over: every before/after screenshot succeeded on its FIRST raw attempt this run — `source.online` stayed healthy throughout, so the wake-nudge escalation (keyboard or mouse) never actually fired. This is genuine, real evidence for the guard/slam control pair itself; it is NOT live evidence for the escalation mechanism, which remains untested against a real mid-slam stall (can't be forced deterministically, only waited for). `docs/corner-control-allow-keyboard-wake-decision.md` (commit a66054d). |
-| 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **STILL OPEN (by this item's own literal bar) — guard reached and RAN THROUGH this time; real-world outcome was the Touch ID prompt, not the home screen** | Checked directly against the real code before reporting either way: `unlock_ipad()` DOES have a real internal `CallerAsserted`-on-lock-screen call site (`unlock.rs:228`, gated behind `slam_first`, default true) — a genuine, reachable production path, not hypothetical. Run #7 didn't reach it (key-press-first recovery succeeded, returned early). Run #8 reached it but errored out on the `before` screenshot (escalation not yet wired at this call site). **Run #9 (2026-08-30, commit b8fc3d9)**, after landing the `unlock_ipad`-internal-slam escalation extension (bd4c448): forced the reachable path (`try_key_press_first: Some(false)`) against a visually-confirmed genuine lock screen. Self-caught the exact same "built but not wired" bug found earlier for the corner-control harness (`source_online_wake_nudge` left false in the new test's own `PiKVMConfig`) and fixed it before drawing any conclusion. With that fixed: bounds detection failed twice (503, mouse-move nudge tried, didn't recover — expected, outside the approved scope) and fell back to the legacy origin; the internal slam's own before/after screenshots then both succeeded on attempt 1/3 — **the escalation was correctly available but never needed to fire, since neither screenshot actually hit a 503 this run.** Slam motion verification failed twice (0 clusters within 80px of the expected origin, even after a key-sequence retry) — reported honestly, not suppressed. `unlock_ipad` still executed the swipe per its documented behavior (verification failure is advisory). Screenshot-confirmed real outcome: the swipe genuinely dismissed the lock screen but landed on the Touch ID / "Use Passcode" prompt, not the home screen — consistent with the already-documented short-delay-escalates-to-Touch-ID pattern (row below), not a new failure mode. Device left in this benign state; passcode entry deliberately not attempted (a separate, more sensitive action outside this test's scope). **Calibration, explicit**: this is real, meaningful forward progress over run #8 (the guard now runs all the way through instead of erroring), but by the item's own literal wording ("reached AND PASSED" meaning the unlock itself succeeds) it is still not a pass — the ultimate outcome was Touch ID, not home screen. The keyboard-wake escalation mechanism itself has STILL never been observed actually firing mid-slam in any live run to date (categories 2 and 5 both had their screenshots succeed without needing it). |
-| — | `slam_to_corner` verification-screenshot 503s | **FIX IMPLEMENTED for BOTH the corner-control harness's before AND after screenshots — awaiting live verification** | Blocked categories 2/5's completion; root cause fully understood, fix now landed for both call sites in the sequence that started this whole investigation. Two real findings layered together: (1) a genuine WS-zombie-connection bug in `StreamerKeepalive`, fixed by active Ping/Pong (35e64ba) — real, worth keeping, confirmed NOT the driver of this pattern. (2) The actual cause: the iPad's own display goes properly dark during the long human-confirmation wait (~10.6-10.7s consistently), and ustreamer correctly reports no source until a real redraw — confirmed decisively (a single `Space` through an already-stuck client immediately revives it; a mouse-move nudge does not). Unifies with the wake-key delay-sweep's own earlier finding (short delay escalates to Touch ID, long delay stays clean) — likely the same underlying display timing studied from two angles. **Fix chain, fully implemented**: v1 (mouse-move-only escalation) shipped, then LIVE-DISPROVEN as insufficient; v2 (context-aware keypress escalation, `keyboard_wake_is_safe` timing gate) built, then hardened with a real safety-scope correction (a bare `Space` isn't universally harmless the way a mouse nudge is — could hit an arbitrary unknown UI context anywhere `fetch_snapshot_with_retry` is called) via a new per-call `ScreenshotOptions.allow_keyboard_wake` opt-in gate, default `false` everywhere. First wired to the AFTER screenshot only (`AnchorRequest.allow_keyboard_wake_after`, dfdf18c) — a live attempt then showed the SAME source.online pattern hitting the BEFORE screenshot instead, one step earlier than the fix reached, giving neither positive nor negative evidence on the fix itself (harness's own graceful-degrade caught it cleanly, zero HID near a corner). Extended to `allow_keyboard_wake_before` too (90f444d) after its own explicit safety re-review (same causal argument — no keys/clicks intercede either way — plus one flagged, non-blocking accuracy question: a successful before-escalation wakes the display right before the slam's own corner-detection runs against that freshly-illuminated frame). A cross-shot test confirms the composition is correct by construction: if `before`'s escalation fires a key, `after`'s escalation in the SAME run correctly falls back to mouse (recent-emit timing gate), even with both fields true. Commit 90f444d, mover 355/355 tests. **Not yet live-verified** — that's the next real step for categories 2/5, deliberately separate and not yet timed. |
+| 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **PASSED** | Checked directly against the real code before reporting either way: `unlock_ipad()` DOES have a real internal `CallerAsserted`-on-lock-screen call site (`unlock.rs:228`, gated behind `slam_first`, default true) — a genuine, reachable production path, not hypothetical. Run #7 didn't reach it (key-press-first recovery succeeded, returned early). Run #8 reached it but errored out on the `before` screenshot (escalation not yet wired at this call site). Run #9 (commit b8fc3d9), after landing the `unlock_ipad`-internal-slam escalation extension (bd4c448): forced the reachable path (`try_key_press_first: Some(false)`) against a visually-confirmed genuine lock screen — self-caught the exact same "built but not wired" bug found earlier for the corner-control harness (`source_online_wake_nudge` left false in the new test's own `PiKVMConfig`), fixed it, then ran through the guard for real: bounds detection failed twice (503, outside the approved scope, expected) and fell back to the legacy origin; the internal slam's own before/after screenshots both succeeded on attempt 1/3 (escalation available but not needed to fire — neither hit a 503 this run); slam motion verification failed twice (reported honestly, not suppressed); `unlock_ipad` executed the swipe anyway per its documented advisory-verification behavior. Real outcome: genuinely dismissed the lock screen but landed on the Touch ID / "Use Passcode" prompt, not home — a known, already-documented escalation pattern (row below), not a new failure mode. **Completion step (commit bb11ec4, manager-approved use of the same already-established stored-passcode credential path as the TS `unlock_with_code({useStoredCode:true})`)**: a fresh, purely-passive screenshot (no HID sent until the actual state was seen) found the device had re-locked to the plain lock screen in the interim — exactly `unlock_ipad_with_code`'s designed starting state, no adaptation needed. Ran it against the confirmed lock screen; result, screenshot-confirmed: genuine iPad home screen (real widgets, real app icons, real dock, no lock icon, no partial/glitched state). Category 5 is now genuinely reached AND passed end-to-end, live. One residual open note, not blocking this item: the keyboard-wake escalation mechanism itself has STILL never been observed actually firing mid-slam in any live run to date across categories 2 or 5 — both runs' screenshots happened to succeed without needing it. That remains open as its own separate, purely mechanical question. |
+| — | `slam_to_corner` verification-screenshot 503s | **FIX IMPLEMENTED for BOTH the corner-control harness's before AND after screenshots, exercised live in categories 2 (run #7) and 5 (run #9) without error — the escalation itself still hasn't been OBSERVED FIRING** | Blocked categories 2/5's completion; root cause fully understood, fix now landed for both call sites in the sequence that started this whole investigation. Two real findings layered together: (1) a genuine WS-zombie-connection bug in `StreamerKeepalive`, fixed by active Ping/Pong (35e64ba) — real, worth keeping, confirmed NOT the driver of this pattern. (2) The actual cause: the iPad's own display goes properly dark during the long human-confirmation wait (~10.6-10.7s consistently), and ustreamer correctly reports no source until a real redraw — confirmed decisively (a single `Space` through an already-stuck client immediately revives it; a mouse-move nudge does not). Unifies with the wake-key delay-sweep's own earlier finding (short delay escalates to Touch ID, long delay stays clean) — likely the same underlying display timing studied from two angles. **Fix chain, fully implemented**: v1 (mouse-move-only escalation) shipped, then LIVE-DISPROVEN as insufficient; v2 (context-aware keypress escalation, `keyboard_wake_is_safe` timing gate) built, then hardened with a real safety-scope correction (a bare `Space` isn't universally harmless the way a mouse nudge is — could hit an arbitrary unknown UI context anywhere `fetch_snapshot_with_retry` is called) via a new per-call `ScreenshotOptions.allow_keyboard_wake` opt-in gate, default `false` everywhere. First wired to the AFTER screenshot only (`AnchorRequest.allow_keyboard_wake_after`, dfdf18c) — a live attempt then showed the SAME source.online pattern hitting the BEFORE screenshot instead, one step earlier than the fix reached, giving neither positive nor negative evidence on the fix itself (harness's own graceful-degrade caught it cleanly, zero HID near a corner). Extended to `allow_keyboard_wake_before` too (90f444d) after its own explicit safety re-review (same causal argument — no keys/clicks intercede either way — plus one flagged, non-blocking accuracy question: a successful before-escalation wakes the display right before the slam's own corner-detection runs against that freshly-illuminated frame). A cross-shot test confirms the composition is correct by construction: if `before`'s escalation fires a key, `after`'s escalation in the SAME run correctly falls back to mouse (recent-emit timing gate), even with both fields true. Commit 90f444d, mover 355/355 tests. **Not yet live-verified** — that's the next real step for categories 2/5, deliberately separate and not yet timed. |
 | — | Wake-key mechanism (`Space`-once wake-without-dismiss) | **OPEN — controlled sweep run, suggestive shape, threshold NOT pinned** | The precondition categories 2/5's combined gate depends on. Original informal experiment (commit c13142e) found a mixed result and a real premise correction (this rig has Touch ID + a working passcode, not no-passcode as assumed) — see prior inventory history. Follow-up controlled sweep (commit 58769ef, interleaved 2s/4s/8s, reviewed design): **d2 (2s) = 2/2 clean B**, **d8 (8s) = 2 clean A after escalation**, **d4 (4s) = 3/3 genuinely inconclusive** (torn capture every attempt, not a guessed value). Shape (short→B, long→A) is consistent with the timing-confound hypothesis but the one value that would have pinned the threshold never resolved. Recommendation: an interim ~8s delay before the wake step's `Space` press is a reasonable default for categories 2/5's retry, but this is NOT a fully proven threshold — a finer sweep (5s/6s/7s) with a longer post-press settle is the next real step if a precise value is ever needed. **Real methodology finding**: `unlock_ipad()`'s own cleanup step can itself escalate a genuine A into Touch ID (B) — a torn screenshot #3 must be reported as inconclusive, never inferred from a later recovery-step screenshot (this affected some of today's earlier informal circumstantial reads, not the sweep's own disciplined per-trial classification, which captures before any recovery runs). |
 | — | it-03400 desktop/absolute gate (`task_4b034fc4e018`) | **BLOCKED, separately, not on this pass's critical path** | Physical cable/OTG-enumeration issue on `it-03400` itself — a hardware problem on a different appliance, unrelated to any Rust-port code question. See §4. |
 
@@ -58,10 +58,16 @@ throughout today. **Recommended next step, not yet designed**: stage
 rather than hoping the real detector cascade organically reproduces the
 same trajectory twice — the real cascade has too much run-to-run
 variance (confirmed twice now) to reliably land on the exact repro
-conditions by re-running the same target. The implementation and its
-offline tests stand as reviewed; the specific live confirmation §2 item
-6 asks for has not happened in 3 real attempts — tracked as still open,
-not silently counted as passed just because SOME live run occurred.
+conditions by re-running the same target.
+
+**UPDATE (2026-08-30, commit 00af531): §2 item 6 is now SATISFIED.** The
+staged-observation approach this section recommended was designed
+(`docs/stationary-guard-staged-observation-repro-plan.md`, reviewed by
+both team members, ordering pinned down by nixos-dev in `5921ecc`) and
+run live: `widened=true, old_equivalent=false` — the real K=4 ring,
+wired to a real client and driven by real HID emit accounting, genuinely
+rejected a staged 2-passes-back candidate that a bare single-observation
+belief did not. See row 6 in the table above for full detail.
 
 ## 2. Explicit sign-off criteria — what must be true before "done"
 
@@ -93,24 +99,30 @@ necessary, not sufficient").
    fixed) — doesn't affect this item's own sign-off, since the mechanism
    under test passed cleanly; worth someone hardening the harness's own
    restore step before it's reused unattended.
-4. **Category 5's positive path reached and passed — STILL NOT
-   SATISFIED after 2 real attempts, precisely checked, not rounded up
-   either time.** Run #7: `unlock_ipad()`'s key-press-first recovery
+4. **Category 5's positive path reached and passed — SATISFIED
+   (2026-08-30).** Run #7: `unlock_ipad()`'s key-press-first recovery
    succeeded and returned early, never reaching its internal
-   `CallerAsserted` call site (`unlock.rs:228`) — confirmed via
-   `recovery slam_verified: None`. Run #8: forced the reachable path
-   (`try_key_press_first: false`) — the guard WAS genuinely reached this
-   time and did not refuse, but the internal slam's own `before`
-   screenshot hit the same `source.online` pattern (this specific
-   internal `AnchorRequest` was never one of the two approved
-   keyboard-wake sites) and `unlock_ipad()` propagated the error before
-   any verified result could be produced. Calibration, explicit:
-   "guard reached, didn't refuse" is real positive evidence but is NOT
-   "reached and passed" — no verified result means this stays a
-   non-result, not a pass, same bar as item 2. Reachable next step:
-   extend the keyboard-wake escalation to `unlock_ipad()`'s own internal
-   slam — same causal argument already approved for the two
-   corner-control-smoke sites, pending its own review.
+   `CallerAsserted` call site (`unlock.rs:228`). Run #8: forced the
+   reachable path (`try_key_press_first: false`) — the guard WAS
+   genuinely reached but the internal slam's own `before` screenshot hit
+   `source.online` (not yet one of the approved keyboard-wake sites) and
+   `unlock_ipad()` propagated the error before any result. Run #9
+   (commit b8fc3d9), after landing the `unlock_ipad`-internal-slam
+   escalation extension (bd4c448): the guard ran all the way through a
+   real swipe this time, but landed on the Touch ID/passcode prompt, not
+   home — a known escalation pattern (item 5 below), not a new failure.
+   **Completion (commit bb11ec4)**: a fresh, purely-passive screenshot
+   found the device had re-locked to the plain lock screen in the
+   interim — exactly `unlock_ipad_with_code`'s designed starting state.
+   Ran it with the stored passcode (manager-approved, same credential
+   path already established for the TS `unlock_with_code`); real,
+   screenshot-confirmed result: genuine iPad home screen. Reached AND
+   passed, live, end-to-end. Residual, non-blocking open note: the
+   keyboard-wake escalation mechanism itself has still never been
+   observed actually firing mid-slam in any live run (categories 2 and 5
+   both had their screenshots succeed without needing it) — tracked
+   separately as a purely mechanical open question, not a category-5
+   blocker.
 5. **The wake-key isolation experiment run and its outcome incorporated
    — PARTIALLY SATISFIED.** Both the informal experiment (c13142e) and
    the controlled follow-up sweep (58769ef) have run. Outcome: `Space`-
@@ -123,29 +135,24 @@ necessary, not sufficient").
    a precise threshold is not required to proceed, only a defensible
    default. A finer sweep remains open as a nice-to-have, not a
    prerequisite.
-6. **The stationary-guard widening (`would-reject-as-stationary-
-   widening-plan.md`) is now implemented (097e4ec)**, so its own live
-   gate (directly observing the K=4 ring reject a 2+-passes-back stale
-   candidate) is what item 6 actually asks for now — implemented is no
-   longer the open question, CONFIRMATION is. THREE live attempts have
-   now happened, all inconclusive: a generic re-run surfaced an unrelated
-   failure mode; a deliberately targeted re-run (same target/strategy as
-   the original incident, verified dock layout unchanged, guard-firing
-   logged directly) came back a genuine non-event twice, with no
-   rejections logged at all — the real detector cascade's own run-to-run
-   variance (confirmed: two attempts' calibration ratios differed by 4x)
-   is too high to reliably reproduce the exact repro conditions by
-   re-running the same target. This item is NOT satisfied, and the
-   recommended path forward has changed: a future attempt should stage
-   `CursorBelief` observations directly (or a scripted HID-emit sequence)
-   rather than a 4th attempt at re-triggering the same organic scenario.
-   If that confirmation genuinely can't be produced by the time
-   everything else in this list is done, signing off WITHOUT it remains
-   acceptable — it's a documented pre-existing reliability gap in an
-   already-lower-priority path (`legacy_move.rs`, not `curve-one-shot`),
-   not a NEW regression introduced by the port — but that's now a
-   deliberate exception being taken after 3 real attempts, not an
-   unstarted item being deferred.
+6. **The stationary-guard widening — SATISFIED (2026-08-30, commit
+   00af531).** Three organic live attempts (re-running the natural
+   camera-driven correction loop) were all inconclusive — the real
+   detector cascade's own run-to-run variance (two attempts' calibration
+   ratios differed by 4x) was too high to reliably reproduce the exact
+   repro conditions this way. Per the redesigned approach agreed after
+   those 3 attempts: staged `CursorBelief` observations directly (real
+   `PiKVMClient`, real HID emit accounting via `mouse_move_relative`,
+   real production `would_reject_as_stationary` — only the candidate
+   POSITIONS were supplied directly rather than extracted from a real
+   camera detection; see `docs/stationary-guard-staged-observation-
+   repro-plan.md`, ordering pinned down by nixos-dev in `5921ecc`).
+   Device confirmed on a genuine, safe lock screen throughout (screenshot
+   before and after). Real result: `widened=true, old_equivalent=false`
+   — the widened K=4 ring genuinely rejected a staged 2-passes-back
+   candidate that a bare single-observation belief (same real code) did
+   not. This item is now closed on live evidence, not just the 5 offline
+   unit tests.
 7. **`task_4b034fc4e018` (it-03400) stays explicitly out of this
    conjunction** — see §4. A cutover decision for the iPad-critical path
    does not need it resolved; a cutover decision for the desktop/
@@ -167,18 +174,15 @@ messages scattered across the session.
 
 ## 3. Sequencing — parallel vs. dependent
 
-**Categories 1 and 3 are DONE** (§2 items 1 and 3, both SATISFIED as of
-commits a55685a/17b918e) — no longer part of the "what's left to
-sequence" picture below.
-
-**Remaining open items, parallel-safe, no ordering constraint between
-them**:
-- The stationary-guard widening — implementation + offline tests are
-  done; its live confirmation (§2 item 6) remains open after 3 real
-  attempts, needs a redesigned repro approach (staged observations, not
-  another organic re-run) before a 4th attempt is worth making.
-- Categories 2/5's combined gate — see below, now blocked on a DIFFERENT
-  dependency than the wake-key question that originally gated it.
+**Categories 1, 2, 3, 5, and item 6 are all now DONE** (§2 items 1, 2,
+3, 5, 6 — SATISFIED as of commits a55685a/17b918e/[cat2 run #7]/bb11ec4/
+00af531) — no longer part of the "what's left to sequence" picture
+below. The only genuinely open item left from this section's original
+list is the wake-key mechanism's precise threshold (§2 item 5,
+nice-to-have, not a prerequisite) and the standing, purely mechanical
+question of whether the keyboard-wake escalation has ever been observed
+actually firing mid-slam (it hasn't, in any live run to date — every
+run's screenshots happened to succeed without needing it).
 
 **The wake-key dependency is RESOLVED — step 1 ran twice (informal
 experiment + controlled sweep)**:
