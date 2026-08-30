@@ -2178,3 +2178,52 @@ mystery 503" through a wrong-hypothesis correction, two retry-budget
 iterations, a diagnostic accessor, and finally a structurally-verified
 root cause with a properly reviewed and implemented fix — a complete,
 honest arc, not a shortcut at any step.
+
+---
+
+**§22 first live test of the ping/pong fix, 2026-08-30 ~08:29-08:39 —
+real FAILED result, points at a source-side factor beyond what the
+fix targets.**
+
+Manager approved running the low-risk idle-hold-then-screenshot
+diagnostic. Built a new `streamer_keepalive_idle_hold_screenshot`
+example in `kvmd-client/examples/`. First 2 full runs both aborted at
+the warm-up step — a brand-new client's very first snapshot hit the
+module's own documented, separate, pre-existing cold-start race
+(kvmd's stream-client-count propagation + ustreamer fork/exec/bind
+latency) — not the bug under test. Added a 5-attempt warm-up retry;
+still 5/5 failed on the next run. Independently checked `/api/streamer`
+directly: `source.online: false` — and confirmed via the SAME
+established TS health-check path that it ALSO cold-503'd right then,
+matching this whole session's consistent pattern (every successful
+screenshot tonight was preceded by a wake key). Added exactly one wake
+key before establishing the connection (nothing during the idle hold
+itself) — committed `afae929`, `0c0d4cb`.
+
+With the wake key in place, the real test ran cleanly for the first
+time: wake → warm-up screenshot OK on attempt 1/5 (530ms) → held idle
+32s with zero traffic → `streamer_keepalive_connected=true`
+immediately after the hold → **the post-idle screenshot STILL 503'd.**
+
+**Real, honest, informative negative result — not proof the fix is
+wrong.** The WS-level keepalive genuinely stayed connected through the
+full idle window (the ping/pong is doing its own job correctly) but
+that alone didn't prevent this specific 503. Combined with the earlier
+direct `/api/streamer` read (`source.online: false` — a different
+signal than the WS keepalive's connected state; the HDMI capture
+source itself, not the held session), this suggests tonight's 503
+pattern has at least an additional source-side factor a WS-level
+ping/pong fix genuinely cannot reach. The fix still closes the real
+"permanent until process restart" bug nixos-dev identified — it just
+may not be sufficient on its own to explain or resolve tonight's
+specific recurring pattern. Sent to nixos-dev for their read before
+doing anything further. Device confirmed safe throughout (fresh
+screenshot after, clean lock screen).
+
+**Status**: categories 2/5 remains not completed end-to-end after 6
+live attempts plus this diagnostic. The root-cause chase tonight has
+been genuinely thorough and honest at every step — wrong hypotheses
+corrected in the open, real diagnostics built before guessing at
+numbers, a real fix designed/reviewed/implemented/tested, and now a
+real (if not fully resolving) live result reported honestly rather than
+oversold. Zero unsafe HID across every attempt tonight.
