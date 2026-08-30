@@ -250,6 +250,13 @@ async fn main() {
     let config = PiKVMConfig {
         verify_ssl: false,
         proxy_url,
+        // The top-level wake-nudge escalation gate — the guarded slam's
+        // own `allow_keyboard_wake_after: true` (below) has NO effect at
+        // all unless this is also on. See docs/streamer-source-online-
+        // wake-nudge-plan.md + docs/corner-control-allow-keyboard-wake-
+        // decision.md for the full reasoning behind enabling this here
+        // specifically.
+        source_online_wake_nudge: true,
         ..PiKVMConfig::new(host, username, password)
     };
     let client = Arc::new(PiKVMClient::new(config, None));
