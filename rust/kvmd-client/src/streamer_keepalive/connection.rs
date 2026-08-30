@@ -6,12 +6,43 @@
 //! gate; `keepalive`'s state-machine logic is unit-tested via the
 //! injected `ConnectFn` seam instead, which is where the actual
 //! reconnect/backoff/idempotency risk lives.
+//!
+//! `run_liveness_loop` (2026-08-30, docs/streamer-keepalive-liveness-
+//! ping-plan.md) actively probes the held connection with a periodic
+//! `Ping`/`Pong` cycle, instead of the old purely-passive "drain reads
+//! until natural EOF" — a held connection with no active probe can go
+//! silently dead (an intermediate NAT/proxy drops the mapping without
+//! ever delivering a close frame) while `StreamerKeepalive::connected()`
+//! keeps reporting `true` forever, since `ensure_started()` never
+//! re-checks an already-`connected()` session. The probe's actual
+//! staleness DECISION is factored into `liveness::is_stale` (pure,
+//! unit-tested); this loop's real socket I/O stays untested here, per
+//! this file's own established convention above.
 
 use std::sync::Arc;
-use tokio::sync::oneshot;
+use std::time::{Duration, Instant};
 
+use futures_util::{SinkExt, StreamExt};
+use tokio::sync::oneshot;
+use tokio_tungstenite::tungstenite::Message;
+
+use super::liveness::is_stale;
 use super::tls::build_tls_connector;
 use super::types::{ConnectFn, ConnectResult, StreamerKeepaliveConfig, WsSession};
+
+/// How often to send a `Ping` on the held connection. Well within kvmd's
+/// own documented ~10s ustreamer idle-stop window (this file's parent
+/// module doc) — the only real number available to anchor against.
+/// Honestly uncalibrated beyond that anchor; flagged for future
+/// real-world tuning, same posture as every other timing constant
+/// touched this session.
+const PING_INTERVAL_MS: u64 = 5_000;
+/// How long without ANY inbound frame (not just a `Pong` — any
+/// successful receive proves the path is alive) before the connection
+/// is presumed dead. Checked once per `PING_INTERVAL_MS` tick, so
+/// worst-case detection latency is roughly one interval plus one
+/// timeout (~10s).
+const PONG_TIMEOUT_MS: u64 = 5_000;
 
 pub(super) fn real_connector() -> ConnectFn {
     Arc::new(|config: StreamerKeepaliveConfig| Box::pin(real_connect(config)))
@@ -89,17 +120,57 @@ async fn real_connect(config: StreamerKeepaliveConfig) -> ConnectResult {
 
     let (close_tx, close_rx) = oneshot::channel();
     tokio::spawn(async move {
-        use futures_util::StreamExt;
-        let (_write, mut read) = ws_stream.split();
-        while read.next().await.is_some() {
-            // Drain incoming frames — this connection exists purely to
-            // keep kvmd's stream-client count above zero, matching the TS
-            // `ws.on('message', () => {})` drain. No data is consumed.
-        }
-        let _ = close_tx.send(());
+        run_liveness_loop(ws_stream, close_tx).await;
     });
 
     Ok(WsSession { closed: close_rx })
+}
+
+/// Drains incoming frames (any successful receive proves the path is
+/// alive — matches the old drain's original job of keeping kvmd's
+/// stream-client count above zero) while actively probing liveness with
+/// a periodic `Ping`, closing (firing `close_tx`) as soon as EITHER the
+/// connection naturally ends (an `Err`/`None` read) OR the active probe
+/// decides it's gone stale (`liveness::is_stale`) OR a `Ping` send
+/// itself fails outright (a write failing is stronger, faster evidence
+/// of death than waiting for the next timeout tick).
+async fn run_liveness_loop(
+    ws_stream: tokio_tungstenite::WebSocketStream<
+        tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
+    >,
+    close_tx: oneshot::Sender<()>,
+) {
+    let (mut write, mut read) = ws_stream.split();
+    let mut last_proof_of_life = Instant::now();
+    let mut ping_interval = tokio::time::interval(Duration::from_millis(PING_INTERVAL_MS));
+    // The first tick fires immediately — skip it so the first real ping
+    // waits a full interval, matching the natural cadence of every tick
+    // after it (tokio::time::interval's documented first-tick behavior).
+    ping_interval.tick().await;
+    loop {
+        tokio::select! {
+            msg = read.next() => {
+                match msg {
+                    Some(Ok(_)) => {
+                        // Any successful receive (Pong or otherwise) is
+                        // proof of bidirectional liveness for this
+                        // failure class — see the plan doc's Q2.
+                        last_proof_of_life = Instant::now();
+                    }
+                    Some(Err(_)) | None => break, // natural close/error, unchanged from before this fix
+                }
+            }
+            _ = ping_interval.tick() => {
+                if is_stale(last_proof_of_life, Instant::now(), Duration::from_millis(PONG_TIMEOUT_MS)) {
+                    break; // presumed dead — same close signal as a natural EOF
+                }
+                if write.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break; // a failed send is itself immediate evidence of death
+                }
+            }
+        }
+    }
+    let _ = close_tx.send(());
 }
 
 /// CONNECT-tunnels through an HTTP(S) proxy, then TLS-wraps the resulting

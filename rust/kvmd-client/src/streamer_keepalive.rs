@@ -40,13 +40,18 @@
 //!
 //! Split into `types` (config/handle/DI-seam types shared by the other
 //! two), `keepalive` (the `StreamerKeepalive` reconnect/backoff state
-//! machine + its tests), `connection` (the real `/api/ws` networking),
-//! and `tls` (crypto-provider install + the self-signed-cert bypass) —
-//! idiomatic Rust 2018+ module layout, one responsibility per file,
-//! rather than one file mirroring the single TS source.
+//! machine + its tests), `connection` (the real `/api/ws` networking,
+//! including an active ping/pong liveness probe — see its own header
+//! comment for why passive close-detection alone isn't enough), `tls`
+//! (crypto-provider install + the self-signed-cert bypass), and
+//! `liveness` (the pure staleness DECISION `connection`'s ping/pong loop
+//! feeds — no networking, unit-tested directly) — idiomatic Rust 2018+
+//! module layout, one responsibility per file, rather than one file
+//! mirroring the single TS source.
 
 mod connection;
 mod keepalive;
+mod liveness;
 mod tls;
 mod types;
 

@@ -167,19 +167,61 @@ categories-2/5 guarded slam itself — no need to risk a live slam to
 validate this fix; a standalone idle-hold-then-screenshot check
 exercises exactly the mechanism in question with less blast radius.
 
-## Open questions for review
+## Review (nixos-dev) — resolved, implement as reviewed
 
-1. Is 5s/5s (ping interval / pong timeout) reasonable, or should it be
-   tighter/looser given kvmd's ~10s idle-stop window is the only real
-   anchor available?
-2. Is resetting `last_proof_of_life` on ANY inbound frame (not just
-   `Pong`) the right call, or should only `Pong` count (stricter,
-   slower to reset, more directly tests the ping mechanism itself
-   rather than general traffic)?
-3. Is the untested-real-IO / tested-pure-decision split the right
-   scope, or does this specific fix warrant a fuller fake-stream test
-   seam given how much today's live time went into chasing this?
-4. Best-effort `write.send(Ping)` (ignoring the send error) — should a
-   failed SEND itself immediately count as evidence of death (skip
-   waiting for the next timeout tick), rather than waiting for the
-   pong-timeout to also expire?
+**Framing point, added per review, not a design change**: this fix
+BOUNDS the zombie-connection problem, it doesn't fully eliminate 503s.
+kvmd's own idle-stop timer starts from whenever the connection actually
+died on ITS side, not from whenever this side detects it — in the
+worst case (our ~10-15s detection+reconnect window), kvmd could still
+idle-stop ustreamer before reconnection completes, so a screenshot
+could still occasionally 503 even post-fix. The real, large
+improvement: TODAY, once zombied, `ensure_started()`'s own
+"no-op if `connected()`" check means a zombie connection can NEVER
+self-heal for the rest of the process's life — every future
+`ensure_started()` call sees `connected()==true` and does nothing, so
+today's failure mode is effectively PERMANENT until process restart.
+The fix makes it SELF-HEALING within a bounded ~10-15s window instead.
+That's the real value — a rare 503 still occurring post-fix isn't the
+fix failing, it's the bound working as designed.
+
+**Also note**: `StreamerKeepalive` is core `PiKVMClient` infrastructure,
+not harness-only test scaffolding — this fix affects every future real
+deployment once the port ships, not just today's live-testing session.
+
+1. **5s/5s confirmed reasonable** — anchoring against kvmd's ~10s
+   window is the only real number available; comfortably clears it.
+2. **Reset on ANY inbound frame confirmed** — any successful receive is
+   reasonable proof of bidirectional liveness for this failure class (a
+   NAT/proxy dropping the whole mapping), no reason to require the
+   stricter Pong-only signal.
+3. **Test scope confirmed as proposed** — matches the module's existing
+   convention; the live-verification path is well-scoped and low-risk,
+   not worth a fuller fake-stream seam tonight.
+4. **Failed Ping send = immediate evidence of death.** Fire `close_tx`
+   right on a failed `write.send()`, don't wait for the next tick's
+   staleness check — a write failing is a stronger, faster signal than
+   a read-side timeout. Only tightens the already-broken/write-fails-
+   immediately case; the harder silent-NAT-drop case still needs the
+   full timeout cycle.
+
+## Implementation
+
+Done, as reviewed. New `streamer_keepalive::liveness` module (`is_stale`,
+pure, 5 unit tests). `connection.rs`'s `real_connect` now keeps both
+split WS halves and runs `run_liveness_loop`: a periodic 5s `Ping`,
+staleness checked against a 5s pong-timeout via `is_stale`, any inbound
+frame (not just `Pong`) resets the liveness clock, a failed `Ping` send
+is treated as immediate death (no wait for the next tick). All three
+death paths (natural EOF, staleness, failed send) fire the same
+`close_tx` the old passive drain loop already used — `keepalive.rs`'s
+reconnect/backoff state machine is completely untouched.
+
+Full workspace: 65/65 kvmd-client (60 existing + 5 new liveness),
+350/350 mover, 966/966 total across all crates, zero failures. Clippy
+`-D warnings` and fmt clean across the whole workspace.
+
+Not yet exercised live. Per the plan's own test-plan section, the right
+next live check is the low-risk idle-hold-then-screenshot diagnostic
+(not risking an actual guarded slam) — holding on that until directed,
+same live-hardware discipline as the rest of tonight.
