@@ -1719,3 +1719,52 @@ action reached the device (HID was already confirmed offline), but the
 sequencing was wrong and was owned as such. No further HID sends after
 noticing. iPad left in a confirmed-safe, unlocked, real home-screen
 resting state.
+
+---
+
+**§11 categories 2/5 fresh-session attempt, 2026-08-30 ~07:00-07:06 —
+correction to §10: HID was never actually down; real issue is capture
+reliability, 2/2 new non-events for a different reason.**
+
+pikvm-nixos peer read kvmd's own source: `keyboard.online`/`mouse.online`
+in `/api/hid` are only ever `True` in the split-second right after a real
+send, `False` any other time polled idle — designed behavior, not a
+stale/broken state. §10's conclusion ("HID genuinely offline") was wrong
+— a real instance of trusting a flag's absolute value instead of its
+transient nature, caught by a peer reading the actual source rather than
+inferring from repeated cold polls. Confirmed directly before proceeding:
+sent a relative mouse move and diffed before/after screenshots — the
+pointer visibly appeared exactly where expected. HID is genuinely fine.
+
+Ran the v8 confirmation harness twice this morning. **Attempt 1**:
+streamer showed `online=false` right after lock (a real signal, unlike
+last night) — but the confirmation screenshot itself was a torn/
+corrupted capture (thin dark strip + solid green fill), exactly the
+artifact the harness's own header comment already documented once
+happening live. Correctly did not confirm; clean fail-closed abort, zero
+HID near the corner. A follow-up wake+screenshot OUTSIDE the harness
+(pure diagnostic) got back a genuine, clean, unambiguous lock screen —
+proving the LOCK itself worked; only the harness's capture at that exact
+moment was corrupted. **Attempt 2**: tried to use the harness's
+"already locked" fast path since the device was still genuinely locked,
+but its own baseline screenshot hit a 503 so it fell through to the full
+lock+wake cycle again. Result: another torn/corrupted frame (partial
+correct content + black side-bars + green fill). Same correct
+non-confirmation, clean abort, and a follow-up screenshot again showed a
+genuine clean lock screen.
+
+**Net for today**: 4/4 non-clean confirmation attempts across the whole
+session (2 last night — over-shoot to unlocked, HID timing-adjacent; 2
+this morning — pure capture corruption, lock itself fine both times) —
+two genuinely different failure modes, not a repeat of the same bug.
+Device safe throughout all 4: zero HID ever reached the corner-slam
+region, confirmed via fresh screenshots after every attempt. Not
+attempting a 5th blind run. Recommendation sent to the manager: harden
+the capture step to auto-detect a torn/solid-fill frame (large
+contiguous flat-color region) and retry before ever presenting to the
+human, instead of relying solely on the human veto — a real design
+change, to be written up and reviewed with nixos-dev like everything
+else, not freehanded. Categories 2/5 remains not yet exercised end-to-end
+(the guarded slam pair has still never fired live today), but every
+non-firing has been a genuine, verified-safe non-event for a real,
+now-understood reason.
