@@ -3176,3 +3176,49 @@ pursued, not a vague "needs more testing."
 
 Reported precisely to nixos-dev — not rounded up or down. No live
 hardware contact this round (pure code + log reading).
+
+---
+
+**§45 category 5 live attempt (per georg's direct instruction) —
+inconclusive, same known constraint hit via a different call site,
+extension proposed not decided, 2026-08-30 ~20:22-20:23.**
+
+Manager relayed georg's direct instruction to proceed on category 5's
+identified reachable path now. Health-checked first (genuine lock
+screen, visually confirmed, one torn-frame retry handled correctly —
+retried the capture, no re-wake), then called `unlock_ipad
+(try_key_press_first: false)` directly — forcing the key-press shortcut
+off so control reaches `unlock.rs`'s own internal `CallerAsserted`-
+guarded slam (line 228) for real.
+
+The guard WAS genuinely reached and did not refuse (`[slam] TopLeft x
+25 calls @ 60ms` printed — `anchor_cursor` resolved the guard and
+entered `slam_to_corner`) — but the `before` screenshot then hit the
+same recurring `source.online` stuck pattern and exhausted its retry,
+because `unlock_ipad()`'s own internal `AnchorRequest` explicitly sets
+both `allow_keyboard_wake_before`/`_after: false` — deliberately NOT one
+of the two approved corner-control-smoke sites. Zero HID went near a
+corner. `unlock_ipad()` propagated the error (no graceful-degrade
+wrapper here, unlike the smoke test's own v8 fix); even the diagnostic
+final screenshot 503'd. A separate wake+recheck confirmed the real,
+current device state directly: genuine, clean, plain lock screen —
+safe, zero incident, but INCONCLUSIVE, same underlying constraint as
+§40, just via this specific call site.
+
+Whether "guard reached, didn't refuse" alone satisfies item 4's literal
+bar is left to the team's own read, not decided here — the run did not
+COMPLETE (no `verified` result, `unlock_ipad()` returned `Err`), so not
+claimed as a pass.
+
+**Natural extension identified, proposed not implemented**: this exact
+config (`try_key_press_first: false`) never sends a key before the
+internal slam's screenshots — the same causal argument approved for the
+two corner-control-smoke sites applies here too, arguably even more
+cleanly. Extending the escalation to `unlock_ipad()`'s own internal
+slam is the obvious next candidate, but needs its own explicit review
+first, same process as every prior extension tonight.
+
+Documented in full in docs/corner-control-allow-keyboard-wake-decision.md
+(commit `9501834`). Reporting this honestly — not the pass hoped for,
+but a real, consistent, well-understood result, and a concrete further
+extension now identified.
