@@ -3306,3 +3306,62 @@ Per nixos-dev: "probably the real, final unlock for item 4" — category
 5's own positive path is now genuinely buildable; live verification
 (a fresh `try_key_press_first: false` attempt with the escalation
 actually wired) is the natural next live step, not yet run this round.
+
+---
+
+**§48 item 6 (stationary-guard K=4 widening) confirmed LIVE — staged
+repro PASS, plus a real self-inflicted debugging detour worth
+recording, 2026-08-30 ~20:40-20:55.**
+
+Built `rust/mover/examples/stationary_guard_staged_repro.rs` exactly
+per the plan reviewed last round (ordering already fixed by nixos-dev
+in `5921ecc`). First live attempt aborted cleanly at the health-check
+step (503, zero HID sent — by design). Sent one wake key via a
+throwaway diagnostic, got a screenshot back — but the diagnostic and
+then the harness itself kept failing with a generic "error sending
+request," which I initially assumed meant a persistent device-side
+outage (ustreamer idle-stop not resolving, or a genuine source drop).
+
+Traced it properly instead of concluding from the vague error: wrote a
+one-off probe printing the full reqwest error source-chain. Real cause:
+`No route to host` connecting directly to the LAN IP
+(`10.109.1.1:443`) — `PIKVM_PROXY` had silently NOT carried over between
+separate Bash tool calls (env vars set via `source ../.env` in one call
+don't persist to the next), so several `cargo run` invocations were
+silently bypassing the loopback tinyproxy entirely. Confirmed via
+direct `curl -x http://127.0.0.1:8888 ...` in parallel: the proxy and
+device were fine throughout; only my own shell invocations were
+missing the flag intermittently. No device-side mystery here — a pure
+self-inflicted tooling gap, corrected by always setting
+`PIKVM_PROXY=http://127.0.0.1:8888` inline in the same command as the
+`cargo run` that needs it, never relying on a prior call's exports.
+
+With that fixed: one wake key, then the harness run immediately after
+(minimal gap to avoid a second idle-stop), health-check screenshot
+succeeded and was visually confirmed (genuine, safe lock screen,
+consistent with the wake-check screenshots taken moments before and
+after — no unexpected UI at any point). Real result:
+
+    widened=true, old_equivalent=false -- PASS
+
+The widened K=4 ring, in the real production type wired to a real
+`PiKVMClient`, driven by real HID emit accounting via
+`mouse_move_relative`, genuinely rejected a staged 2-passes-back
+candidate that a bare single-observation belief (same real code) did
+not. Item 6 (`docs/final-e2e-validation-sign-off-plan.md`) is now
+closed on live evidence, not just the 5 offline unit tests.
+
+Committed `00af531` (the harness + its live result recorded in the
+commit message), pushed to `rust-port/module-4-mover`. Cleaned up every
+throwaway file (`wake_check_stationary.rs`, `probe_reqwest_error.rs`,
+all `/tmp`/scratchpad screenshot copies) — nothing left littering the
+tree.
+
+Remaining open items, unchanged from §47: category 5's own live
+positive-path verification (`unlock_ipad(try_key_press_first: false)`,
+built + unit-tested, not yet exercised live), and the wake-nudge
+escalation mechanism itself still has never been observed actually
+firing mid-slam in a live run (every real stall so far has hit it at a
+call site where it was deliberately unwired, or been resolved by a
+separate throwaway diagnostic before the guarded harness's own
+escalation had a chance to fire).
