@@ -138,6 +138,36 @@ nudge by checking the exact `WAKE_NUDGE_DELTA_PX` magnitude. Full
 workspace: all green (mover 352/352, was 350), clippy `-D warnings` and
 fmt clean.
 
-Live verification, once this is exercised for real, is a separate,
-later, deliberately-timed decision per the manager's standing
-instruction. No caller has fired this path live yet.
+## First live run (2026-08-30 ~19:14-19:16) — inconclusive, zero incident, the fix was never actually exercised
+
+Ran the harness for real (health-check first, genuine lock screen
+confirmed by direct visual inspection both before and at the
+confirmation-screenshot checkpoint). Confirmed by writing "yes."
+
+The `before` screenshot (deliberately NOT wired to `allow_keyboard_wake`
+— out of scope for this decision) hit the same recurring
+`source.online` stuck pattern, exhausted its 3-attempt outer retry using
+only the (already-shown-ineffective) mouse-move fallback, and
+`slam_to_corner` returned `Err` **before the slam movement loop ever
+ran** — zero HID went near a corner. The harness's own v8 graceful-
+degrade path caught this, ran `unlock_ipad()` recovery, and exited
+INCONCLUSIVE (code 2), exactly as designed. Final-state screenshot
+inspected directly: a clean Touch ID / Use Passcode / Cancel prompt —
+safe, known, recoverable, not mid-navigation in any app.
+
+**This run gives neither positive nor negative evidence about the new
+fix itself** — it was never reached. The actual blocker was the
+`before` screenshot, which this decision deliberately left unaddressed.
+
+**Natural follow-up, not decided or implemented here**: the same safety
+reasoning above arguably applies to `before` at least as well as
+`after` — if anything, `before` is a SAFER context (even less time has
+elapsed since the human's confirmation, nothing has moved yet at all).
+Extending `allow_keyboard_wake` to `before` too would need its own
+explicit review before any implementation, per this project's own
+process — flagged here as the concrete next step, not assumed.
+
+Live verification, once the fix is actually exercised (needs `before`
+addressed first, or a run where `before` happens to succeed on its
+own), is a separate, later, deliberately-timed decision per the
+manager's standing instruction.
