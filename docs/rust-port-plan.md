@@ -2227,3 +2227,76 @@ corrected in the open, real diagnostics built before guessing at
 numbers, a real fix designed/reviewed/implemented/tested, and now a
 real (if not fully resolving) live result reported honestly rather than
 oversold. Zero unsafe HID across every attempt tonight.
+
+---
+
+**§23 nixos-dev's synthesis: two real findings connected, follow-up
+diagnostic parked for a fresh session — standing down on categories
+2/5 for tonight.**
+
+nixos-dev connected §22's result to an earlier finding from earlier
+tonight (`streamer.source.online` producing false aborts, root-caused
+to ustreamer's own "on-demand run state," not the iPad's actual lock/
+screen state — see the categories-2/5 harness's own header history).
+`source.online` is ustreamer's own view of whether it currently sees a
+live capture signal — a genuinely different signal from the WS
+keepalive's `connected()` state. If ustreamer itself cycles on-demand
+for a reason orthogonal to WS-client-count (resource pressure, its own
+internal timer, whatever actually drives that "on-demand run state"),
+a screenshot could 503 regardless of whether the held WS connection is
+healthy — exactly consistent with §22's measurement
+(`connected=true` throughout, 503 anyway). The ping/pong fix solves a
+real, confirmed bug (zombie WS connections, previously permanent until
+process restart); it may be solving a DIFFERENT layer than tonight's
+specific recurring 503 pattern.
+
+**Concrete follow-up, explicitly deferred to a fresh session, not
+built/run tonight**: log `/api/streamer`'s `source.online` alongside
+`streamer_keepalive_connected` at the exact moment of a screenshot
+failure, correlated in time. If `source.online` flips false exactly
+when the 503s happen, that's real direct evidence pointing at
+ustreamer's own process/capture-source layer — a fundamentally
+different fix (understanding ustreamer's on-demand cycling) than more
+client-side keepalive work. Caveat carried forward: `source.online`
+already produced a false read once tonight (unrelated to real device
+state) — this new diagnostic needs its own careful characterization,
+not a single correlated reading trusted at face value.
+
+**Standing down on categories 2/5 for tonight** — agreed with
+nixos-dev's recommendation. Not walking back the ping/pong fix; it's
+real and correct on its own merits regardless of what the next layer
+turns out to be.
+
+## Session-end summary (2026-08-30, extended live-hardware session)
+
+Categories 2/5 was not completed end-to-end tonight, across 6 real
+live guarded-slam attempts plus a 7th targeted idle-hold diagnostic.
+But every single attempt was a genuine, verified-safe non-event — zero
+unsafe HID ever reached the device, confirmed via a fresh screenshot
+after every single action. The root-cause chase itself was real,
+substantive engineering work, not a stall:
+- Built and validated live: torn-frame capture detection (v9), the
+  v8 graceful-degrade harness fix, and an outer-retry mechanism for
+  the post-slam verification screenshots.
+- Caught and corrected my own wrong hypothesis in the open (a missing-
+  retry guess that structural code-reading disproved) rather than
+  building on it.
+- Escalated from budget-tuning to a real diagnostic (the
+  `streamer_keepalive_connected` accessor) before guessing at more
+  numbers, and let real data — not intuition — rule out the
+  reconnect-backoff hypothesis.
+- Designed, got real adversarial review on, implemented, and fully
+  tested (966/966 workspace tests) a genuine root-cause fix for a real
+  bug: `StreamerKeepalive`'s zombie-connection gap, previously
+  unrecoverable until process restart, now self-healing within a
+  bounded window.
+- Ran that fix live, got an honest (not fully resolving) result, and
+  identified a real, coherent next lead rather than declaring victory
+  or giving up.
+
+Two clean, well-scoped follow-up items now stand for whenever this
+resumes: (1) the `source.online`/keepalive-connected correlation
+diagnostic above, (2) categories 2/5 itself, once (1) clarifies
+whether there's a further fix needed. No open safety concerns. No
+uninstrumented mysteries — every remaining gap is named and understood
+well enough to resume cleanly.
