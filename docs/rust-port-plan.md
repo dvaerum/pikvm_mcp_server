@@ -2118,3 +2118,63 @@ screenshot 503 → keepalive ruled out as reconnect-backoff → budget
 exhaustion pointing at a passive-close-watcher gap. The real next step
 (ping/pong for `StreamerKeepalive`) is recorded and deliberately
 deferred, not lost.
+
+---
+
+**§21 the real fix: active liveness ping/pong for StreamerKeepalive —
+designed, reviewed, implemented, 2026-08-30 ~08:16-08:34. Code-only,
+not yet run live.**
+
+Manager: stop live attempts, go design the actual fix (an active
+ping/pong liveness check with real reconnect, not a passive close
+watcher), take the time it needs, real review, no rush. Read the full
+`streamer_keepalive` module before writing anything: `keepalive.rs`
+(reconnect/backoff state machine, driven purely by `WsSession
+::wait_closed()`), `connection.rs` (`real_connect` — confirmed
+structurally: `.split()`s the WS stream and drops the write half
+entirely, only drains reads until natural EOF, no active probe ever
+existed), `types.rs` (the `WsSession`/`ConnectFn` DI seams). Confirmed
+nixos-dev's hypothesis is not just plausible but structurally verified
+— the write half really is dropped, there really is no ping anywhere.
+
+Wrote `docs/streamer-keepalive-liveness-ping-plan.md`: keep both split
+halves, periodic Ping + bounded Pong-timeout, fire the SAME `close_tx`
+signal the passive path already used on death (natural EOF, staleness,
+or a failed Ping send) — `keepalive.rs`'s entire state machine stays
+untouched, since it already reacts correctly to any close signal
+however triggered. Extracted the actual staleness DECISION into a pure,
+unit-testable `is_stale` helper, kept the real socket I/O untested,
+matching this module's own established convention (documented in its
+own header comment) rather than inventing a new one.
+
+nixos-dev's review: sound design, right minimal-blast-radius shape.
+Added a genuinely important framing point not previously stated: this
+BOUNDS the zombie problem (~10-15s self-healing window) rather than
+fully eliminating 503s — kvmd's own idle-stop timer runs from when the
+connection ACTUALLY died, not from when this side detects it, so a rare
+503 can still occur post-fix and that's the bound working as designed,
+not a fix failure. The real, large improvement: TODAY, once zombied,
+`ensure_started()`'s own "no-op if already connected()" check means it
+can NEVER self-heal for the rest of the process's life — permanent
+until restart. Confirmed all 4 open design questions (5s/5s timing,
+reset-on-any-frame, test scope as proposed, failed-send=immediate
+death). Also flagged: `StreamerKeepalive` is core `PiKVMClient`
+infrastructure, not harness-only — this fix matters for every future
+real deployment.
+
+Implemented exactly as reviewed: new `streamer_keepalive::liveness`
+module (`is_stale`, pure, 5 unit tests), `connection.rs`'s
+`run_liveness_loop` replacing the old passive drain. Full workspace:
+**966/966 tests, zero failures, clippy `-D warnings` and fmt clean
+across every crate.** Committed `fa31375` (plan), `35e64ba`
+(implementation) on `rust-port/module-4-mover`.
+
+**Status**: not yet exercised live — holding per the manager's explicit
+"no pressure to rush." The plan doc's own test-plan section proposes a
+low-risk idle-hold-then-screenshot diagnostic (not another guarded
+slam) as the right next live verification step, once directed. This
+closes out tonight's real root-cause chase on categories 2/5: from "3rd
+mystery 503" through a wrong-hypothesis correction, two retry-budget
+iterations, a diagnostic accessor, and finally a structurally-verified
+root cause with a properly reviewed and implemented fix — a complete,
+honest arc, not a shortcut at any step.
