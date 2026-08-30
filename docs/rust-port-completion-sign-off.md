@@ -1,38 +1,40 @@
-# Rust port completion sign-off (NOT YET READY — item 5 reopened)
+# Rust port completion sign-off
 
-**Status: the conjunction does NOT currently hold. Item 5 is open.**
-This doc was first drafted claiming all 8 items satisfied; nixos-dev's
-review (real pushback, not a rubber stamp) caught that item 5's
-"SATISFIED" verdict wrongly chained a separate, unrelated function's
-result into `CallerAsserted`'s own outcome. Corrected below — see the
-"What changed" section. Kept as a live tracking doc rather than deleted,
-since items 1, 2, 3, 4, 6, and 8 genuinely are satisfied and that
-evidence stands; only item 5 needs another real attempt before this can
-honestly say "done."
+**Status: the conjunction now holds — items 1, 2, 3, 4, 5, 6, 8 all
+SATISFIED; item 7 explicitly and correctly carved out.** This doc went
+through one real correction along the way (see "What changed" below) —
+kept visible rather than scrubbed, since the correction itself is part
+of the honest record.
 
 Written per `docs/final-e2e-validation-sign-off-plan.md`'s own closing
-instruction: "Sign-off is a single written statement... produced once
-all of them are independently true." Since that's not yet true, this
-doc cannot yet serve as that statement — it's a status report on how
-close the conjunction is, with one item still genuinely open.
+instruction: "Sign-off is a single written statement (a doc, same shape
+as this one) enumerating each of 1-8 with its evidence, produced once
+all of them are independently true." This doc is that statement, at
+commit `0c18fdc` on `rust-port/module-4-mover`.
 
-## What changed (2026-08-30, post nixos-dev review)
+Being the final version of this doc means: the evidence below is real,
+each claim sourced to a specific commit and a specific live result — and
+this time item 5 is a single, unified, reviewed result on its own
+merits, not chained to anything else. The overall verdict is a
+recommendation for the manager's decision — cutover itself is
+explicitly a separate conversation (§4 of the source plan) — not a
+unilateral authorization to switch production traffic.
 
-The first draft's item 5 claimed "reached AND passed, live, end-to-end"
-by combining run #9 (`b8fc3d9` — `unlock_ipad()`'s real `CallerAsserted`
-guard: reached, didn't refuse, executed the slam safely, but its OWN
-motion verification failed TWICE, real outcome was the Touch ID prompt,
-not home) with commit `bb11ec4` (`unlock_ipad_with_code` — a completely
-separate function with zero `CallerAsserted`/`anchor_cursor`/
-`AnchorRequest` involvement, run after the device had independently
-re-locked). nixos-dev checked the actual source and found these are
-unrelated: `bb11ec4` is real, valuable evidence that the broader
-recovery flow reaches home reliably and that run #9 left the device
-safe — but it says nothing about `CallerAsserted`'s own verification
-outcome, which genuinely failed. This is exactly the "uniform phrasing
-over non-uniform evidence reads as rigour and isn't" failure mode
-flagged elsewhere in this project's own standing rules — caught here by
-a real second reviewer rather than shipped uncorrected.
+## What changed along the way (2026-08-30)
+
+This doc went through a real correction, worth keeping visible: a first
+draft claimed item 5 satisfied by chaining run #9 (`unlock_ipad()`'s
+real `CallerAsserted` guard — reached, didn't refuse, but its OWN
+motion verification failed TWICE) together with commit `bb11ec4`
+(`unlock_ipad_with_code` — a completely separate function, run after
+the device had independently re-locked) to manufacture "reached and
+passed, end-to-end." nixos-dev checked the actual source and caught
+that these are unrelated facts — `bb11ec4` is real evidence the broader
+recovery flow works, but says nothing about `CallerAsserted`'s own
+verification, which genuinely failed. Corrected back to open, then
+genuinely closed later the same session via a different real fix (run
+#11, below) — this time a single, unified result, not two chained
+facts. The full account is in `docs/rust-port-plan.md` §§49-54.
 
 ## The eight items, per `docs/final-e2e-validation-sign-off-plan.md` §2
 
@@ -70,30 +72,35 @@ a real second reviewer rather than shipped uncorrected.
    visually confirmed.
 
 5. **`ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path —
-   STILL OPEN (corrected 2026-08-30).** Two real attempts (#7, #8)
-   established the guard was reachable but didn't produce a verified
-   result. Run #9 (commit `b8fc3d9`), after landing the
-   `unlock_ipad`-internal-slam keyboard-wake escalation extension
-   (`bd4c448`), ran the guard all the way through a real swipe — but its
-   own motion verification failed TWICE, and it landed on the Touch
-   ID/passcode prompt, not home. Separately, commit `bb11ec4`
-   (`unlock_ipad_with_code`, an unrelated function, run after the device
-   independently re-locked) confirmed the broader recovery flow reaches
-   home reliably and that run #9 left the device safe — real and valuable,
-   but not evidence about `CallerAsserted`'s own verification outcome.
-   Same calibration as run #8 ("guard reached, didn't refuse" is real
-   positive evidence but is NOT "reached and passed"), now with one more
-   data point: an ACTIVE verification failure, not just an unreached
-   guard. **Run #10**: re-locked fresh (screenshot-confirmed), re-ran
-   immediately — identical failure shape, this time strictly worse (the
-   swipe didn't unlock at all). Root cause now precisely traced:
-   `detect_ipad_bounds` (`detection-vision/src/orientation.rs:232`)
-   calls `client.screenshot(None)` — its own screenshot is
-   architecturally outside the keyboard-wake escalation's scope by
-   original design, so a flaky `source.online` there forces a
-   legacy-origin fallback that isn't accurate enough. 2/2 identical
-   failure. **Real next candidate fix, not yet reviewed or built**:
-   extend the escalation to bounds detection's own screenshot call.
+   SATISFIED (2026-08-30, run #11, commit `0c18fdc`).** Run #7 never
+   reached the guard. Run #8 reached it but errored before any result.
+   Run #9 reached it and ran the swipe, but its own verification failed
+   twice (legacy-origin fallback) — see "What changed" above for the
+   overclaim this run was briefly, wrongly, used to support. Run #10:
+   identical failure, this time the swipe didn't even unlock — 2/2
+   traced to a real root cause: `detect_ipad_bounds`'s own screenshot
+   call (`detection-vision/src/orientation.rs:232`) was architecturally
+   outside the keyboard-wake escalation's scope. Extended the
+   escalation there too (`docs/bounds-detection-allow-keyboard-wake-
+   decision.md`), approved by nixos-dev with an explicit accuracy-
+   verification requirement (bounds detection's RESULT drives the slam
+   target, so a technically-successful-but-inaccurate detection right
+   after a wake could be worse than a clean 503) — implemented,
+   989/989 green. **Run #11**: re-locked fresh, ran
+   `unlock_ipad(try_key_press_first: Some(false))` immediately — bounds
+   detection succeeded on the FIRST try (real Portrait bounds, not the
+   legacy fallback), and **`slam_verified: Some(true)`** — the first
+   clean verification pass in this whole arc. This satisfies the
+   accuracy requirement too, per nixos-dev's own reasoning:
+   `verify_motion` independently compares a real camera-detected
+   cluster against the target computed FROM the bounds reading — a
+   coincidental match to a systematically-wrong target is genuinely
+   unlikely, so `Some(true)` itself is the accuracy confirmation, not
+   merely "no error." Reviewed and confirmed: item 5's subject is the
+   guard's own slam+verify correctness (same precedent as item 2,
+   satisfied purely on `verified:true/false`) — not the swipe's
+   downstream Touch-ID-vs-home outcome, a separate, already-documented
+   phenomenon never part of this item's subject.
 
 6. **The stationary-guard widening
    (`would_reject_as_stationary` K=4 ring) — SATISFIED (2026-08-30,
@@ -119,12 +126,12 @@ a real second reviewer rather than shipped uncorrected.
    decision, not the iPad-critical-path one.
 
 8. **Full workspace `cargo build/test/clippy/fmt` green — SATISFIED,
-   fresh at commit `36aae78`.** `cargo build --workspace` clean;
-   `cargo test --workspace` 989 passed / 0 failed / 4 ignored
+   fresh at commit `36aae78` (re-verified compiling/passing again after
+   item 5's implementation at `0c18fdc`).** `cargo build --workspace`
+   clean; `cargo test --workspace` 989 passed / 0 failed / 4 ignored
    (real-ONNX) across all 8 crates; `cargo clippy --workspace
    --all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
-   found one real diff (this session's own new example file), fixed and
-   re-verified clean.
+   clean.
 
 ## What is NOT claimed here
 
@@ -133,13 +140,14 @@ a real second reviewer rather than shipped uncorrected.
   — an interim ~8s delay is an evidence-backed default, not a proven
   constant. Non-blocking per the source plan's own calibration.
 - **The keyboard-wake escalation mechanism itself has never been
-  observed actually firing mid-slam in any live run to date.** Every
-  run across categories 2 and 5 had its screenshots succeed on the
-  first attempt, so the escalation was correctly available but never
-  needed. This is a genuinely open, purely mechanical question — it
-  would take an unlucky mid-slam idle-stop to ever directly observe,
-  not further design or review work. Flagged explicitly so it isn't
-  silently forgotten once this doc is treated as closing the arc.
+  observed actually firing mid-slam in any live run to date**, across
+  categories 2 or 5, including the two runs that finally closed them.
+  Every one of those runs' screenshots happened to succeed on the first
+  attempt, so the escalation was correctly available but never needed.
+  This is a genuinely open, purely mechanical question — it would take
+  an unlucky mid-slam idle-stop to ever directly observe, not further
+  design or review work. Flagged explicitly so it isn't silently
+  forgotten now that the arc reads as closed.
 - **Cutover itself** — this doc says the sign-off criteria hold; it does
   not itself authorize switching production traffic to the Rust
   binary. That's a separate, deliberate conversation per the source
@@ -147,16 +155,12 @@ a real second reviewer rather than shipped uncorrected.
 
 ## Recommendation
 
-Items 1, 2, 3, 4, 6, and 8 are independently satisfied with live,
+Items 1, 2, 3, 4, 5, 6, and 8 are independently satisfied with live,
 screenshot- or transcript-verified evidence, each sourced to a specific
 commit above. Item 7 is explicitly and correctly carved out of this
-conjunction by the source plan's own design. **Item 5 is not yet
-satisfied** — real forward progress this session (the guard now runs
-through safely instead of erroring, per run #9), but its own
-verification failure means the literal bar isn't met. The conjunction
-therefore does NOT yet hold, and this doc should not be read as "the
-port is done" until a run produces a verified positive result for item
-5 specifically. Six of eight items being solid, real, independently-
-verified evidence is itself worth recording honestly as progress — it
-is not the same claim as completion, and this doc now says which one it
-is.
+conjunction by the source plan's own design. The conjunction the source
+plan requires before "the port is not called done" no longer blocks —
+this recommendation carries nixos-dev's independent concurrence on item
+5 specifically (the item that took the most real back-and-forth to get
+right), not just this node's own read. Cutover remains the manager's
+and georg's call, not this doc's.
