@@ -172,6 +172,33 @@ a comment explaining why). Logs attempt count via `verbose` for future
 calibration. 349/349 mover tests (4 new: succeeds-first-try,
 recovers-on-second-outer-attempt, exhausts-max-attempts,
 slam_to_corner-recovers-from-a-transient-after-failure), clippy
-`-D warnings` and fmt clean. Not yet exercised live — the next
-categories-2/5 attempt is the real test of whether the 3-attempt/1s
-defaults are enough.
+`-D warnings` and fmt clean.
+
+## Addendum: `before` needs a lighter-touch version too
+
+**New evidence (2026-08-30, `docs/rust-port-plan.md` §15)**: the very
+next live attempt after shipping the `after`-only fix hit the SAME
+transient 503 again — but `take_screenshot_with_retry`'s own log line
+(fires on every attempt, success or failure) never appeared in the log
+(`grep -c` confirmed zero occurrences). The failure happened upstream of
+`after`, almost certainly at the un-retried `before` screenshot. Q2's
+"no evidence-based need to touch `before`" no longer holds — both calls
+have now independently shown the same failure. The safety concern behind
+leaving `before` unretried (widening the confirmed-precondition-to-slam
+gap) is still real and still matters — the fix is a LIGHTER-touch retry
+on `before`, not the same treatment as `after`.
+
+Proposed: reuse `take_screenshot_with_retry` (same helper, no new code
+needed) with smaller values — `max_attempts = 2` (one extra try, not
+two), `settle_ms = 300` (vs `after`'s 1000ms). Worst-case added latency
+on a genuinely down streamer: 1 extra attempt × (client's own ~1.5s
+internal retry + 300ms settle) ≈ 1.8s, vs `after`'s ~5s — meaningfully
+lighter, while still handling the demonstrated transient case (the
+`after` fix's own test data shows recovery typically happens by the
+2nd outer attempt). Same `verbose`-gated logging as `after`, so real
+runs keep building calibration data for both.
+
+Open question for review: is 2 attempts / 300ms the right "lighter"
+values, or should `before` get an even smaller budget (e.g. 1 extra
+attempt with no settle at all, relying purely on the client's own
+built-in 1500ms grace already baked into each attempt)?
