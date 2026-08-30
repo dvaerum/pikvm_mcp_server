@@ -3139,3 +3139,40 @@ something to claim covered by this pass.
 Documented in full in docs/corner-control-allow-keyboard-wake-
 decision.md (commit `0d85c10`). Reporting the real milestone plainly to
 the team, without overclaiming what it does and doesn't prove.
+
+---
+
+**§44 category 5 precision check — the real production `CallerAsserted`
+call site exists in `unlock_ipad()`, but tonight's run never reached it,
+2026-08-30 ~19:37.**
+
+nixos-dev, preparing the manager's full 8-criteria sign-off report,
+asked a precise question rather than assuming: does §43's recovery-step
+`unlock_ipad()` call itself exercise a genuine `CallerAsserted`-on-
+lock-screen assertion via its own real production logic (matching
+category 5's specific "real production call sites, NOT an isolated
+synthetic smoke test" wording), or was tonight's `CallerAsserted`
+exercise entirely confined to the smoke test's own direct
+`anchor_cursor` calls?
+
+Checked the actual code fresh, not memory. Real, precise answer with a
+twist: `unlock_ipad()` DOES have a genuine internal `CallerAsserted`
+call site (`unlock.rs:228`, its own "1. Optionally slam" step) — the
+production path exists for real. But `unlock_ipad()` tries a key-press-
+first shortcut before that, and if it succeeds (it did tonight), the
+function returns EARLY, never reaching the guarded slam. Confirmed from
+tonight's own log: "Swipe SKIPPED" + "recovery slam_verified: None" — if
+the internal guarded slam had run, `slam_verified` would be
+`Some(true/false)`, not `None`.
+
+**Category 5: NOT satisfied by tonight's run.** Tonight's `CallerAsserted`
+exercise was entirely confined to the smoke test's own direct
+`anchor_cursor` calls, exactly what item 4 wants to rule out. The real
+reachable path is now identified precisely though: `try_key_press_first:
+false` (or any real-world case where the key-press path genuinely
+fails) would drive `unlock_ipad()` into its own internal `CallerAsserted`
+slam — a concrete, specific next step for whenever category 5 is
+pursued, not a vague "needs more testing."
+
+Reported precisely to nixos-dev — not rounded up or down. No live
+hardware contact this round (pure code + log reading).
