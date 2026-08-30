@@ -2987,3 +2987,42 @@ is not the same claim as "the pieces are actually connected" — should
 have verified the full wiring chain before reporting it as done, not
 after. Self-caught before running live verification, not during or
 after — no live hardware contact wasted on a no-op test.
+
+---
+
+**§40 first live run of the fixed corner-control harness — clean,
+zero-incident, but INCONCLUSIVE: the new fix was never actually
+reached, 2026-08-30 ~19:14-19:16.**
+
+Ran the harness for real: health-check first (genuine plain lock
+screen, visually confirmed), fresh baseline (503, non-fatal), lock,
+8s wake delay, wake attempt 1/5 succeeded cleanly (no torn frame),
+confirmation screenshot visually inspected directly — genuine, clean,
+unambiguous lock screen — confirmed "yes."
+
+The `before` screenshot (deliberately NOT wired to `allow_keyboard_wake`
+— out of scope for §37-§39's decision) hit the same recurring
+`source.online` stuck pattern, exhausted its 3-attempt outer retry using
+only the mouse-move fallback (already shown ineffective), and
+`slam_to_corner` returned `Err` **before the slam movement loop ever
+ran** — zero HID went near a corner. Harness's own v8 graceful-degrade
+caught it, ran `unlock_ipad()` recovery, exited INCONCLUSIVE (code 2) as
+designed. Final-state screenshot inspected directly: clean Touch ID /
+Use Passcode / Cancel prompt — safe, known, recoverable.
+
+**Real, honest conclusion: this run gives neither positive nor negative
+evidence about the new fix** — it was never reached at all. The actual
+blocker was the `before` screenshot, deliberately left unaddressed by
+the approved decision's own scoping.
+
+Natural follow-up, flagged not decided: the same safety reasoning
+approved for `after` likely applies to `before` at least as well
+(arguably safer — even less elapsed time since the human confirmation,
+nothing has moved yet). Needs its own explicit review before any
+implementation — not assumed or built here.
+
+Documented in full in docs/corner-control-allow-keyboard-wake-
+decision.md (commit `64180f1`). Zero incidents throughout. Reporting
+this honestly to the team — not the "real unlock" moment §38-39 hoped
+for, but real, useful information about exactly where the remaining
+blocker actually sits.
