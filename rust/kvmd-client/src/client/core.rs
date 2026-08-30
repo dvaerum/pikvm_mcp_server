@@ -26,6 +26,18 @@ use super::types::{CalibrationState, PiKVMConfig, ScreenResolution};
 /// (re)start.
 const STREAMER_RESTART_GRACE_MS: u64 = 1500;
 
+/// Wake-nudge escalation (`PiKVMConfig::source_online_wake_nudge`, off by
+/// default — see docs/streamer-source-online-wake-nudge-plan.md): delta
+/// matches `--fallback-mouse-move`'s own already-live-tested nudge in
+/// `cursor_anchor_corner_control_smoke.rs`, deliberately NOT the unrelated
+/// ±1px net-zero nudge `screenshot_keeping_cursor_alive` uses (that one only
+/// keeps an already-awake cursor visible in-frame; it has never been tested
+/// as a display-wake event).
+const WAKE_NUDGE_DELTA_PX: f64 = 5.0;
+/// Settle time after the nudge before the final retry — matches the
+/// corner-control harness's own post-wake settle window.
+const WAKE_NUDGE_SETTLE_MS: u64 = 1500;
+
 /// The client's default `CursorBelief` (wide initial variance + wide
 /// bounds so `predict()` can't drift off-screen before orientation sets
 /// real bounds). Shared by the client's own-belief fallback AND the
@@ -209,13 +221,44 @@ impl PiKVMClient {
                         if err2.api_status() != Some(503) {
                             return Err(err2);
                         }
-                        Err(ClientError::StreamerUnavailable(format!(
-                            "Streamer unavailable even after a held /api/ws stream client and one retry \
-                             ({STREAMER_RESTART_GRACE_MS}ms grace window): {err2} \
-                             This retry exists specifically to rule out ustreamer's idle-stop race — surviving \
-                             it means the more likely explanation is a genuine source-side outage. Check \
-                             pikvm_health_check's streamer.source.online (HDMI cable / iPad off / mid-reboot)."
-                        )))
+                        if !self.config.source_online_wake_nudge {
+                            return Err(streamer_unavailable_error(&err2, false));
+                        }
+                        // docs/streamer-source-online-wake-nudge-plan.md:
+                        // live evidence tonight is that this specific 503
+                        // pattern is the iPad's own display needing a real
+                        // redraw event, not a connection-bookkeeping race —
+                        // a relative mouse-move (not a keypress, to avoid
+                        // the documented same-key-twice/dismiss-to-Touch-ID
+                        // hazard) is the safe wake mechanism already
+                        // validated for this by `--fallback-mouse-move`.
+                        // Best-effort: a nudge failure falls through to the
+                        // final attempt anyway, same convention as
+                        // `screenshot_keeping_cursor_alive`'s `let _ = ...`.
+                        let _ = self
+                            .mouse_move_relative(WAKE_NUDGE_DELTA_PX, WAKE_NUDGE_DELTA_PX)
+                            .await;
+                        tokio::time::sleep(Duration::from_millis(WAKE_NUDGE_SETTLE_MS)).await;
+                        match self
+                            .request(RequestArgs {
+                                method: HttpMethod::Get,
+                                path: path.to_string(),
+                                body: None,
+                            })
+                            .await
+                        {
+                            Ok(ResponseBody::Image(bytes)) => Ok(bytes),
+                            Ok(_) => Err(ClientError::Other(
+                                "expected an image response from the streamer snapshot endpoint"
+                                    .into(),
+                            )),
+                            Err(err3) => {
+                                if err3.api_status() != Some(503) {
+                                    return Err(err3);
+                                }
+                                Err(streamer_unavailable_error(&err3, true))
+                            }
+                        }
                     }
                 }
             }
@@ -256,6 +299,27 @@ impl PiKVMClient {
             ))),
         }
     }
+}
+
+/// Shared `StreamerUnavailable` builder for `fetch_snapshot_with_retry`'s
+/// two exit points (nudge disabled/skipped vs. nudge attempted and still
+/// 503) — same error text either way except for the one clause noting
+/// whether the wake nudge fired, so operator-hints's pattern match and the
+/// original 503/UnavailableError text stay identical in both cases.
+fn streamer_unavailable_error(err: &ClientError, nudge_attempted: bool) -> ClientError {
+    let nudge_clause = if nudge_attempted {
+        "a wake nudge (relative mouse move) was also tried and did not recover it"
+    } else {
+        "the wake-nudge escalation is disabled (PiKVMConfig::source_online_wake_nudge)"
+    };
+    ClientError::StreamerUnavailable(format!(
+        "Streamer unavailable even after a held /api/ws stream client and one retry \
+         ({STREAMER_RESTART_GRACE_MS}ms grace window): {err} \
+         This retry exists specifically to rule out ustreamer's idle-stop race — surviving \
+         it means the more likely explanation is a genuine source-side outage. Check \
+         pikvm_health_check's streamer.source.online (HDMI cable / iPad off / mid-reboot). \
+         ({nudge_clause}.)"
+    ))
 }
 
 /// `response.result.streamer.source`, threading through the same
@@ -364,6 +428,173 @@ mod tests {
             }
             other => panic!("expected StreamerUnavailable, got {other:?}"),
         }
+    }
+
+    /// docs/streamer-source-online-wake-nudge-plan.md: with the flag ON,
+    /// two consecutive 503s escalate to a mouse-move wake nudge and a
+    /// THIRD attempt, which recovers here — exactly one nudge, no
+    /// retry-storm past it.
+    #[tokio::test]
+    async fn wake_nudge_enabled_recovers_via_the_third_attempt_after_a_nudge() {
+        let snapshot_calls = Arc::new(AtomicU32::new(0));
+        let nudge_calls = Arc::new(AtomicU32::new(0));
+        let snapshot_calls_c = snapshot_calls.clone();
+        let nudge_calls_c = nudge_calls.clone();
+        let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+            let snapshot_calls = snapshot_calls_c.clone();
+            let nudge_calls = nudge_calls_c.clone();
+            Box::pin(async move {
+                if args.path.starts_with("/streamer/snapshot") {
+                    let n = snapshot_calls.fetch_add(1, Ordering::SeqCst);
+                    if n < 2 {
+                        return Err(unavailable_error());
+                    }
+                    return Ok(ResponseBody::Image(vec![9, 9, 9]));
+                }
+                if args.path.starts_with("/hid/events/send_mouse_relative") {
+                    nudge_calls.fetch_add(1, Ordering::SeqCst);
+                    return Ok(ResponseBody::Empty);
+                }
+                panic!("unexpected request path in this test: {}", args.path);
+            })
+        });
+        let client = PiKVMClient::with_request_fn(
+            PiKVMConfig {
+                source_online_wake_nudge: true,
+                ..PiKVMConfig::new("http://mock.local", "admin", "pw")
+            },
+            None,
+            request_fn,
+        );
+        let buf = client
+            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .await
+            .unwrap();
+        assert_eq!(buf, vec![9, 9, 9]);
+        assert_eq!(snapshot_calls.load(Ordering::SeqCst), 3);
+        assert_eq!(nudge_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Flag ON, but the device stays genuinely unavailable through all
+    /// three attempts: still exactly one nudge (never re-nudges past the
+    /// one escalation), and the resulting error explicitly says the nudge
+    /// was tried.
+    #[tokio::test]
+    async fn wake_nudge_enabled_still_fails_after_a_nudge_reports_it_was_tried() {
+        let nudge_calls = Arc::new(AtomicU32::new(0));
+        let nudge_calls_c = nudge_calls.clone();
+        let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+            let nudge_calls = nudge_calls_c.clone();
+            Box::pin(async move {
+                if args.path.starts_with("/streamer/snapshot") {
+                    return Err(unavailable_error());
+                }
+                if args.path.starts_with("/hid/events/send_mouse_relative") {
+                    nudge_calls.fetch_add(1, Ordering::SeqCst);
+                    return Ok(ResponseBody::Empty);
+                }
+                panic!("unexpected request path in this test: {}", args.path);
+            })
+        });
+        let client = PiKVMClient::with_request_fn(
+            PiKVMConfig {
+                source_online_wake_nudge: true,
+                ..PiKVMConfig::new("http://mock.local", "admin", "pw")
+            },
+            None,
+            request_fn,
+        );
+        let err = client
+            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .await
+            .unwrap_err();
+        match err {
+            ClientError::StreamerUnavailable(msg) => {
+                assert!(msg.contains("wake nudge"));
+                assert!(msg.contains("did not recover it"));
+            }
+            other => panic!("expected StreamerUnavailable, got {other:?}"),
+        }
+        assert_eq!(nudge_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Flag OFF (the default): behavior is byte-identical to before this
+    /// feature existed — no third attempt, no nudge ever sent, and the
+    /// error explicitly says the escalation was disabled rather than
+    /// silently omitting that detail.
+    #[tokio::test]
+    async fn wake_nudge_disabled_by_default_never_sends_a_nudge() {
+        let snapshot_calls = Arc::new(AtomicU32::new(0));
+        let snapshot_calls_c = snapshot_calls.clone();
+        let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+            let snapshot_calls = snapshot_calls_c.clone();
+            Box::pin(async move {
+                if args.path.starts_with("/streamer/snapshot") {
+                    snapshot_calls.fetch_add(1, Ordering::SeqCst);
+                    return Err(unavailable_error());
+                }
+                panic!(
+                    "unexpected request path in this test (a mouse-move nudge must not fire \
+                     when the flag is off): {}",
+                    args.path
+                );
+            })
+        });
+        let client = PiKVMClient::with_request_fn(
+            PiKVMConfig::new("http://mock.local", "admin", "pw"), // source_online_wake_nudge: false
+            None,
+            request_fn,
+        );
+        let err = client
+            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .await
+            .unwrap_err();
+        match err {
+            ClientError::StreamerUnavailable(msg) => {
+                assert!(msg.contains("escalation is disabled"));
+            }
+            other => panic!("expected StreamerUnavailable, got {other:?}"),
+        }
+        assert_eq!(snapshot_calls.load(Ordering::SeqCst), 2); // the pre-existing retry-once, nothing more
+    }
+
+    /// The nudge itself erroring must not crash the retry — best-effort,
+    /// same convention as `screenshot_keeping_cursor_alive`'s `let _ = ...`:
+    /// falls through to the final snapshot attempt anyway.
+    #[tokio::test]
+    async fn wake_nudge_failure_falls_through_to_the_final_attempt_anyway() {
+        let snapshot_calls = Arc::new(AtomicU32::new(0));
+        let snapshot_calls_c = snapshot_calls.clone();
+        let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+            let snapshot_calls = snapshot_calls_c.clone();
+            Box::pin(async move {
+                if args.path.starts_with("/streamer/snapshot") {
+                    let n = snapshot_calls.fetch_add(1, Ordering::SeqCst);
+                    if n < 2 {
+                        return Err(unavailable_error());
+                    }
+                    return Ok(ResponseBody::Image(vec![7, 7, 7]));
+                }
+                if args.path.starts_with("/hid/events/send_mouse_relative") {
+                    return Err(unavailable_error());
+                }
+                panic!("unexpected request path in this test: {}", args.path);
+            })
+        });
+        let client = PiKVMClient::with_request_fn(
+            PiKVMConfig {
+                source_online_wake_nudge: true,
+                ..PiKVMConfig::new("http://mock.local", "admin", "pw")
+            },
+            None,
+            request_fn,
+        );
+        let buf = client
+            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .await
+            .unwrap();
+        assert_eq!(buf, vec![7, 7, 7]);
+        assert_eq!(snapshot_calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

@@ -128,6 +128,10 @@ async fn main() {
         verify_ssl: config.pikvm.verify_ssl,
         default_keymap: config.pikvm.default_keymap,
         proxy_url: config_proxy_url.clone(),
+        // Default off — see docs/streamer-source-online-wake-nudge-plan.md;
+        // not yet live-verified, deliberately not wired to a config/env
+        // knob until that verification happens.
+        source_online_wake_nudge: false,
     };
     let client = PiKVMClient::new(client_config, Some(cursor_belief));
 

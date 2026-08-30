@@ -19,6 +19,13 @@ pub struct PiKVMConfig {
     /// header for why this exists (macOS Local Network privacy).
     /// `None` = direct connection.
     pub proxy_url: Option<String>,
+    /// Default `false`. When `true`, `fetch_snapshot_with_retry` escalates
+    /// a SECOND consecutive `/streamer/snapshot` 503 with one relative
+    /// mouse-move wake nudge (before a final third attempt) instead of
+    /// giving up — see docs/streamer-source-online-wake-nudge-plan.md for
+    /// the live evidence this responds to and why it defaults off (no
+    /// live-hardware verification of this specific escalation yet).
+    pub source_online_wake_nudge: bool,
 }
 
 impl PiKVMConfig {
@@ -37,6 +44,7 @@ impl PiKVMConfig {
             verify_ssl: false,
             default_keymap: "en-us".to_string(),
             proxy_url: None,
+            source_online_wake_nudge: false,
         }
     }
 }
