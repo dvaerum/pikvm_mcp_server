@@ -225,10 +225,23 @@ pub async fn unlock_ipad(
             }
             None => LEGACY_PORTRAIT_SLAM_ORIGIN,
         };
+        // docs/unlock-ipad-allow-keyboard-wake-decision.md (nixos-dev
+        // approved, 2026-08-30): `true` only when `try_key_press_first
+        // == Some(false)` — the one config where genuinely ZERO keys
+        // have been sent this call before this slam's own screenshots
+        // (the key-press-first branch above is skipped entirely, not
+        // just "attempted long enough ago"). Deliberately does NOT cover
+        // the default config (key press attempted, whether it succeeded
+        // or failed) — that path sent a real key at an elapsed time this
+        // decision hasn't characterized; a separate analysis, not
+        // assumed to transfer. Symmetric with this file's own `!=
+        // Some(false)` check (above) for skipping the key-press-first
+        // branch in the first place.
+        let allow_keyboard_wake_for_internal_slam = options.try_key_press_first == Some(false);
         let slam_result = anchor_cursor(AnchorRequest {
             client: client.clone(),
-            allow_keyboard_wake_after: false, // see docs/corner-control-allow-keyboard-wake-decision.md
-            allow_keyboard_wake_before: false, // see docs/corner-control-allow-keyboard-wake-decision.md
+            allow_keyboard_wake_after: allow_keyboard_wake_for_internal_slam,
+            allow_keyboard_wake_before: allow_keyboard_wake_for_internal_slam,
             corner: Some(Corner::TopLeft),
             guard: AnchorGuard::CallerAsserted {
                 reason: "Layer 5 — lock screen has no active hot corner".to_string(),

@@ -630,6 +630,223 @@ mod unlock_ipad_tests {
         }
     }
 
+    /// docs/unlock-ipad-allow-keyboard-wake-decision.md (nixos-dev
+    /// approved, 2026-08-30): `unlock_ipad`'s own internal guarded slam
+    /// must opt into the v2 wake-nudge escalation's keyboard path ONLY
+    /// when `try_key_press_first == Some(false)` — the one config where
+    /// genuinely zero keys have been sent this call before the slam's
+    /// own screenshots.
+    mod allow_keyboard_wake_internal_slam_tests {
+        use super::*;
+        use pikvm_mcp_kvmd_client::client::ClientError;
+
+        /// Like `stub_client`, but honours `source_online_wake_nudge`
+        /// and fails the FIRST `fail_first_n` raw `/streamer/snapshot`
+        /// calls (503) before serving `screenshots` round-robin — forces
+        /// exactly one wake-nudge escalation, on whichever screenshot
+        /// call happens to be first in the flow (with explicit
+        /// `start_x`/`start_y`, that's the internal slam's own `before`
+        /// shot — bounds detection is skipped entirely).
+        fn stub_client_with_escalation(
+            resolution: (u32, u32),
+            screenshots: Vec<Vec<u8>>,
+            fail_first_n: u32,
+            fail_escape: bool,
+        ) -> (Arc<PiKVMClient>, Calls) {
+            let (w, h) = resolution;
+            let calls: Calls = Arc::new(StdMutex::new(Vec::new()));
+            let calls_bg = calls.clone();
+            let snapshot_calls: Arc<StdMutex<u32>> = Arc::new(StdMutex::new(0));
+            let snapshot_calls_bg = snapshot_calls.clone();
+            let screenshots = Arc::new(screenshots);
+            let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+                let calls = calls_bg.clone();
+                let snapshot_calls = snapshot_calls_bg.clone();
+                let screenshots = screenshots.clone();
+                Box::pin(async move {
+                    if args.path.starts_with("/hid/events/send_mouse_relative") {
+                        let (dx, dy) = parse_delta(&args.path);
+                        calls.lock().unwrap().push(Call::Move { dx, dy });
+                        return Ok(ResponseBody::Empty);
+                    }
+                    if args.path.starts_with("/hid/events/send_mouse_button") {
+                        let q = parse_query(&args.path);
+                        match q.get("state").map(String::as_str) {
+                            Some("true") => calls.lock().unwrap().push(Call::MouseDown),
+                            Some("false") => calls.lock().unwrap().push(Call::MouseUp),
+                            _ => {}
+                        }
+                        return Ok(ResponseBody::Empty);
+                    }
+                    if args.path.starts_with("/hid/events/send_key") {
+                        let q = parse_query(&args.path);
+                        let key = q.get("key").cloned().unwrap_or_default();
+                        // Force the key-press-first sequence (Escape ->
+                        // Enter -> Space) to fail at its very first key
+                        // when testing the DEFAULT `try_key_press_first`
+                        // — so control falls through to the internal
+                        // slam without the key-sequence itself ever
+                        // sending a real "Space", letting a later Space
+                        // be unambiguously attributed to the wake-nudge
+                        // escalation (or its absence) alone.
+                        if fail_escape && key == "Escape" {
+                            return Err(ClientError::Api(
+                                pikvm_mcp_kvmd_client::client::PiKVMApiError {
+                                    status: 500,
+                                    message: "simulated HID write failure".to_string(),
+                                },
+                            ));
+                        }
+                        match q.get("state").map(String::as_str) {
+                            Some("true") => calls.lock().unwrap().push(Call::KeyDown(key)),
+                            Some("false") => calls.lock().unwrap().push(Call::KeyUp(key)),
+                            _ => calls.lock().unwrap().push(Call::SendKey(key)),
+                        }
+                        return Ok(ResponseBody::Empty);
+                    }
+                    if args.path.starts_with("/streamer/snapshot") {
+                        let mut i = snapshot_calls.lock().unwrap();
+                        *i += 1;
+                        // Call #1 is `cursor_anchor`'s own internal
+                        // bounds-detection screenshot (runs regardless of
+                        // `unlock_ipad`'s own `start_x`/`start_y` — a
+                        // SEPARATE resolution step used for `verify_
+                        // motion`'s expected-target computation). Always
+                        // succeeds immediately with `screenshots[0]` (a
+                        // "black" frame that fails DETECTION, not the
+                        // HTTP call — matching this file's other verified-
+                        // slam tests) so the fail-then-escalate window
+                        // below applies to the slam's own before/after
+                        // shots, not this unrelated call.
+                        if *i == 1 {
+                            calls.lock().unwrap().push(Call::Screenshot);
+                            return Ok(ResponseBody::Image(screenshots[0].clone()));
+                        }
+                        let slam_call_index = *i - 1; // 1-based, excluding call #1
+                        if slam_call_index <= fail_first_n {
+                            return Err(ClientError::Api(
+                                pikvm_mcp_kvmd_client::client::PiKVMApiError {
+                                    status: 503,
+                                    message: "Service Unavailable".to_string(),
+                                },
+                            ));
+                        }
+                        calls.lock().unwrap().push(Call::Screenshot);
+                        let idx = ((slam_call_index - fail_first_n - 1) as usize + 1)
+                            .min(screenshots.len() - 1);
+                        return Ok(ResponseBody::Image(screenshots[idx].clone()));
+                    }
+                    if args.path == "/streamer" {
+                        calls.lock().unwrap().push(Call::GetResolution);
+                        return Ok(ResponseBody::Json(serde_json::json!({
+                            "ok": true,
+                            "result": { "streamer": { "source": { "online": true, "resolution": { "width": w, "height": h } } } }
+                        })));
+                    }
+                    Ok(ResponseBody::Empty)
+                })
+            });
+            let client = Arc::new(PiKVMClient::with_request_fn(
+                PiKVMConfig {
+                    source_online_wake_nudge: true,
+                    ..PiKVMConfig::new("http://127.0.0.1:1", "admin", "pw")
+                },
+                None,
+                request_fn,
+            ));
+            (client, calls)
+        }
+
+        #[tokio::test]
+        async fn try_key_press_first_false_escalates_the_internal_slam_with_a_keypress() {
+            let _guard = TEST_LOCK.lock().await;
+            clear_orientation_cache();
+            let black = solid_jpeg(1920, 1080, [0, 0, 0]);
+            let shot = solid_jpeg(1920, 1080, [128, 128, 128]);
+            let (client, calls) = stub_client_with_escalation(
+                (1920, 1080),
+                vec![black, shot.clone(), shot],
+                2,
+                false,
+            );
+            unlock_ipad(
+                &client,
+                IpadUnlockOptions {
+                    try_key_press_first: Some(false),
+                    slam_first: Some(true),
+                    start_x: Some(960),
+                    start_y: Some(800),
+                    drag_px: Some(100),
+                    chunk_mickeys: Some(25.0),
+                    slam_pace_ms: Some(0),
+                    post_settle_ms: Some(0),
+                    verbose: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let recorded = calls.lock().unwrap().clone();
+            assert!(
+                recorded
+                    .iter()
+                    .any(|c| matches!(c, Call::SendKey(k) if k == "Space")),
+                "expected a Space keypress escalation, got: {recorded:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn default_try_key_press_first_never_escalates_the_internal_slam_with_a_keypress() {
+            let _guard = TEST_LOCK.lock().await;
+            clear_orientation_cache();
+            // Force the key-press-first attempt itself to fail (Escape,
+            // its first key, errors at the transport level) so control
+            // falls through to the internal slam — but `try_key_press_
+            // first` is left at its default (`None`, i.e. attempted),
+            // NOT `Some(false)`, so the escalation must stay off
+            // regardless. Before/after are staged to genuinely VERIFY
+            // (a cluster near the expected TopLeft target, same pattern
+            // as this file's own other verified-slam tests) so
+            // `cursor_anchor`'s KeySequenceRetry recovery path — which
+            // would send a SECOND Escape on a verify failure — never
+            // fires and collides with the simulated Escape failure above.
+            let black = solid_jpeg(1920, 1080, [0, 0, 0]);
+            let before_rgb = raw_solid(1920, 1080, [50, 50, 50]);
+            let before = jpeg_encode(&before_rgb, 1920, 1080);
+            let after = jpeg_encode(
+                &stamp_square(&before_rgb, 1920, 1080, 5, 5, 10, [255, 255, 255]),
+                1920,
+                1080,
+            );
+            let (client, calls) =
+                stub_client_with_escalation((1920, 1080), vec![black, before, after], 2, true);
+            unlock_ipad(
+                &client,
+                IpadUnlockOptions {
+                    slam_first: Some(true),
+                    start_x: Some(960),
+                    start_y: Some(800),
+                    drag_px: Some(100),
+                    chunk_mickeys: Some(25.0),
+                    slam_pace_ms: Some(0),
+                    post_settle_ms: Some(0),
+                    verbose: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let recorded = calls.lock().unwrap().clone();
+            assert!(
+                !recorded
+                    .iter()
+                    .any(|c| matches!(c, Call::SendKey(k) if k == "Space")),
+                "no Space keypress should have fired for the internal slam under the default \
+                 try_key_press_first, got: {recorded:?}"
+            );
+        }
+    }
+
     mod slam_verify_motion_retry {
         use super::*;
 

@@ -79,9 +79,26 @@ rather than relying on today's call sites never changing, matching this
 project's own standing preference for the principled option over the
 locally-simplest one.
 
+## Explicit scope boundary (nixos-dev review)
+
+This proposal deliberately does NOT extend to `unlock_ipad()`'s default
+configuration (`try_key_press_first` unset/`true`, key-press attempted
+first). That path — whether the key press succeeds (returns early,
+never reaching this slam at all) or fails (falls through to the slam
+having already sent a key moments earlier) — still gets `false`/mouse-
+move-only. A key WAS sent there, at an elapsed time this proposal has
+not characterized for this specific call site (unlike the corner-
+control-smoke sites' own explicit `WAKE_DELAY_S`/timing analysis). This
+is a deliberate scope boundary, not an oversight — extending to that
+case would need its own separate causal or timing analysis, not
+assumed to transfer from this one.
+
 ## Status
 
-Proposal, not yet implemented or approved. nixos-dev: "your proposed
-next step... is exactly right and the obvious move... probably the
-real, final unlock for item 4." Sending this write-up for the same
-explicit review as the other two extensions before touching any code.
+**Approved by nixos-dev** — confirmed option (b) is symmetric with
+`unlock.rs`'s own existing `!= Some(false)` check for skipping the
+key-press-first branch, so the pairing is exact and principled, not
+just locally simpler. Confirmed `before`+`after` together is correctly
+justified for this one call site (both sit at the identical point in
+the causal chain here, unlike the corner-control-smoke case, which
+needed them reviewed separately). Cleared for implementation.
