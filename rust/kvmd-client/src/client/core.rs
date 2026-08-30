@@ -152,6 +152,18 @@ impl PiKVMClient {
         self.streamer_keepalive.stop();
     }
 
+    /// Whether the held `/api/ws` stream-keepalive connection is currently
+    /// connected. Diagnostic-only pass-through to `StreamerKeepalive
+    /// ::connected()` — added 2026-08-30 to investigate whether a 503 at
+    /// screenshot time correlates with the keepalive being mid-reconnect
+    /// (exponential backoff, capped at `RECONNECT_MAX_MS`) rather than a
+    /// screenshot-specific issue. See
+    /// docs/slam-verify-screenshot-retry-plan.md's before/after-retry
+    /// history for the investigation this supports.
+    pub fn streamer_keepalive_connected(&self) -> bool {
+        self.streamer_keepalive.connected()
+    }
+
     pub(super) async fn request(&self, args: RequestArgs) -> Result<ResponseBody, ClientError> {
         (self.request_fn)(args).await
     }

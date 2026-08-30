@@ -235,17 +235,37 @@ pub async fn slam_to_corner(
     // two calls asymmetrically doesn't depend on WHY `before` failed,
     // only on how much delay is tolerable before the slam fires.
     let before = if verify_motion {
-        Some(
-            take_screenshot_with_retry(
-                client,
-                options.screenshot.unwrap(),
-                BEFORE_SCREENSHOT_RETRY_MAX_ATTEMPTS,
-                BEFORE_SCREENSHOT_RETRY_SETTLE_MS,
-                options.verbose,
-                "before",
-            )
-            .await?,
+        // Diagnostic instrumentation (nixos-dev, 2026-08-30, see
+        // docs/slam-verify-screenshot-retry-plan.md): 2/2 live 503s here
+        // outlasted the retry budget. Before tuning the budget further,
+        // check whether the held `/api/ws` keepalive is actually
+        // connected at this point — if it's mid-reconnect (exponential
+        // backoff, capped at RECONNECT_MAX_MS), no amount of small
+        // settle-bumping on the screenshot side will help, and the real
+        // fix is elsewhere.
+        if options.verbose {
+            eprintln!(
+                "[slam] before-screenshot: streamer_keepalive_connected={} (checked before the attempt)",
+                client.streamer_keepalive_connected()
+            );
+        }
+        let result = take_screenshot_with_retry(
+            client,
+            options.screenshot.unwrap(),
+            BEFORE_SCREENSHOT_RETRY_MAX_ATTEMPTS,
+            BEFORE_SCREENSHOT_RETRY_SETTLE_MS,
+            options.verbose,
+            "before",
         )
+        .await;
+        if options.verbose {
+            eprintln!(
+                "[slam] before-screenshot: streamer_keepalive_connected={} (checked after the attempt, ok={})",
+                client.streamer_keepalive_connected(),
+                result.is_ok()
+            );
+        }
+        Some(result?)
     } else {
         None
     };
