@@ -93,17 +93,28 @@ own ~1.5s internal retry + 1000ms settle) ≈ 5s — acceptable for a
 verification step that isn't on the interactive-UI critical path (unlike
 the harness's human-facing confirm loop).
 
-Apply to BOTH the `before` and `after` calls in `slam_to_corner`, not
-just `after` — for consistency and because the `before` shot isn't
-provably immune (it follows whatever the caller did right before
-invoking `slam_to_corner`, which this module has no visibility into).
+Apply to the `after` call only, not `before`. All 3 live 503 occurrences
+were on `after`, never `before` — no evidence-based need to touch it.
+More importantly (nixos-dev's review): `before` sits between the guard's
+CONFIRMED precondition (the human-reviewed lock-screen check upstream)
+and the actual slam — every retry-with-settle attempt there would widen
+that specific gap, and this whole day's sessions have repeatedly shown
+this rig's screen state can shift within single-digit seconds (re-dimming,
+Touch ID escalation, torn frames). Minimizing that gap matters more than
+treating both calls symmetrically. `before` stays a bare `.await?`,
+unchanged, fail-fast as today.
 
-This only adds resilience: a call that succeeds on the first attempt
-(the overwhelming majority) behaves identically to today — same latency,
-same code path, no observable change. Not exposed as a new
-`SlamOptions` field for now (no caller has asked to tune it); can be
-added later if real-world calibration data says the defaults are wrong
-for some caller.
+This only adds resilience to `after`: a call that succeeds on the first
+attempt (the overwhelming majority) behaves identically to today — same
+latency, same code path, no observable change. Logs the actual attempt
+count on every real run (same calibration-continues-from-real-data
+discipline as the torn-frame threshold), since neither 1500ms nor the
+new 1000ms/3-attempts has real measured backing — `STREAMER_RESTART_GRACE_MS`'s
+own history (checked by nixos-dev) has no richer number to borrow either,
+so this is consistent with the existing precedent, not under-grounded
+relative to it. Not exposed as a new `SlamOptions` field for now (no
+caller has asked to tune it); can be added later if real-world
+calibration data says the defaults are wrong for some caller.
 
 ## Test plan
 
@@ -139,3 +150,28 @@ real runs, not resolved here.
    symmetry-alone reasoning justified, or unnecessary scope creep?
 3. Should this become a `SlamOptions` field (caller-tunable) now, or is
    deferring that until a real need appears the right call?
+
+## Review (nixos-dev) — resolved
+
+1. **3 attempts / 1000ms are reasonable, no better number exists.**
+   `STREAMER_RESTART_GRACE_MS`'s own history has no direct measurement
+   behind its 1500ms either — same qualitative "give it margin"
+   reasoning. Not under-grounded relative to the precedent it extends.
+2. **Apply to `after` only, NOT `before` — decided, not symmetric.**
+   `before` sits between the guard's confirmed precondition and the
+   slam; retrying there would widen that specific gap, and this rig's
+   screen state has repeatedly shifted within single-digit seconds this
+   session. `before` stays a bare, fail-fast `.await?`, unchanged.
+3. **Deferred — no `SlamOptions` field for now**, straightforward YAGNI.
+
+## Implementation
+
+Done — `take_screenshot_with_retry` helper in `slam/motion.rs`, applied
+to the `after` screenshot only (`before` explicitly left unretried, with
+a comment explaining why). Logs attempt count via `verbose` for future
+calibration. 349/349 mover tests (4 new: succeeds-first-try,
+recovers-on-second-outer-attempt, exhausts-max-attempts,
+slam_to_corner-recovers-from-a-transient-after-failure), clippy
+`-D warnings` and fmt clean. Not yet exercised live — the next
+categories-2/5 attempt is the real test of whether the 3-attempt/1s
+defaults are enough.
