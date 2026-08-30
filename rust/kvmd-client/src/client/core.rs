@@ -7,7 +7,7 @@
 //! responsibility.
 
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pikvm_mcp_cursor_belief::{Bounds as BeliefBounds, CursorBelief, CursorBeliefOptions, Point};
 
@@ -37,6 +37,25 @@ const WAKE_NUDGE_DELTA_PX: f64 = 5.0;
 /// Settle time after the nudge before the final retry — matches the
 /// corner-control harness's own post-wake settle window.
 const WAKE_NUDGE_SETTLE_MS: u64 = 1500;
+
+/// v2 escalation (docs/streamer-source-online-wake-nudge-plan.md): a
+/// keypress reliably revives `source.online` (confirmed live, multiple
+/// times); the only reason it isn't the default nudge is the lock-
+/// screen's own documented two-stage wake-then-dismiss state machine —
+/// a SECOND keyboard key sent while the first stage is still active
+/// advances it, which is unsafe to risk blind. This client can't see the
+/// screen during the exact outage it's trying to recover from (that's
+/// the definition of the failure), so screen state can't be the gate.
+/// The tractable proxy instead: how long since THIS client last sent a
+/// keyboard key. Tonight's own live evidence (`docs/allow-access-when-
+/// locked-keyboard-check-plan.md`'s two attempts) showed a second Space
+/// sent after a real gap exceeding this project's own documented
+/// ~10-12s wake/redraw window registers as a FRESH wake, not a
+/// continuation — so a quiet window comfortably past that resets the
+/// state machine back to safe-to-wake. `N=2` evidence, not a proven
+/// constant — deliberately wide margin, flagged for its own live
+/// verification.
+const KEYBOARD_WAKE_QUIET_WINDOW_MS: u64 = 20_000;
 
 /// The client's default `CursorBelief` (wide initial variance + wide
 /// bounds so `predict()` can't drift off-screen before orientation sets
@@ -74,6 +93,16 @@ pub struct PiKVMClient {
     /// can push observations via `observe_cursor` and reset belief via
     /// `reset_belief`.
     pub belief: Mutex<CursorBelief>,
+
+    /// When THIS client last sent a keyboard key (`send_key`/
+    /// `send_shortcut`), stamped by `send_key` on every call. Per-
+    /// instance, deliberately NOT the process-global `emit_clock` (that
+    /// module tracks mouse emits only and is shared across every client
+    /// instance — the wrong shape for "has THIS client recently sent a
+    /// key"). Read by `fetch_snapshot_with_retry`'s v2 escalation via
+    /// `keyboard_wake_is_safe` — see
+    /// docs/streamer-source-online-wake-nudge-plan.md.
+    pub(super) last_keyboard_emit: Mutex<Option<Instant>>,
 }
 
 impl PiKVMClient {
@@ -112,6 +141,7 @@ impl PiKVMClient {
             calibration: Mutex::new(None),
             streamer_keepalive,
             belief: Mutex::new(belief.unwrap_or_else(create_default_belief)),
+            last_keyboard_emit: Mutex::new(None),
         }
     }
 
@@ -227,31 +257,39 @@ impl PiKVMClient {
                         // docs/streamer-source-online-wake-nudge-plan.md:
                         // live evidence tonight is that this specific 503
                         // pattern is the iPad's own display needing a real
-                        // redraw event, not a connection-bookkeeping race —
-                        // a relative mouse-move (not a keypress, to avoid
-                        // the documented same-key-twice/dismiss-to-Touch-ID
-                        // hazard) is the safe wake mechanism already
-                        // validated for this by `--fallback-mouse-move`.
-                        // nixos-dev review (docs/streamer-source-online-wake-nudge-plan.md):
-                        // a FIXED (+dx,+dy) nudge isn't safe everywhere — the
-                        // call site that actually motivated this fix
-                        // (`slam_to_corner`'s own "after" verification
-                        // screenshot) fires right after the cursor has been
-                        // intentionally parked AT a screen corner, and a
-                        // fixed direction can move FURTHER into a bottom
-                        // corner's quick-action affordances instead of away.
-                        // Compute the nudge direction from the believed
-                        // current position toward screen center instead —
-                        // cheap (already-held belief + bounds), and safe
-                        // regardless of which corner the caller targeted.
-                        let (nudge_dx, nudge_dy) = {
-                            let belief = self.belief.lock().unwrap();
-                            wake_nudge_toward_center(belief.position, belief.bounds)
+                        // redraw event, not a connection-bookkeeping race.
+                        // v2: a keypress reliably does this (confirmed live,
+                        // multiple times) — a mouse-move (v1) mostly doesn't
+                        // (also confirmed live). A keypress is unsafe ONLY
+                        // when the lock screen's own two-stage wake-then-
+                        // dismiss state machine might still be mid-sequence
+                        // — this client can't see the screen during the
+                        // exact outage it's recovering from, so
+                        // `keyboard_wake_is_safe` uses the tractable proxy
+                        // instead (how long since THIS client last sent a
+                        // keyboard key — see `KEYBOARD_WAKE_QUIET_WINDOW_MS`'s
+                        // own doc comment). Falls back to v1's corner-aware
+                        // mouse-move nudge when a keypress isn't safe.
+                        let keyboard_safe = {
+                            let last = *self.last_keyboard_emit.lock().unwrap();
+                            keyboard_wake_is_safe(
+                                last,
+                                Instant::now(),
+                                Duration::from_millis(KEYBOARD_WAKE_QUIET_WINDOW_MS),
+                            )
                         };
                         // Best-effort: a nudge failure falls through to the
                         // final attempt anyway, same convention as
                         // `screenshot_keeping_cursor_alive`'s `let _ = ...`.
-                        let _ = self.mouse_move_relative(nudge_dx, nudge_dy).await;
+                        if keyboard_safe {
+                            let _ = self.send_key("Space", None).await;
+                        } else {
+                            let (nudge_dx, nudge_dy) = {
+                                let belief = self.belief.lock().unwrap();
+                                wake_nudge_toward_center(belief.position, belief.bounds)
+                            };
+                            let _ = self.mouse_move_relative(nudge_dx, nudge_dy).await;
+                        }
                         tokio::time::sleep(Duration::from_millis(WAKE_NUDGE_SETTLE_MS)).await;
                         match self
                             .request(RequestArgs {
@@ -340,6 +378,24 @@ fn wake_nudge_toward_center(position: Point, bounds: Option<BeliefBounds>) -> (f
         -WAKE_NUDGE_DELTA_PX
     };
     (dx, dy)
+}
+
+/// v2 escalation gate: is it safe to send a keyboard wake key right now?
+/// Mirrors `streamer_keepalive::liveness::is_stale`'s exact shape and
+/// boundary convention (`>`, not `>=`) — `None` (no keyboard key ever
+/// sent by this client) is always safe; otherwise safe only once
+/// `quiet_window` has fully elapsed since the last one. See
+/// `KEYBOARD_WAKE_QUIET_WINDOW_MS`'s own doc comment for why this proxy
+/// exists instead of checking screen state directly.
+fn keyboard_wake_is_safe(
+    last_keyboard_emit: Option<Instant>,
+    now: Instant,
+    quiet_window: Duration,
+) -> bool {
+    match last_keyboard_emit {
+        None => true,
+        Some(last) => now.duration_since(last) > quiet_window,
+    }
 }
 
 /// Shared `StreamerUnavailable` builder for `fetch_snapshot_with_retry`'s
@@ -538,19 +594,93 @@ mod tests {
         }
     }
 
-    /// End-to-end through `fetch_snapshot_with_retry`: with the cursor
-    /// believed to be at a BottomRight-style corner position, the actual
-    /// HID request sent for the wake nudge carries negative deltas (moving
-    /// toward center), not the corner-agnostic fixed +5,+5.
+    /// Pins `keyboard_wake_is_safe`'s boundary convention (mirrors
+    /// `streamer_keepalive::liveness::is_stale`'s own `>`, not `>=`, and
+    /// its 5-case shape: none/well-within/at-boundary/just-past/well-past).
+    mod keyboard_wake_is_safe_tests {
+        use super::*;
+
+        const WINDOW: Duration = Duration::from_millis(20_000);
+
+        #[test]
+        fn safe_when_no_keyboard_key_was_ever_sent() {
+            assert!(keyboard_wake_is_safe(None, Instant::now(), WINDOW));
+        }
+
+        #[test]
+        fn not_safe_well_within_the_window() {
+            let now = Instant::now();
+            let last = now - Duration::from_millis(1_000);
+            assert!(!keyboard_wake_is_safe(Some(last), now, WINDOW));
+        }
+
+        #[test]
+        fn not_safe_exactly_at_the_boundary() {
+            let now = Instant::now();
+            let last = now - WINDOW;
+            assert!(!keyboard_wake_is_safe(Some(last), now, WINDOW));
+        }
+
+        #[test]
+        fn safe_just_past_the_boundary() {
+            let now = Instant::now();
+            let last = now - WINDOW - Duration::from_millis(1);
+            assert!(keyboard_wake_is_safe(Some(last), now, WINDOW));
+        }
+
+        #[test]
+        fn safe_well_past_the_window() {
+            let now = Instant::now();
+            let last = now - Duration::from_millis(60_000);
+            assert!(keyboard_wake_is_safe(Some(last), now, WINDOW));
+        }
+    }
+
+    /// Wiring: `send_key` stamps this client's own `last_keyboard_emit`
+    /// clock on every successful call — the v2 escalation's whole gate
+    /// depends on this actually happening.
     #[tokio::test]
-    async fn wake_nudge_direction_follows_believed_position_not_a_fixed_delta() {
+    async fn send_key_stamps_the_last_keyboard_emit_clock() {
+        let request_fn: RequestFn =
+            Arc::new(move |_args: RequestArgs| Box::pin(async move { Ok(ResponseBody::Empty) }));
+        let client = PiKVMClient::with_request_fn(
+            PiKVMConfig::new("http://mock.local", "admin", "pw"),
+            None,
+            request_fn,
+        );
+        assert!(client.last_keyboard_emit.lock().unwrap().is_none());
+        client.send_key("Space", None).await.unwrap();
+        let stamped = client
+            .last_keyboard_emit
+            .lock()
+            .unwrap()
+            .expect("send_key should have stamped last_keyboard_emit");
+        assert!(stamped.elapsed() < Duration::from_secs(1));
+    }
+
+    /// v2 fallback path: when a keyboard key was sent recently (inside
+    /// `KEYBOARD_WAKE_QUIET_WINDOW_MS`), a Space escalation isn't safe —
+    /// falls back to v1's corner-aware mouse-move nudge. With the cursor
+    /// believed to be at a BottomRight-style corner position, the actual
+    /// HID request sent carries negative deltas (moving toward center),
+    /// not the corner-agnostic fixed +5,+5. Also pins that NO second
+    /// keyboard key is sent in this branch (only the one forced below).
+    #[tokio::test]
+    async fn wake_nudge_falls_back_to_corner_aware_mouse_move_when_keyboard_is_not_safe() {
         let nudge_deltas = Arc::new(std::sync::Mutex::new(None));
+        let key_calls = Arc::new(AtomicU32::new(0));
         let nudge_deltas_c = nudge_deltas.clone();
+        let key_calls_c = key_calls.clone();
         let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
             let nudge_deltas = nudge_deltas_c.clone();
+            let key_calls = key_calls_c.clone();
             Box::pin(async move {
                 if args.path.starts_with("/streamer/snapshot") {
                     return Err(unavailable_error());
+                }
+                if args.path.starts_with("/hid/events/send_key") {
+                    key_calls.fetch_add(1, Ordering::SeqCst);
+                    return Ok(ResponseBody::Empty);
                 }
                 if let Some(query) = args.path.strip_prefix("/hid/events/send_mouse_relative?") {
                     *nudge_deltas.lock().unwrap() = Some(query.to_string());
@@ -574,12 +704,14 @@ mod tests {
             x: 4090.0,
             y: 2150.0,
         });
+        // Force the "keyboard not safe" branch: a real key sent moments ago.
+        client.send_key("Escape", None).await.unwrap();
         let _ = client.fetch_snapshot_with_retry("/streamer/snapshot").await;
         let query = nudge_deltas
             .lock()
             .unwrap()
             .clone()
-            .expect("wake nudge should have fired exactly once");
+            .expect("mouse-move nudge should have fired exactly once");
         assert!(
             query.contains(&format!("delta_x={}", -WAKE_NUDGE_DELTA_PX as i64)),
             "expected a negative delta_x (toward center from BottomRight), got: {query}"
@@ -588,21 +720,25 @@ mod tests {
             query.contains(&format!("delta_y={}", -WAKE_NUDGE_DELTA_PX as i64)),
             "expected a negative delta_y (toward center from BottomRight), got: {query}"
         );
+        // Exactly one send_key call total — the forced "Escape" above, and
+        // NOT a second one from the escalation (which must have used the
+        // mouse-move fallback instead).
+        assert_eq!(key_calls.load(Ordering::SeqCst), 1);
     }
 
-    /// docs/streamer-source-online-wake-nudge-plan.md: with the flag ON,
-    /// two consecutive 503s escalate to a mouse-move wake nudge and a
-    /// THIRD attempt, which recovers here — exactly one nudge, no
-    /// retry-storm past it.
+    /// docs/streamer-source-online-wake-nudge-plan.md v2: with the flag ON
+    /// and no recent keyboard activity (the common case — a fresh client),
+    /// two consecutive 503s escalate to a Space keypress wake and a THIRD
+    /// attempt, which recovers here — exactly one keypress, no retry-storm.
     #[tokio::test]
-    async fn wake_nudge_enabled_recovers_via_the_third_attempt_after_a_nudge() {
+    async fn wake_nudge_enabled_recovers_via_the_third_attempt_after_a_keyboard_wake() {
         let snapshot_calls = Arc::new(AtomicU32::new(0));
-        let nudge_calls = Arc::new(AtomicU32::new(0));
+        let key_calls = Arc::new(AtomicU32::new(0));
         let snapshot_calls_c = snapshot_calls.clone();
-        let nudge_calls_c = nudge_calls.clone();
+        let key_calls_c = key_calls.clone();
         let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
             let snapshot_calls = snapshot_calls_c.clone();
-            let nudge_calls = nudge_calls_c.clone();
+            let key_calls = key_calls_c.clone();
             Box::pin(async move {
                 if args.path.starts_with("/streamer/snapshot") {
                     let n = snapshot_calls.fetch_add(1, Ordering::SeqCst);
@@ -611,8 +747,8 @@ mod tests {
                     }
                     return Ok(ResponseBody::Image(vec![9, 9, 9]));
                 }
-                if args.path.starts_with("/hid/events/send_mouse_relative") {
-                    nudge_calls.fetch_add(1, Ordering::SeqCst);
+                if args.path.starts_with("/hid/events/send_key") {
+                    key_calls.fetch_add(1, Ordering::SeqCst);
                     return Ok(ResponseBody::Empty);
                 }
                 panic!("unexpected request path in this test: {}", args.path);
@@ -632,25 +768,25 @@ mod tests {
             .unwrap();
         assert_eq!(buf, vec![9, 9, 9]);
         assert_eq!(snapshot_calls.load(Ordering::SeqCst), 3);
-        assert_eq!(nudge_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(key_calls.load(Ordering::SeqCst), 1);
     }
 
-    /// Flag ON, but the device stays genuinely unavailable through all
-    /// three attempts: still exactly one nudge (never re-nudges past the
-    /// one escalation), and the resulting error explicitly says the nudge
-    /// was tried.
+    /// Flag ON, no recent keyboard activity, but the device stays
+    /// genuinely unavailable through all three attempts: still exactly one
+    /// keypress (never re-sends past the one escalation), and the
+    /// resulting error explicitly says the nudge was tried.
     #[tokio::test]
-    async fn wake_nudge_enabled_still_fails_after_a_nudge_reports_it_was_tried() {
-        let nudge_calls = Arc::new(AtomicU32::new(0));
-        let nudge_calls_c = nudge_calls.clone();
+    async fn wake_nudge_enabled_still_fails_after_a_keyboard_wake_reports_it_was_tried() {
+        let key_calls = Arc::new(AtomicU32::new(0));
+        let key_calls_c = key_calls.clone();
         let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
-            let nudge_calls = nudge_calls_c.clone();
+            let key_calls = key_calls_c.clone();
             Box::pin(async move {
                 if args.path.starts_with("/streamer/snapshot") {
                     return Err(unavailable_error());
                 }
-                if args.path.starts_with("/hid/events/send_mouse_relative") {
-                    nudge_calls.fetch_add(1, Ordering::SeqCst);
+                if args.path.starts_with("/hid/events/send_key") {
+                    key_calls.fetch_add(1, Ordering::SeqCst);
                     return Ok(ResponseBody::Empty);
                 }
                 panic!("unexpected request path in this test: {}", args.path);
@@ -675,7 +811,7 @@ mod tests {
             }
             other => panic!("expected StreamerUnavailable, got {other:?}"),
         }
-        assert_eq!(nudge_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(key_calls.load(Ordering::SeqCst), 1);
     }
 
     /// Flag OFF (the default): behavior is byte-identical to before this
@@ -735,7 +871,7 @@ mod tests {
                     }
                     return Ok(ResponseBody::Image(vec![7, 7, 7]));
                 }
-                if args.path.starts_with("/hid/events/send_mouse_relative") {
+                if args.path.starts_with("/hid/events/send_key") {
                     return Err(unavailable_error());
                 }
                 panic!("unexpected request path in this test: {}", args.path);

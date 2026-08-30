@@ -1,16 +1,26 @@
 # `source.online` wake-nudge fix — design (2026-08-30)
 
-> **STATUS (2026-08-30, updated after live verification): the fix's core
-> mechanism is DISPROVEN, not just unverified.** A real live test found
-> the mouse-move escalation this fix relies on does NOT reliably revive
-> `source.online` — a genuine current 503-idle episode survived the full
-> flag-on escalation path, then was immediately recovered by a Space
-> keypress on the exact same stuck state. This is not "implemented,
+> **STATUS (2026-08-30, updated after live verification): the v1 fix's
+> core mechanism is DISPROVEN, not just unverified.** A real live test
+> found the mouse-move escalation this fix relies on does NOT reliably
+> revive `source.online` — a genuine current 503-idle episode survived
+> the full flag-on escalation path, then was immediately recovered by a
+> Space keypress on the exact same stuck state. This is not "implemented,
 > pending a routine live-verification pass" — it is "built, reviewed for
 > safety, and its central assumption failed its first real test." The
 > flag stays off. See "Live verification result" and "Status" near the
-> bottom for the full account; do not read only the Design section below
-> and assume this is close to flippable.
+> bottom for the full v1 account.
+>
+> **v2 design added below** ("Context-aware keypress escalation"): a
+> keypress-based escalation, gated on a NEW per-client "how long since
+> this client last sent a keyboard key" tracker, safe in the vast
+> majority of real calls (anywhere without very recent keyboard activity)
+> — but it does NOT solve the narrower case of recovering `source.online`
+> DURING an active multi-key lock-screen/passcode sequence (see
+> docs/allow-access-when-locked-keyboard-check-plan.md's second live
+> attempt) — that case is intentionally left to fall back to the v1
+> mouse-move nudge, since ANY extra keypress mid-sequence is genuinely
+> unsafe to send blind.
 
 ## Problem this fixes
 
@@ -270,3 +280,114 @@ concrete, untested lead exists for that question (see above — the
 "Allow Access When Locked → Keyboard" setting). Needs a fresh design
 pass + that setting checked on-device (through the same review process)
 before any further live testing — not decided in this pass.
+
+---
+
+# v2 design: context-aware keypress escalation (2026-08-30, manager's proactive next step)
+
+## Why now
+
+The v1 mouse-move fix is disproven. But a keypress reliably revives
+`source.online` (confirmed live, multiple times tonight) — the ONLY
+reason it isn't already the escalation mechanism is the lock-screen
+double-press-dismiss risk, which is real but genuinely narrow: it only
+matters when a wake key was ALREADY sent recently and the screen is still
+sitting on the plain-lock first stage. In every other real call —
+already unlocked, an ordinary idle health-check, the first wake attempt
+this sequence — a keypress is exactly as safe as the mouse-move was
+meant to be, and unlike the mouse-move, it actually works.
+
+## Correction to the manager's framing, stated plainly
+
+The manager's ask assumed "reuse whatever state-tracking already exists
+from today's lock-screen work." Checked this before designing anything
+on top of it: **no such tracker currently exists.** `emit_clock` (the
+only existing "last HID activity" clock in this codebase) is explicitly
+documented as MOUSE-only ("last mouse emit timestamp... call after every
+mouse emit") and is a process-wide global `static`, not scoped to a
+specific client. `send_key`/`send_shortcut` (`keyboard.rs`) touch it not
+at all. Reusing it as-is would be architecturally wrong on two counts:
+it doesn't track keyboard emits, and a global static would incorrectly
+conflate activity across multiple concurrent `PiKVMClient` instances
+(this session alone has constructed many, across its own diagnostic
+examples) rather than answering "has THIS client recently sent a key."
+New per-instance tracking is needed — a deliberate design decision, not
+an oversight of "reusing what's there."
+
+## Why the client layer can't know the actual screen state — and doesn't need to
+
+The fundamental problem this whole night's investigation exists to solve
+is: during a `source.online` outage, there IS no screenshot — that's
+the definition of the failure. So a gate like "screen is currently on
+the plain-lock first stage" can never be evaluated from inside
+`fetch_snapshot_with_retry` at the moment it needs an answer; there is no
+signal to check it against. The only tractable proxy is procedural, not
+visual: **how long since THIS client last sent a keyboard key.**
+Tonight's own two live attempts at the Allow-Access-When-Locked check
+directly demonstrated the mechanism this proxy relies on: a second Space
+press sent well after a real gap (tens of seconds, exceeding this
+project's own documented ~10-12s wake/redraw window) registered as a
+FRESH wake, not a continuation of the two-stage dismiss sequence — i.e.,
+enough elapsed time genuinely resets the lock-screen state machine back
+to its first stage. A "quiet window" threshold is therefore a real,
+evidence-grounded (if still `N=2`, not yet a large sample) proxy for
+"is a second keypress here going to land as a fresh wake, not a
+dismiss," without ever needing to see the screen.
+
+## Design
+
+- New `PiKVMClient` field: `last_keyboard_emit: Mutex<Option<Instant>>`
+  (per-instance, mirroring `belief`'s own per-instance `Mutex` pattern on
+  the same struct — NOT a global static like `emit_clock`, for the
+  reason above).
+- `send_key` stamps it on every call (covers `send_shortcut` for free,
+  since it's built entirely on `send_key`).
+- Pure decision function (mirrors `streamer_keepalive::liveness::
+  is_stale`'s exact shape and boundary convention — `>`, not `>=`):
+  ```rust
+  fn keyboard_wake_is_safe(
+      last_keyboard_emit: Option<Instant>,
+      now: Instant,
+      quiet_window: Duration,
+  ) -> bool {
+      match last_keyboard_emit {
+          None => true,
+          Some(last) => now.duration_since(last) > quiet_window,
+      }
+  }
+  ```
+- `KEYBOARD_WAKE_QUIET_WINDOW_MS = 20_000` — roughly double the
+  documented ~10-12s window, a deliberately wide margin given this is
+  `N=2` evidence, not a proven constant. Flagged as its own live-
+  verification item, same as the wake-nudge delta ever was.
+- `fetch_snapshot_with_retry`'s third-attempt escalation: check
+  `keyboard_wake_is_safe` against `self.last_keyboard_emit`. If safe,
+  send `send_key("Space", None)` instead of the mouse-move nudge. If not
+  safe (a keyboard key went out inside the quiet window — some other
+  in-flight sequence owns the screen right now), fall back to the
+  existing `wake_nudge_toward_center` mouse-move nudge, unchanged from
+  v1. Same `PiKVMConfig::source_online_wake_nudge` opt-in flag gates the
+  whole escalation, still off by default.
+
+## Honest scope limitation
+
+This does NOT unblock the specific failure mode hit twice in
+docs/allow-access-when-locked-keyboard-check-plan.md's live attempts:
+recovering `source.online` DURING an active, in-progress multi-key
+lock-screen/passcode sequence. In that exact window, a keyboard key was
+sent very recently (by design — that's the sequence itself), so
+`keyboard_wake_is_safe` correctly reports "not safe" and falls back to
+the mouse-move nudge, which tonight's own evidence says doesn't reliably
+work — so the escalation would still fail to recover in-sequence, same
+as today. That specific case remains parked per nixos-dev's framing
+(needs either a more direct fix or a purpose-built faster sequence, not
+this). This fix targets the GENERIC/ordinary case instead — most real
+`fetch_snapshot_with_retry` calls (health-checks, post-slam verification
+screenshots not immediately preceded by a keypress, etc.) have no recent
+keyboard activity and would newly, reliably self-heal.
+
+## Implementation status
+
+Code-complete, unit-tested, sent to nixos-dev for review. Not live-
+verified — per the manager's own standing instruction, that timing is a
+separate, later decision.

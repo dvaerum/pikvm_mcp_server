@@ -53,6 +53,12 @@ impl PiKVMClient {
             body: None,
         })
         .await?;
+        // v2 wake-nudge escalation (docs/streamer-source-online-wake-nudge-
+        // plan.md): stamps this client's OWN "last keyboard key sent" clock
+        // — per-instance, not `emit_clock` (mouse-only, process-global).
+        // `send_shortcut` is built entirely on this method, so it's covered
+        // for free.
+        *self.last_keyboard_emit.lock().unwrap() = Some(std::time::Instant::now());
         Ok(())
     }
 
