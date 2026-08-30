@@ -1768,3 +1768,39 @@ else, not freehanded. Categories 2/5 remains not yet exercised end-to-end
 (the guarded slam pair has still never fired live today), but every
 non-firing has been a genuine, verified-safe non-event for a real,
 now-understood reason.
+
+---
+
+**§12 torn-frame detection + retry, designed and implemented,
+2026-08-30 ~07:10-07:20 — code-only, closes the §11 capture-reliability
+gap.**
+
+Wrote `docs/torn-frame-detection-plan.md` with real, measured evidence
+(cropped to the tight iPad region, since the full 1680×1050 frame is
+~63% black letterbox even when clean — a naive full-frame check is
+invalid): a dominant-colour-fraction check doesn't discriminate
+(legitimate dark UI already ~18% flat-colour in the tight region), but
+full-row pixel-uniformity does — 1.5% on two clean samples vs 22.4% on
+the one torn sample still on disk (~15x separation). Sent for review.
+
+nixos-dev's review, 4 real points, all incorporated: (1) threshold math
+was wrong — 8% wasn't "biased toward clean" as claimed (geometric mean
+of 1.5%/22.4% is ~5.8%), resolved to 6%; (2) never re-send the wake key
+on a torn-frame retry — not a judgment call, a documented hard hazard on
+this rig (`ipad-unlock.ts:591-614`: a second `Space` dismisses an
+already-woken lock screen into Touch ID, exactly what this whole
+categories-2/5 saga has been fighting); (3) don't hardcode the crop
+rectangle — pass real per-frame `detect_ipad_bounds_from_buffer` output,
+since bounds drift (~4.6% edge-delta, per auto_crop.rs's own calibration
+work); (4) synthetic-only test fixtures, no committed binary.
+
+Implemented: new `detection-vision::torn_frame` module (mirrors
+`brightness.rs`'s exact conventions, 6 unit tests), wired into
+`cursor_anchor_corner_control_smoke.rs`'s existing wake+screenshot retry
+loop (v9) — never blocks (a bounds/analysis failure just skips the check
+for that attempt), never withholds from the human veto (a still-torn
+frame after 5 attempts is presented anyway with a warning). 345/345
+mover tests, 198/198 detection-vision tests, clippy `-D warnings` and
+fmt clean. Committed `2d5b8e9` (plan) and `719e2e1` (implementation) on
+`rust-port/module-4-mover`. Code-only — not yet exercised live; the next
+categories-2/5 attempt will be its first real test.
