@@ -251,3 +251,47 @@ open, pending a future run where the timing happens to line up (or a
 deliberately-constructed live test that forces the condition) — a
 separate, later, deliberately-timed decision per the manager's standing
 instruction.
+
+## Category 5 live attempt (2026-08-30 ~20:22-20:23) — INCONCLUSIVE, same known constraint, a natural extension proposed
+
+Per georg's direct instruction (via manager) to pursue category 5's
+identified reachable path now: health-checked (genuine lock screen,
+visually confirmed, one torn-frame retry handled correctly), then
+called `unlock_ipad(try_key_press_first: false)` directly — forcing the
+key-press shortcut off so control reaches `unlock.rs`'s own internal
+`CallerAsserted`-guarded slam (line 228) for real, not via the smoke
+test's own direct `anchor_cursor` calls.
+
+The guard itself WAS genuinely reached and did not refuse (`[slam]
+TopLeft x 25 calls @ 60ms` printed, confirming `anchor_cursor` resolved
+the guard and entered `slam_to_corner`) — but the `before` screenshot
+then hit the same recurring `source.online` stuck pattern and exhausted
+its 3-attempt retry, because `unlock_ipad()`'s own internal
+`AnchorRequest` explicitly sets `allow_keyboard_wake_before: false` /
+`allow_keyboard_wake_after: false` (unlock.rs:230-231) — it was
+deliberately NOT one of the two approved corner-control-smoke sites.
+`anchor_cursor` returned `Err` before the slam movement loop ever ran —
+zero HID near a corner. `unlock_ipad()` propagated the error (no
+graceful-degrade wrapper here, unlike the smoke test's own v8 fix), and
+even the diagnostic final screenshot 503'd. A separate wake+recheck
+confirmed the real, current device state directly: a genuine, clean,
+plain lock screen — safe, zero incident, but INCONCLUSIVE, same as
+§40's earlier finding, just via this specific call site instead.
+
+**The guard being reached and not refusing may or may not satisfy item
+4's literal bar on its own** — worth the team's own read, not decided
+here. What's clear is the run did not COMPLETE (no `verified` result was
+ever produced, `unlock_ipad()` returned `Err`), so this is not being
+claimed as a pass.
+
+**Natural extension, proposed not decided**: this exact configuration
+(`try_key_press_first: false`) never sends any key before the internal
+slam's screenshots — the same causal argument approved for the two
+corner-control-smoke sites (nothing sends a key/click between whatever
+triggered the call and this screenshot) applies here too, arguably even
+more cleanly (no preceding wake-key sequence at all in this config).
+Extending `allow_keyboard_wake_before`/`_after: true` to `unlock_ipad()`'s
+own internal slam — at least for this specific `try_key_press_first:
+false` configuration — would be a natural next candidate. Not
+implemented or decided here; needs its own explicit review, same
+process as every other extension in this doc.
