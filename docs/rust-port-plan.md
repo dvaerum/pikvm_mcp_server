@@ -2779,3 +2779,52 @@ docs/allow-access-when-locked-keyboard-check-plan.md (commit `4414566`).
 Two clean, safe, zero-incident attempts in a row that both got this far
 and no further is itself real information. Not resumed further this
 pass. All throwaway files cleaned up each time.
+
+---
+
+**§35 v2 wake-nudge escalation built — context-aware keypress, mouse-move
+fallback, per manager's proactive next step, 2026-08-30 ~18:30.**
+
+Manager's direction after §34: rather than leave `source.online`'s fix
+open-ended, design a keypress-based escalation gated on tracking
+"already sent a wake key this sequence," reusing existing state-tracking.
+
+Checked that premise before building on it: **no such tracker exists.**
+`emit_clock` is mouse-only (its own doc comment says so) and a process-
+global `static`, not scoped to a client — reusing it would be
+architecturally wrong on both counts. Built new, deliberate per-instance
+tracking instead: `PiKVMClient.last_keyboard_emit: Mutex<Option<Instant>>`,
+stamped by `send_key` on every call (covers `send_shortcut` for free).
+
+Core design insight: the client can't see the screen during the exact
+outage it's recovering from (that's the definition of the failure), so
+screen state can never gate this decision — the only tractable proxy is
+procedural: how long since THIS client last sent a keyboard key.
+Tonight's own live evidence (§34's two attempts) directly demonstrated
+the mechanism this relies on — a second Space sent after a real gap
+exceeding the documented ~10-12s wake/redraw window registered as a
+FRESH wake, not a continuation. `KEYBOARD_WAKE_QUIET_WINDOW_MS = 20_000`
+(double the documented window, `N=2` evidence, deliberately wide margin,
+flagged for its own live verification).
+
+`fetch_snapshot_with_retry`'s third-attempt escalation: safe → send
+`Space`; not safe (a keyboard key went out inside the quiet window) →
+fall back to v1's corner-aware mouse-move nudge, unchanged. Same
+`source_online_wake_nudge` flag, still off by default.
+
+**Honest scope limitation, documented plainly**: this does NOT unblock
+recovering `source.online` DURING an active multi-key lock-screen/
+passcode sequence (§33-§34's own blocker) — a keyboard key sent recently
+there correctly reports "not safe" and falls back to the mouse-move
+nudge, which doesn't reliably work either. That case stays parked. This
+targets the generic/ordinary case instead — most real
+`fetch_snapshot_with_retry` calls have no recent keyboard activity.
+
+11 new/updated unit tests (`keyboard_wake_is_safe`'s 5 boundary cases
+mirroring `streamer_keepalive::liveness::is_stale`'s own convention,
+`send_key` wiring, keyboard-escalation recovers/fails, mouse-move
+fallback with the corner-aware direction check preserved). kvmd-client
+81/81, full workspace all green, clippy `-D warnings` + fmt clean.
+Committed `7ef89fa`, pushed. Sent to nixos-dev for review; reported to
+the manager as built+tested per their direction, live verification
+deliberately held for a separately-timed decision.
