@@ -69,6 +69,11 @@ fn screenshot_options(args: &serde_json::Map<String, serde_json::Value>) -> Scre
         max_width: validate_number(args, "maxWidth", Some(1.0), Some(10000.0)).map(|v| v as u32),
         max_height: validate_number(args, "maxHeight", Some(1.0), Some(10000.0)).map(|v| v as u32),
         quality: validate_number(args, "quality", Some(1.0), Some(100.0)).map(|v| v as u32),
+        // This is the generic, arbitrary-context screenshot tool — never
+        // grant the keyboard-wake escalation here (nixos-dev review, v2
+        // wake-nudge design: a bare Space isn't safe in an unknown UI
+        // context). Falls back to the mouse-move nudge only, same as v1.
+        allow_keyboard_wake: false,
     }
 }
 

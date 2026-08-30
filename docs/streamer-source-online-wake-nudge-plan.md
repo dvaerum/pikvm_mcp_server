@@ -360,34 +360,69 @@ dismiss," without ever needing to see the screen.
   documented ~10-12s window, a deliberately wide margin given this is
   `N=2` evidence, not a proven constant. Flagged as its own live-
   verification item, same as the wake-nudge delta ever was.
-- `fetch_snapshot_with_retry`'s third-attempt escalation: check
-  `keyboard_wake_is_safe` against `self.last_keyboard_emit`. If safe,
-  send `send_key("Space", None)` instead of the mouse-move nudge. If not
-  safe (a keyboard key went out inside the quiet window — some other
-  in-flight sequence owns the screen right now), fall back to the
-  existing `wake_nudge_toward_center` mouse-move nudge, unchanged from
-  v1. Same `PiKVMConfig::source_online_wake_nudge` opt-in flag gates the
-  whole escalation, still off by default.
+- `fetch_snapshot_with_retry`'s third-attempt escalation: with keyboard
+  wake permitted for this call (see below) AND `keyboard_wake_is_safe`
+  against `self.last_keyboard_emit`, send `send_key("Space", None)`
+  instead of the mouse-move nudge. Otherwise fall back to the existing
+  `wake_nudge_toward_center` mouse-move nudge, unchanged from v1. Same
+  `PiKVMConfig::source_online_wake_nudge` opt-in flag still gates
+  whether the escalation happens at all, off by default.
+
+## Review round 2 (nixos-dev) — a significant safety-scope gap, fixed
+
+Initial v2 draft gated the keypress purely on `keyboard_wake_is_safe`'s
+timing proxy — nixos-dev caught a real, significant gap: that proxy only
+reasons about ONE hazard (the lock screen's own two-stage wake-then-
+dismiss machine). But `fetch_snapshot_with_retry` sits under nearly
+every screenshot call in the whole system, in ARBITRARY UI contexts —
+an open app mid-interaction, a focused text field (a bare `Space` types
+a literal character), a system alert/modal (`Space`/`Return` can
+activate a focused control in some UI/accessibility frameworks). A
+timing-since-last-keypress proxy says nothing about which of these the
+device is actually showing — v1's mouse-move was chosen not just for
+lock-screen safety but for being broadly harmless across arbitrary
+unknown contexts; `Space` doesn't share that property.
+
+**Fix: per-call consent, not a blanket runtime heuristic.** New
+`ScreenshotOptions.allow_keyboard_wake: bool`, default `false`. The
+keypress escalation now requires BOTH `allow_keyboard_wake: true` on
+THIS specific call AND `keyboard_wake_is_safe`'s timing check —
+`allow_keyboard_wake: false` is a hard override that always uses the
+mouse-move nudge regardless of timing (unit-tested explicitly). Every
+existing call site (`pikvm_screenshot`'s MCP tool, every internal
+`.screenshot(...)` call across `mover`/`ipad-hid`/the server) defaults
+to `false` and is therefore byte-identical to v1's behavior — nothing
+changes for any caller that doesn't explicitly opt in. Deciding to flip
+`true` at any SPECIFIC call site (e.g. a harness that just ran its own
+lock/wake sequence, so has real contextual grounds to trust it) is a
+separate, later, per-call-site design decision — not part of landing
+this code, same discipline as the whole escalation's own top-level
+opt-in flag.
 
 ## Honest scope limitation
 
-This does NOT unblock the specific failure mode hit twice in
-docs/allow-access-when-locked-keyboard-check-plan.md's live attempts:
-recovering `source.online` DURING an active, in-progress multi-key
-lock-screen/passcode sequence. In that exact window, a keyboard key was
-sent very recently (by design — that's the sequence itself), so
-`keyboard_wake_is_safe` correctly reports "not safe" and falls back to
-the mouse-move nudge, which tonight's own evidence says doesn't reliably
-work — so the escalation would still fail to recover in-sequence, same
-as today. That specific case remains parked per nixos-dev's framing
-(needs either a more direct fix or a purpose-built faster sequence, not
-this). This fix targets the GENERIC/ordinary case instead — most real
-`fetch_snapshot_with_retry` calls (health-checks, post-slam verification
-screenshots not immediately preceded by a keypress, etc.) have no recent
-keyboard activity and would newly, reliably self-heal.
+Even with `allow_keyboard_wake: true` granted, this does NOT unblock the
+specific failure mode hit twice in docs/allow-access-when-locked-
+keyboard-check-plan.md's live attempts: recovering `source.online`
+DURING an active, in-progress multi-key lock-screen/passcode sequence.
+In that exact window, a keyboard key was sent very recently (by design
+— that's the sequence itself), so `keyboard_wake_is_safe` correctly
+reports "not safe" and falls back to the mouse-move nudge, which
+tonight's own evidence says doesn't reliably work — so the escalation
+would still fail to recover in-sequence, same as today. That specific
+case remains parked per nixos-dev's own framing (needs either a more
+direct fix or a purpose-built faster sequence, not this). This fix
+targets the GENERIC/ordinary case instead, for callers that have
+explicitly opted in — most real `fetch_snapshot_with_retry` calls
+(health-checks, post-slam verification screenshots not immediately
+preceded by a keypress, etc.) have no recent keyboard activity and
+would newly, reliably self-heal, once a specific call site is reviewed
+and flipped on.
 
 ## Implementation status
 
-Code-complete, unit-tested, sent to nixos-dev for review. Not live-
-verified — per the manager's own standing instruction, that timing is a
-separate, later decision.
+Code-complete, unit-tested (including the scoping fix), sent to
+nixos-dev for review. Not live-verified — per the manager's own standing
+instruction, that timing is a separate, later decision. No caller has
+been flipped to `allow_keyboard_wake: true` yet — that's the next,
+separate, per-call-site decision once this lands.

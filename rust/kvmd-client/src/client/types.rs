@@ -135,6 +135,17 @@ pub struct ScreenshotOptions {
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
     pub quality: Option<u32>,
+    /// Default `false`. Permits `fetch_snapshot_with_retry`'s v2 wake-
+    /// nudge escalation to use a keyboard `Space` press (instead of
+    /// always falling back to a mouse-move nudge) for THIS call, if
+    /// `PiKVMConfig::source_online_wake_nudge` is also enabled and no
+    /// keyboard key was sent recently. A bare `Space` isn't universally
+    /// harmless the way a small mouse nudge is (arbitrary UI context —
+    /// see `fetch_snapshot_with_retry`'s own doc comment) — only set this
+    /// when the CALLER has itself reasoned through its specific context
+    /// (e.g. a harness that just ran its own lock/wake sequence), never
+    /// as a default for a generic screenshot call.
+    pub allow_keyboard_wake: bool,
 }
 
 #[derive(Debug, Clone, Default)]

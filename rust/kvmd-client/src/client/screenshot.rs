@@ -43,7 +43,9 @@ impl PiKVMClient {
         } else {
             format!("/streamer/snapshot?{}", params.join("&"))
         };
-        let buffer = self.fetch_snapshot_with_retry(&path).await?;
+        let buffer = self
+            .fetch_snapshot_with_retry(&path, options.allow_keyboard_wake)
+            .await?;
 
         // Force-refresh resolution to ensure accuracy.
         let actual_resolution = self.get_resolution(true).await?;

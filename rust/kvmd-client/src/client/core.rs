@@ -213,9 +213,29 @@ impl PiKVMClient {
     /// Fetch `/streamer/snapshot` bytes, absorbing the ustreamer
     /// idle-stop race. `ensure_started()` makes this a true no-op after
     /// the first call in a session.
+    ///
+    /// `allow_keyboard_wake` (nixos-dev review, v2 wake-nudge design):
+    /// `fetch_snapshot_with_retry` sits under nearly every screenshot call
+    /// in the whole system, in ARBITRARY UI contexts this client can never
+    /// know at the moment it needs to decide — an open app mid-
+    /// interaction, a focused text field, a system alert. A bare `Space`
+    /// keypress isn't universally harmless there the way a small mouse
+    /// nudge is (it can type a character or activate a focused control).
+    /// `keyboard_wake_is_safe`'s "quiet window" proxy only reasons about
+    /// ONE hazard (the lock screen's own two-stage wake-then-dismiss
+    /// machine) — it says nothing about arbitrary other contexts. So the
+    /// keypress escalation defaults OFF per call, not just per client:
+    /// `false` (every existing caller, unchanged from v1) always uses the
+    /// mouse-move nudge, ignoring `keyboard_wake_is_safe` entirely. Only a
+    /// caller that has itself reasoned through its own specific context
+    /// (e.g. a harness that just ran its own lock/wake sequence) should
+    /// ever pass `true` — a deliberate, reviewed, per-call-site decision,
+    /// not a blanket runtime heuristic. See
+    /// docs/streamer-source-online-wake-nudge-plan.md's v2 section.
     pub(super) async fn fetch_snapshot_with_retry(
         &self,
         path: &str,
+        allow_keyboard_wake: bool,
     ) -> Result<Vec<u8>, ClientError> {
         self.streamer_keepalive.ensure_started().await;
         match self
@@ -270,7 +290,12 @@ impl PiKVMClient {
                         // keyboard key — see `KEYBOARD_WAKE_QUIET_WINDOW_MS`'s
                         // own doc comment). Falls back to v1's corner-aware
                         // mouse-move nudge when a keypress isn't safe.
-                        let keyboard_safe = {
+                        // `allow_keyboard_wake` gates the KEYPRESS option
+                        // per call, on top of `keyboard_wake_is_safe`'s
+                        // own per-client timing check — see this method's
+                        // own doc comment for why the caller's explicit
+                        // consent is required, not inferred.
+                        let keyboard_safe = allow_keyboard_wake && {
                             let last = *self.last_keyboard_emit.lock().unwrap();
                             keyboard_wake_is_safe(
                                 last,
@@ -497,7 +522,7 @@ mod tests {
             request_fn,
         );
         let buf = client
-            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .fetch_snapshot_with_retry("/streamer/snapshot", false)
             .await
             .unwrap();
         assert_eq!(buf, vec![1, 2, 3]);
@@ -514,7 +539,7 @@ mod tests {
             request_fn,
         );
         let err = client
-            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .fetch_snapshot_with_retry("/streamer/snapshot", false)
             .await
             .unwrap_err();
         match err {
@@ -658,6 +683,55 @@ mod tests {
         assert!(stamped.elapsed() < Duration::from_secs(1));
     }
 
+    /// nixos-dev review: `allow_keyboard_wake: false` (the default every
+    /// existing caller gets, unchanged from v1) must ALWAYS use the
+    /// mouse-move nudge, even with NO recent keyboard activity at all
+    /// (the exact condition `keyboard_wake_is_safe` would otherwise call
+    /// safe) — the per-call gate is a hard override, not merely another
+    /// input to the timing check. Only a caller that has itself reasoned
+    /// through its specific context should ever see a keypress escalation.
+    #[tokio::test]
+    async fn wake_nudge_never_sends_a_keypress_when_the_call_does_not_allow_it() {
+        let key_calls = Arc::new(AtomicU32::new(0));
+        let nudge_calls = Arc::new(AtomicU32::new(0));
+        let key_calls_c = key_calls.clone();
+        let nudge_calls_c = nudge_calls.clone();
+        let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+            let key_calls = key_calls_c.clone();
+            let nudge_calls = nudge_calls_c.clone();
+            Box::pin(async move {
+                if args.path.starts_with("/streamer/snapshot") {
+                    return Err(unavailable_error());
+                }
+                if args.path.starts_with("/hid/events/send_key") {
+                    key_calls.fetch_add(1, Ordering::SeqCst);
+                    return Ok(ResponseBody::Empty);
+                }
+                if args.path.starts_with("/hid/events/send_mouse_relative") {
+                    nudge_calls.fetch_add(1, Ordering::SeqCst);
+                    return Ok(ResponseBody::Empty);
+                }
+                panic!("unexpected request path in this test: {}", args.path);
+            })
+        });
+        let client = PiKVMClient::with_request_fn(
+            PiKVMConfig {
+                source_online_wake_nudge: true,
+                ..PiKVMConfig::new("http://mock.local", "admin", "pw")
+            },
+            None,
+            request_fn,
+        );
+        // No keyboard key ever sent by this client — keyboard_wake_is_safe
+        // alone would say "safe". allow_keyboard_wake: false must still
+        // force the mouse-move path.
+        let _ = client
+            .fetch_snapshot_with_retry("/streamer/snapshot", false)
+            .await;
+        assert_eq!(key_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(nudge_calls.load(Ordering::SeqCst), 1);
+    }
+
     /// v2 fallback path: when a keyboard key was sent recently (inside
     /// `KEYBOARD_WAKE_QUIET_WINDOW_MS`), a Space escalation isn't safe —
     /// falls back to v1's corner-aware mouse-move nudge. With the cursor
@@ -706,7 +780,9 @@ mod tests {
         });
         // Force the "keyboard not safe" branch: a real key sent moments ago.
         client.send_key("Escape", None).await.unwrap();
-        let _ = client.fetch_snapshot_with_retry("/streamer/snapshot").await;
+        let _ = client
+            .fetch_snapshot_with_retry("/streamer/snapshot", true)
+            .await;
         let query = nudge_deltas
             .lock()
             .unwrap()
@@ -763,7 +839,7 @@ mod tests {
             request_fn,
         );
         let buf = client
-            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .fetch_snapshot_with_retry("/streamer/snapshot", true)
             .await
             .unwrap();
         assert_eq!(buf, vec![9, 9, 9]);
@@ -801,7 +877,7 @@ mod tests {
             request_fn,
         );
         let err = client
-            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .fetch_snapshot_with_retry("/streamer/snapshot", true)
             .await
             .unwrap_err();
         match err {
@@ -842,7 +918,7 @@ mod tests {
             request_fn,
         );
         let err = client
-            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .fetch_snapshot_with_retry("/streamer/snapshot", false)
             .await
             .unwrap_err();
         match err {
@@ -886,7 +962,7 @@ mod tests {
             request_fn,
         );
         let buf = client
-            .fetch_snapshot_with_retry("/streamer/snapshot")
+            .fetch_snapshot_with_retry("/streamer/snapshot", true)
             .await
             .unwrap();
         assert_eq!(buf, vec![7, 7, 7]);
