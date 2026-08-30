@@ -1,20 +1,38 @@
-# Rust port completion sign-off (DRAFT)
+# Rust port completion sign-off (NOT YET READY — item 5 reopened)
 
-**Status: DRAFT, for nixos-dev review before this is treated as final.**
+**Status: the conjunction does NOT currently hold. Item 5 is open.**
+This doc was first drafted claiming all 8 items satisfied; nixos-dev's
+review (real pushback, not a rubber stamp) caught that item 5's
+"SATISFIED" verdict wrongly chained a separate, unrelated function's
+result into `CallerAsserted`'s own outcome. Corrected below — see the
+"What changed" section. Kept as a live tracking doc rather than deleted,
+since items 1, 2, 3, 4, 6, and 8 genuinely are satisfied and that
+evidence stands; only item 5 needs another real attempt before this can
+honestly say "done."
+
 Written per `docs/final-e2e-validation-sign-off-plan.md`'s own closing
-instruction: "Sign-off is a single written statement (a doc, same shape
-as this one) enumerating each of 1-8 with its evidence, produced once
-all of them are independently true — not asserted from memory of
-individual PASSED messages scattered across the session." This doc is
-that statement, at commit `68d4749` on `rust-port/module-4-mover`.
+instruction: "Sign-off is a single written statement... produced once
+all of them are independently true." Since that's not yet true, this
+doc cannot yet serve as that statement — it's a status report on how
+close the conjunction is, with one item still genuinely open.
 
-This being a DRAFT means: the evidence below is real and each claim is
-sourced to a specific commit and a specific live result, not asserted
-from memory — but the overall verdict ("the conjunction holds") is a
-proposal for nixos-dev + the manager to confirm, not a unilateral
-declaration. Cutover itself is explicitly a separate conversation (see
-§4 of the source plan) — this doc only speaks to whether the sign-off
-criteria that gate that conversation are met.
+## What changed (2026-08-30, post nixos-dev review)
+
+The first draft's item 5 claimed "reached AND passed, live, end-to-end"
+by combining run #9 (`b8fc3d9` — `unlock_ipad()`'s real `CallerAsserted`
+guard: reached, didn't refuse, executed the slam safely, but its OWN
+motion verification failed TWICE, real outcome was the Touch ID prompt,
+not home) with commit `bb11ec4` (`unlock_ipad_with_code` — a completely
+separate function with zero `CallerAsserted`/`anchor_cursor`/
+`AnchorRequest` involvement, run after the device had independently
+re-locked). nixos-dev checked the actual source and found these are
+unrelated: `bb11ec4` is real, valuable evidence that the broader
+recovery flow reaches home reliably and that run #9 left the device
+safe — but it says nothing about `CallerAsserted`'s own verification
+outcome, which genuinely failed. This is exactly the "uniform phrasing
+over non-uniform evidence reads as rigour and isn't" failure mode
+flagged elsewhere in this project's own standing rules — caught here by
+a real second reviewer rather than shipped uncorrected.
 
 ## The eight items, per `docs/final-e2e-validation-sign-off-plan.md` §2
 
@@ -52,18 +70,24 @@ criteria that gate that conversation are met.
    visually confirmed.
 
 5. **`ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path —
-   SATISFIED (2026-08-30).** Two real attempts (#7, #8) established the
-   guard was reachable but didn't produce a verified result. Run #9
-   (commit `b8fc3d9`), after landing the `unlock_ipad`-internal-slam
-   keyboard-wake escalation extension (`bd4c448`), ran the guard all the
-   way through a real swipe — landed on the Touch ID/passcode prompt,
-   not home (a known, already-documented escalation pattern, not a
-   failure). Completion (commit `bb11ec4`, manager-approved use of the
-   already-established stored-passcode credential path): a fresh,
-   purely-passive screenshot confirmed the device had re-locked to the
-   plain lock screen; `unlock_ipad_with_code` against that confirmed
-   state produced a real, screenshot-confirmed genuine home screen.
-   Reached AND passed, live, end-to-end.
+   STILL OPEN (corrected 2026-08-30).** Two real attempts (#7, #8)
+   established the guard was reachable but didn't produce a verified
+   result. Run #9 (commit `b8fc3d9`), after landing the
+   `unlock_ipad`-internal-slam keyboard-wake escalation extension
+   (`bd4c448`), ran the guard all the way through a real swipe — but its
+   own motion verification failed TWICE, and it landed on the Touch
+   ID/passcode prompt, not home. Separately, commit `bb11ec4`
+   (`unlock_ipad_with_code`, an unrelated function, run after the device
+   independently re-locked) confirmed the broader recovery flow reaches
+   home reliably and that run #9 left the device safe — real and valuable,
+   but not evidence about `CallerAsserted`'s own verification outcome.
+   Same calibration as run #8 ("guard reached, didn't refuse" is real
+   positive evidence but is NOT "reached and passed"), now with one more
+   data point: an ACTIVE verification failure, not just an unreached
+   guard. **Reachable next step, not yet attempted**: a run where the
+   internal slam's own motion verification actually succeeds
+   (`slam_verified: Some(true)`) in the same continuous `unlock_ipad()`
+   call that reaches home.
 
 6. **The stationary-guard widening
    (`would_reject_as_stationary` K=4 ring) — SATISFIED (2026-08-30,
@@ -117,11 +141,16 @@ criteria that gate that conversation are met.
 
 ## Recommendation
 
-Items 1, 2, 3, 4, 5, 6, and 8 are independently satisfied with live,
+Items 1, 2, 3, 4, 6, and 8 are independently satisfied with live,
 screenshot- or transcript-verified evidence, each sourced to a specific
 commit above. Item 7 is explicitly and correctly carved out of this
-conjunction by the source plan's own design. On that basis, the
-conjunction the source plan requires before "the port is not called
-done" no longer blocks — but this is a recommendation for nixos-dev's
-concurrence and the manager's decision, not a unilateral declaration
-from this node alone.
+conjunction by the source plan's own design. **Item 5 is not yet
+satisfied** — real forward progress this session (the guard now runs
+through safely instead of erroring, per run #9), but its own
+verification failure means the literal bar isn't met. The conjunction
+therefore does NOT yet hold, and this doc should not be read as "the
+port is done" until a run produces a verified positive result for item
+5 specifically. Six of eight items being solid, real, independently-
+verified evidence is itself worth recording honestly as progress — it
+is not the same claim as completion, and this doc now says which one it
+is.
