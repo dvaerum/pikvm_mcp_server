@@ -241,3 +241,19 @@ information, not a failure of technique.
 
 Not resumed further this pass. All throwaway files cleaned up, device
 confirmed safe (clean plain lock screen) at the end.
+
+**The shape of the blocker, named plainly (nixos-dev)**: this check
+investigates the Keyboard setting as a CANDIDATE FIX for `source.online`'s
+wake problem — but confirming that setting now requires surviving
+`source.online`'s own blind windows long enough to complete a passcode
+entry. The bug is blocking investigation of one of its own candidate
+fixes. Not a design failure of this check; just where the dependency
+chain currently points.
+
+**Parked, not abandoned**, until either: (a) `source.online` gets a more
+direct fix that isn't itself gated on finding a safe wake key, or (b)
+someone deliberately designs a much tighter, faster passcode-entry
+sequence built specifically to beat the ~10-12s window — a real
+engineering task for a fresh session, not an urgent one, since the payoff
+here may matter less once `source.online`'s actual root cause is
+addressed directly.
