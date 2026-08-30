@@ -75,17 +75,24 @@ async fn take_screenshot_with_retry(
     Err(last_err.expect("loop runs at least once, so an all-Err path always sets this"))
 }
 
-/// Starting values for `take_screenshot_with_retry` on the `after` shot —
-/// see its doc comment and docs/slam-verify-screenshot-retry-plan.md.
+/// Starting values for `take_screenshot_with_retry`, shared by BOTH the
+/// `before` and `after` shots. `before` originally used a lighter budget
+/// (2 attempts/300ms) specifically to minimize widening the confirmed-
+/// precondition-to-slam gap — but live evidence (3 real occurrences, one
+/// with `streamer_keepalive_connected=true` throughout, ruling out a
+/// keepalive-reconnect explanation) showed that budget reliably fails
+/// anyway, giving none of the precondition-freshness benefit it was
+/// meant to preserve. nixos-dev's review (2026-08-30): abandon the
+/// asymmetry — a slightly longer retry that might actually succeed
+/// serves that same goal better than a short one that predictably
+/// doesn't. See docs/slam-verify-screenshot-retry-plan.md for the full
+/// history, including a flagged-for-later root-cause hypothesis (a
+/// zombie WS connection: `StreamerKeepalive`'s close-watcher is purely
+/// passive, no active ping, so `connected()` can report `true` for a
+/// connection an intermediate NAT/proxy silently dropped during the long
+/// human-confirmation silence — not fixed here, a bigger design item).
 const VERIFY_SCREENSHOT_RETRY_MAX_ATTEMPTS: u32 = 3;
 const VERIFY_SCREENSHOT_RETRY_SETTLE_MS: u64 = 1000;
-
-/// Lighter-touch starting values for the `before` shot — fewer attempts,
-/// shorter settle than `after`, to minimize widening the confirmed-
-/// precondition-to-slam gap (docs/slam-verify-screenshot-retry-plan.md
-/// addendum).
-const BEFORE_SCREENSHOT_RETRY_MAX_ATTEMPTS: u32 = 2;
-const BEFORE_SCREENSHOT_RETRY_SETTLE_MS: u64 = 300;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SlamOptions {
@@ -220,29 +227,17 @@ pub async fn slam_to_corner(
         eprintln!("[slam] {corner:?} x {calls} calls @ {pace_ms}ms");
     }
 
-    // Retried, but LIGHTER-touch than `after` below (docs/slam-verify-
-    // screenshot-retry-plan.md addendum): this sits between the guard's
-    // CONFIRMED precondition (the human-reviewed lock-screen check
-    // upstream) and the slam itself — a live 503 here was first
-    // attributed to slam-load-specific streamer flakiness (only `after`
-    // was retried), but the very next live run hit the identical
-    // signature on THIS call, with no slam traffic preceding it —
-    // counter-evidence against a load-specific mechanism, more
-    // consistent with general ustreamer flakiness that can hit either
-    // call. Still deliberately smaller than `after`'s budget (2 attempts
-    // / 300ms vs 3 / 1000ms) to minimize widening the confirmed-
-    // precondition-to-slam gap — the safety reasoning for treating the
-    // two calls asymmetrically doesn't depend on WHY `before` failed,
-    // only on how much delay is tolerable before the slam fires.
+    // Retried with the SAME budget as `after`, below (docs/slam-verify-
+    // screenshot-retry-plan.md). Originally lighter-touch (2 attempts/
+    // 300ms) to minimize widening the confirmed-precondition-to-slam
+    // gap — abandoned per nixos-dev's review after 3 real live
+    // occurrences (one with the keepalive diagnostic below confirming
+    // `connected=true` throughout, ruling out a reconnect-backoff
+    // explanation) showed the lighter budget reliably fails anyway,
+    // giving none of the precondition-freshness benefit it was meant to
+    // preserve. Keeping the keepalive diagnostic logging regardless — it
+    // still feeds the flagged-for-later zombie-WS-connection hypothesis.
     let before = if verify_motion {
-        // Diagnostic instrumentation (nixos-dev, 2026-08-30, see
-        // docs/slam-verify-screenshot-retry-plan.md): 2/2 live 503s here
-        // outlasted the retry budget. Before tuning the budget further,
-        // check whether the held `/api/ws` keepalive is actually
-        // connected at this point — if it's mid-reconnect (exponential
-        // backoff, capped at RECONNECT_MAX_MS), no amount of small
-        // settle-bumping on the screenshot side will help, and the real
-        // fix is elsewhere.
         if options.verbose {
             eprintln!(
                 "[slam] before-screenshot: streamer_keepalive_connected={} (checked before the attempt)",
@@ -252,8 +247,8 @@ pub async fn slam_to_corner(
         let result = take_screenshot_with_retry(
             client,
             options.screenshot.unwrap(),
-            BEFORE_SCREENSHOT_RETRY_MAX_ATTEMPTS,
-            BEFORE_SCREENSHOT_RETRY_SETTLE_MS,
+            VERIFY_SCREENSHOT_RETRY_MAX_ATTEMPTS,
+            VERIFY_SCREENSHOT_RETRY_SETTLE_MS,
             options.verbose,
             "before",
         )
@@ -290,8 +285,8 @@ pub async fn slam_to_corner(
         .mouse_move_relative(3.0 * vx as f64, 3.0 * vy as f64)
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
-    // Both before and after are retried now, but with different budgets
-    // — see take_screenshot_with_retry's doc comment and
+    // Both before and after are retried with the same budget now — see
+    // VERIFY_SCREENSHOT_RETRY_MAX_ATTEMPTS's doc comment and
     // docs/slam-verify-screenshot-retry-plan.md for why.
     let after = take_screenshot_with_retry(
         client,

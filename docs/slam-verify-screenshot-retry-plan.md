@@ -233,3 +233,52 @@ lighter constants (`BEFORE_SCREENSHOT_RETRY_MAX_ATTEMPTS = 2`,
 New test: `slam_to_corner` recovers `verify_motion` from a transient
 `before`-screenshot failure (mirrors the existing `after` test). 350/350
 mover tests, clippy `-D warnings` and fmt clean. Not yet exercised live.
+
+## RESULTS: the asymmetry was abandoned after real live evidence
+
+Ran live 3 times after the lighter-budget implementation. All 3 hit the
+identical failure: `before`'s 2-attempt/300ms budget was exhausted every
+time (`attempt 1/2 failed`, `attempt 2/2 failed`), never recovering
+within it. That's 3/3, not noise.
+
+**Diagnostic added first, per nixos-dev's review**: before tuning the
+budget blindly, checked whether `PiKVMClient`'s held `/api/ws` keepalive
+was actually connected at the failure point — if it were mid-reconnect
+(exponential backoff), no amount of budget-tuning on the screenshot side
+would help; the real fix would be elsewhere. Added a public
+`streamer_keepalive_connected()` accessor and logged it before/after
+`before`'s retry. **Result: `connected=true` both before AND after**,
+with the retry still failing both times in between. This rules out the
+reconnect-backoff hypothesis as the explanation for THIS failure.
+
+**Follow-up hypothesis, flagged for a future design pass, NOT built
+tonight**: `StreamerKeepalive`'s close-watcher (`wait_closed()`) is
+purely passive — it waits for a close event, never sends an active
+ping/heartbeat on the held connection. During the ~30s of total silence
+on that WS while a human reviews the confirmation screenshot, an
+intermediate NAT/proxy layer could silently drop the connection mapping
+without a clean close frame ever reaching this side — leaving
+`connected()` reporting `true` for a connection whose actual capability
+is gone. This is consistent with the measured data (`true`/`true`,
+503/503 in between) and is a well-known class of gap for idle WS
+connections without active pings. Recording it here so it isn't lost;
+fixing it (adding ping/pong to `StreamerKeepalive`) is a bigger design
+item for whenever this comes back up, not scoped into this session.
+
+**Decision**: abandon the before/after asymmetry. `before` now uses the
+SAME budget as `after` (`VERIFY_SCREENSHOT_RETRY_MAX_ATTEMPTS = 3`,
+`VERIFY_SCREENSHOT_RETRY_SETTLE_MS = 1000`, one shared pair of constants
+for both calls). nixos-dev's own reasoning: the original safety-tradeoff
+logic (minimize the confirmed-precondition-to-slam gap) doesn't survive
+contact with the empirical reality — a retry that reliably fails anyway
+gives ZERO of the precondition-freshness benefit the lighter budget was
+trying to preserve; a slightly longer retry that might actually SUCCEED
+serves that same goal better than a short one that predictably doesn't.
+
+Implemented: removed the separate `BEFORE_SCREENSHOT_RETRY_*` constants
+(no longer needed — both calls share `VERIFY_SCREENSHOT_RETRY_*`),
+updated both call sites' comments, kept the keepalive diagnostic logging
+in place (still useful data for the flagged zombie-WS hypothesis).
+350/350 mover tests, clippy `-D warnings` and fmt clean. Not yet
+exercised live with the matched budget — the next categories-2/5
+attempt is the real test.
