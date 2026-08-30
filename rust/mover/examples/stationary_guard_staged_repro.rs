@@ -112,10 +112,7 @@ async fn main() {
     // (predict, observe, a SECOND fresh predict, then query) -- skipping
     // the second predict would let the min_emit_mickeys gate alone force
     // `false`, proving nothing about the actual ring-size question.
-    let mut old_equivalent = CursorBelief::new(CursorBeliefOptions::new(Point {
-        x: 0.0,
-        y: 0.0,
-    }));
+    let mut old_equivalent = CursorBelief::new(CursorBeliefOptions::new(Point { x: 0.0, y: 0.0 }));
     old_equivalent.predict(Emit { dx: 50.0, dy: 0.0 }, None);
     let old_accepted_b = old_equivalent.observe(B, 0.9, None);
     old_equivalent.predict(Emit { dx: 50.0, dy: 0.0 }, None); // fresh emit, post-accept reset
