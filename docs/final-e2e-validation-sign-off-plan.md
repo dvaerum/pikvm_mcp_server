@@ -31,8 +31,9 @@ today's earlier 56-vs-38 tool-count reconciliation):
 | — | Real-MCP-transport gate (`pikvm_mouse_move_to`/`click_at`) | **PASSED** | `move_to_click_at_mcp_smoke.rs` against the real spawned binary over real stdio JSON-RPC, landed 10.8px from target, visually confirmed. §8 item 9. |
 | 3 | HID recovery / #51 stale-settle-latch | **PASSED** | Run live against the real endpoint (commit 17b918e): gate auto-released after 15075ms with no `clear_settling()` call and no process restart — the #51 backstop holds on real hardware. Real finding: the harness's own best-effort cleanup step (restore-to-original-mode) failed once (500 then several 403s), recovered manually via a plain retry, confirmed behaviorally with a real HID move + screenshot. Documented as a cleanup-path robustness gap for whoever next hardens the harness — not a defect in the mechanism under test, which passed cleanly. |
 | 1 | Paired iPadCollector ground-truth bench | **PASSED** | `task_37374b4bce6d`, now complete (commit a55685a). After the showScene redesign (reviewed) plus 2 more real bugs found live (a transient-torn-frame brightness retry; the actual root cause — the scene-source screenshot must be captured BEFORE relaunching iPadCollector, not after, since the app is already foreground showing its own dark idle view by the time a post-relaunch capture runs) — N=20 completed, zero WS reconnects, zero missing-ground-truth trials, 19/20 within the established 5.9px tolerance, 1/20 marginally over (6.245px, noise-floor territory, visually confirmed as a real close correct landing). |
-| 2 | `cornerTargetFromBounds`/anchor-verification positive+negative control | **OPEN — partial live evidence, PAUSED** | Guard-refusal proven; a genuine short-slam-through-the-guard `verified:false` control has not yet been reached cleanly. Two real incidents (guard-bypass, then guard-on-wrong-precondition) fixed and reviewed; combined run paused 3x on an unrelated wake-key question (see category 5). |
-| 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **OPEN — partial live evidence, PAUSED** | Same combined run as category 2. Safety boundary held 3/3 real attempts (fail-closed correctly every time, zero unsafe HID at any corner); the actual positive path (reach a plain lock screen, then a guarded slam) has never been cleanly reached. Blocked on the wake-key question below, not on the guard/slam logic itself, which is believed sound. |
+| 2 | `cornerTargetFromBounds`/anchor-verification positive+negative control | **OPEN — blocked on a well-characterized transport gap, not an open question** | Guard-refusal proven; the actual control pair has now been attempted 6 real live times (after the wake-key delay unblocked it) and consistently fails at `slam_to_corner`'s verification screenshot — see the new row below. Two earlier real incidents (guard-bypass, then guard-on-wrong-precondition) were fixed and reviewed; the guard/slam logic itself is believed sound. Stopping further live attempts here — more retries won't fix a transport-level gap; the next unlock is the fix below, not another attempt. |
+| 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **OPEN — same blocker as category 2** | Same combined run as category 2, same transport gap. Safety boundary held across all 6 real attempts (fail-closed correctly every time, zero unsafe HID at any corner, clean recovery every time — including via the v8 graceful-degrade fix). |
+| — | `slam_to_corner` verification-screenshot 503s (transport gap, well-characterized) | **OPEN — real root-cause candidate identified, fix not yet scoped** | Blocks categories 2/5's actual completion. Live evidence (2026-08-30): `slam_to_corner`'s before/after verification screenshots 503 unpredictably, confirmed NOT explained by insufficient outer-retry budget (tried asymmetric light/light, then symmetric 3/1000ms matching the `after` call — a full 3-attempt/~6.5s budget was exhausted with the failure persisting) and NOT explained by `StreamerKeepalive` reporting disconnected (`streamer_keepalive_connected=true` logged before AND after every failure). **Leading hypothesis**: `StreamerKeepalive`'s held `/api/ws` connection only detects death passively (`wait_closed()` waits for a close event/read-loop-end; no active ping/heartbeat) — a connection silently killed by an idle NAT/proxy timeout during the ~30s human-confirmation wait's total WS silence could report `connected=true` while the underlying transport is actually dead. Plausible and consistent with all observed data, not yet confirmed. **Fix, not yet built**: add an active ping/pong cycle to `StreamerKeepalive`'s held session so a truly-dead connection is detected and reconnected proactively, instead of relying on a passive close-watcher. Deliberately NOT scoped/built this session (real design work, not a tail-end addition) — full detail in `docs/slam-verify-screenshot-retry-plan.md`'s RESULTS section. |
 | — | Wake-key mechanism (`Space`-once wake-without-dismiss) | **OPEN — controlled sweep run, suggestive shape, threshold NOT pinned** | The precondition categories 2/5's combined gate depends on. Original informal experiment (commit c13142e) found a mixed result and a real premise correction (this rig has Touch ID + a working passcode, not no-passcode as assumed) — see prior inventory history. Follow-up controlled sweep (commit 58769ef, interleaved 2s/4s/8s, reviewed design): **d2 (2s) = 2/2 clean B**, **d8 (8s) = 2 clean A after escalation**, **d4 (4s) = 3/3 genuinely inconclusive** (torn capture every attempt, not a guessed value). Shape (short→B, long→A) is consistent with the timing-confound hypothesis but the one value that would have pinned the threshold never resolved. Recommendation: an interim ~8s delay before the wake step's `Space` press is a reasonable default for categories 2/5's retry, but this is NOT a fully proven threshold — a finer sweep (5s/6s/7s) with a longer post-press settle is the next real step if a precise value is ever needed. **Real methodology finding**: `unlock_ipad()`'s own cleanup step can itself escalate a genuine A into Touch ID (B) — a torn screenshot #3 must be reported as inconclusive, never inferred from a later recovery-step screenshot (this affected some of today's earlier informal circumstantial reads, not the sweep's own disciplined per-trial classification, which captures before any recovery runs). |
 | — | it-03400 desktop/absolute gate (`task_4b034fc4e018`) | **BLOCKED, separately, not on this pass's critical path** | Physical cable/OTG-enumeration issue on `it-03400` itself — a hardware problem on a different appliance, unrelated to any Rust-port code question. See §4. |
 
@@ -75,12 +76,15 @@ necessary, not sufficient").
    (commit a55685a). N=20 completed, 19/20 within the 5.9px tolerance,
    1/20 marginal (noise-floor, visually confirmed correct). No
    disagreement severe enough to warrant escalating to N≥80.
-2. **Category 2 positive+negative control pair actually run and passed**
-   on the guarded path (`anchor_cursor` with a real `CallerAsserted`
-   asserted against a genuine, screenshot-confirmed lock screen) —
-   `verified:true` for a correct-corner landing, `verified:false` for a
-   deliberately-short slam, both through the guard, not the raw
-   primitive.
+2. **Category 2 positive+negative control pair actually run and passed —
+   NOT YET, blocked on a well-characterized transport gap.** 6 real live
+   attempts, all blocked at `slam_to_corner`'s verification-screenshot
+   503s (see §1's new inventory row) — not the guard/slam logic itself,
+   believed sound throughout. Needs the `StreamerKeepalive` ping/pong fix
+   (or equivalent) before another live attempt is worth making; further
+   retries without that fix would spend live-hardware contact for no
+   additional signal, per the same day's own "stop when it's no longer
+   ambiguous" discipline.
 3. **Category 3 run against the real endpoint — SATISFIED** (commit
    17b918e). Forced a real `POST /hidmode` mode switch, gate released at
    15075ms with no restart, matching the #51 incident's exact failure
@@ -88,10 +92,11 @@ necessary, not sufficient").
    fixed) — doesn't affect this item's own sign-off, since the mechanism
    under test passed cleanly; worth someone hardening the harness's own
    restore step before it's reused unattended.
-4. **Category 5's positive path reached and passed** — a genuine
-   `CallerAsserted`-on-lock-screen run through `unlock_ipad()`/
-   `ipad_go_home()`'s real production call sites, not an isolated
-   synthetic smoke test.
+4. **Category 5's positive path reached and passed — NOT YET, same
+   blocker as item 2.** Same 6 live attempts, same transport gap. The
+   safety boundary itself has real repeated evidence now (fail-closed
+   correctly, clean recovery, all 6/6 times) — what's missing is reaching
+   the actual positive path, gated on the same fix as item 2.
 5. **The wake-key isolation experiment run and its outcome incorporated
    — PARTIALLY SATISFIED.** Both the informal experiment (c13142e) and
    the controlled follow-up sweep (58769ef) have run. Outcome: `Space`-
@@ -154,21 +159,25 @@ them**:
   done; its live confirmation (§2 item 6) remains open after 3 real
   attempts, needs a redesigned repro approach (staged observations, not
   another organic re-run) before a 4th attempt is worth making.
-- Categories 2/5's combined gate, once its wake-step redesign (below) is
-  settled.
+- Categories 2/5's combined gate — see below, now blocked on a DIFFERENT
+  dependency than the wake-key question that originally gated it.
 
-**This dependency is now RESOLVED — step 1 ran twice (informal
-experiment + controlled sweep), categories 2/5 are unblocked**:
+**The wake-key dependency is RESOLVED — step 1 ran twice (informal
+experiment + controlled sweep)**:
 1. Wake-key isolation experiment — RAN (c13142e) then a controlled
    follow-up sweep — RAN (58769ef): short delays reliably escalate to
    Touch ID, long delays reliably don't, precise threshold unresolved
    (see §1's inventory row) →
-2. Categories 2/5's combined gate retry: per §2 item 5, use an interim
-   ~8s delay before the wake step's `Space` press as the evidence-backed
-   default — not a guess, and not requiring the mouse-move fallback as a
-   fallback-of-last-resort either, though that option remains available
-   if an ~8s delay still proves unreliable in practice. The combined
-   gate can now be retried; nothing further blocks it structurally.
+2. Categories 2/5's combined gate retry, using the interim ~8s wake-step
+   delay: attempted 6 real live times. The wake-key mechanism itself
+   was NOT the blocker on any of these 6 — every attempt reached and
+   exercised the guard/slam logic successfully. **A NEW, different
+   dependency now blocks completion**: `slam_to_corner`'s verification
+   screenshots 503 unpredictably (see §1's new transport-gap row), a
+   transport-level issue unrelated to the wake-key question. Categories
+   2/5 are BLOCKED again, but on a well-characterized issue with a
+   candidate fix identified (not on an open question needing more live
+   experimentation).
 
 **Independent of everything else in this table**:
 - `task_4b034fc4e018` (it-03400) — different appliance, different
