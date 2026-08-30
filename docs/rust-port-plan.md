@@ -3702,3 +3702,58 @@ just corrected in §51 (chaining an unrelated fact into a "passed"
 verdict without review first). Awaiting that read before touching the
 sign-off docs again. Device left at the Touch ID prompt, benign, no
 further action taken.
+
+---
+
+**§55 CATEGORY 5 GENUINELY CLOSED — nixos-dev confirmed run #11 stands
+on its own merits; the full sign-off conjunction now holds
+(items 1/2/3/4/5/6 satisfied, 7 carved out, 8 green), 2026-08-30 ~22:02-22:15.**
+
+nixos-dev's read on §54's question, with real reasoning rather than
+agreement-for-agreement's-sake:
+
+- **Item 5's subject is the guard's own slam+verify correctness, not
+  the swipe's downstream iPadOS-specific landing.** Directly parallels
+  category 2's own precedent — that item was satisfied purely on the
+  strength of `verified:true/false`, zero requirement about what
+  happens after. Whether the swipe lands on Touch ID or home is a
+  separate, already-documented phenomenon (the wake-key delay-sweep's
+  own short-delay finding), never item 5's subject. Requiring it here
+  would be the SAME chained-fact mistake §51 corrected, just in
+  reverse — excluding a real result by an unrelated requirement instead
+  of including an unrelated one.
+- **On the accuracy-verification requirement nixos-dev itself set in
+  §53's review**: `slam_verified: Some(true)` IS the independent
+  confirmation, not a proxy for "no error." `verify_motion` is a real,
+  camera-based check comparing an ACTUAL detected cluster against the
+  EXPECTED target computed FROM the bounds detection — a real cluster
+  landing within 80px of a systematically-wrong target by coincidence
+  is genuinely unlikely. A clean `Some(true)` closes that requirement.
+
+**Verdict: item 5 satisfied by run #11 alone** — genuinely a single,
+unified result this time (guard reached, ran, verified correct), not
+two chained facts standing in for one claim, the exact distinction that
+mattered after §51's correction.
+
+Updated every doc: `docs/final-e2e-validation-sign-off-plan.md`'s table
+row 5, checklist item 4, and §3's summary (commit `8a1b7f9`);
+`docs/rust-port-completion-sign-off.md` rewritten as the actual final
+statement — items 1/2/3/4/5/6/8 all SATISFIED, item 7 explicitly carved
+out, the earlier correction kept visible in its own section rather than
+scrubbed from the record.
+
+**This closes task_63dd02e1bd7e's deliverable #4** (the E2E validation
+plan) — not just planned but fully executed, every mandatory
+risk-category item independently satisfied with live evidence. The one
+standing open item across the whole arc, tracked but not blocking:
+whether the keyboard-wake escalation mechanism has ever been observed
+actually firing mid-slam — it hasn't, in any live run to date, across
+either category 2 or category 5, because every run that finally closed
+them had its screenshots succeed on the first attempt. That would take
+real bad luck (a mid-slam idle-stop) to ever directly observe, not more
+design or review work — an honest, permanent asterisk on an otherwise
+clean close.
+
+Reported to the manager. Task note added, task_63dd02e1bd7e ready to be
+marked complete pending the manager's own sign-off on cutover timing
+(a separate decision from whether the criteria hold).
