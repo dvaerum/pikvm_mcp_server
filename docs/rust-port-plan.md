@@ -2828,3 +2828,51 @@ fallback with the corner-aware direction check preserved). kvmd-client
 Committed `7ef89fa`, pushed. Sent to nixos-dev for review; reported to
 the manager as built+tested per their direction, live verification
 deliberately held for a separately-timed decision.
+
+---
+
+**§36 v2 wake-nudge escalation scoped to per-call opt-in — a real,
+significant safety gap nixos-dev caught, fixed, 2026-08-30 ~18:50.**
+
+nixos-dev's review of §35's v2 design caught something bigger than the
+3 questions I'd asked: the timing-since-last-keypress proxy only reasons
+about ONE hazard (the lock screen's own two-stage wake-then-dismiss
+machine), but `fetch_snapshot_with_retry` sits under nearly every
+screenshot call in the whole system, in ARBITRARY UI contexts — an open
+app mid-interaction, a focused text field (a bare Space types a literal
+character), a system alert/modal. v1's mouse-move was chosen not just
+for lock-screen safety but for being broadly harmless across arbitrary
+unknown contexts; `Space` doesn't share that property. Swapping mouse-
+move for keypress traded "safe everywhere, effective nowhere" for
+"effective in the one context reasoned about, unknown risk everywhere
+else" — a trade that was never actually evaluated, just assumed.
+
+Fixed via per-call consent, not a blanket runtime heuristic: new
+`ScreenshotOptions.allow_keyboard_wake: bool`, default `false`. The
+keypress escalation now requires BOTH `allow_keyboard_wake: true` on
+THIS specific call AND `keyboard_wake_is_safe`'s timing check —
+`false` is a HARD override that always uses the mouse-move nudge
+regardless of timing (unit-tested explicitly: zero recent keyboard
+activity, the exact condition the timing check alone would call safe,
+still forces mouse-move when the call doesn't opt in). Every existing
+call site (`pikvm_screenshot`'s MCP tool, every internal
+`.screenshot()` call across the whole codebase) defaults to `false` —
+byte-identical to v1's behavior, nothing changes for any caller that
+doesn't explicitly opt in. Deciding to flip `true` at any SPECIFIC,
+reviewed call site (e.g. a harness that just ran its own lock/wake
+sequence) is a separate, later, per-call-site decision — not part of
+landing this code.
+
+`fetch_snapshot_with_retry`'s signature grew an explicit
+`allow_keyboard_wake: bool` parameter. 12 tests updated/added: existing
+keyboard-escalation tests now pass `true` explicitly (opted-in path), a
+new test pins `false` as a hard override. kvmd-client 82/82 (was 81).
+Full workspace: all green, zero regressions. Clippy `-D warnings` + fmt
+clean. Committed `7c131c6`, pushed. Design doc updated in full
+(docs/streamer-source-online-wake-nudge-plan.md).
+
+No caller has been flipped to `allow_keyboard_wake: true` yet — that's
+explicitly the next, separate decision, not part of this cycle. Good
+example of review catching a real gap before it could ship broadly —
+worth having sent this through review rather than treating the first
+draft as done.
