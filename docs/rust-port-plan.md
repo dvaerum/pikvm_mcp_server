@@ -2876,3 +2876,43 @@ explicitly the next, separate decision, not part of this cycle. Good
 example of review catching a real gap before it could ship broadly —
 worth having sent this through review rather than treating the first
 draft as done.
+
+---
+
+**§37 the specific opt-in decision — corner-control harness's post-slam
+screenshot, safety argument written up and sent for review,
+2026-08-30 ~18:50.**
+
+Manager: now that v2's structural fix is landed and reviewed, make the
+deliberate opt-in decision for the exact call site this whole
+investigation has circled — categories 2/5's corner-control harness's
+post-slam verification screenshot — rather than leaving it abstract.
+
+Wrote docs/corner-control-allow-keyboard-wake-decision.md (commit
+`bd11e2a`): reasoned through this SPECIFIC context, not generically.
+Key facts grounding it: this harness only reaches the guarded slam
+after a human visually confirms a genuine lock screen; the slam itself
+is pure relative mouse movement (no keys, no clicks) toward `TopLeft`
+(the only corner any real call site uses); mouse movement alone cannot
+transition the lock-screen state machine (established fact all
+session). So the realistic state space if `source.online` sticks at
+the after-screenshot is narrow: same lock screen (now further dimmed,
+real human confirmation-reading time having passed), or an external
+event unrelated to this harness (already an accepted risk it lives
+with regardless of this fix) — not the fully arbitrary-app/text-field
+risk nixos-dev correctly flagged for the generic case.
+
+Stated plainly, not rounded up: doesn't PROVE the device is still
+locked at that moment — same fundamental unknowability as the rest of
+tonight. What's true: nothing in this call site's own control flow can
+produce the arbitrary-context risk class. Materially smaller residual
+risk, not zero.
+
+Plumbing needed if approved (not yet built, mechanical but real): thread
+a new bool through `SlamOptions` → `take_screenshot_with_retry`'s
+"after" call specifically → `AnchorRequest` → set only at this one
+harness's own call site, default false everywhere else.
+
+Sent to nixos-dev for review of the safety argument itself, not just
+the eventual plumbing shape. Not implemented yet. No live hardware
+contact this round.
