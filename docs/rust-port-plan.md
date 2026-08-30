@@ -3101,3 +3101,41 @@ escalation — the actual practical blocker the first live run surfaced
 should now be addressed. Not live-verified yet — next live attempt
 would be the real test of whether this actually closes categories 2/5
 end-to-end, timing per the manager's own standing instruction.
+
+---
+
+**§43 categories 2/5 PASSED end-to-end for the first time this whole
+session — real milestone, honestly scoped: the wake-nudge escalation
+itself still wasn't exercised, 2026-08-30 ~19:32-19:33.**
+
+nixos-dev signed off on the before-extension with no further concerns.
+Ran the harness live a second time (health-check first, genuine lock
+screen confirmed): lock, wake (one torn-frame retry, correctly handled
+— no re-wake), confirmation screenshot visually confirmed genuine,
+confirmed "yes."
+
+Both controls completed cleanly through the full guarded slam pair:
+- Positive: `origin=(516, 58), verified=Some(true)` — real corner
+  landing correctly matched.
+- Negative: `origin=(516, 58), verified=Some(false)` — real short slam
+  correctly NOT matched.
+- Real `unlock_ipad()` recovery ran. Exit code 0 — **PASSED.**
+
+All screenshots (confirmation, positive, negative, final) inspected
+directly: genuine, clean, safe throughout. Zero incident.
+
+**Honest, precise scoping — not blurred together**: every `before`/
+`after` screenshot this run succeeded on its FIRST raw attempt —
+`source.online` happened to stay healthy throughout the whole slam
+sequence this time, so the wake-nudge escalation (keyboard or mouse)
+never actually fired. Categories 2/5 is now genuinely, verifiably
+passing end-to-end for the first time this whole session — the real
+milestone this entire multi-hour investigation has been working
+toward — but this specific run provides NO live evidence about the
+escalation mechanism itself, which remains untested against an actual
+mid-slam `source.online` stall. That's a separate, still-open item, not
+something to claim covered by this pass.
+
+Documented in full in docs/corner-control-allow-keyboard-wake-
+decision.md (commit `0d85c10`). Reporting the real milestone plainly to
+the team, without overclaiming what it does and doesn't prove.
