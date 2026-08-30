@@ -65,9 +65,16 @@ anything needs to currently be visible there.
 
 2. **Reset the real shared belief to a clean slate**: `client.reset_belief(<any
    current point>)` — the existing public pass-through (confirmed real,
-   `kvmd-client/src/client/core.rs`), clears `recent_observations` and
-   `emit_mag_since_last_observation` so nothing from process startup or
-   an earlier run leaks in.
+   `kvmd-client/src/client/core.rs`). **Precision correction (georgs-mac-mini
+   review)**: `reset()` clears `recent_observations` then immediately
+   re-seeds it with exactly ONE entry (the passed-in anchor point) via
+   `push_recent_observation` — confirmed at `estimator.rs`'s own `reset()`
+   body — so the ring has 1 entry after this step, not 0. Not a
+   correctness issue (the anchor point is chosen deliberately far from
+   both `A` and `B` below, so it never interferes with the drift checks
+   in steps 5/6), just a more precise description than "clears... so
+   nothing leaks in." `emit_mag_since_last_observation` genuinely does
+   reset to 0.
 
 3. **Stage pass 1 — accept the "A" observation** (the dock-icon-area
    cluster from the real incident, `(1092.0, 979.0)`):
@@ -108,16 +115,39 @@ anything needs to currently be visible there.
 6. **The contrast, computed for real, not asserted**: construct a
    SEPARATE, bare `CursorBelief::new(...)` (no client needed — this side
    only exists to demonstrate what the OLD, pre-widening design would
-   have concluded, not to test the real wiring). Replay ONLY the single
-   most recent observation from step 4 (`observe(Point{x:1020.0,
-   y:662.0}, 0.9, None)` + a matching `predict(Emit{dx:50.0, dy:0.0},
-   None)`), then call `would_reject_as_stationary(Point{x:1092.0,
-   y:979.0}, None)` on THIS instance. A belief that has only ever
-   observed once behaves identically to the old single-slot design (this
-   is the same "K=1-equivalent" property the widening's own offline
-   tests already establish and rely on). **Expected: `false`** — directly
-   demonstrating, with real running code on both sides, that the OLD
-   design would have missed exactly what the NEW design catches.
+   have concluded, not to test the real wiring; confirmed `new()` seeds
+   an EMPTY ring, unlike `reset()`, so no unrelated anchor point ends up
+   in it). Replay ONLY the single most recent observation from step 4,
+   **in this exact order, pinned down explicitly** (georgs-mac-mini
+   review, confirmed against `estimator.rs` directly):
+   1. `predict(Emit{dx:50.0, dy:0.0}, None)` — emit_mag = 50.
+   2. `observe(Point{x:1020.0, y:662.0}, 0.9, None)` — accepted, ring
+      becomes `[B]`. **`observe()` unconditionally resets
+      `emit_mag_since_last_observation` to 0 on acceptance
+      (`estimator.rs`'s own final lines) — this reset happens
+      regardless of what came before it.**
+   3. **A SECOND, fresh `predict(Emit{dx:50.0, dy:0.0}, None)`** — emit_mag
+      = 50 again. Skipping this step is the exact trap to avoid: without
+      it, `would_reject_as_stationary`'s own `min_emit_mickeys` gate
+      alone (0 < 30) would force `false` regardless of the ring's
+      contents, and the test would "pass" for the wrong reason (gate-
+      blocked, not because the ring genuinely lacks a match) — silently
+      proving nothing about the actual K=1-vs-K=4 ring-size question.
+   4. THEN call `would_reject_as_stationary(Point{x:1092.0, y:979.0},
+      None)` on this instance. **Expected: `false`** — gate passes
+      (50≥30), ring contains only `B`, and `A` is far from `B`, so the
+      rejection genuinely comes from the ring only having one relevant
+      entry, not from an unrelated gate failure. This mirrors exactly
+      how step 5's real widened-side query is itself structured (observe
+      resets emit, a fresh predict rebuilds it, then the query) — the
+      contrast is only meaningful if both sides follow the identical
+      shape.
+
+   A belief that has only ever observed once behaves identically to the
+   old single-slot design (the same "K=1-equivalent" property the
+   widening's own offline tests already establish and rely on) —
+   directly demonstrating, with real running code on both sides, that
+   the OLD design would have missed exactly what the NEW design catches.
 
 7. **Report both results side by side**, verbose, in the harness's own
    log: candidate position, both booleans, and an explicit PASS/FAIL
