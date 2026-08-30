@@ -31,8 +31,8 @@ today's earlier 56-vs-38 tool-count reconciliation):
 | — | Real-MCP-transport gate (`pikvm_mouse_move_to`/`click_at`) | **PASSED** | `move_to_click_at_mcp_smoke.rs` against the real spawned binary over real stdio JSON-RPC, landed 10.8px from target, visually confirmed. §8 item 9. |
 | 3 | HID recovery / #51 stale-settle-latch | **PASSED** | Run live against the real endpoint (commit 17b918e): gate auto-released after 15075ms with no `clear_settling()` call and no process restart — the #51 backstop holds on real hardware. Real finding: the harness's own best-effort cleanup step (restore-to-original-mode) failed once (500 then several 403s), recovered manually via a plain retry, confirmed behaviorally with a real HID move + screenshot. Documented as a cleanup-path robustness gap for whoever next hardens the harness — not a defect in the mechanism under test, which passed cleanly. |
 | 1 | Paired iPadCollector ground-truth bench | **PASSED** | `task_37374b4bce6d`, now complete (commit a55685a). After the showScene redesign (reviewed) plus 2 more real bugs found live (a transient-torn-frame brightness retry; the actual root cause — the scene-source screenshot must be captured BEFORE relaunching iPadCollector, not after, since the app is already foreground showing its own dark idle view by the time a post-relaunch capture runs) — N=20 completed, zero WS reconnects, zero missing-ground-truth trials, 19/20 within the established 5.9px tolerance, 1/20 marginally over (6.245px, noise-floor territory, visually confirmed as a real close correct landing). |
-| 2 | `cornerTargetFromBounds`/anchor-verification positive+negative control | **OPEN — blocked on a well-characterized transport gap, not an open question** | Guard-refusal proven; the actual control pair has now been attempted 6 real live times (after the wake-key delay unblocked it) and consistently fails at `slam_to_corner`'s verification screenshot — see the new row below. Two earlier real incidents (guard-bypass, then guard-on-wrong-precondition) were fixed and reviewed; the guard/slam logic itself is believed sound. Stopping further live attempts here — more retries won't fix a transport-level gap; the next unlock is the fix below, not another attempt. |
-| 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **OPEN — same blocker as category 2** | Same combined run as category 2, same transport gap. Safety boundary held across all 6 real attempts (fail-closed correctly every time, zero unsafe HID at any corner, clean recovery every time — including via the v8 graceful-degrade fix). |
+| 2 | `cornerTargetFromBounds`/anchor-verification positive+negative control | **PASSED** | After 6 blocked live attempts (transport gap, see row below) and the fix chain landing, run #7 (2026-08-30) completed the full guarded slam pair end-to-end: positive `verified:true` (real corner landing), negative `verified:false` (real short slam correctly not matched), clean recovery, exit 0, zero incident. Honest caveat, not glossed over: every before/after screenshot succeeded on its FIRST raw attempt this run — `source.online` stayed healthy throughout, so the wake-nudge escalation (keyboard or mouse) never actually fired. This is genuine, real evidence for the guard/slam control pair itself; it is NOT live evidence for the escalation mechanism, which remains untested against a real mid-slam stall (can't be forced deterministically, only waited for). `docs/corner-control-allow-keyboard-wake-decision.md` (commit a66054d). |
+| 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **STILL OPEN — precisely checked, not satisfied by run #7** | Checked directly against the real code before reporting either way: `unlock_ipad()` DOES have a real internal `CallerAsserted`-on-lock-screen call site (`unlock.rs:228`, gated behind `slam_first`, default true) — a genuine, reachable production path, not hypothetical. But `unlock_ipad()` tries a key-press-first recovery (Esc+Enter+Space) before that step, and if it succeeds — which it did in run #7 — the function returns EARLY, never reaching the internal guarded slam. Proven from run #7's own log: `recovery slam_verified: None` (would be `Some(true/false)` if the internal slam had actually run). So run #7's `CallerAsserted` exercise was entirely confined to the smoke test's OWN direct `anchor_cursor` calls (category 2's territory) — exactly what this item's wording ("not an isolated synthetic smoke test") requires to be ruled out. Reachable path identified for a future attempt: force `try_key_press_first: false` (or any real-world case where the key-press recovery genuinely fails) to drive control into `unlock_ipad()`'s own guarded slam. |
 | — | `slam_to_corner` verification-screenshot 503s | **FIX IMPLEMENTED for BOTH the corner-control harness's before AND after screenshots — awaiting live verification** | Blocked categories 2/5's completion; root cause fully understood, fix now landed for both call sites in the sequence that started this whole investigation. Two real findings layered together: (1) a genuine WS-zombie-connection bug in `StreamerKeepalive`, fixed by active Ping/Pong (35e64ba) — real, worth keeping, confirmed NOT the driver of this pattern. (2) The actual cause: the iPad's own display goes properly dark during the long human-confirmation wait (~10.6-10.7s consistently), and ustreamer correctly reports no source until a real redraw — confirmed decisively (a single `Space` through an already-stuck client immediately revives it; a mouse-move nudge does not). Unifies with the wake-key delay-sweep's own earlier finding (short delay escalates to Touch ID, long delay stays clean) — likely the same underlying display timing studied from two angles. **Fix chain, fully implemented**: v1 (mouse-move-only escalation) shipped, then LIVE-DISPROVEN as insufficient; v2 (context-aware keypress escalation, `keyboard_wake_is_safe` timing gate) built, then hardened with a real safety-scope correction (a bare `Space` isn't universally harmless the way a mouse nudge is — could hit an arbitrary unknown UI context anywhere `fetch_snapshot_with_retry` is called) via a new per-call `ScreenshotOptions.allow_keyboard_wake` opt-in gate, default `false` everywhere. First wired to the AFTER screenshot only (`AnchorRequest.allow_keyboard_wake_after`, dfdf18c) — a live attempt then showed the SAME source.online pattern hitting the BEFORE screenshot instead, one step earlier than the fix reached, giving neither positive nor negative evidence on the fix itself (harness's own graceful-degrade caught it cleanly, zero HID near a corner). Extended to `allow_keyboard_wake_before` too (90f444d) after its own explicit safety re-review (same causal argument — no keys/clicks intercede either way — plus one flagged, non-blocking accuracy question: a successful before-escalation wakes the display right before the slam's own corner-detection runs against that freshly-illuminated frame). A cross-shot test confirms the composition is correct by construction: if `before`'s escalation fires a key, `after`'s escalation in the SAME run correctly falls back to mouse (recent-emit timing gate), even with both fields true. Commit 90f444d, mover 355/355 tests. **Not yet live-verified** — that's the next real step for categories 2/5, deliberately separate and not yet timed. |
 | — | Wake-key mechanism (`Space`-once wake-without-dismiss) | **OPEN — controlled sweep run, suggestive shape, threshold NOT pinned** | The precondition categories 2/5's combined gate depends on. Original informal experiment (commit c13142e) found a mixed result and a real premise correction (this rig has Touch ID + a working passcode, not no-passcode as assumed) — see prior inventory history. Follow-up controlled sweep (commit 58769ef, interleaved 2s/4s/8s, reviewed design): **d2 (2s) = 2/2 clean B**, **d8 (8s) = 2 clean A after escalation**, **d4 (4s) = 3/3 genuinely inconclusive** (torn capture every attempt, not a guessed value). Shape (short→B, long→A) is consistent with the timing-confound hypothesis but the one value that would have pinned the threshold never resolved. Recommendation: an interim ~8s delay before the wake step's `Space` press is a reasonable default for categories 2/5's retry, but this is NOT a fully proven threshold — a finer sweep (5s/6s/7s) with a longer post-press settle is the next real step if a precise value is ever needed. **Real methodology finding**: `unlock_ipad()`'s own cleanup step can itself escalate a genuine A into Touch ID (B) — a torn screenshot #3 must be reported as inconclusive, never inferred from a later recovery-step screenshot (this affected some of today's earlier informal circumstantial reads, not the sweep's own disciplined per-trial classification, which captures before any recovery runs). |
 | — | it-03400 desktop/absolute gate (`task_4b034fc4e018`) | **BLOCKED, separately, not on this pass's critical path** | Physical cable/OTG-enumeration issue on `it-03400` itself — a hardware problem on a different appliance, unrelated to any Rust-port code question. See §4. |
@@ -76,24 +76,16 @@ necessary, not sufficient").
    (commit a55685a). N=20 completed, 19/20 within the 5.9px tolerance,
    1/20 marginal (noise-floor, visually confirmed correct). No
    disagreement severe enough to warrant escalating to N≥80.
-2. **Category 2 positive+negative control pair actually run and passed —
-   NOT YET, but the fix is now fully implemented for BOTH call sites in
-   the sequence.** 6 real live attempts were blocked at `slam_to_corner`'s
-   verification-screenshot 503s (see §1's inventory row) — not the
-   guard/slam logic itself, believed sound throughout (one further
-   attempt after the AFTER-only fix landed showed the same pattern
-   hitting BEFORE instead — inconclusive on the fix, but confirmed the
-   need to cover both shots, now done). Root cause: the iPad's own
-   display going dark during the long confirmation wait (~10.6-10.7s
-   consistently); a real `Space` keypress reliably revives it, a mouse
-   nudge does not. Fix chain complete: a context-aware keypress
-   escalation (`keyboard_wake_is_safe` timing gate) is now wired in via
-   an explicit per-call opt-in (`ScreenshotOptions.allow_keyboard_wake`,
-   default false everywhere, `true` for both this harness's before AND
-   after screenshots, reviewed safety arguments in
-   `docs/corner-control-allow-keyboard-wake-decision.md`, commit
-   90f444d). Next step is this specific fix's own live verification,
-   THEN a fresh category 2 attempt — no further design work blocking it.
+2. **Category 2 positive+negative control pair actually run and passed
+   — SATISFIED (2026-08-30).** After 6 blocked attempts and the fix
+   chain landing (v1 disproven, v2 built + safety-hardened + extended to
+   both before/after shots), run #7 completed the full guarded slam pair
+   live: positive `verified:true`, negative `verified:false`, clean
+   recovery, exit 0, zero incident. Honest caveat: `source.online`
+   stayed healthy the whole run, so the wake-nudge escalation itself
+   never fired — this satisfies the control-pair criterion as literally
+   worded, but is NOT live evidence for the escalation mechanism, which
+   remains untested against a real mid-slam stall.
 3. **Category 3 run against the real endpoint — SATISFIED** (commit
    17b918e). Forced a real `POST /hidmode` mode switch, gate released at
    15075ms with no restart, matching the #51 incident's exact failure
@@ -101,12 +93,20 @@ necessary, not sufficient").
    fixed) — doesn't affect this item's own sign-off, since the mechanism
    under test passed cleanly; worth someone hardening the harness's own
    restore step before it's reused unattended.
-4. **Category 5's positive path reached and passed — NOT YET, same
-   status as item 2.** Same 6 live attempts, same transport gap, same
-   shipped-but-unverified fix. The safety boundary itself has real
-   repeated evidence now (fail-closed correctly, clean recovery, all 6/6
-   times) — what's missing is reaching the actual positive path, gated on
-   the same fix verification as item 2.
+4. **Category 5's positive path reached and passed — STILL NOT
+   SATISFIED, precisely checked against run #7, not assumed from item
+   2's pass.** `unlock_ipad()` has a real internal `CallerAsserted`
+   call site (`unlock.rs:228`, gated behind `slam_first`) — but its
+   key-press-first recovery path succeeded in run #7 and returned
+   early, before ever reaching that internal guarded slam (confirmed:
+   `recovery slam_verified: None` in the run's own log — would be
+   `Some(...)` if it had run). Run #7's entire `CallerAsserted` exercise
+   was confined to the smoke test's own direct `anchor_cursor` calls
+   (item 2's territory), which this item's own wording explicitly
+   excludes ("not an isolated synthetic smoke test"). Reachable path
+   identified for whenever this is worth forcing: `try_key_press_first:
+   false`, or any real case where the key-press recovery genuinely
+   fails.
 5. **The wake-key isolation experiment run and its outcome incorporated
    — PARTIALLY SATISFIED.** Both the informal experiment (c13142e) and
    the controlled follow-up sweep (58769ef) have run. Outcome: `Space`-
@@ -147,10 +147,14 @@ necessary, not sufficient").
    does not need it resolved; a cutover decision for the desktop/
    absolute-mouse path does, and that's called out separately at
    whatever point desktop/absolute cutover is actually discussed.
-8. **Full workspace `cargo build/test/clippy/fmt` green** at the commit
-   being signed off, verified fresh (not trusted from an earlier report)
-   at sign-off time, matching the standing per-commit discipline already
-   applied throughout this port.
+8. **Full workspace `cargo build/test/clippy/fmt` green — SATISFIED,
+   verified fresh (2026-08-30) at commit a66054d.** Ran directly, not
+   trusted from an earlier report: `cargo build --workspace` clean;
+   `cargo test --workspace` 987 passed / 0 failed / 4 ignored (real-ONNX)
+   across all 8 crates; `cargo clippy --workspace --all-targets -- -D
+   warnings` clean; `cargo fmt --all -- --check` clean. This item alone
+   is satisfied at any given commit — re-verify again at whatever commit
+   is actually being signed off, since the workspace keeps moving.
 
 Sign-off is a single written statement (a doc, same shape as this one)
 enumerating each of 1-8 with its evidence, produced once all of them are
