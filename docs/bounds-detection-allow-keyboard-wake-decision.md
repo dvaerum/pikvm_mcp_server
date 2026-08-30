@@ -135,12 +135,35 @@ already gone out first (`ipad_go_home`, and `unlock_ipad`'s
 default-config error path), this proposal deliberately does NOT extend
 there — consistent with every prior decision in this chain.
 
-## Open question for nixos-dev
+## Open question for nixos-dev — RESOLVED
 
-Is hoisting the `try_key_press_first == Some(false)` boolean computation
-to the top of `unlock_ipad` (so both Site A's `DetectOptions` and the
-internal slam's `AnchorRequest` read the same computed value) the right
-call, or should each site independently re-derive it from
-`options.try_key_press_first`? Leaning toward hoisting (single source
-of truth, avoids the two sites drifting if the condition is ever
-revisited) but no strong objection to the alternative.
+Hoist the `try_key_press_first == Some(false)` boolean to a single
+computed value both Site A's `DetectOptions` and the internal slam's
+`AnchorRequest` read, rather than each independently re-deriving it —
+nixos-dev's call, matching this session's own standing preference for
+the principled option over the locally-simplest one.
+
+## Verification requirement, specific to this call site (nixos-dev review)
+
+Unlike the two already-approved sites (the before/after slam
+screenshots are a verification/redundant check), bounds detection's
+RESULT actively drives where the subsequent slam targets
+(`corner_target_from_bounds`'s own calibration) — run #9/#10 already
+demonstrate this concretely: a bad/fallback bounds reading directly
+caused the downstream slam+verification to fail. This means a
+technically-successful-but-INACCURATE detection right after a
+keyboard-wake could be WORSE than a clean 503: a 503 fails loudly into
+the existing (known-suboptimal but safe) fallback, while a
+wrong-but-"successful" detection would silently feed bad calibration
+into the slam with no error signal at all.
+
+**Whoever runs this escalation's live verification must specifically
+check that the bounds detected right after it fires are ACCURATE**
+(matches the known-good iPad screen region) — not merely that the call
+returned without a 503. Checking success alone is not sufficient
+evidence this change is safe to rely on.
+
+## Status
+
+**Approved by nixos-dev**, with the accuracy-verification requirement
+above. Cleared for implementation.
