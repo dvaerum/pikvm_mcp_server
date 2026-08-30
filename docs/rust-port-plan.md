@@ -2916,3 +2916,45 @@ harness's own call site, default false everywhere else.
 Sent to nixos-dev for review of the safety argument itself, not just
 the eventual plumbing shape. Not implemented yet. No live hardware
 contact this round.
+
+---
+
+**§38 corner-control harness wired to the keypress escalation — approved
+and implemented, 2026-08-30 ~19:10.**
+
+nixos-dev approved §37's safety argument, with one precise wording
+correction (the accepted external-event residual risk marginally raises
+that case's SEVERITY if it coincides with this escalation, not its
+LIKELIHOOD — applied to the doc). Cleared for implementation.
+
+`SlamOptions.allow_keyboard_wake_after` (default `false`) threads
+through `take_screenshot`/`take_screenshot_with_retry` to the `after`
+shot's `ScreenshotOptions.allow_keyboard_wake` only — `before` always
+hardcodes `false`, a separate undecided question. `AnchorRequest.
+allow_keyboard_wake_after` threads through `run_slam` into
+`SlamOptions`. `AnchorRequest` has no `Default` derive, so all 9
+construction sites across the crate needed this set explicitly — no new
+call site can silently inherit `true`. Set `true` at exactly the two
+approved sites (`cursor_anchor_corner_control_smoke.rs`'s positive AND
+negative controls); `false` everywhere else.
+
+2 new end-to-end tests drive `slam_to_corner` itself through a real
+escalation and assert which HID endpoint actually fired — isolated from
+the slam's own large relative-move calls and the pre-verify in-corner
+nudge by checking the exact `WAKE_NUDGE_DELTA_PX` magnitude specifically
+(a real debugging round: the first attempt's naive "any mouse-relative
+call = an escalation" tracking miscounted the slam's own ±127 moves and
+the pre-verify ±3 nudge as escalations, caught by inspecting the actual
+call sequence rather than guessing further).
+
+mover: 352/352 (was 350). Full workspace: all green, zero regressions.
+Clippy `-D warnings` + fmt clean. Committed `dfdf18c`, pushed.
+docs/corner-control-allow-keyboard-wake-decision.md updated to
+implementation-complete.
+
+Not live-verified — per the manager's standing instruction, that timing
+is a separate, later decision. This is the real path to finally
+completing categories 2/5, once live-verified: the post-slam
+verification screenshot can now self-heal a stuck `source.online` via a
+real keypress instead of the previously-shown-ineffective mouse-move,
+specifically in the one context reasoned through and approved.
