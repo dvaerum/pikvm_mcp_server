@@ -3026,3 +3026,34 @@ decision.md (commit `64180f1`). Zero incidents throughout. Reporting
 this honestly to the team — not the "real unlock" moment §38-39 hoped
 for, but real, useful information about exactly where the remaining
 blocker actually sits.
+
+---
+
+**§41 before-extension proposal — timing-direction correction from
+nixos-dev, addendum written, 2026-08-30 ~19:20.**
+
+nixos-dev caught my own reasoning error before it went further: my
+proposal to extend `allow_keyboard_wake` to the `before` screenshot
+claimed "even less time has elapsed" as the safety basis — backward.
+`before` fires strictly EARLIER than `after` (before the slam loop's
+own movement even runs), so elapsed time since the last keyboard key is
+actually SMALLER there, not larger. Corrected.
+
+The actual transferable argument nixos-dev identified: causal, not
+timing-based — does anything in the harness's control flow send a
+key/click between the human's confirmation and this specific screenshot
+call? For `before`, same answer as `after`: no. That holds regardless
+of the (corrected) timing direction.
+
+One genuine asymmetry flagged, not resolved: `after` is the last
+screenshot in the sequence (nothing downstream depends on its exact
+resulting state); `before`'s escalation, if it fires, wakes the display
+right before the slam's own movement+detection logic runs against that
+freshly-illuminated frame — an ACCURACY question (not safety), noted
+with the same-detection-logic-elsewhere precedent as reassuring but not
+proof.
+
+Addendum written (docs/corner-control-allow-keyboard-wake-decision.md,
+commit `e7b219c`) and sent back to nixos-dev for its own explicit
+review — proposal only, not decided or implemented. No live hardware
+contact this round.
