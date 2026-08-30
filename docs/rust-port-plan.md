@@ -3638,3 +3638,67 @@ already are), and one open design question for nixos-dev (hoist the
 shared boolean computation or let each site re-derive it independently).
 Sent for review — not implementing until that lands, same discipline as
 the two prior sites.
+
+---
+
+**§54 bounds-detection escalation approved+implemented+run live —
+first clean `slam_verified: Some(true)` this whole arc, verdict pending
+nixos-dev's read, 2026-08-30 ~21:50-22:05.**
+
+nixos-dev approved §53's draft with one real addition: an accuracy-
+verification requirement, since (unlike the two already-approved sites)
+bounds detection's RESULT drives where the slam targets — a
+technically-successful-but-inaccurate detection right after a wake
+could be worse than a clean 503 (silent bad calibration, no error
+signal). Confirmed the hoist-over-re-derive call too.
+
+Implemented per the approved design: `DetectOptions.allow_keyboard_wake`
+(additive, default false); `detect_ipad_bounds`'s screenshot call
+threaded through it; `unlock.rs` hoists a single
+`allow_keyboard_wake_for_internal_slam` boolean read by both its own
+bounds-detection call AND the internal slam's `AnchorRequest`;
+`cursor_anchor.rs` gains `AnchorRequest.allow_keyboard_wake_bounds_
+detection`, explicit at every real construction site (`true` only for
+unlock_ipad's internal slam and `cursor_anchor_corner_control_smoke.rs`;
+`false` everywhere else, including `ipad_go_home` — traced directly,
+it unconditionally sends Cmd+H first, so the causal argument never
+held there). 989/989 tests green (pure additive), clippy+fmt clean.
+Committed `0c18fdc`, pushed.
+
+Live retry: re-locked fresh (Ctrl+Cmd+Q, visually confirmed genuine
+lock screen — had to recover once from an unplanned detour first: the
+first wake attempt after locking landed on the Touch ID sheet instead
+of the plain lock screen, apparently because `Space` doubles as an
+old-iPadOS unlock-attempt key, not a neutral wake; waited it out and
+re-confirmed the plain lock screen before proceeding, rather than
+guess another key). Ran `unlock_ipad(try_key_press_first: Some(false))`
+immediately after.
+
+Real result, genuinely different from every prior attempt: bounds
+detection succeeded on the FIRST try — zero 503s this run, so whether
+the escalation itself actually fires mid-slam remains exactly as open
+as before (still never observed). Detected "Portrait bounds (507,49)
+662×951". `slam_verified: Some(true)` — the first clean verification
+pass anywhere in this arc (the prior 2/2 were both `Some(false)` off
+the legacy-origin fallback). Swipe functionally registered as a real
+unlock attempt too (reached the Touch ID/passcode prompt, screenshot-
+confirmed — same behavior as run #9, not run #10's "stayed locked").
+
+Per nixos-dev's accuracy-verification requirement: no independent
+ground-truth bounds reading to diff against directly, but two
+behavioral signals corroborate the detection was good enough in
+practice — the verification cluster search succeeded within tolerance,
+AND separately the swipe's real-world effect (Touch ID prompt) is
+consistent with a well-positioned gesture, not the "stayed locked"
+failure mode run #10 produced from a bad origin.
+
+**Deliberately did NOT declare this closes item 5 myself** — sent the
+precise result to nixos-dev and explicitly asked whether
+`slam_verified: Some(true)` on a real run, on its own, is sufficient for
+the item's literal bar (the guard's own slam+verify logic) independent
+of the swipe's downstream Touch-ID-vs-home outcome (an already-
+documented, separate phenomenon) — rather than repeat the exact mistake
+just corrected in §51 (chaining an unrelated fact into a "passed"
+verdict without review first). Awaiting that read before touching the
+sign-off docs again. Device left at the Touch ID prompt, benign, no
+further action taken.
