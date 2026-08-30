@@ -2654,3 +2654,34 @@ than freehand on top of an already long session. Documented in
 docs/streamer-source-online-wake-nudge-plan.md (commit `78d0e55`) as the
 concrete next step, not attempted here. No live hardware contact this
 round.
+
+---
+
+**§32 resuming the Allow-Access-When-Locked/Keyboard lead — design doc
+sent for review, 2026-08-30 ~16:41.**
+
+Manager's honest check-in noted real time had passed (3+ hours) since
+§31's lead was deferred "for tonight." Judged: yes, worth resuming now.
+
+Found this codebase already ships exactly the right primitive to make
+this low-risk: `launch_ipad_app` (unlock → Cmd+Space/Spotlight → type →
+Enter → settle → screenshot) — its own doc comment: "Verified live for
+Files, Settings, App Store on iPadOS 26.1." iOS Spotlight indexes
+individual Settings panes by name; a real chance
+`launch_ipad_app(client, "Face ID & Passcode", ...)` deep-links straight
+to the target pane in one call, skipping in-app hierarchical navigation
+(and its click-precision risk) entirely.
+
+Wrote docs/allow-access-when-locked-keyboard-check-plan.md (commit
+`6fd5aee`): a read-only pass only (confirm the current toggle state, do
+NOT toggle it this round) — no new library code, pure glue over
+already-shipped, already-verified primitives (`launch_ipad_app`, the
+digit-by-digit passcode pattern `unlock_ipad_with_code` already uses,
+`mouse_scroll`, `ipad_go_home`), with a self-checkpoint (inspect the
+screenshot) between every stage rather than one blind chained script.
+Sent to nixos-dev for review before any live contact — including asking
+directly whether full design-doc weight is even warranted here, given
+it's read-only glue over already-shipped primitives rather than new
+production code.
+
+No live hardware contact this round — design + review request only.
