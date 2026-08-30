@@ -159,3 +159,19 @@ Next attempt (not this session): redesign the unlock stage specifically
 to get a confirmed screenshot between EVERY key sent, recovering
 `source.online` first each time it's stuck, rather than trusting a
 multi-key sequence to complete blind.
+
+**Addendum (nixos-dev, lowering the "don't know" concern)**:
+`streamer_keepalive.rs`'s own header states plainly "HID is unaffected —
+this is video-only" — screenshot/video capture and keyboard/mouse HID
+delivery are architecturally independent subsystems throughout this
+design. So the `send_key` calls almost certainly reached the device and
+were processed normally; the uncertainty here is purely about VISUAL
+CONFIRMATION of the result, not whether the passcode digits landed. Reads
+as low-concern given the clean final lock-screen state, not a
+"something's wrong" situation. Practical note for whoever next unlocks
+this rig for any reason: iOS typically resumes into whatever screen was
+active before locking, not necessarily the home screen — since it's
+unconfirmed whether the sequence ever reached the Face ID & Passcode
+pane, the device *might* currently be parked mid-navigation there.
+Expect a possible unexpected Settings screen on next unlock and navigate
+out via `ipad_go_home` rather than treating it as a new incident.
