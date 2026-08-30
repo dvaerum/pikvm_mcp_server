@@ -159,11 +159,14 @@ necessary, not sufficient").
    absolute-mouse path does, and that's called out separately at
    whatever point desktop/absolute cutover is actually discussed.
 8. **Full workspace `cargo build/test/clippy/fmt` green — SATISFIED,
-   verified fresh (2026-08-30) at commit a66054d.** Ran directly, not
+   verified fresh (2026-08-30) at commit 36aae78.** Ran directly, not
    trusted from an earlier report: `cargo build --workspace` clean;
-   `cargo test --workspace` 987 passed / 0 failed / 4 ignored (real-ONNX)
+   `cargo test --workspace` 989 passed / 0 failed / 4 ignored (real-ONNX)
    across all 8 crates; `cargo clippy --workspace --all-targets -- -D
-   warnings` clean; `cargo fmt --all -- --check` clean. This item alone
+   warnings` clean; `cargo fmt --all -- --check` found one real
+   formatting diff (`stationary_guard_staged_repro.rs`, this session's
+   own new example) — fixed via `cargo fmt --all`, re-verified clean,
+   committed `36aae78`. This item alone
    is satisfied at any given commit — re-verify again at whatever commit
    is actually being signed off, since the workspace keeps moving.
 
