@@ -2345,3 +2345,46 @@ understanding what actually drives ustreamer's on-demand source cycling
 needs to come before any fix design, same discipline as everything
 else. Categories 2/5 still open, but the diagnostic picture keeps
 narrowing with each real, honestly-reported step rather than stalling.
+
+---
+
+**§25 REST-recency hypothesis test: ruled out cleanly, plus a real new
+observation about edge- vs level-triggered restart, 2026-08-30 ~12:18-
+12:20.**
+
+nixos-dev's specific, checkable follow-up to §24: the ~10.7s flip was
+suspiciously close to kvmd's own documented ~10s ustreamer idle-stop
+window, despite the WS keepalive genuinely satisfying `stream=1` — the
+proposed test was whether REST `/streamer/snapshot` request recency
+(not WS-connection presence) drives the source layer. Built
+`streamer_source_rest_ping_test`: same idle-hold shape, but a periodic
+throwaway REST snapshot call every ~5s during the hold. Manager
+approved running it immediately. Committed `97d20da`.
+
+**Clean, direct negative result**: `source.online` flipped false early
+again, and periodic throwaway REST pings — sustained past the original
+32s window (~80s+, stopped deliberately once the result was already
+unambiguous) — never revived it; every single ping itself also 503'd.
+This directly rules out REST-request-recency as the mechanism.
+
+**Real secondary finding, not sought but observed**: stopped the
+long-held diagnostic process (whose own keepalive had stayed
+`connected=true` throughout, never self-healing) and immediately ran a
+completely FRESH wake+screenshot via a brand-new client — it succeeded
+instantly, clean lock screen confirmed. The long-held, healthy
+connection never recovered on its own; a genuinely NEW connection fixed
+it right away. This is consistent with kvmd's ustreamer restart being
+EDGE-triggered (fires on a real 0→1 new-connection event) rather than
+LEVEL-triggered (continuously checking "is a client currently
+connected") — if ustreamer stops for a reason unrelated to client-count
+bookkeeping, an already-connected client (however healthy, ping/pong or
+not) would never trigger a restart; only a fresh connection attempt
+would. This would also explain why the ping/pong fix's own healthy,
+present connection doesn't help here — presence isn't what matters if
+this holds, a connection EVENT is. Sent to nixos-dev and the manager for
+their read; not building anything from this without more understanding
+first, same discipline as every other step tonight.
+
+Device confirmed safe throughout every check. Categories 2/5 remains
+open, but each pass keeps replacing a vaguer hypothesis with a more
+specific, testable one — real narrowing, not a stall.
