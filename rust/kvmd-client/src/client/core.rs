@@ -232,12 +232,26 @@ impl PiKVMClient {
                         // the documented same-key-twice/dismiss-to-Touch-ID
                         // hazard) is the safe wake mechanism already
                         // validated for this by `--fallback-mouse-move`.
+                        // nixos-dev review (docs/streamer-source-online-wake-nudge-plan.md):
+                        // a FIXED (+dx,+dy) nudge isn't safe everywhere — the
+                        // call site that actually motivated this fix
+                        // (`slam_to_corner`'s own "after" verification
+                        // screenshot) fires right after the cursor has been
+                        // intentionally parked AT a screen corner, and a
+                        // fixed direction can move FURTHER into a bottom
+                        // corner's quick-action affordances instead of away.
+                        // Compute the nudge direction from the believed
+                        // current position toward screen center instead —
+                        // cheap (already-held belief + bounds), and safe
+                        // regardless of which corner the caller targeted.
+                        let (nudge_dx, nudge_dy) = {
+                            let belief = self.belief.lock().unwrap();
+                            wake_nudge_toward_center(belief.position, belief.bounds)
+                        };
                         // Best-effort: a nudge failure falls through to the
                         // final attempt anyway, same convention as
                         // `screenshot_keeping_cursor_alive`'s `let _ = ...`.
-                        let _ = self
-                            .mouse_move_relative(WAKE_NUDGE_DELTA_PX, WAKE_NUDGE_DELTA_PX)
-                            .await;
+                        let _ = self.mouse_move_relative(nudge_dx, nudge_dy).await;
                         tokio::time::sleep(Duration::from_millis(WAKE_NUDGE_SETTLE_MS)).await;
                         match self
                             .request(RequestArgs {
@@ -301,6 +315,33 @@ impl PiKVMClient {
     }
 }
 
+/// Direction-aware wake-nudge delta: moves `WAKE_NUDGE_DELTA_PX` toward
+/// screen center from `position`, using `bounds` to find center — so a
+/// cursor parked at (or near) ANY corner nudges away from it, not further
+/// into it. `bounds: None` (belief has no known screen bounds yet) falls
+/// back to the fixed `(+WAKE_NUDGE_DELTA_PX, +WAKE_NUDGE_DELTA_PX)` —
+/// matches `--fallback-mouse-move`'s own validated delta, a reasonable
+/// default when there's no bounds to compute a direction from at all, and
+/// this exact case is unit-tested below.
+fn wake_nudge_toward_center(position: Point, bounds: Option<BeliefBounds>) -> (f64, f64) {
+    let Some(bounds) = bounds else {
+        return (WAKE_NUDGE_DELTA_PX, WAKE_NUDGE_DELTA_PX);
+    };
+    let center_x = bounds.x + bounds.width / 2.0;
+    let center_y = bounds.y + bounds.height / 2.0;
+    let dx = if position.x <= center_x {
+        WAKE_NUDGE_DELTA_PX
+    } else {
+        -WAKE_NUDGE_DELTA_PX
+    };
+    let dy = if position.y <= center_y {
+        WAKE_NUDGE_DELTA_PX
+    } else {
+        -WAKE_NUDGE_DELTA_PX
+    };
+    (dx, dy)
+}
+
 /// Shared `StreamerUnavailable` builder for `fetch_snapshot_with_retry`'s
 /// two exit points (nudge disabled/skipped vs. nudge attempted and still
 /// 503) — same error text either way except for the one clause noting
@@ -308,7 +349,8 @@ impl PiKVMClient {
 /// original 503/UnavailableError text stay identical in both cases.
 fn streamer_unavailable_error(err: &ClientError, nudge_attempted: bool) -> ClientError {
     let nudge_clause = if nudge_attempted {
-        "a wake nudge (relative mouse move) was also tried and did not recover it"
+        "a wake nudge (relative mouse move, PiKVMConfig::source_online_wake_nudge) was also \
+         tried and did not recover it"
     } else {
         "the wake-nudge escalation is disabled (PiKVMConfig::source_online_wake_nudge)"
     };
@@ -428,6 +470,124 @@ mod tests {
             }
             other => panic!("expected StreamerUnavailable, got {other:?}"),
         }
+    }
+
+    /// nixos-dev review: pins `wake_nudge_toward_center`'s core safety
+    /// property — the nudge must move AWAY from whichever corner the
+    /// cursor is believed to be at, not a fixed direction that could move
+    /// further into a bottom corner's quick-action affordances.
+    mod wake_nudge_toward_center_tests {
+        use super::*;
+
+        fn bounds() -> BeliefBounds {
+            BeliefBounds {
+                x: 0.0,
+                y: 0.0,
+                width: 4096.0,
+                height: 2160.0,
+            }
+        }
+
+        #[test]
+        fn from_top_left_nudges_right_and_down_toward_center() {
+            let (dx, dy) = wake_nudge_toward_center(Point { x: 0.0, y: 0.0 }, Some(bounds()));
+            assert_eq!((dx, dy), (WAKE_NUDGE_DELTA_PX, WAKE_NUDGE_DELTA_PX));
+        }
+
+        /// The safety-critical case: from bottom-right (matches
+        /// `slam_to_corner`'s `BottomRight` target), the nudge must be
+        /// NEGATIVE in both axes — toward center, away from the corner's
+        /// quick-action affordances — not the fixed +5,+5 the original
+        /// design would have sent regardless of position.
+        #[test]
+        fn from_bottom_right_nudges_left_and_up_toward_center() {
+            let (dx, dy) = wake_nudge_toward_center(
+                Point {
+                    x: 4090.0,
+                    y: 2150.0,
+                },
+                Some(bounds()),
+            );
+            assert_eq!((dx, dy), (-WAKE_NUDGE_DELTA_PX, -WAKE_NUDGE_DELTA_PX));
+        }
+
+        #[test]
+        fn from_bottom_left_nudges_right_and_up_toward_center() {
+            let (dx, dy) = wake_nudge_toward_center(Point { x: 5.0, y: 2150.0 }, Some(bounds()));
+            assert_eq!((dx, dy), (WAKE_NUDGE_DELTA_PX, -WAKE_NUDGE_DELTA_PX));
+        }
+
+        #[test]
+        fn from_top_right_nudges_left_and_down_toward_center() {
+            let (dx, dy) = wake_nudge_toward_center(Point { x: 4090.0, y: 5.0 }, Some(bounds()));
+            assert_eq!((dx, dy), (-WAKE_NUDGE_DELTA_PX, WAKE_NUDGE_DELTA_PX));
+        }
+
+        /// No known bounds — falls back to the fixed default rather than
+        /// panicking or guessing a direction from nothing.
+        #[test]
+        fn with_no_bounds_falls_back_to_the_fixed_default() {
+            let (dx, dy) = wake_nudge_toward_center(
+                Point {
+                    x: 4090.0,
+                    y: 2150.0,
+                },
+                None,
+            );
+            assert_eq!((dx, dy), (WAKE_NUDGE_DELTA_PX, WAKE_NUDGE_DELTA_PX));
+        }
+    }
+
+    /// End-to-end through `fetch_snapshot_with_retry`: with the cursor
+    /// believed to be at a BottomRight-style corner position, the actual
+    /// HID request sent for the wake nudge carries negative deltas (moving
+    /// toward center), not the corner-agnostic fixed +5,+5.
+    #[tokio::test]
+    async fn wake_nudge_direction_follows_believed_position_not_a_fixed_delta() {
+        let nudge_deltas = Arc::new(std::sync::Mutex::new(None));
+        let nudge_deltas_c = nudge_deltas.clone();
+        let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+            let nudge_deltas = nudge_deltas_c.clone();
+            Box::pin(async move {
+                if args.path.starts_with("/streamer/snapshot") {
+                    return Err(unavailable_error());
+                }
+                if let Some(query) = args.path.strip_prefix("/hid/events/send_mouse_relative?") {
+                    *nudge_deltas.lock().unwrap() = Some(query.to_string());
+                    return Ok(ResponseBody::Empty);
+                }
+                panic!("unexpected request path in this test: {}", args.path);
+            })
+        });
+        let client = PiKVMClient::with_request_fn(
+            PiKVMConfig {
+                source_online_wake_nudge: true,
+                ..PiKVMConfig::new("http://mock.local", "admin", "pw")
+            },
+            None,
+            request_fn,
+        );
+        // Default bounds (create_default_belief) are 4096x2160 — anchor the
+        // belief near BottomRight, the corner this review specifically
+        // flagged.
+        client.reset_belief(Point {
+            x: 4090.0,
+            y: 2150.0,
+        });
+        let _ = client.fetch_snapshot_with_retry("/streamer/snapshot").await;
+        let query = nudge_deltas
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("wake nudge should have fired exactly once");
+        assert!(
+            query.contains(&format!("delta_x={}", -WAKE_NUDGE_DELTA_PX as i64)),
+            "expected a negative delta_x (toward center from BottomRight), got: {query}"
+        );
+        assert!(
+            query.contains(&format!("delta_y={}", -WAKE_NUDGE_DELTA_PX as i64)),
+            "expected a negative delta_y (toward center from BottomRight), got: {query}"
+        );
     }
 
     /// docs/streamer-source-online-wake-nudge-plan.md: with the flag ON,

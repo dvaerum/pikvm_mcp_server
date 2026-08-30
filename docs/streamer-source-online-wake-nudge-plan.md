@@ -59,11 +59,27 @@ with a third, opt-in attempt:
 Mouse-move, not a keypress, is chosen deliberately: it carries none of the
 same-key-twice/dismiss-to-Touch-ID hazard, and it's exactly the mechanism
 `--fallback-mouse-move` already validates as safe against a genuine lock
-screen. The nudge magnitude (5,5 px) matches `--fallback-mouse-move`'s own
+screen. The nudge magnitude (5px) matches `--fallback-mouse-move`'s own
 already-live-tested delta rather than the unrelated ±1px net-zero nudge
 `screenshot_keeping_cursor_alive` uses (that one only keeps an already-awake
 cursor visible in-frame; it is not attempting a display-wake event and has
 never been tested for one).
+
+**Direction is corner-aware, not a fixed `(+5,+5)`** — added after
+nixos-dev's review (see below): a fixed direction isn't safe everywhere.
+The call site that actually motivated this whole investigation is
+`slam_to_corner`'s own "after" verification screenshot, which fires right
+after the cursor has been intentionally parked AT a screen corner — and
+iOS/iPadOS lock screens carry live quick-action affordances specifically in
+the BOTTOM corners (flashlight bottom-left, camera bottom-right). A fixed
+`(+5,+5)` nudge fired near a bottom corner could move FURTHER into it, not
+away — exactly the class of incident (HID near a corner on a possibly-
+locked device) this whole session has been fighting. Fixed by
+`wake_nudge_toward_center`: reads the already-held `CursorBelief`'s
+`position` + `bounds` and nudges 5px toward whichever half of the screen
+center is on each axis — safe from any corner, not just `TopLeft`. Falls
+back to the fixed `(+5,+5)` only when `bounds` is `None` (no direction to
+compute from at all).
 
 ## Why gated behind an explicit opt-in, not default-on
 
@@ -83,8 +99,9 @@ reviewable, separately-timed decision, not bundled into landing the code.
 - `PiKVMConfig.source_online_wake_nudge: bool` (default `false`).
 - `fetch_snapshot_with_retry`: third attempt gated on the flag, using
   `WAKE_NUDGE_DELTA_PX = 5.0` / `WAKE_NUDGE_SETTLE_MS = 1500` (mirrors
-  `--fallback-mouse-move`'s validated 5,5 delta and the corner-control
-  harness's own post-wake settle time).
+  `--fallback-mouse-move`'s validated 5px delta and the corner-control
+  harness's own post-wake settle time), with `wake_nudge_toward_center`
+  computing the actual direction from the held belief.
 - Unit tests (mock `RequestFn`, no live hardware):
   - flag off: unchanged two-attempt behavior (regression pin on the
     existing tests).
@@ -98,9 +115,40 @@ reviewable, separately-timed decision, not bundled into landing the code.
     `screenshot_keeping_cursor_alive`'s existing best-effort
     (`let _ = ...`) convention for a nudge that isn't the primary
     operation.
+  - `wake_nudge_toward_center` (pure function, 5 cases): from each of the
+    four corners nudges toward center on both axes; with no known bounds,
+    falls back to the fixed default.
+  - end-to-end: with belief reset to a `BottomRight`-style position, the
+    actual HID request sent carries negative deltas on both axes (toward
+    center), not the corner-agnostic fixed `(+5,+5)` — the specific case
+    nixos-dev's review flagged.
+
+## Review (nixos-dev)
+
+Two points raised, both addressed:
+1. **Fixed-direction safety** (real safety concern) — fixed by
+   `wake_nudge_toward_center`, above.
+2. **Possible `verify_motion` measurement contamination** — if the
+   escalation nudge fires during `slam_to_corner`'s "after" verification
+   capture, the frame reflects a cursor position a few px away from where
+   the slam itself actually left it. `verify_motion`'s own tolerance
+   (default 80px, `mover/src/slam/motion.rs`) is already an order of
+   magnitude larger than the nudge's 5px, and that function already sends
+   its OWN small pre-verify nudge (`3.0 * vx, 3.0 * vy`) for an unrelated
+   reason (keeping the cursor visible past its fade timer) — so this is
+   very unlikely to move a matched cluster outside tolerance, but not
+   proven. **Open item for live verification, not a code change**: check
+   whether `verify_motion`'s reported residual/position differs
+   measurably on a run where the escalation nudge fires vs. one where it
+   doesn't, before ever enabling this flag for a `slam_to_corner`-adjacent
+   call path.
+3. (Minor, non-blocking) error-message wording — the "nudge tried and
+   failed" branch now names `PiKVMConfig::source_online_wake_nudge`
+   explicitly, matching the "disabled" branch's own wording.
 
 ## Status
 
-Sent to nixos-dev for review before merging, same process as every other
-fix this session. Not live-verified yet — that is a deliberate, separate,
+Reviewed by nixos-dev; both substantive points addressed in code (item 2
+is a live-verification checklist item, documented above, not a further
+code change). Not live-verified yet — that is a deliberate, separate,
 later decision per the manager's explicit direction.
