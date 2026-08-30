@@ -1927,3 +1927,37 @@ on whether `before` needs its own (likely lighter-touch) treatment.
 Categories 2/5 still has not completed cleanly through this harness —
 now blocked on a DIFFERENT specific failure point than before, which is
 itself real progress (each attempt narrows the remaining gap).
+
+---
+
+**§16 lighter-touch before-retry: designed, reviewed, implemented,
+2026-08-30 ~07:46-07:52 — code-only, extends §14 to cover §15's new
+evidence.**
+
+Manager approved designing a lighter-touch retry for `before` given
+§15's evidence. Wrote an addendum to
+`docs/slam-verify-screenshot-retry-plan.md`: reuse
+`take_screenshot_with_retry`, smaller budget (2 attempts/300ms vs
+`after`'s 3/1000ms) specifically to minimize widening the confirmed-
+precondition-to-slam gap. Sent for review.
+
+nixos-dev: keep the asymmetric treatment — the safety reasoning doesn't
+depend on WHY `before` failed, only on tolerable delay before the slam
+fires. Confirmed 2/300ms reasonable (mild preference for a non-zero
+settle, not blocking). Flagged that the original "slam-load-specific"
+hypothesis (that `after` needed retry because of sustained slam HID
+traffic) is now weakened — `before` has no preceding slam traffic and
+failed with the identical signature, more consistent with general
+ustreamer flakiness than a load effect. Corrected the plan doc's
+hypothesis section rather than leaving the now-contradicted framing
+standing unchallenged.
+
+Implemented: `before` now uses the same retry helper with its own
+lighter constants, a new `label` parameter ("before"/"after") so
+calibration logs distinguish which call recovered, and a new test
+mirroring the existing after-recovery one. 350/350 mover tests, clippy
+`-D warnings` and fmt clean. Committed `1c70b8b` (addendum) and
+`1b781ec` (implementation) on `rust-port/module-4-mover`. Not yet
+exercised live — both screenshots in `slam_to_corner` now have retry
+coverage, closing whatever's left of the post-slam capture-reliability
+gap identified in §13.
