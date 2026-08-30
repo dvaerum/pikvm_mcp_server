@@ -3481,3 +3481,66 @@ active work list from the manager's own "fix everything now" directive
 self-caught bug along the way (PIKVM_PROXY not persisting across shell
 calls; the config-wiring gap repeated once more and caught again before
 it mattered) rather than a clean narrative pretending otherwise.
+
+---
+
+**§51 REVISED §50: nixos-dev caught a real overclaim in category 5's
+"reached and passed" verdict — reverted to OPEN, corrected across every
+doc, 2026-08-30 ~21:37-21:50.**
+
+Sent §50's draft completion sign-off (`docs/rust-port-completion-sign-
+off.md`) to nixos-dev for the same real critical review this whole arc
+has used, explicitly asking them not to rubber-stamp it. They didn't:
+independently re-verified the workspace green (caught the same fmt diff
+I'd already found and fixed — good corroboration), then pushed back
+hard on item 5 specifically.
+
+**The actual bug in my own reasoning**: I'd written "run #9... landed
+on Touch ID prompt. Completion (bb11ec4)... produced a genuine home
+screen. Reached AND passed, live, end-to-end" — reading as one
+continuous positive-path demonstration. nixos-dev checked the real
+source: `unlock_ipad_with_code` (the function `bb11ec4` calls) has ZERO
+references to `CallerAsserted`, `anchor_cursor`, or `AnchorRequest`
+anywhere in it — a completely separate, independent function from
+`unlock_ipad()`'s own internal guarded slam. And per `bb11ec4`'s own
+commit message, the device had naturally re-locked BETWEEN the two
+steps — not a continuation of the same call, a fresh unrelated
+invocation. So what I'd actually shown was two SEPARATE facts: (a)
+`CallerAsserted` reached, didn't refuse, executed the slam safely, but
+its OWN motion verification failed TWICE and the direct outcome was
+ambiguous (Touch ID, not home) — that IS item 5's literal ask, and it
+did not produce a clean verified positive there; (b) completely
+separately, a DIFFERENT function with no guard involvement reliably
+reaches home from a locked/ambiguous state. Chaining (b) into (a)'s
+verdict manufactured a "pass" neither fact alone supports — precisely
+this project's own standing rule, "uniform phrasing over non-uniform
+evidence reads as rigour and isn't," which I broke here and a real
+second reviewer caught.
+
+Conceded immediately and fully (this was a correct, well-reasoned
+catch, not a matter of interpretation) — see msg exchange with nixos-
+dev. Corrected every place the overclaim had propagated: `docs/final-
+e2e-validation-sign-off-plan.md`'s table row 5, checklist item 4, and
+§3's sequencing summary (commit `bd6f943`); `docs/rust-port-completion-
+sign-off.md`, retitled to make the real status legible at a glance
+rather than reading as a near-final draft, with an explicit "What
+changed" section naming the overclaim precisely and crediting the catch
+(commit `7e5cd65`).
+
+**Corrected verdict**: category 5 goes back to STILL OPEN — same
+calibration bar as run #8's own writeup ("guard reached, didn't refuse"
+is real positive evidence but is NOT "reached and passed"), now with
+one additional real data point from run #9: an ACTIVE verification
+failure (not just an unreached guard), plus a separately-confirmed
+benign recovery path via the unrelated passcode function. Six of the
+eight sign-off items (1, 2, 3, 4, 6, 8) remain genuinely SATISFIED with
+real evidence — that doesn't change. Item 5's reachable next step,
+still not attempted: a run where the internal slam's own motion
+verification actually succeeds (`slam_verified: Some(true)`) in the
+same continuous `unlock_ipad()` call that reaches home.
+
+Lesson worth keeping explicit for next time: a second reviewer's job
+isn't to check whether the individual facts are true (they were) — it's
+to check whether the SYNTHESIS across facts is honest. Both bb11ec4 and
+run #9 were accurately reported on their own; the error was only in how
+they were combined into a single verdict.
