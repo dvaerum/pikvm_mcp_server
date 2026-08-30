@@ -3222,3 +3222,46 @@ Documented in full in docs/corner-control-allow-keyboard-wake-decision.md
 (commit `9501834`). Reporting this honestly — not the pass hoped for,
 but a real, consistent, well-understood result, and a concrete further
 extension now identified.
+
+---
+
+**§46 two parallel review threads — the third wake-nudge extension
+(unlock_ipad's own slam) proposed, and a fresh review of nixos-dev's
+staged-observation repro design for item 6, 2026-08-30 ~20:25.**
+
+nixos-dev confirmed category 5's non-result plainly (item 4's wording
+is "reached AND PASSED," not "guard reached, didn't refuse" — a run
+that errors on infra before verification is a non-result, same bar as
+category 2's own verified:true/false requirement) and endorsed the
+proposed next step. Wrote docs/unlock-ipad-allow-keyboard-wake-decision.md
+(commit `66b78cf`): extends the same causal argument (nothing sends a
+key/click between the precondition and this screenshot) to
+`unlock_ipad()`'s own internal guarded slam, specifically for
+`try_key_press_first: false` — arguably even cleaner than the two
+already-approved sites, since this config sends ZERO keys before the
+slam at all, not just enough elapsed time. Recommends gating the
+escalation on `try_key_press_first == Some(false)` explicitly in code
+(not an unconditional flip), encoding the actual causal precondition.
+Sent for review, not yet implemented.
+
+Separately, nixos-dev sent their own design for item 6 (the stationary-
+guard widening's live confirmation) for MY review before either of us
+touches the device — docs/stationary-guard-staged-observation-repro-plan.md.
+Traced the actual logic against `estimator.rs` directly rather than
+trusting the narrative: confirmed the widened-side sequence (reset →
+accept A → accept B → fresh emit → query A) correctly produces `true`
+by tracing `would_reject_as_stationary`'s real gate+ring logic exactly.
+Caught one precise, real issue in the contrast side (step 6): `observe()`
+always resets `emit_mag_since_last_observation` to 0 on acceptance
+(estimator.rs:267) — if the contrast's own predict+observe pair runs
+predict-BEFORE-observe (mirroring how a real observation is normally
+preceded by its emit), the emit-gate alone would force `false` before
+the ring is even checked, making the "old design would have missed
+this" claim untested rather than demonstrated. Flagged that step 6
+needs observe(B) THEN a fresh predict THEN the query, matching the
+widened side's own real order, not the ambiguous-as-written "observe +
+predict" pairing. Also noted `reset_belief` leaves the ring at 1 entry
+(the anchor), not 0 — a minor wording imprecision, not a bug.
+
+Both proposals in flight, neither implemented yet. No live hardware
+contact this round — pure code tracing + design writing.
