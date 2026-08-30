@@ -1,5 +1,17 @@
 # `source.online` wake-nudge fix — design (2026-08-30)
 
+> **STATUS (2026-08-30, updated after live verification): the fix's core
+> mechanism is DISPROVEN, not just unverified.** A real live test found
+> the mouse-move escalation this fix relies on does NOT reliably revive
+> `source.online` — a genuine current 503-idle episode survived the full
+> flag-on escalation path, then was immediately recovered by a Space
+> keypress on the exact same stuck state. This is not "implemented,
+> pending a routine live-verification pass" — it is "built, reviewed for
+> safety, and its central assumption failed its first real test." The
+> flag stays off. See "Live verification result" and "Status" near the
+> bottom for the full account; do not read only the Design section below
+> and assume this is close to flippable.
+
 ## Problem this fixes
 
 `docs/rust-port-plan.md` §22-§26 (tonight, 2026-08-30): a live, root-caused,
@@ -190,6 +202,33 @@ held as a separate, deliberately-timed decision rather than bundled into
 landing the code — the caution was justified: it caught a real gap before
 it could ever have been enabled by default.
 
+## Why mouse-move and keypress likely differ (nixos-dev's mechanistic hypothesis, code-checked)
+
+nixos-dev's instinct: iPadOS treats pointer/trackpad input as comparatively
+passive (this project already documents the on-screen pointer fading after
+idle — the whole reason `screenshot_keeping_cursor_alive`'s ±1px nudge
+exists), while keyboard input is a stronger "user is actively present"
+signal to the OS's own power/display management. If the display-wake
+heuristic is keyed off perceived presence rather than raw HID traffic, a
+keypress plausibly clears a higher-confidence bar than a pointer nudge —
+treat "mouse-move is probably not an adequate substitute" as the working
+assumption now, not a 50/50 unknown.
+
+Checked against this codebase's own documented lock-screen key semantics
+(`mover/src/ipad_unlock/unlock_with_code.rs`'s header): `Space` is used
+TWICE, on purpose, as the first two stages of the passcode-unlock
+sequence — "Space → wait: wakes the screen" then "Space → wait: dismisses
+the lock screen, brings up the passcode prompt." This is a real, DELIBERATE
+two-stage state machine this project already exploits, not an incidental
+side effect — confirms the hazard is structural, not a fluke. `unlock_ipad`
+(`unlock.rs`) also treats `Enter` as "the actual unlock key on iPadOS 26
+lock screens," a distinct advancing role of its own. Neither file
+documents any key that's proven wake-only / never-advances — whether such
+a key exists (one iPadOS's lock-screen state machine treats as a strong
+presence signal but does NOT advance to the next stage on a second press)
+is the concrete open question for a fresh design pass, not resolved by
+what's in the codebase today.
+
 ## Status
 
 Reviewed by nixos-dev; both substantive review points addressed in code.
@@ -197,6 +236,8 @@ Live-verified 2026-08-30: **negative result, flag must stay off.** The
 underlying root-cause finding (§22-§26 — the iPad's display needs a real
 redraw event, not connection bookkeeping) still stands; what's now in
 question is specifically whether a relative mouse-move is a sufficient
-redraw event, or whether only a keypress reliably is. Needs a fresh design
-pass (through the same review process) before any further live testing —
-not decided in this pass.
+redraw event, or whether only a keypress reliably is — and, per the above,
+the working assumption is now that it needs a keypress, with the open
+design question being WHICH key is both effective and safe. Needs a fresh
+design pass (through the same review process) before any further live
+testing — not decided in this pass.
