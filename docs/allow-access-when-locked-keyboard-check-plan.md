@@ -38,7 +38,8 @@ functions this codebase already ships and has already live-verified:
    in one call, skipping in-app hierarchical navigation (and its
    click-precision risk) entirely.
    - **Checkpoint**: inspect the returned screenshot myself before doing
-     anything else. Three possible outcomes:
+     anything else. Four possible outcomes (nixos-dev review — named
+     explicitly rather than left to the closing catch-all to imply):
      (a) landed on a passcode re-entry prompt (iOS gates Face ID &
      Passcode settings behind re-entering the passcode) → proceed to 2.
      (b) landed directly on the Face ID & Passcode settings list (no
@@ -48,6 +49,10 @@ functions this codebase already ships and has already live-verified:
      `launch_ipad_app(client, "Settings")` + in-app navigation only as a
      separate, later, reviewed step (bigger click-precision surface, not
      attempted blind).
+     (d) Spotlight fuzzy-matched to a PLAUSIBLE BUT WRONG pane (e.g.
+     "Passwords" instead of "Face ID & Passcode" — a clean hit, just the
+     wrong one) → STOP, do not proceed as if it were the right pane;
+     report the actual pane landed on and stop there, same as (c).
 2. **Passcode re-entry** (only if (a)): same digit-by-digit `send_key`
    pattern `unlock_ipad_with_code` already uses (`Digit{n}` per digit,
    100ms apart, then `Enter`). Screenshot after. Checkpoint: inspect
@@ -85,6 +90,9 @@ since this is exploratory and read-only, not a repeated production gate.
 - Spotlight doesn't match "Face ID & Passcode" → falls to home screen,
   harmless, caught at the step-1 checkpoint. No further action this
   pass.
+- Spotlight fuzzy-matches to a plausible-but-wrong pane (nixos-dev
+  review) → caught at the same step-1 checkpoint; report the actual
+  pane, do not proceed as if it were the right one.
 - Wrong passcode entered somehow → iOS shows an error/retry, caught at
   the step-2 checkpoint. Abort — do not retry blind; a human should
   confirm the actual passcode before any second attempt (this project's
@@ -98,6 +106,12 @@ since this is exploratory and read-only, not a repeated production gate.
 
 ## Status
 
-Design only — not yet executed. Sent to nixos-dev for review before any
-live contact, per the manager's own framing that this deserves the same
-review discipline as the wake-nudge fix itself.
+Reviewed by nixos-dev — approved, with one addition (the plausible-but-
+wrong-pane case above, now named explicitly rather than left to the
+closing catch-all). Confirmed: two passcode entries back to back (initial
+unlock, then the settings-pane re-authentication gate) is not a lockout
+concern — that pattern is specifically about repeated WRONG attempts, not
+two correct entries for two legitimate prompts. Confirmed this plan
+carries zero corner/slam-adjacent risk (no `CallerAsserted`, no
+cursor-near-a-corner concern) — a genuinely lower risk class than
+categories 2/5. Cleared for live execution.
