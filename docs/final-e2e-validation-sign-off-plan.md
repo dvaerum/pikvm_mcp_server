@@ -33,7 +33,7 @@ today's earlier 56-vs-38 tool-count reconciliation):
 | 1 | Paired iPadCollector ground-truth bench | **PASSED** | `task_37374b4bce6d`, now complete (commit a55685a). After the showScene redesign (reviewed) plus 2 more real bugs found live (a transient-torn-frame brightness retry; the actual root cause — the scene-source screenshot must be captured BEFORE relaunching iPadCollector, not after, since the app is already foreground showing its own dark idle view by the time a post-relaunch capture runs) — N=20 completed, zero WS reconnects, zero missing-ground-truth trials, 19/20 within the established 5.9px tolerance, 1/20 marginally over (6.245px, noise-floor territory, visually confirmed as a real close correct landing). |
 | 2 | `cornerTargetFromBounds`/anchor-verification positive+negative control | **OPEN — blocked on a well-characterized transport gap, not an open question** | Guard-refusal proven; the actual control pair has now been attempted 6 real live times (after the wake-key delay unblocked it) and consistently fails at `slam_to_corner`'s verification screenshot — see the new row below. Two earlier real incidents (guard-bypass, then guard-on-wrong-precondition) were fixed and reviewed; the guard/slam logic itself is believed sound. Stopping further live attempts here — more retries won't fix a transport-level gap; the next unlock is the fix below, not another attempt. |
 | 5 | `ipad_unlock.rs`'s `CallerAsserted`-on-lock-screen positive path | **OPEN — same blocker as category 2** | Same combined run as category 2, same transport gap. Safety boundary held across all 6 real attempts (fail-closed correctly every time, zero unsafe HID at any corner, clean recovery every time — including via the v8 graceful-degrade fix). |
-| — | `slam_to_corner` verification-screenshot 503s (transport gap, well-characterized) | **OPEN — real root-cause candidate identified, fix not yet scoped** | Blocks categories 2/5's actual completion. Live evidence (2026-08-30): `slam_to_corner`'s before/after verification screenshots 503 unpredictably, confirmed NOT explained by insufficient outer-retry budget (tried asymmetric light/light, then symmetric 3/1000ms matching the `after` call — a full 3-attempt/~6.5s budget was exhausted with the failure persisting) and NOT explained by `StreamerKeepalive` reporting disconnected (`streamer_keepalive_connected=true` logged before AND after every failure). **Leading hypothesis**: `StreamerKeepalive`'s held `/api/ws` connection only detects death passively (`wait_closed()` waits for a close event/read-loop-end; no active ping/heartbeat) — a connection silently killed by an idle NAT/proxy timeout during the ~30s human-confirmation wait's total WS silence could report `connected=true` while the underlying transport is actually dead. Plausible and consistent with all observed data, not yet confirmed. **Fix, not yet built**: add an active ping/pong cycle to `StreamerKeepalive`'s held session so a truly-dead connection is detected and reconnected proactively, instead of relying on a passive close-watcher. Deliberately NOT scoped/built this session (real design work, not a tail-end addition) — full detail in `docs/slam-verify-screenshot-retry-plan.md`'s RESULTS section. |
+| — | `slam_to_corner` verification-screenshot 503s (transport gap) | **FIX SHIPPED (35e64ba), live verification still needed** | Blocks categories 2/5's actual completion until verified. Root cause confirmed (not just hypothesized): read `real_connect`'s actual source — the held `/api/ws` connection dropped its write half entirely and never actively probed liveness, exactly matching the `connected=true`-but-still-503 data from 6 real live attempts. **Fix**: `docs/streamer-keepalive-liveness-ping-plan.md` — active Ping/Pong on the held connection (5s interval/5s timeout, any inbound frame or a received Pong resets the clock, a failed Ping send counts as immediate death) reusing the existing close-signal path, so `keepalive.rs`'s whole reconnect/backoff state machine is untouched. Implemented + reviewed, 966/966 workspace tests, clippy/fmt clean. **Bounds, does not eliminate**: today's failure mode (zombied connection self-heals NEVER, for the life of the process) becomes self-healing within a bounded ~10-15s window — a real, large improvement, but an occasional 503 could still theoretically occur in the worst-case race against kvmd's own idle-stop timer. **Not yet run live** — the plan's own proposed next step is a low-risk idle-hold-then-screenshot diagnostic (verifies the mechanism directly, no slam risk), not another guarded-slam attempt. |
 | — | Wake-key mechanism (`Space`-once wake-without-dismiss) | **OPEN — controlled sweep run, suggestive shape, threshold NOT pinned** | The precondition categories 2/5's combined gate depends on. Original informal experiment (commit c13142e) found a mixed result and a real premise correction (this rig has Touch ID + a working passcode, not no-passcode as assumed) — see prior inventory history. Follow-up controlled sweep (commit 58769ef, interleaved 2s/4s/8s, reviewed design): **d2 (2s) = 2/2 clean B**, **d8 (8s) = 2 clean A after escalation**, **d4 (4s) = 3/3 genuinely inconclusive** (torn capture every attempt, not a guessed value). Shape (short→B, long→A) is consistent with the timing-confound hypothesis but the one value that would have pinned the threshold never resolved. Recommendation: an interim ~8s delay before the wake step's `Space` press is a reasonable default for categories 2/5's retry, but this is NOT a fully proven threshold — a finer sweep (5s/6s/7s) with a longer post-press settle is the next real step if a precise value is ever needed. **Real methodology finding**: `unlock_ipad()`'s own cleanup step can itself escalate a genuine A into Touch ID (B) — a torn screenshot #3 must be reported as inconclusive, never inferred from a later recovery-step screenshot (this affected some of today's earlier informal circumstantial reads, not the sweep's own disciplined per-trial classification, which captures before any recovery runs). |
 | — | it-03400 desktop/absolute gate (`task_4b034fc4e018`) | **BLOCKED, separately, not on this pass's critical path** | Physical cable/OTG-enumeration issue on `it-03400` itself — a hardware problem on a different appliance, unrelated to any Rust-port code question. See §4. |
 
@@ -77,14 +77,14 @@ necessary, not sufficient").
    1/20 marginal (noise-floor, visually confirmed correct). No
    disagreement severe enough to warrant escalating to N≥80.
 2. **Category 2 positive+negative control pair actually run and passed —
-   NOT YET, blocked on a well-characterized transport gap.** 6 real live
-   attempts, all blocked at `slam_to_corner`'s verification-screenshot
-   503s (see §1's new inventory row) — not the guard/slam logic itself,
-   believed sound throughout. Needs the `StreamerKeepalive` ping/pong fix
-   (or equivalent) before another live attempt is worth making; further
-   retries without that fix would spend live-hardware contact for no
-   additional signal, per the same day's own "stop when it's no longer
-   ambiguous" discipline.
+   NOT YET, the blocking fix has shipped but not been live-verified.**
+   6 real live attempts were blocked at `slam_to_corner`'s verification-
+   screenshot 503s (see §1's inventory row) — not the guard/slam logic
+   itself, believed sound throughout. The root-cause fix (`StreamerKeepalive`
+   ping/pong, commit 35e64ba) is implemented and reviewed. Next step is
+   its own low-risk idle-hold-then-screenshot diagnostic, THEN a fresh
+   category 2 attempt — not immediately re-attempting the guarded slam
+   before the fix itself has been confirmed working.
 3. **Category 3 run against the real endpoint — SATISFIED** (commit
    17b918e). Forced a real `POST /hidmode` mode switch, gate released at
    15075ms with no restart, matching the #51 incident's exact failure
@@ -93,10 +93,11 @@ necessary, not sufficient").
    under test passed cleanly; worth someone hardening the harness's own
    restore step before it's reused unattended.
 4. **Category 5's positive path reached and passed — NOT YET, same
-   blocker as item 2.** Same 6 live attempts, same transport gap. The
-   safety boundary itself has real repeated evidence now (fail-closed
-   correctly, clean recovery, all 6/6 times) — what's missing is reaching
-   the actual positive path, gated on the same fix as item 2.
+   status as item 2.** Same 6 live attempts, same transport gap, same
+   shipped-but-unverified fix. The safety boundary itself has real
+   repeated evidence now (fail-closed correctly, clean recovery, all 6/6
+   times) — what's missing is reaching the actual positive path, gated on
+   the same fix verification as item 2.
 5. **The wake-key isolation experiment run and its outcome incorporated
    — PARTIALLY SATISFIED.** Both the informal experiment (c13142e) and
    the controlled follow-up sweep (58769ef) have run. Outcome: `Space`-
