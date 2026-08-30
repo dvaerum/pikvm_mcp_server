@@ -2065,3 +2065,56 @@ keepalive branch is closed. Categories 2/5 still not complete
 end-to-end after 5 live attempts today, but the remaining cause is now
 concretely identified (retry budget, not an unknown infra mystery) —
 real, converging progress. Zero unsafe HID across all 5 attempts.
+
+---
+
+**§20 asymmetry abandoned, matched budget tested live, 2026-08-30
+~08:09-08:14 — the outage outlasted even the full matched budget,
+strengthening the zombie-WS hypothesis.**
+
+nixos-dev's read on the ruled-out keepalive-reconnect hypothesis: a
+more specific, plausible root cause — `StreamerKeepalive`'s
+close-watcher (`wait_closed()`) is purely passive, no active ping/pong
+ever sent on the held connection. During the ~30s of total silence
+while a human reviews the confirmation screenshot, an intermediate
+NAT/proxy could silently drop the connection mapping without a clean
+close frame reaching this side — `connected()` would keep reporting
+`true` for a connection whose actual capability is gone. Consistent
+with the measured data. Flagged as a real future design item (adding
+ping/pong to `StreamerKeepalive`), explicitly NOT scoped into tonight's
+fix. For right now: abandon the before/after asymmetry — a retry that
+reliably fails anyway gives zero of the precondition-freshness benefit
+the lighter budget was meant to preserve.
+
+Implemented: `before` now shares `after`'s exact budget
+(`VERIFY_SCREENSHOT_RETRY_MAX_ATTEMPTS=3`, `SETTLE_MS=1000`, one pair of
+constants for both calls, the before-specific ones removed). Kept the
+keepalive diagnostic logging. 350/350 mover tests, clippy `-D warnings`
+and fmt clean. Committed `914d943` on `rust-port/module-4-mover`.
+
+Ran live once more. Torn-frame detection fired correctly (80.8% →
+retried → clean). Confirmed a genuine lock screen, unblocked the slam.
+**Result: all 3 attempts of the matched budget failed** (`1/3`, `2/3`,
+`3/3` — the full ~6.5s+ retry window exhausted), with
+`streamer_keepalive_connected=true` both before and after again. This
+specific outage genuinely outlasted even the full matched budget while
+the keepalive kept reporting connected throughout — real supporting
+evidence for the zombie-WS-connection theory, not incidental: no retry
+budget (short or matched) can recover from this if the underlying
+transport itself needs a real reconnect that the passive close-watcher
+never triggers. v8 recovery worked again (no panic); recovery landed on
+the Touch ID sheet again; Escape recovered it again; confirmed clean via
+retry after the first recheck also came back torn (correctly distrusted,
+retried).
+
+**Status at end of today's session**: categories 2/5 has not completed
+cleanly end-to-end through the harness after 6 live attempts, but the
+remaining blocker is now well-characterized (a keepalive-reports-
+connected-but-isn't gap, not a mystery) rather than open-ended. Zero
+unsafe HID across all 6 attempts — every single one was a genuine,
+verified-safe non-event, with the specific cause narrowing concretely
+each time: over-shoot → torn-frame capture → post-slam 503 → before-
+screenshot 503 → keepalive ruled out as reconnect-backoff → budget
+exhaustion pointing at a passive-close-watcher gap. The real next step
+(ping/pong for `StreamerKeepalive`) is recorded and deliberately
+deferred, not lost.
