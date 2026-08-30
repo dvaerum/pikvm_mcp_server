@@ -2685,3 +2685,42 @@ it's read-only glue over already-shipped primitives rather than new
 production code.
 
 No live hardware contact this round — design + review request only.
+
+---
+
+**§33 first live attempt at the Allow-Access-When-Locked check — blocked
+by the SAME source.online bug this whole night's thread exists to fix,
+inconclusive, no incident, 2026-08-30 ~16:47-16:50.**
+
+nixos-dev reviewed and approved the design (§32), with one addition (a
+4th checkpoint case — Spotlight fuzzy-matching to a plausible-but-wrong
+pane). Proceeded to live execution.
+
+Device was sitting in a real `source.online` 503 episode at the start —
+same recurring pattern as §22-§31. Called `unlock_ipad_with_code` with
+the real passcode; its `send_key` calls likely reached the device (HID
+and video-capture are independent subsystems, long-established this
+session), but EVERY screenshot attempt around and immediately after it
+503'd — meaning the plan's own core discipline (confirm via screenshot
+before every next stage) could not actually be honored across that
+stretch. Chained ahead blind for a moment — a real process gap, self-
+caught, not caught by review — before stopping and doing one isolated
+wake+confirm. Device came back on a genuine, clean, PLAIN lock screen
+(16:49, 100% Charged) — zero incident, not mid-navigation anywhere, but
+inconclusive: no confirmation the passcode sequence ever reached or
+passed the passcode field.
+
+Real process lesson: a passcode-entry sequence must never chain through
+a capture-outage window — confirm via screenshot before every key sent,
+recovering `source.online` first each time it's stuck, not trust a
+multi-key sequence to complete blind. Documented in
+docs/allow-access-when-locked-keyboard-check-plan.md (commit `a52bb8b`)
+for whenever this is retried.
+
+Genuinely useful side finding: this is the first CONCRETE case of the
+`source.online` bug actively interfering with a real, unrelated task
+(not a synthetic diagnostic) — direct evidence the fix matters beyond
+the wake-nudge investigation's own narrow framing.
+
+Not resumed further this pass. All throwaway files cleaned up. Device
+confirmed safe (clean lock screen) at the end.
