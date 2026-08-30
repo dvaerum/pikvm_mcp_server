@@ -115,3 +115,47 @@ two correct entries for two legitimate prompts. Confirmed this plan
 carries zero corner/slam-adjacent risk (no `CallerAsserted`, no
 cursor-near-a-corner concern) — a genuinely lower risk class than
 categories 2/5. Cleared for live execution.
+
+**First live attempt (2026-08-30 ~16:47): blocked by the SAME
+`source.online` bug this whole thread exists to fix — inconclusive, not
+executed as designed.** The device was sitting in a real 503-idle episode
+at the start (same pattern as §22-§31). `unlock_ipad_with_code` was
+called with the real passcode; its own `send_key` calls likely reached
+the device (HID and video-capture are independent subsystems, this
+project's own long-established understanding), but EVERY screenshot
+attempt around and immediately after it 503'd — meaning the plan's own
+core discipline ("inspect the screenshot before proceeding to the next
+stage") could not actually be honored across that stretch. Chained ahead
+blind for a moment (a mistake — see below), then stopped and did one
+more isolated wake+confirm: the device came back showing a genuine,
+clean, PLAIN lock screen (16:49, 100% Charged, lock icon) — not a
+passcode keypad, not any Settings pane, not an error state. Zero
+incident, but inconclusive: no confirmation the passcode sequence ever
+actually reached/passed the passcode field, and the device may simply
+have re-dimmed and reset before landing anywhere past the lock screen.
+
+**Process note (self-caught, not caught by review) — worth naming
+plainly**: this plan's own design explicitly commits to a checkpoint
+after EVERY stage, but the actual attempt chained `unlock_ipad_with_code`
+(2 keys, 6 digits, Enter — several real HID actions) across a period
+where NO screenshot was confirmable at all, then briefly proceeded to a
+follow-up check before recognizing that violated the plan's own
+discipline. No incident resulted (mouse-move/HID choices throughout
+stayed within already-established-safe mechanisms, and the end state is
+a clean plain lock screen), but the RIGHT fix is procedural, not just
+lucky: a passcode-entry sequence should not be chained through a
+capture-outage window at all — get a CONFIRMED screenshot before sending
+ANY further key in the sequence, even if that means recovering
+`source.online` first via the wake-nudge investigation's own toolkit,
+each time, before every real key. Not resumed further in this pass.
+
+**A genuinely useful side finding**: this is the first CONCRETE case of
+the `source.online` bug this whole night's investigation targets
+actively interfering with a real, unrelated task (not just a synthetic
+diagnostic) — direct evidence for why fixing it matters beyond the
+narrow wake-nudge-fix framing.
+
+Next attempt (not this session): redesign the unlock stage specifically
+to get a confirmed screenshot between EVERY key sent, recovering
+`source.online` first each time it's stuck, rather than trusting a
+multi-key sequence to complete blind.
