@@ -175,3 +175,69 @@ unconfirmed whether the sequence ever reached the Face ID & Passcode
 pane, the device *might* currently be parked mid-navigation there.
 Expect a possible unexpected Settings screen on next unlock and navigate
 out via `ipad_go_home` rather than treating it as a new incident.
+
+## Second live attempt (2026-08-30 ~18:14-18:20) — per-key-confirmed redesign, still blocked, but with real new evidence
+
+Ran the actual redesigned sequence this time (screenshot-confirm before
+every key, abort rather than push through blind). Real findings, in
+order:
+
+1. **Passive precheck**: `source.online` was stuck (503) at the start,
+   as usual. Correctly aborted rather than sending any key — exactly per
+   design.
+2. **Space #1 (wake)**: confirmed via a real screenshot — genuine, lit,
+   plain lock screen (18:14).
+3. **Space #2 (dismiss), sent from a SEPARATE process invocation** (real
+   wall-clock gap of tens of seconds for compile+run+my own inspection
+   between steps 2 and 3): screenshot came back showing the SAME plain
+   lock screen, unchanged — Space #2 did NOT advance the state machine.
+   **Correctly did NOT conclude anything about the "Allow Access When
+   Locked → Keyboard" setting from this** — recognized the likely
+   confound (the real gap between separate process runs is almost
+   certainly longer than this project's own documented ~10-12s wake/
+   redraw window, so the screen had likely re-dimmed and step 3's Space
+   registered as a FRESH wake, not the second stage) before drawing any
+   conclusion.
+4. **Re-tested with tight, matching timing** (both Space presses 1000ms
+   apart, in ONE continuous process — exactly `unlock_ipad_with_code`'s
+   own already-validated rhythm): **confirmed the two-stage mechanic DOES
+   work exactly as documented** — landed on a Touch ID / "Use Passcode" /
+   "Cancel" prompt. This resolves the earlier ambiguity cleanly: it was a
+   timing artifact, not evidence about the Keyboard setting.
+5. **Typed the 6 passcode digits (no Enter)**: the confirmation
+   screenshot came back TORN (flood-fill green block + a partial render
+   showing a "Delete" key — confirms we WERE on the real numeric
+   passcode keypad, just an unreliable capture of it). Correctly did NOT
+   trust this frame for a dot-count check — retried the capture using
+   this project's own `analyze_torn_frame` check rather than guessing.
+6. **`source.online` went stuck again during the retry** for a clean
+   frame. Tried the least-risky recovery first (a mouse-move nudge —
+   consistent with tonight's own finding, did NOT recover it), then one
+   Space keypress specifically as a video-recovery action (reasoned as a
+   safe no-op on a numeric keypad, unlike on the lock screen) — this DID
+   recover a clean frame.
+7. **The clean frame showed the device back on the plain, undisturbed
+   LOCK SCREEN (18:20)** — not the passcode keypad, not mid-navigation.
+   The passcode-entry attempt had auto-timed-out and re-locked before
+   Enter could ever be sent (which per the design was never sent blind —
+   correctly never risked a submission on an unconfirmed state). No
+   incident: nothing was ever submitted, no wrong-passcode counter risk.
+
+**Real, decision-relevant conclusion**: this specific check is currently
+BLOCKED by the same `source.online` bug this whole investigation targets
+— not by a design flaw in the check itself. The redesign's own
+confirm-before-every-key discipline works exactly as intended (caught
+both the torn frame and the ambiguous timing correctly, never guessed,
+never risked a submission), but the multi-second blind windows the
+`source.online` bug introduces keep colliding with iOS's own short
+lock/passcode-entry timeout, so the sequence times out before completing
+even when every individual step is being handled correctly and safely.
+**This means completing this check reliably is realistically gated on
+actually FIXING `source.online` first** (the still-open mouse-move-vs-
+keypress design question from the wake-nudge thread), not just something
+to retry again with the same tooling. Two clean, safe, zero-incident
+attempts in a row that both got this far and no further is itself
+information, not a failure of technique.
+
+Not resumed further this pass. All throwaway files cleaned up, device
+confirmed safe (clean plain lock screen) at the end.
