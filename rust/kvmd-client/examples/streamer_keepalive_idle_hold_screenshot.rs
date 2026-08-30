@@ -38,19 +38,48 @@ async fn main() {
     };
     let client = Arc::new(PiKVMClient::new(config, None));
 
+    // Retried (unlike the post-idle screenshot below, which is the ACTUAL
+    // thing under test): a brand-new client's first-ever snapshot races a
+    // SEPARATE, already-documented, pre-existing condition (this crate's
+    // own streamer_keepalive.rs header: kvmd's stream-client count going
+    // 0->1 has to propagate through its own poll loop and fork+exec+bind
+    // ustreamer before the first snapshot can succeed) — not the
+    // zombie-connection bug this diagnostic is trying to isolate. Live-
+    // confirmed 2026-08-30: 2/2 consecutive cold runs hit exactly this
+    // race. Retrying here just gets a connection established at all;
+    // it does not touch what's actually being tested below.
     eprintln!("=== warm-up: taking an initial screenshot to establish the held connection ===");
-    let t0 = Instant::now();
-    match client.screenshot(None).await {
-        Ok(shot) => eprintln!(
-            "warm-up screenshot OK in {:?} ({} bytes), streamer_keepalive_connected={}",
-            t0.elapsed(),
-            shot.buffer.len(),
-            client.streamer_keepalive_connected()
-        ),
-        Err(e) => {
-            eprintln!("=== ABORT: warm-up screenshot itself failed ({e}) — nothing to verify. ===");
-            std::process::exit(2);
+    let mut warm_up_ok = false;
+    for attempt in 1..=5 {
+        let t0 = Instant::now();
+        match client.screenshot(None).await {
+            Ok(shot) => {
+                eprintln!(
+                    "warm-up screenshot OK on attempt {attempt}/5 in {:?} ({} bytes), \
+                     streamer_keepalive_connected={}",
+                    t0.elapsed(),
+                    shot.buffer.len(),
+                    client.streamer_keepalive_connected()
+                );
+                warm_up_ok = true;
+                break;
+            }
+            Err(e) => {
+                eprintln!(
+                    "warm-up screenshot attempt {attempt}/5 failed ({e}) — likely the \
+                     documented cold-start race, not the bug under test. Retrying."
+                );
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
         }
+    }
+    if !warm_up_ok {
+        eprintln!(
+            "=== ABORT: warm-up never succeeded after 5 attempts — nothing to verify. This is \
+             itself worth reporting (the cold-start race is worse than 5 attempts can clear), \
+             but it isn't evidence about the zombie-connection fix either way. ==="
+        );
+        std::process::exit(2);
     }
 
     eprintln!(
