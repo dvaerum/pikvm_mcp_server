@@ -2724,3 +2724,58 @@ the wake-nudge investigation's own narrow framing.
 
 Not resumed further this pass. All throwaway files cleaned up. Device
 confirmed safe (clean lock screen) at the end.
+
+---
+
+**§34 second live attempt, per-key-confirmed redesign — confirmed the
+two-stage lock-screen mechanic works, but the check remains genuinely
+blocked by the source.online bug itself, 2026-08-30 ~18:14-18:20.**
+
+Ran the actual redesigned sequence (screenshot-confirm before every key,
+abort rather than push through blind). Real findings, in order:
+
+1. Passive precheck: `source.online` stuck at the start, as usual —
+   correctly aborted rather than sending any key.
+2. Space #1 (wake): confirmed via screenshot — genuine lit plain lock
+   screen (18:14).
+3. Space #2 (dismiss), sent from a SEPARATE process (real gap of tens of
+   seconds): screen unchanged, still the same lock screen. Correctly did
+   NOT conclude anything about the Keyboard setting — recognized the
+   likely confound (the gap between separate process runs almost
+   certainly exceeded this project's own documented ~10-12s wake/redraw
+   window) before drawing any conclusion.
+4. Re-tested with tight, matching timing (both Spaces 1000ms apart, ONE
+   continuous process — exactly `unlock_ipad_with_code`'s own already-
+   validated rhythm): **confirmed the two-stage mechanic works exactly
+   as documented** — landed on a Touch ID / "Use Passcode" / "Cancel"
+   prompt. Resolves step 3's ambiguity cleanly as a timing artifact, not
+   a Keyboard-setting finding.
+5. Typed the 6 passcode digits (no Enter): confirmation screenshot came
+   back TORN (flood-fill + a partial "Delete" key visible — confirms the
+   real numeric keypad WAS showing, just an unreliable capture of it).
+   Correctly retried via `analyze_torn_frame` rather than trusting an
+   unreliable frame for a dot-count check.
+6. `source.online` went stuck again during the retry. Mouse-move nudge
+   didn't recover it (consistent with the earlier wake-nudge negative
+   result); one Space keypress did (reasoned safe as a no-op on a
+   numeric keypad, unlike on the lock screen).
+7. The clean frame showed the device back on the plain, undisturbed lock
+   screen (18:20) — the passcode-entry attempt had auto-timed-out and
+   re-locked before Enter could ever be sent. Correctly never risked a
+   blind submission. Zero incident.
+
+**Real, decision-relevant conclusion**: this check is blocked by the
+SAME `source.online` bug this whole investigation targets, not by a
+flaw in the check's own design — the confirm-before-every-key discipline
+worked exactly as intended throughout (caught the torn frame, caught the
+timing confound, never guessed, never risked a submission), but the
+bug's multi-second blind windows keep colliding with iOS's own short
+passcode-entry timeout, timing the sequence out before completion even
+when every step is handled correctly. Completing this check reliably is
+realistically gated on actually fixing `source.online` first — not
+something to retry again with the same tooling. Documented in full in
+docs/allow-access-when-locked-keyboard-check-plan.md (commit `4414566`).
+
+Two clean, safe, zero-incident attempts in a row that both got this far
+and no further is itself real information. Not resumed further this
+pass. All throwaway files cleaned up each time.
