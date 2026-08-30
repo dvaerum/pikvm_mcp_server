@@ -146,9 +146,57 @@ Two points raised, both addressed:
    failed" branch now names `PiKVMConfig::source_online_wake_nudge`
    explicitly, matching the "disabled" branch's own wording.
 
+## Live verification result (2026-08-30 ~13:29) — NEGATIVE. Do not enable this flag.
+
+Manager asked whether now was a reasonable time to run it; judged yes (the
+device happened to be sitting in the real 503-idle state this fix targets,
+confirmed via the actual production `fetch_snapshot_with_retry` path with
+the flag OFF — genuine current state, not a synthetic test). Ran three
+steps, in order, on the real device:
+
+1. **Precheck (flag off)**: `client.screenshot(None)` — `StreamerUnavailable`
+   after the existing two-attempt retry. Confirms a genuine current
+   `source.online=false` episode, not a curl/proxy artifact.
+2. **Fix under test (flag on)**: same call, `source_online_wake_nudge: true`,
+   nothing else changed. Elapsed 14.8s (consistent with the full
+   escalation path actually running: connect + 2×503/grace + nudge +
+   settle + 3rd 503). **Result: STILL FAILED.** The error text confirms
+   the nudge fired ("a wake nudge... was also tried and did not recover
+   it") — the escalation logic ran as designed, it just didn't work.
+3. **Disambiguation (same episode, no new connection)**: sent ONE `Space`
+   keypress (the mechanism tonight's earlier root-cause investigation
+   actually validated, §22-§26) through a fresh client — first wake
+   attempt this idle episode, so none of the documented second-press risk
+   applies. **Result: REVIVED** — `get_streamer_status()` reported
+   `online=true`, and a direct screenshot succeeded (78374 bytes).
+   Screenshot inspected directly: a genuine, clean, plain lock screen
+   (clock 13:29, "100% Charged", lock icon) — safe, no incident, exactly
+   the state the whole session's safety model expects.
+
+**This is a real, important negative finding, not a minor caveat.** The
+fix's mouse-move mechanism was inherited from `--fallback-mouse-move`'s
+OWN validated property — that it's SAFE (doesn't dismiss a lock screen)
+— never from any independent proof that it's EFFECTIVE at reviving
+`source.online`. This live test directly contradicts that inherited
+assumption on a genuine real episode: mouse-move escalation failed where
+an otherwise-identical Space keypress, moments later on the same stuck
+state, succeeded. N=1 each side — not proof mouse-move NEVER works — but
+enough to say the fix as designed cannot be trusted to actually recover
+the case it targets, and the flag must stay off pending a real redesign,
+not just a bigger live sample of the current mechanism.
+
+This is exactly why the flag defaulted off and why live verification was
+held as a separate, deliberately-timed decision rather than bundled into
+landing the code — the caution was justified: it caught a real gap before
+it could ever have been enabled by default.
+
 ## Status
 
-Reviewed by nixos-dev; both substantive points addressed in code (item 2
-is a live-verification checklist item, documented above, not a further
-code change). Not live-verified yet — that is a deliberate, separate,
-later decision per the manager's explicit direction.
+Reviewed by nixos-dev; both substantive review points addressed in code.
+Live-verified 2026-08-30: **negative result, flag must stay off.** The
+underlying root-cause finding (§22-§26 — the iPad's display needs a real
+redraw event, not connection bookkeeping) still stands; what's now in
+question is specifically whether a relative mouse-move is a sufficient
+redraw event, or whether only a keypress reliably is. Needs a fresh design
+pass (through the same review process) before any further live testing —
+not decided in this pass.
