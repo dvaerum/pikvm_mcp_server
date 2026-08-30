@@ -1847,3 +1847,44 @@ itself points at the post-slam verification screenshot needing the same
 "held /api/ws stream client" retry treatment the baseline screenshot
 already has. Not fixed blind — flagged for a targeted look before the
 next attempt. No safety incident; device left safely locked throughout.
+
+---
+
+**§14 slam-verify outer-retry: designed, corrected mid-flight, reviewed,
+implemented, 2026-08-30 ~07:28-07:35 — code-only, closes the §13 gap.**
+
+Manager directed investigating the 3rd post-slam 503 occurrence. First
+message to the manager proposed the wrong fix ("missing the same
+held-stream-client retry treatment the baseline has") — checked the
+actual code before writing anything further and found that's false:
+`client.screenshot()` already has a uniform built-in retry-once-with-
+1500ms-grace (`kvmd-client/core.rs`'s `fetch_snapshot_with_retry`),
+and `verify_motion`'s screenshot calls already go through that exact
+path. Corrected the record with the manager and nixos-dev rather than
+building on the wrong guess.
+
+Real gap, found by reading `slam::motion::slam_to_corner`: the before/
+after screenshots have no OUTER retry on top of that built-in one —
+unlike two other places in this codebase that already retry the capture
+itself with a settle (the harness's wake+confirm loop,
+`capture_until_bright_enough`). Wrote
+`docs/slam-verify-screenshot-retry-plan.md`, sent for review.
+
+nixos-dev's review, 3 points: (1) 3-attempts/1000ms settle is as
+well-grounded as the existing precedent — checked
+`STREAMER_RESTART_GRACE_MS`'s own history, no richer number exists to
+borrow; (2) apply to `after` only, not `before` — `before` sits between
+the guard's CONFIRMED precondition and the slam, and retrying there
+would widen exactly the gap this whole day's sessions have been
+fighting (re-dimming, Touch ID escalation, torn frames all within
+single-digit seconds); (3) defer caller-tunability, YAGNI.
+
+Implemented: `take_screenshot_with_retry` helper in `slam/motion.rs`,
+applied to `after` only (`before` stays a bare fail-fast `.await?`,
+with a comment explaining why). 4 new tests, including one that
+reproduces today's exact live failure shape (a transient after-
+screenshot 503 that now recovers instead of propagating). 349/349
+mover tests, clippy `-D warnings` and fmt clean. Committed `5e9f9fc`
+(plan) and `0ef76f7` (implementation) on `rust-port/module-4-mover`.
+Code-only — not yet exercised live; the next categories-2/5 attempt is
+the real test of whether the 3-attempt/1s defaults are enough.
