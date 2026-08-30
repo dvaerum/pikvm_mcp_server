@@ -97,6 +97,25 @@
 //! a real, harder design question left open; this just makes the
 //! harness itself robust to it.
 //!
+//! **v9 (2026-08-30), automatic torn-frame detection + retry.** Two live
+//! runs this morning produced a torn/corrupted confirmation screenshot
+//! (flood-fill placeholder colour + black bars replacing part or all of
+//! the real content) — correctly caught by the human veto both times
+//! (never confirmed), zero incidents, but wasting the whole confirm
+//! window on an unjudgeable frame. See docs/torn-frame-detection-plan.md
+//! (reviewed by nixos-dev) for the real, measured evidence behind this
+//! fix. The wake+screenshot loop now runs
+//! `pikvm_mcp_detection_vision::torn_frame::analyze_torn_frame` on every
+//! captured shot (cropped to the freshly-detected iPad bounds, not a
+//! hardcoded rectangle) and retries the CAPTURE — never the wake key — if
+//! it's flagged torn: a second wake key is a documented hazard on this
+//! rig (dismisses an already-woken lock screen into Touch ID), not just
+//! unnecessary. Never blocks or loops forever: a bounds/analysis failure
+//! skips the check for that attempt, and a still-torn frame after all 5
+//! attempts is presented to the human veto anyway with a warning. The
+//! human veto remains the real backstop either way — this closes a
+//! reliability gap in front of it, not a replacement for it.
+//!
 //! Run (writes /tmp/corner_control_confirm.flag — delete any stale copy
 //! from a previous run before starting; the process waits up to 30s for
 //! it to contain exactly "yes"):
@@ -108,6 +127,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use pikvm_mcp_detection_vision::brightness::Region;
+use pikvm_mcp_detection_vision::orientation::{detect_ipad_bounds_from_buffer, DetectOptions};
+use pikvm_mcp_detection_vision::torn_frame::{analyze_torn_frame, AnalyzeTornFrameOptions};
 use pikvm_mcp_kvmd_client::client::{PiKVMClient, PiKVMConfig};
 use pikvm_mcp_mover::cursor_anchor::{
     anchor_cursor, AnchorGuard, AnchorNudge, AnchorRecoveryPosture, AnchorRequest, Corner,
@@ -325,35 +347,100 @@ async fn main() {
         // expected and harmless; the process just keeps trying until it
         // gets a real image for the human to judge.
         let mut confirm_shot = None;
+        // v9 (docs/torn-frame-detection-plan.md, reviewed by nixos-dev):
+        // when a captured frame is automatically flagged torn, this stays
+        // true for the next loop iteration so it re-captures WITHOUT
+        // re-sending the wake key. Sending a SECOND wake key here is a
+        // documented hazard on this rig, not just unnecessary — a second
+        // `Space` DISMISSES an already-woken lock screen and brings up the
+        // Touch ID/passcode prompt (ipad-unlock.ts's own documented
+        // mechanic, reinforced by the wake-key-delay-sweep and by
+        // `unlock_ipad()`'s own recovery keys doing exactly this earlier
+        // today). The device is presumably already awake by the time a
+        // torn frame is detected; only the CAPTURE needs retrying.
+        let mut skip_wake = false;
         for attempt in 1..=5 {
-            if fallback_mouse_move {
-                eprintln!("=== Wake attempt {attempt}/5: small relative mouse move (--fallback-mouse-move) ===");
-                client
-                    .mouse_move_relative(5.0, 5.0)
-                    .await
-                    .expect("wake mouse move failed");
+            if skip_wake {
+                eprintln!(
+                    "=== Attempt {attempt}/5: re-capturing after a torn-frame retry (no \
+                     re-wake — a second wake key would dismiss the lock screen) ==="
+                );
+                tokio::time::sleep(Duration::from_millis(500)).await;
             } else {
-                eprintln!("=== Wake attempt {attempt}/5: single Space press (not Enter) ===");
-                client
-                    .send_key("Space", None)
-                    .await
-                    .expect("wake Space press failed");
+                if fallback_mouse_move {
+                    eprintln!("=== Wake attempt {attempt}/5: small relative mouse move (--fallback-mouse-move) ===");
+                    client
+                        .mouse_move_relative(5.0, 5.0)
+                        .await
+                        .expect("wake mouse move failed");
+                } else {
+                    eprintln!("=== Wake attempt {attempt}/5: single Space press (not Enter) ===");
+                    client
+                        .send_key("Space", None)
+                        .await
+                        .expect("wake Space press failed");
+                }
+                // 1.5s, not 800ms: this project's own documented finding is
+                // that a screenshot taken immediately after a UI-dismissing
+                // keypress can be a genuinely torn/glitched capture frame
+                // (solid-colour fill with a small correct render in one
+                // corner) — a streamer mid-transition artifact, not real
+                // device state. Live-confirmed 2026-08-29: an 800ms wait
+                // produced exactly that. Longer settle reduces how often
+                // that happens; the automatic check below and the human
+                // step after it are the real backstops either way.
+                tokio::time::sleep(Duration::from_millis(1500)).await;
             }
-            // 1.5s, not 800ms: this project's own documented finding is that
-            // a screenshot taken immediately after a UI-dismissing keypress
-            // can be a genuinely torn/glitched capture frame (solid-colour
-            // fill with a small correct render in one corner) — a streamer
-            // mid-transition artifact, not real device state. Live-confirmed
-            // 2026-08-29: an 800ms wait produced exactly that (a real, correct
-            // lock-screen fragment in the top strip, solid green filling the
-            // rest) — caught by the human step below (correctly did NOT
-            // confirm it), not by this retry loop, since a torn frame is
-            // still a successful `Ok(shot)`, not an `Err` this loop retries
-            // on. Longer settle reduces how often that happens; the human
-            // step remains the real backstop either way.
-            tokio::time::sleep(Duration::from_millis(1500)).await;
+            skip_wake = false;
             match client.screenshot(None).await {
                 Ok(shot) => {
+                    // Automatic torn-frame check (docs/torn-frame-detection-plan.md):
+                    // crop to the FRESHLY-detected iPad content bounds, not a
+                    // hardcoded rectangle — per-frame bounds drift (auto_crop.rs's
+                    // calibration work measured up to ~4.6% edge-delta). Never
+                    // blocks: a bounds- or analysis-failure just skips the
+                    // automatic check for this attempt and falls through to the
+                    // human veto, same as before this feature existed.
+                    let region =
+                        detect_ipad_bounds_from_buffer(&shot.buffer, DetectOptions::default())
+                            .ok()
+                            .map(|b| Region {
+                                x: b.x,
+                                y: b.y,
+                                width: b.width,
+                                height: b.height,
+                            });
+                    match analyze_torn_frame(&shot.buffer, AnalyzeTornFrameOptions { region }) {
+                        Ok(report) => {
+                            eprintln!(
+                                "[torn-frame-check] attempt {attempt}/5: uniform_row_fraction={:.3} \
+                                 is_torn={}",
+                                report.uniform_row_fraction, report.is_torn
+                            );
+                            if report.is_torn {
+                                if attempt < 5 {
+                                    eprintln!(
+                                        "[torn-frame-check] flagged torn — retrying the capture \
+                                         (no re-wake)."
+                                    );
+                                    skip_wake = true;
+                                    continue;
+                                }
+                                eprintln!(
+                                    "[torn-frame-check] WARNING: still flagged torn after 5 \
+                                     attempts — presenting to the human veto anyway rather than \
+                                     looping forever."
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[torn-frame-check] analysis failed ({e}) — skipping the \
+                                 automatic check for this attempt; the human veto below remains \
+                                 the backstop."
+                            );
+                        }
+                    }
                     confirm_shot = Some(shot);
                     break;
                 }

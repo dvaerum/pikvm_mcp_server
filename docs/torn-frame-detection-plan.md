@@ -134,13 +134,44 @@ withhold a frame from the human veto entirely.
   frame if one recurs — not required before merging the code change
   itself.
 
-## Open questions for review
+## Review (nixos-dev) — resolved
 
-1. Is 8% the right threshold, or should it start more conservative
-   (lower, e.g. 5%) given only one real torn sample was measured?
-2. Should the retry-without-rewake assumption be verified, or is there
-   a safer alternative (e.g. also re-send the wake key on a torn-frame
-   retry, in case the corruption correlates with a mid-transition state
-   that a fresh wake would resolve faster)?
-3. Worth committing the real torn-frame JPEG as a test fixture, or keep
-   the test suite fully synthetic to avoid binary fixtures in the repo?
+1. **Threshold: 6%, not 8%.** The 8% framing's "biased toward clean"
+   math was wrong (geometric mean of 1.5%/22.4% is ~5.8%, arithmetic
+   ~12% — 8% sits closer to the torn end than claimed). Also: the two
+   clean samples were both settled/static shots, not the screen-just-
+   woke moment this check actually runs at (more likely to carry some
+   transitional artifact) — reason to lean lower, not higher. Resolved
+   to **6%** (`UNIFORM_ROW_FRACTION_THRESHOLD = 0.06`), near the
+   geometric mean.
+2. **Never re-send the wake key on a torn-frame retry — hard constraint,
+   not a judgment call.** `ipad-unlock.ts:591-614`'s documented
+   mechanic: a FIRST `Space` wakes the screen still-locked; a SECOND
+   `Space` DISMISSES the lock screen into the Touch ID/passcode prompt —
+   the exact escalation this whole categories-2/5 saga has been fighting
+   all day, reinforced by the wake-key-delay-sweep's own finding that
+   `unlock_ipad()`'s recovery keys do this. A torn-frame retry re-fetches
+   the capture only (with a short extra settle), never re-presses the
+   wake key.
+3. **Don't hardcode the crop-region literal — pass real per-frame
+   detected bounds.** `AnalyzeTornFrameOptions.region` is populated from
+   `orientation::detect_ipad_bounds_from_buffer` on the SAME captured
+   frame, not the literal `{x:610,y:58,...}` rectangle — per-frame
+   bounds drift (auto_crop.rs's calibration work measured ~4.6%
+   edge-delta across captures). A bounds-detection failure just skips
+   the torn-frame check for that attempt (never blocks); the human veto
+   remains the backstop either way.
+4. **Fixture: synthetic-only, no committed binary.** The one real torn
+   sample was an incidental artifact, not a purpose-built calibration
+   corpus — a synthetic "half-noise, half-flood-fill" test covers the
+   same shape without adding a binary fixture to the repo.
+
+## Implementation
+
+Done — `rust/detection-vision/src/torn_frame.rs` (new module, mirrors
+`brightness.rs`'s conventions exactly, 6 unit tests), wired into
+`cursor_anchor_corner_control_smoke.rs`'s existing wake+screenshot retry
+loop (v9). 345/345 mover tests, 198/198 detection-vision tests, clippy
+`-D warnings` and fmt clean. Not yet exercised live (code-only per the
+manager's direction — no live rig contact needed for this change); the
+next live categories-2/5 attempt will be its first real test.

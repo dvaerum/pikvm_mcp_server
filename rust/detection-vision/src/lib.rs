@@ -27,3 +27,4 @@ pub mod orientation;
 pub mod seed_template;
 pub mod snapshot;
 pub mod template_set;
+pub mod torn_frame;
