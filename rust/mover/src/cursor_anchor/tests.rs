@@ -198,6 +198,7 @@ fn make_landscape_frame() -> Vec<u8> {
 fn default_req(client: Arc<PiKVMClient>, guard: AnchorGuard) -> AnchorRequest {
     AnchorRequest {
         client,
+        allow_keyboard_wake_after: false,
         corner: None,
         guard,
         screenshot: ScreenshotMode::Raw,

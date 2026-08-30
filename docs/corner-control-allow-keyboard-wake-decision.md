@@ -53,7 +53,20 @@ reading window (an incoming call, a notification, a scheduled event) —
 a residual possibility that exists for this harness EVERY time it runs,
 regardless of this fix, already accepted (the only mitigation is the
 human looking at the screenshot before saying yes, which already
-happened). This fix does not introduce that risk; it was already there.
+happened).
+
+**Precise wording (nixos-dev review — the original draft overclaimed
+this)**: this fix does not change case (b)'s LIKELIHOOD — that event
+was already possible regardless of this escalation. It does marginally
+raise case (b)'s potential SEVERITY if it coincides with this
+escalation firing: if that already-accepted rare event landed the
+device on something with an actual focused control, a `Space` there
+could activate it (its known "activate focus" semantics), where a
+mouse nudge would have stayed harmless regardless of what was focused.
+This is a real but narrow, multiply-compound-probability case (external
+event AND `source.online` sticking AND a focused control existing on
+whatever resulted) — not something to block on, but stated exactly
+rather than rounded down to "not introduced."
 
 Case (a) is exactly the case the v2 escalation's `keyboard_wake_is_safe`
 timing gate is built for: real, sizeable idle time (human reading time)
@@ -95,8 +108,36 @@ the codebase unaffected).
 
 ## Status
 
-Sent to nixos-dev for review of the SAFETY ARGUMENT specifically (not
-just the plumbing shape) before any implementation. Not implemented
-yet. Live verification, if this is approved and built, is a separate,
+**Approved by nixos-dev** — verified the `keyboard_wake_is_safe` 20s
+gate is a hard code-level enforcement, not a hopeful timing assumption
+(a fast confirmation self-selects into the safe mouse-move fallback on
+its own); confirmed no timing overlap with the harness's own recovery-
+key logic; agreed scoping to AFTER-only (leaving BEFORE undecided) is
+the right discipline. One wording correction applied above (case (b)'s
+severity, not likelihood, is what's marginally affected). Cleared for
+implementation.
+
+**Implemented.** `SlamOptions.allow_keyboard_wake_after` (default
+`false`) threads through `take_screenshot`/`take_screenshot_with_retry`
+to the `after` shot's `ScreenshotOptions.allow_keyboard_wake` only —
+`before` always passes `false`, hardcoded, regardless of the caller.
+`AnchorRequest.allow_keyboard_wake_after` (no `Default` derive on that
+struct, so every one of its 9 construction sites had to set this
+explicitly — no new call site can silently inherit `true`) threads
+through `run_slam`. Set `true` at exactly the two approved call sites
+(`cursor_anchor_corner_control_smoke.rs`'s positive AND negative
+controls — both reach the guarded slam via the same human-confirmed-
+lock-screen precondition); `false` everywhere else in the codebase.
+
+2 new end-to-end tests (`allow_keyboard_wake_after_tests` in
+`mover/src/slam/motion.rs`) drive `slam_to_corner` itself through a real
+escalation and assert which HID endpoint fired: `true` → `/hid/events/
+send_key`, `false` → `/hid/events/send_mouse_relative`, isolated from
+the slam's own large relative-move calls and the pre-verify in-corner
+nudge by checking the exact `WAKE_NUDGE_DELTA_PX` magnitude. Full
+workspace: all green (mover 352/352, was 350), clippy `-D warnings` and
+fmt clean.
+
+Live verification, once this is exercised for real, is a separate,
 later, deliberately-timed decision per the manager's standing
-instruction.
+instruction. No caller has fired this path live yet.

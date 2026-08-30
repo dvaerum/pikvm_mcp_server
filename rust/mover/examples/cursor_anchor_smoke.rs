@@ -77,6 +77,7 @@ async fn main() {
     // unlockIpad/ipadGoHome actually hold, not a bare "looked fine" claim.
     let result = anchor_cursor(AnchorRequest {
         client: client.clone(),
+        allow_keyboard_wake_after: false, // see docs/corner-control-allow-keyboard-wake-decision.md
         corner: Some(Corner::TopLeft),
         guard: AnchorGuard::CallerAsserted {
             reason: "cursor_anchor_smoke v3: operator locked the iPad (Ctrl+Cmd+Q) and confirmed via screenshot BEFORE this run — matches unlockIpad's real precondition, not an active/interactive target".to_string(),
@@ -150,6 +151,7 @@ async fn main() {
     // nudge mechanism, matching measureCell's own use of it).
     if let Err(e) = anchor_cursor(AnchorRequest {
         client: client.clone(),
+        allow_keyboard_wake_after: false, // see docs/corner-control-allow-keyboard-wake-decision.md
         corner: Some(Corner::TopLeft),
         guard: AnchorGuard::NoneCalibration,
         screenshot: ScreenshotMode::Nudging,

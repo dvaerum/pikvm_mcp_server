@@ -93,6 +93,7 @@ pub async fn ipad_go_home(
         // second time, which is what this code used to do.
         let anchor_result = anchor_cursor(AnchorRequest {
             client: client.clone(),
+            allow_keyboard_wake_after: false, // see docs/corner-control-allow-keyboard-wake-decision.md
             corner: Some(Corner::TopLeft),
             guard: AnchorGuard::CallerAsserted {
                 reason: "Layer 5 — safe on lock screen and home screen, idempotent".to_string(),

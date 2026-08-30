@@ -500,6 +500,14 @@ async fn main() {
         pace_ms: None,
         slam_origin_px: None,
         slam_calls: None, // full default — guaranteed to reach the corner
+        // docs/corner-control-allow-keyboard-wake-decision.md (approved
+        // by nixos-dev, 2026-08-30): THIS is the one call site currently
+        // reasoned through and cleared for the v2 wake-nudge escalation's
+        // keyboard path on the post-slam verification screenshot — a
+        // human has just confirmed a genuine lock screen, the slam is
+        // pure mouse movement (no keys, no clicks), so mouse movement
+        // alone cannot have changed that state.
+        allow_keyboard_wake_after: true,
         verbose: true,
     })
     .await
@@ -585,6 +593,11 @@ async fn main() {
         pace_ms: None,
         slam_origin_px: None,
         slam_calls: Some(3), // deliberately short
+        // Same reasoning as the positive control above, plus an even
+        // fresher precondition check (the mid-check screenshot just
+        // above this call) — see docs/corner-control-allow-keyboard-
+        // wake-decision.md.
+        allow_keyboard_wake_after: true,
         verbose: true,
     })
     .await

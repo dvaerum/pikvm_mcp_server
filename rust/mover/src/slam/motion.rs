@@ -13,18 +13,33 @@ use pikvm_mcp_detection_vision::orientation::{
 };
 #[cfg(test)]
 use pikvm_mcp_kvmd_client::client::ScreenResolution;
-use pikvm_mcp_kvmd_client::client::{ClientError, PiKVMClient};
+use pikvm_mcp_kvmd_client::client::{ClientError, PiKVMClient, ScreenshotOptions};
 
 use super::geometry::{corner_target_from_bounds, corner_target_px, corner_vector};
 use super::types::{Axis, Corner, ScreenshotMode};
 
+/// `allow_keyboard_wake`: threaded straight through to
+/// `ScreenshotOptions` — see docs/corner-control-allow-keyboard-wake-
+/// decision.md for the specific, reasoned-through decision behind
+/// setting this `true` at any real call site (currently only the
+/// `after` shot in `slam_to_corner`, and only when the caller's own
+/// `SlamOptions.allow_keyboard_wake_after` opts in). Default `false`
+/// everywhere else, matching v1's mouse-move-only behavior exactly.
 async fn take_screenshot(
     client: &PiKVMClient,
     mode: ScreenshotMode,
+    allow_keyboard_wake: bool,
 ) -> Result<Vec<u8>, ClientError> {
+    let options = Some(ScreenshotOptions {
+        allow_keyboard_wake,
+        ..Default::default()
+    });
     match mode {
-        ScreenshotMode::Nudging => Ok(client.screenshot_keeping_cursor_alive(None).await?.buffer),
-        ScreenshotMode::Raw => Ok(client.screenshot(None).await?.buffer),
+        ScreenshotMode::Nudging => Ok(client
+            .screenshot_keeping_cursor_alive(options)
+            .await?
+            .buffer),
+        ScreenshotMode::Raw => Ok(client.screenshot(options).await?.buffer),
     }
 }
 
@@ -47,10 +62,11 @@ async fn take_screenshot_with_retry(
     settle_ms: u64,
     verbose: bool,
     label: &str,
+    allow_keyboard_wake: bool,
 ) -> Result<Vec<u8>, ClientError> {
     let mut last_err = None;
     for attempt in 1..=max_attempts {
-        match take_screenshot(client, mode).await {
+        match take_screenshot(client, mode, allow_keyboard_wake).await {
             Ok(buf) => {
                 if verbose {
                     eprintln!(
@@ -129,6 +145,16 @@ pub struct SlamOptions {
     /// full-struct `Option` is the more idiomatic Rust shape; flagged as
     /// an individually-justified simplification rather than a silent one.
     pub detection: Option<DetectionConfig>,
+    /// Default `false`. Permits the `after` verification screenshot
+    /// (NOT `before` — a deliberately separate, undecided question) to
+    /// use the v2 wake-nudge escalation's keyboard `Space` path instead
+    /// of always falling back to a mouse-move nudge, if
+    /// `PiKVMConfig::source_online_wake_nudge` is also enabled. Only set
+    /// `true` when the caller has reasoned through its own specific
+    /// context — see docs/corner-control-allow-keyboard-wake-decision.md
+    /// for the one call site currently approved for this
+    /// (`cursor_anchor_corner_control_smoke.rs`'s guarded slam pair).
+    pub allow_keyboard_wake_after: bool,
 }
 
 /// Result of `slam_to_corner`'s optional post-slam motion check
@@ -251,6 +277,11 @@ pub async fn slam_to_corner(
             VERIFY_SCREENSHOT_RETRY_SETTLE_MS,
             options.verbose,
             "before",
+            // Always false — the AFTER-only decision in
+            // docs/corner-control-allow-keyboard-wake-decision.md was
+            // deliberately scoped to just the after shot; before is a
+            // separate, undecided question.
+            false,
         )
         .await;
         if options.verbose {
@@ -295,6 +326,7 @@ pub async fn slam_to_corner(
         VERIFY_SCREENSHOT_RETRY_SETTLE_MS,
         options.verbose,
         "after",
+        options.allow_keyboard_wake_after,
     )
     .await?;
 
@@ -1206,8 +1238,16 @@ mod tests {
             // (dimension check) — a real (if tiny) JPEG, not arbitrary bytes.
             let (client, shot_calls) =
                 stub_snapshot_client(0, jpeg_encode(&[0u8; 3 * 4 * 4], 4, 4));
-            let result =
-                take_screenshot_with_retry(&client, ScreenshotMode::Raw, 3, 1, false, "test").await;
+            let result = take_screenshot_with_retry(
+                &client,
+                ScreenshotMode::Raw,
+                3,
+                1,
+                false,
+                "test",
+                false,
+            )
+            .await;
             assert!(result.is_ok());
             // No retry needed — the client's own single request succeeds.
             assert_eq!(*shot_calls.lock().unwrap(), 1);
@@ -1222,8 +1262,16 @@ mod tests {
             // (outer attempt 2's first try) succeeds.
             let (client, shot_calls) =
                 stub_snapshot_client(2, jpeg_encode(&[0u8; 3 * 4 * 4], 4, 4));
-            let result =
-                take_screenshot_with_retry(&client, ScreenshotMode::Raw, 3, 1, false, "test").await;
+            let result = take_screenshot_with_retry(
+                &client,
+                ScreenshotMode::Raw,
+                3,
+                1,
+                false,
+                "test",
+                false,
+            )
+            .await;
             assert!(result.is_ok());
             assert_eq!(*shot_calls.lock().unwrap(), 3);
         }
@@ -1233,8 +1281,16 @@ mod tests {
             let _guard = TEST_LOCK.lock().await;
             // Never succeeds: fail every raw call.
             let (client, shot_calls) = stub_snapshot_client(usize::MAX, vec![1, 2, 3]);
-            let result =
-                take_screenshot_with_retry(&client, ScreenshotMode::Raw, 2, 1, false, "test").await;
+            let result = take_screenshot_with_retry(
+                &client,
+                ScreenshotMode::Raw,
+                2,
+                1,
+                false,
+                "test",
+                false,
+            )
+            .await;
             assert!(result.is_err());
             // 2 outer attempts × 2 raw calls each (client's own internal retry).
             assert_eq!(*shot_calls.lock().unwrap(), 4);
@@ -1383,6 +1439,141 @@ mod tests {
                 result.is_ok(),
                 "expected the transient before-screenshot 503 to be recovered, got {result:?}"
             );
+        }
+    }
+
+    /// Pins the plumbing behind
+    /// docs/corner-control-allow-keyboard-wake-decision.md:
+    /// `SlamOptions.allow_keyboard_wake_after` must reach the `after`
+    /// screenshot's `ScreenshotOptions.allow_keyboard_wake`, and NEVER
+    /// the `before` screenshot's (a deliberately separate, undecided
+    /// question) — regardless of what the caller passes.
+    mod allow_keyboard_wake_after_tests {
+        use super::*;
+
+        /// `before` (raw call 1) succeeds immediately — no escalation
+        /// from it, isolating the assertions to `after` alone. `after`
+        /// (raw calls 2-3) 503s twice then succeeds on the 3rd — the
+        /// exact shape `fetch_snapshot_with_retry`'s own retry-once-
+        /// then-escalate needs to fire (not `take_screenshot_with_retry`'s
+        /// separate OUTER retry, which never triggers here since each
+        /// shot succeeds on its first attempt). Records whether the
+        /// escalation used `/hid/events/send_key` (keyboard) or
+        /// `/hid/events/send_mouse_relative` (mouse-move fallback).
+        fn stub_with_escalation_tracking(
+            shot: Vec<u8>,
+        ) -> (PiKVMClient, Arc<StdMutex<Vec<&'static str>>>) {
+            let snapshot_calls: Arc<StdMutex<u32>> = Arc::new(StdMutex::new(0));
+            let escalations: Arc<StdMutex<Vec<&'static str>>> = Arc::new(StdMutex::new(Vec::new()));
+            let shot = Arc::new(shot);
+            let snapshot_calls_bg = snapshot_calls.clone();
+            let escalations_bg = escalations.clone();
+            let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+                let snapshot_calls = snapshot_calls_bg.clone();
+                let escalations = escalations_bg.clone();
+                let shot = shot.clone();
+                Box::pin(async move {
+                    if args.path.starts_with("/streamer/snapshot") {
+                        let mut i = snapshot_calls.lock().unwrap();
+                        *i += 1;
+                        // `before` (raw call 1) succeeds immediately, no
+                        // escalation. `after` (raw calls 2-3) fails twice
+                        // then succeeds on the 3rd — the exact shape
+                        // `fetch_snapshot_with_retry`'s own escalation
+                        // needs to fire, isolated to just the after shot.
+                        if *i == 2 || *i == 3 {
+                            return Err(ClientError::Api(
+                                pikvm_mcp_kvmd_client::client::PiKVMApiError {
+                                    status: 503,
+                                    message: "Service Unavailable".to_string(),
+                                },
+                            ));
+                        }
+                        return Ok(ResponseBody::Image((*shot).clone()));
+                    }
+                    if args.path.starts_with("/hid/events/send_key") {
+                        escalations.lock().unwrap().push("keyboard");
+                        return Ok(ResponseBody::Empty);
+                    }
+                    // The slam loop itself (±127 deltas) and the pre-
+                    // verify in-corner nudge (±3, see slam_to_corner's own
+                    // comment) also go through this same endpoint — only
+                    // count it as an ESCALATION nudge when the magnitude
+                    // matches `WAKE_NUDGE_DELTA_PX` (5), distinct from
+                    // both.
+                    if args.path.starts_with("/hid/events/send_mouse_relative") {
+                        if args.path.contains("delta_x=5") || args.path.contains("delta_x=-5") {
+                            escalations.lock().unwrap().push("mouse");
+                        }
+                        return Ok(ResponseBody::Empty);
+                    }
+                    if args.path == "/streamer" {
+                        return Ok(ResponseBody::Json(serde_json::json!({
+                            "ok": true,
+                            "result": { "streamer": { "source": { "online": true, "resolution": { "width": 4, "height": 4 } } } }
+                        })));
+                    }
+                    Ok(ResponseBody::Empty)
+                })
+            });
+            let config = PiKVMConfig {
+                source_online_wake_nudge: true,
+                ..PiKVMConfig::new("http://127.0.0.1:1", "admin", "pw")
+            };
+            (
+                PiKVMClient::with_request_fn(config, None, request_fn),
+                escalations,
+            )
+        }
+
+        #[tokio::test]
+        async fn allow_keyboard_wake_after_true_escalates_the_after_shot_with_a_keypress() {
+            let _guard = TEST_LOCK.lock().await;
+            clear_orientation_cache();
+            let shot = jpeg_encode(&[0u8; 3 * 4 * 4], 4, 4);
+            let (client, escalations) = stub_with_escalation_tracking(shot);
+            let result = slam_to_corner(
+                &client,
+                SlamOptions {
+                    pace_ms: Some(0),
+                    verify_motion: true,
+                    screenshot: Some(ScreenshotMode::Raw),
+                    corner: Some(Corner::TopLeft),
+                    bounds_hint: Some(None),
+                    allow_keyboard_wake_after: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(result.is_ok(), "expected recovery, got {result:?}");
+            // `before` never fails in this stub (no escalation from it);
+            // `after`, opted in, escalates via keyboard.
+            assert_eq!(*escalations.lock().unwrap(), vec!["keyboard"]);
+        }
+
+        #[tokio::test]
+        async fn allow_keyboard_wake_after_false_escalates_the_after_shot_with_mouse_only() {
+            let _guard = TEST_LOCK.lock().await;
+            clear_orientation_cache();
+            let shot = jpeg_encode(&[0u8; 3 * 4 * 4], 4, 4);
+            let (client, escalations) = stub_with_escalation_tracking(shot);
+            let result = slam_to_corner(
+                &client,
+                SlamOptions {
+                    pace_ms: Some(0),
+                    verify_motion: true,
+                    screenshot: Some(ScreenshotMode::Raw),
+                    corner: Some(Corner::TopLeft),
+                    bounds_hint: Some(None),
+                    allow_keyboard_wake_after: false, // the default
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(result.is_ok(), "expected recovery, got {result:?}");
+            // Not opted in (the default) — falls back to the mouse-move
+            // nudge instead, even though `after` is the shot escalating.
+            assert_eq!(*escalations.lock().unwrap(), vec!["mouse"]);
         }
     }
 }
