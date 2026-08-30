@@ -2451,3 +2451,48 @@ Device confirmed safe throughout every single check tonight. Categories
 2/5 remains not completed end-to-end, but the actual blocking mechanism
 is now genuinely, decisively understood — a real, complete answer, not
 a narrowing guess. Reported in full to nixos-dev and the manager.
+
+---
+
+**§27 wake-nudge fix built (code-only, per manager direction) — opt-in
+mouse-move escalation for the source.online 503 pattern, 2026-08-30
+~12:30-13:00.**
+
+Manager's direction after §26's decisive result: "go design and build the
+fix now (code-only)... reusing the existing --fallback-mouse-move refresh
+nudge, avoiding the known same-key-twice risk... send to nixos-dev for
+review same as always, implement and test offline. Hold the actual live
+verification... for whenever you judge is right."
+
+Design doc: `docs/streamer-source-online-wake-nudge-plan.md`. Shape:
+`fetch_snapshot_with_retry`'s existing two-attempt 503 handling (the
+pre-existing `STREAMER_RESTART_GRACE_MS` retry-once, built for a DIFFERENT,
+narrower cold-start race) escalates a second consecutive 503 with one
+relative mouse-move nudge (`mouse_move_relative(5.0, 5.0)` — same delta as
+`--fallback-mouse-move`, already belief-consistent since that method
+already forward-predicts `CursorBelief`) before a final third attempt.
+Mouse-move, not a keypress, deliberately — a keypress carries the
+documented same-key-twice/dismiss-to-Touch-ID hazard this whole session has
+been fighting; a relative mouse move carries none of it, and is exactly
+the mechanism `--fallback-mouse-move` already validates as safe against a
+genuine lock screen.
+
+New `PiKVMConfig::source_online_wake_nudge: bool`, **default false**. This
+sits underneath essentially every screenshot call in the whole system, in
+a failure state that until tonight had no proven-safe automatic recovery —
+shipping it default-on without a live pass would be exactly the kind of
+un-verified change this project's own standing rules warn against. Built
+fully, unit-tested fully (5 new tests: recovers via the third attempt,
+still fails after a tried nudge with the error saying so, flag-off is
+byte-identical to before — regression pin, nudge failure falls through to
+the final attempt anyway), gated off pending a real live-hardware pass at
+a time separately chosen from landing the code.
+
+Full workspace: all green (kvmd-client 69/69, workspace total climbed by
+the 5 new tests, zero regressions), clippy `-D warnings` clean, fmt clean.
+Rebased onto nixos-dev's own concurrent push (`d032cea`, their own parallel
+doc on the same decisive finding in `docs/final-e2e-validation-sign-off-
+plan.md` — independently converged on the same root cause) before pushing.
+Committed `a1eeafe`. Sent to nixos-dev for review; reported to the manager
+that this is built+tested offline exactly as directed, live verification
+deliberately deferred.
