@@ -30,7 +30,7 @@
 use std::sync::Mutex;
 
 use crate::decode::decode_to_rgb;
-use pikvm_mcp_kvmd_client::client::PiKVMClient;
+use pikvm_mcp_kvmd_client::client::{PiKVMClient, ScreenshotOptions};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IpadOrientation {
@@ -102,6 +102,16 @@ pub struct DetectOptions {
     /// above threshold (~90%); noise columns have ≤1.
     pub min_content_pixels: u32,
     pub verbose: bool,
+    /// Opt-in for `detect_ipad_bounds`'s own screenshot call to escalate
+    /// with a keypress on a `source.online` stall, per
+    /// `docs/bounds-detection-allow-keyboard-wake-decision.md`. Default
+    /// `false` — safe only where the caller has confirmed no key/click
+    /// has been sent yet this call; see that doc for the per-call-site
+    /// analysis. Unlike the before/after slam screenshots this option
+    /// gates elsewhere, this call's RESULT drives where the subsequent
+    /// slam targets — a technically-successful-but-inaccurate detection
+    /// right after a wake is a real risk, not just a redundant check.
+    pub allow_keyboard_wake: bool,
 }
 
 impl Default for DetectOptions {
@@ -110,6 +120,7 @@ impl Default for DetectOptions {
             brightness_sum: 60,
             min_content_pixels: 10,
             verbose: false,
+            allow_keyboard_wake: false,
         }
     }
 }
@@ -233,7 +244,12 @@ pub async fn detect_ipad_bounds(
     client: &PiKVMClient,
     options: DetectOptions,
 ) -> anyhow::Result<IpadBounds> {
-    let shot = client.screenshot(None).await?;
+    let shot = client
+        .screenshot(Some(ScreenshotOptions {
+            allow_keyboard_wake: options.allow_keyboard_wake,
+            ..Default::default()
+        }))
+        .await?;
     detect_ipad_bounds_from_buffer(&shot.buffer, options)
 }
 

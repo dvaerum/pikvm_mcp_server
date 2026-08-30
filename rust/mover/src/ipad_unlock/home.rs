@@ -95,6 +95,11 @@ pub async fn ipad_go_home(
             client: client.clone(),
             allow_keyboard_wake_after: false, // see docs/corner-control-allow-keyboard-wake-decision.md
             allow_keyboard_wake_before: false, // see docs/corner-control-allow-keyboard-wake-decision.md
+            // Explicitly NOT approved (docs/bounds-detection-allow-keyboard-
+            // wake-decision.md): this function unconditionally sends Cmd+H
+            // before ever reaching this guard, so "zero keys sent this
+            // call" does not hold here.
+            allow_keyboard_wake_bounds_detection: false,
             corner: Some(Corner::TopLeft),
             guard: AnchorGuard::CallerAsserted {
                 reason: "Layer 5 — safe on lock screen and home screen, idempotent".to_string(),

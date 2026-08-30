@@ -162,6 +162,19 @@ pub async fn unlock_ipad(
     let ppm = options.position_px_per_mickey.unwrap_or(1.0);
     let post_settle_ms = options.post_settle_ms.unwrap_or(1000);
 
+    // Hoisted single source of truth (docs/bounds-detection-allow-
+    // keyboard-wake-decision.md, nixos-dev review): both this function's
+    // own bounds-detection call below AND the internal slam's
+    // AnchorRequest (further down) read this SAME computed value, rather
+    // than each independently re-deriving it from
+    // `options.try_key_press_first`. `Some(false)` is the one condition
+    // under which "zero keys sent this call up to this point" provably
+    // holds — the default-config path (key press attempted, whether it
+    // succeeded or errored) is a genuinely different situation and stays
+    // unreviewed/false, same deliberate scope boundary as the already-
+    // approved internal-slam extension (bd4c448).
+    let allow_keyboard_wake_for_internal_slam = options.try_key_press_first == Some(false);
+
     // Auto-detect iPad bounds unless caller has fully overridden positioning.
     let mut bounds: Option<IpadBounds> = None;
     if options.start_x.is_none() || options.start_y.is_none() {
@@ -169,6 +182,7 @@ pub async fn unlock_ipad(
             client,
             DetectOptions {
                 verbose: options.verbose,
+                allow_keyboard_wake: allow_keyboard_wake_for_internal_slam,
                 ..Default::default()
             },
             "ipad-unlock",
@@ -237,11 +251,15 @@ pub async fn unlock_ipad(
         // assumed to transfer. Symmetric with this file's own `!=
         // Some(false)` check (above) for skipping the key-press-first
         // branch in the first place.
-        let allow_keyboard_wake_for_internal_slam = options.try_key_press_first == Some(false);
+        // Reuses the single hoisted value computed at the top of this
+        // function (docs/bounds-detection-allow-keyboard-wake-decision.md)
+        // rather than re-deriving it here — avoids the two sites silently
+        // drifting if `try_key_press_first`'s semantics are ever revisited.
         let slam_result = anchor_cursor(AnchorRequest {
             client: client.clone(),
             allow_keyboard_wake_after: allow_keyboard_wake_for_internal_slam,
             allow_keyboard_wake_before: allow_keyboard_wake_for_internal_slam,
+            allow_keyboard_wake_bounds_detection: allow_keyboard_wake_for_internal_slam,
             corner: Some(Corner::TopLeft),
             guard: AnchorGuard::CallerAsserted {
                 reason: "Layer 5 — lock screen has no active hot corner".to_string(),

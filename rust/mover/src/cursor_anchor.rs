@@ -190,6 +190,19 @@ pub struct AnchorRequest {
     /// before` — see the decision doc's addendum for the (causal, not
     /// timing-based) argument approving this too.
     pub allow_keyboard_wake_before: bool,
+    /// Default `false`. Threaded to `resolve_caller_asserted_origin`'s
+    /// own bounds-detection screenshot (`DetectOptions.
+    /// allow_keyboard_wake`) — see
+    /// docs/bounds-detection-allow-keyboard-wake-decision.md. Only
+    /// reached under `AnchorGuard::CallerAsserted`; irrelevant otherwise.
+    /// Approved `true` only for `unlock_ipad`'s own internal slam (same
+    /// `try_key_press_first == Some(false)` precondition as the other
+    /// two fields above) and `cursor_anchor_corner_control_smoke.rs`'s
+    /// guarded slam pair. Explicitly NOT approved for `ipad_go_home`,
+    /// which unconditionally sends `Cmd+H` before ever reaching this
+    /// guard — a key has already gone out there, unlike the other
+    /// approved sites.
+    pub allow_keyboard_wake_bounds_detection: bool,
     pub verbose: bool,
 }
 
@@ -223,6 +236,7 @@ async fn anchor_detect_bounds_or_null(req: &AnchorRequest) -> Option<IpadBounds>
         &req.client,
         DetectOptions {
             verbose: req.verbose,
+            allow_keyboard_wake: req.allow_keyboard_wake_bounds_detection,
             ..Default::default()
         },
         "cursor-anchor",

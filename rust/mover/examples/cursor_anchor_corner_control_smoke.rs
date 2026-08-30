@@ -519,6 +519,11 @@ async fn main() {
         // 2026-08-30): same causal argument as `after` (nothing sends a
         // key/click between the human's confirmation and this shot).
         allow_keyboard_wake_before: true,
+        // docs/bounds-detection-allow-keyboard-wake-decision.md (approved
+        // by nixos-dev, 2026-08-30): same operator-confirmed-lock
+        // precondition, nothing sends a key between confirmation and
+        // anchor_cursor's own internal bounds detection.
+        allow_keyboard_wake_bounds_detection: true,
         verbose: true,
     })
     .await
@@ -610,6 +615,9 @@ async fn main() {
         // wake-decision.md.
         allow_keyboard_wake_after: true,
         allow_keyboard_wake_before: true,
+        // Same reasoning, see docs/bounds-detection-allow-keyboard-wake-
+        // decision.md.
+        allow_keyboard_wake_bounds_detection: true,
         verbose: true,
     })
     .await
