@@ -31,18 +31,22 @@ async fn take_screenshot(
 /// Retries `take_screenshot` a few times with a short settle between
 /// attempts, on top of `client.screenshot()`'s own built-in
 /// retry-once-with-grace. See docs/slam-verify-screenshot-retry-plan.md
-/// for why: the `after` screenshot in `slam_to_corner` fires right after
-/// sustained slam HID traffic, a heavier load than the single built-in
-/// retry's grace window was calibrated against (3 real live occurrences
-/// of a 503 here, 2026-08-29/30). `max_attempts`/`settle_ms` are honestly
-/// uncalibrated starting values, not final-tuned — logs the attempt
-/// count on every call (`verbose`) so real runs build up real data.
+/// for the full history: originally added for `slam_to_corner`'s `after`
+/// screenshot (3 real live 503s post-slam), then extended to `before`
+/// too with a lighter budget once live evidence showed the same failure
+/// there — with no preceding slam traffic, counter-evidence against the
+/// original "slam-load-specific" hypothesis; more likely general
+/// ustreamer flakiness than a load effect. `max_attempts`/`settle_ms` are
+/// honestly uncalibrated starting values, not final-tuned — `label`
+/// (`"before"`/`"after"`) plus the attempt count are logged on every call
+/// (`verbose`) so real runs build up real per-call calibration data.
 async fn take_screenshot_with_retry(
     client: &PiKVMClient,
     mode: ScreenshotMode,
     max_attempts: u32,
     settle_ms: u64,
     verbose: bool,
+    label: &str,
 ) -> Result<Vec<u8>, ClientError> {
     let mut last_err = None;
     for attempt in 1..=max_attempts {
@@ -50,7 +54,7 @@ async fn take_screenshot_with_retry(
             Ok(buf) => {
                 if verbose {
                     eprintln!(
-                        "[slam] verify-screenshot retry: succeeded on attempt {attempt}/{max_attempts}"
+                        "[slam] {label}-screenshot retry: succeeded on attempt {attempt}/{max_attempts}"
                     );
                 }
                 return Ok(buf);
@@ -58,7 +62,7 @@ async fn take_screenshot_with_retry(
             Err(e) => {
                 if verbose {
                     eprintln!(
-                        "[slam] verify-screenshot retry: attempt {attempt}/{max_attempts} failed ({e})"
+                        "[slam] {label}-screenshot retry: attempt {attempt}/{max_attempts} failed ({e})"
                     );
                 }
                 last_err = Some(e);
@@ -75,6 +79,13 @@ async fn take_screenshot_with_retry(
 /// see its doc comment and docs/slam-verify-screenshot-retry-plan.md.
 const VERIFY_SCREENSHOT_RETRY_MAX_ATTEMPTS: u32 = 3;
 const VERIFY_SCREENSHOT_RETRY_SETTLE_MS: u64 = 1000;
+
+/// Lighter-touch starting values for the `before` shot — fewer attempts,
+/// shorter settle than `after`, to minimize widening the confirmed-
+/// precondition-to-slam gap (docs/slam-verify-screenshot-retry-plan.md
+/// addendum).
+const BEFORE_SCREENSHOT_RETRY_MAX_ATTEMPTS: u32 = 2;
+const BEFORE_SCREENSHOT_RETRY_SETTLE_MS: u64 = 300;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SlamOptions {
@@ -209,16 +220,32 @@ pub async fn slam_to_corner(
         eprintln!("[slam] {corner:?} x {calls} calls @ {pace_ms}ms");
     }
 
-    // NOT retried, deliberately (docs/slam-verify-screenshot-retry-plan.md
-    // Q2): this sits between the guard's CONFIRMED precondition (the
-    // human-reviewed lock-screen check upstream) and the slam itself —
-    // adding retry latency here would widen that specific gap, and this
-    // rig's screen state has repeatedly been shown to shift within
-    // single-digit seconds. Fail-fast keeps the gap as tight as before
-    // this change. Compare to `after`, below, which IS retried — no such
-    // gap-widening concern once the slam has already fired.
+    // Retried, but LIGHTER-touch than `after` below (docs/slam-verify-
+    // screenshot-retry-plan.md addendum): this sits between the guard's
+    // CONFIRMED precondition (the human-reviewed lock-screen check
+    // upstream) and the slam itself — a live 503 here was first
+    // attributed to slam-load-specific streamer flakiness (only `after`
+    // was retried), but the very next live run hit the identical
+    // signature on THIS call, with no slam traffic preceding it —
+    // counter-evidence against a load-specific mechanism, more
+    // consistent with general ustreamer flakiness that can hit either
+    // call. Still deliberately smaller than `after`'s budget (2 attempts
+    // / 300ms vs 3 / 1000ms) to minimize widening the confirmed-
+    // precondition-to-slam gap — the safety reasoning for treating the
+    // two calls asymmetrically doesn't depend on WHY `before` failed,
+    // only on how much delay is tolerable before the slam fires.
     let before = if verify_motion {
-        Some(take_screenshot(client, options.screenshot.unwrap()).await?)
+        Some(
+            take_screenshot_with_retry(
+                client,
+                options.screenshot.unwrap(),
+                BEFORE_SCREENSHOT_RETRY_MAX_ATTEMPTS,
+                BEFORE_SCREENSHOT_RETRY_SETTLE_MS,
+                options.verbose,
+                "before",
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -243,14 +270,16 @@ pub async fn slam_to_corner(
         .mouse_move_relative(3.0 * vx as f64, 3.0 * vy as f64)
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
-    // Retried (unlike `before`, above) — see take_screenshot_with_retry's
-    // doc comment for why the two calls are treated asymmetrically.
+    // Both before and after are retried now, but with different budgets
+    // — see take_screenshot_with_retry's doc comment and
+    // docs/slam-verify-screenshot-retry-plan.md for why.
     let after = take_screenshot_with_retry(
         client,
         options.screenshot.unwrap(),
         VERIFY_SCREENSHOT_RETRY_MAX_ATTEMPTS,
         VERIFY_SCREENSHOT_RETRY_SETTLE_MS,
         options.verbose,
+        "after",
     )
     .await?;
 
@@ -1163,7 +1192,7 @@ mod tests {
             let (client, shot_calls) =
                 stub_snapshot_client(0, jpeg_encode(&[0u8; 3 * 4 * 4], 4, 4));
             let result =
-                take_screenshot_with_retry(&client, ScreenshotMode::Raw, 3, 1, false).await;
+                take_screenshot_with_retry(&client, ScreenshotMode::Raw, 3, 1, false, "test").await;
             assert!(result.is_ok());
             // No retry needed — the client's own single request succeeds.
             assert_eq!(*shot_calls.lock().unwrap(), 1);
@@ -1179,7 +1208,7 @@ mod tests {
             let (client, shot_calls) =
                 stub_snapshot_client(2, jpeg_encode(&[0u8; 3 * 4 * 4], 4, 4));
             let result =
-                take_screenshot_with_retry(&client, ScreenshotMode::Raw, 3, 1, false).await;
+                take_screenshot_with_retry(&client, ScreenshotMode::Raw, 3, 1, false, "test").await;
             assert!(result.is_ok());
             assert_eq!(*shot_calls.lock().unwrap(), 3);
         }
@@ -1190,7 +1219,7 @@ mod tests {
             // Never succeeds: fail every raw call.
             let (client, shot_calls) = stub_snapshot_client(usize::MAX, vec![1, 2, 3]);
             let result =
-                take_screenshot_with_retry(&client, ScreenshotMode::Raw, 2, 1, false).await;
+                take_screenshot_with_retry(&client, ScreenshotMode::Raw, 2, 1, false, "test").await;
             assert!(result.is_err());
             // 2 outer attempts × 2 raw calls each (client's own internal retry).
             assert_eq!(*shot_calls.lock().unwrap(), 4);
@@ -1267,6 +1296,77 @@ mod tests {
             assert!(
                 result.is_ok(),
                 "expected the transient after-screenshot 503 to be recovered, got {result:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn slam_to_corner_recovers_verify_motion_from_a_transient_before_screenshot_failure()
+        {
+            let _guard = TEST_LOCK.lock().await;
+            clear_orientation_cache();
+            // New evidence (docs/rust-port-plan.md §15, 2026-08-30): the
+            // `before` shot hit the identical 503 signature live, with NO
+            // slam traffic preceding it — this test reproduces that shape
+            // (fail before's first outer attempt, then recover) using
+            // `before`'s lighter 2-attempt budget.
+            let shot = jpeg_encode(&[0u8; 3 * 100 * 100], 100, 100);
+            let shot_calls: ShotCalls = Arc::new(StdMutex::new(0));
+            let shot_calls_bg = shot_calls.clone();
+            let shot = Arc::new(shot);
+            let request_fn: RequestFn = Arc::new(move |args: RequestArgs| {
+                let shot_calls = shot_calls_bg.clone();
+                let shot = shot.clone();
+                Box::pin(async move {
+                    if args.path.starts_with("/hid/events/send_mouse_relative") {
+                        return Ok(ResponseBody::Empty);
+                    }
+                    if args.path.starts_with("/streamer/snapshot") {
+                        let mut i = shot_calls.lock().unwrap();
+                        *i += 1;
+                        // Calls 1-2 = the `before` shot's first outer
+                        // attempt (both fail, exhausting its 2-raw-call
+                        // internal retry). Call 3 = before's second outer
+                        // attempt (succeeds). Call 4+ = the `after` shot
+                        // (always succeeds — not what this test covers).
+                        if *i <= 2 {
+                            return Err(ClientError::Api(
+                                pikvm_mcp_kvmd_client::client::PiKVMApiError {
+                                    status: 503,
+                                    message: "Service Unavailable".to_string(),
+                                },
+                            ));
+                        }
+                        return Ok(ResponseBody::Image((*shot).clone()));
+                    }
+                    if args.path == "/streamer" {
+                        return Ok(ResponseBody::Json(serde_json::json!({
+                            "ok": true,
+                            "result": { "streamer": { "source": { "online": true, "resolution": { "width": 1920, "height": 1080 } } } }
+                        })));
+                    }
+                    Ok(ResponseBody::Empty)
+                })
+            });
+            let client = PiKVMClient::with_request_fn(
+                PiKVMConfig::new("http://127.0.0.1:1", "admin", "pw"),
+                None,
+                request_fn,
+            );
+            let result = slam_to_corner(
+                &client,
+                SlamOptions {
+                    pace_ms: Some(0),
+                    verify_motion: true,
+                    screenshot: Some(ScreenshotMode::Raw),
+                    corner: Some(Corner::TopLeft),
+                    bounds_hint: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(
+                result.is_ok(),
+                "expected the transient before-screenshot 503 to be recovered, got {result:?}"
             );
         }
     }

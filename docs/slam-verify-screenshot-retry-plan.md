@@ -42,13 +42,23 @@ guarded slam — the 3rd occurrence of this exact failure signature across
 the harness's history (v1-v6, v7, now this), always right after the slam
 motion, never at the `before` screenshot or elsewhere.
 
-**Hypothesis, not yet proven**: the `after` screenshot fires right after
-~1.5s of continuous slam HID traffic (25 rapid calls) — plausibly more
-sustained load on ustreamer's idle-stop/restart cycle than a single wake
-keypress, the scenario the existing 1500ms grace window was calibrated
-against. One retry may not always be enough specifically here. This is a
-plausible mechanism, not a measured one — no direct timing data on how
-long the outage actually lasts post-slam exists yet.
+**Hypothesis, since WEAKENED by later evidence (see the addendum
+below)**: the `after` screenshot fires right after ~1.5s of continuous
+slam HID traffic (25 rapid calls) — plausibly more sustained load on
+ustreamer's idle-stop/restart cycle than a single wake keypress, the
+scenario the existing 1500ms grace window was calibrated against. One
+retry may not always be enough specifically here. This was a plausible
+mechanism, not a measured one, when first written — and the addendum's
+new evidence (the `before` screenshot, with NO preceding slam traffic,
+failing with the identical signature) is real counter-evidence against
+"slam-load-specific" as the mechanism. More consistent with a general,
+not-specifically-slam-triggered ustreamer flakiness that can hit any
+screenshot call in this vicinity, not a load effect. Left standing here
+for the historical record of what motivated the original `after`-only
+fix, but should not be read as still-current reasoning — see the
+addendum for the corrected picture. Doesn't change the fix itself
+(retrying more is still the right response either way), just what
+mechanism it's actually working around.
 
 ## Design
 
@@ -202,3 +212,24 @@ Open question for review: is 2 attempts / 300ms the right "lighter"
 values, or should `before` get an even smaller budget (e.g. 1 extra
 attempt with no settle at all, relying purely on the client's own
 built-in 1500ms grace already baked into each attempt)?
+
+## Review (nixos-dev) — resolved
+
+Keep the asymmetric treatment — the safety reasoning doesn't depend on
+WHY `before` failed, only on tolerable delay before the slam fires.
+2 attempts / 300ms confirmed reasonable (mild preference for a small
+non-zero settle over 0ms, not a blocking concern). Also flagged: the
+original "slam-load-specific" hypothesis is now weakened by this same
+evidence (`before` has no preceding slam traffic and failed identically)
+— corrected in the Design section above rather than left standing
+unchallenged.
+
+## Implementation (addendum)
+
+Done — reused `take_screenshot_with_retry` for `before` with its own
+lighter constants (`BEFORE_SCREENSHOT_RETRY_MAX_ATTEMPTS = 2`,
+`BEFORE_SCREENSHOT_RETRY_SETTLE_MS = 300`), added a `label` parameter
+("before"/"after") so calibration logs distinguish which call recovered.
+New test: `slam_to_corner` recovers `verify_motion` from a transient
+`before`-screenshot failure (mirrors the existing `after` test). 350/350
+mover tests, clippy `-D warnings` and fmt clean. Not yet exercised live.
