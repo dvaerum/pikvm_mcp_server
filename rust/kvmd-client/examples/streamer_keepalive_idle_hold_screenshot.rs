@@ -2,13 +2,22 @@
 //! (docs/streamer-keepalive-liveness-ping-plan.md): holds the
 //! `PiKVMClient`'s held `/api/ws` connection IDLE for the same ~30s
 //! window the real categories-2/5 human-confirmation wait imposes, with
-//! NO screenshot/HID traffic at all during the hold — then attempts a
+//! NO screenshot/HID traffic at all DURING the hold — then attempts a
 //! real screenshot and reports whether it succeeded, plus the keepalive
 //! -connected state before/after.
 //!
-//! Deliberately does NOT drive any HID or attempt a slam — this only
-//! exercises the transport-liveness question the ping/pong fix targets,
-//! with far less blast radius than a full categories-2/5 attempt.
+//! Sends exactly ONE wake key (`Space`) before establishing the
+//! connection, nothing else — no slam, no repeated HID during the idle
+//! window itself. Added after live evidence 2026-08-30: 7 consecutive
+//! cold-connection attempts (both this diagnostic's own retries AND the
+//! project's separate, already-established TS health-check path) all
+//! 503'd without a preceding wake, matching this whole session's
+//! consistent pattern (every successful screenshot tonight was preceded
+//! by a wake). This isn't the zombie-connection bug under test — it's
+//! this project's own established operational reality that the device
+//! needs waking before ANY screenshot path succeeds, matched here so
+//! the diagnostic actually gets to exercise the thing it's testing.
+//!
 //! `streamer_keepalive_smoke.rs`'s existing hold is only 3s (too short
 //! to say anything about the zombie-connection window); this extends
 //! that idea to the real ~30s window and adds the actual screenshot
@@ -37,6 +46,14 @@ async fn main() {
         ..PiKVMConfig::new(host, username, password)
     };
     let client = Arc::new(PiKVMClient::new(config, None));
+
+    eprintln!("=== sending one wake key (Space) before establishing the connection ===");
+    if let Err(e) = client.send_key("Space", None).await {
+        eprintln!(
+            "wake key send failed ({e}) — proceeding anyway, the warm-up retry below covers it."
+        );
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Retried (unlike the post-idle screenshot below, which is the ACTUAL
     // thing under test): a brand-new client's first-ever snapshot races a
