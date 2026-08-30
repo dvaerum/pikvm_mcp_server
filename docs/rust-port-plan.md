@@ -3599,3 +3599,42 @@ precisely-understood root cause is worth more than another undirected
 try. Device left safe: back on the plain lock screen, no unlock
 occurred. Item 5 stays OPEN. Awaiting manager's call on whether to
 draft the bounds-detection escalation proposal tonight or hold here.
+
+---
+
+**§53 drafted the bounds-detection escalation decision doc — split into
+two per-caller-analyzed sites, not one blanket claim, 2026-08-30 ~21:46-22:00.**
+
+Manager greenlit drafting per §52's identified next candidate fix.
+Traced the actual call topology precisely before writing anything (the
+lesson from §51 still fresh): bounds detection is reached from TWO
+distinct places with different pre-histories, not one uniform site.
+
+**Site A** (`unlock_ipad`'s own `detect_bounds_or_null` call,
+`unlock.rs`): reached only outside the early-return branch — either
+`try_key_press_first == Some(false)` (zero keys sent this call, same
+clean shape as the already-approved internal-slam extension) or the
+default config's key-press attempt itself errored (a real key already
+went out first — genuinely different, stays unreviewed).
+
+**Site B** (`cursor_anchor.rs`'s shared `resolve_caller_asserted_origin`,
+only reached under `AnchorGuard::CallerAsserted`): checked each real
+caller individually rather than assuming the guard type alone implies
+safety. `unlock_ipad`'s own internal slam: same precondition as Site A,
+safe. `cursor_anchor_corner_control_smoke.rs`: operator-confirmed lock
+precondition, nothing sends a key before this call, safe. `ipad_go_home`
+(`home.rs`): traced directly — it UNCONDITIONALLY sends `Cmd+H` before
+ever reaching `anchor_cursor`/`CallerAsserted` (only reached at all when
+`force_home_via_swipe:true`), every single time. A key has already gone
+out first there — the "zero keys sent" argument does NOT hold, and this
+proposal explicitly does NOT extend to that call site.
+
+Wrote `docs/bounds-detection-allow-keyboard-wake-decision.md` (commit
+`482be68`) with the full per-site analysis, an implementation sketch
+(`DetectOptions.allow_keyboard_wake`, threaded through
+`detect_ipad_bounds`'s screenshot call; a new `AnchorRequest` field for
+Site B, gated per-caller the same way `allow_keyboard_wake_before/after`
+already are), and one open design question for nixos-dev (hoist the
+shared boolean computation or let each site re-derive it independently).
+Sent for review — not implementing until that lands, same discipline as
+the two prior sites.
