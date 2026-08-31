@@ -242,7 +242,8 @@ inference latency on real Pi hardware") has to take over from design:
   the `.so` has it compiled in, but "should" isn't "confirmed."
   <br>
   Since I have no hardware access (OFFLINE-only), this and the two items
-  below are explicitly for whoever executes this design.
+  below are explicitly for whoever executes this design — see the access
+  correction in §6 for exactly who that is.
 - **Real speed delta.** The best available real-hardware CPU-EP fp32
   reference point today is the Node-side `bench_node.mjs` result on
   it-03400 (2026-08-27): ~71-73ms median per single-crop (N=1) inference,
@@ -273,18 +274,35 @@ inference latency on real Pi hardware") has to take over from design:
    change this session) before any implementation.
 2. Rust code change (§3) — small, additive, off by default, safe to land
    regardless of whether the aarch64 build ever succeeds.
-3. georgs-mac-mini: attempt the aarch64 onnxruntime-XNNPACK build (native
-   or cross — their call, they have the hardware + pikvm-nixos repo
-   access I don't).
-4. If it builds: run the parity harness (§4) first — no speed number
+3. **§5/§6's execution needs routing — corrected after review.**
+   `pikvm-mcp-server@georgs-mac-mini` reviewed this doc (no design gaps
+   found) but correctly flagged that *they* don't actually hold the
+   access §5 assumes: no pikvm-nixos repo checkout, no SSH to pikvm01
+   (key not provisioned, webterm-only, unprivileged uid, no sudo), no
+   configured aarch64 linux-builder — nowhere near enough to run a
+   from-source onnxruntime nix build. The real capability (SSH to
+   pikvm01, the pikvm-nixos repo, an aarch64 linux-builder +
+   nix-copy workflow already in active use) sits with a *different*
+   agent identity on the same physical machine,
+   `pikvm-nixos@georgs-mac-mini` (cross-compile-then-nix-copy, avoids
+   the native-on-Pi4 OOM risk flagged above), or alternatively
+   `pikvm-nixos@it-03400` (an actual Pi4B, native build possible there).
+   Routing this correctly is the manager's call, not assumed here.
+4. Whoever executes: attempt the aarch64 onnxruntime-XNNPACK build
+   (native or cross).
+5. If it builds: run the parity harness (§4) first — no speed number
    trusted before parity holds.
-5. If parity holds: real Pi4 benchmark, multiple runs, both CPU-EP-only
+6. If parity holds: real Pi4 benchmark, multiple runs, both CPU-EP-only
    and XNNPACK-EP baselines measured fresh on the same hardware in the
    same session (not compared against the older Node-side number as a
    substitute).
-6. Report the real, checked answer back — including a clean "no speed
+7. Report the real, checked answer back — including a clean "no speed
    win" or "build infeasible on aarch64" outcome if that's what's found;
    this is explicitly not a foregone-conclusion investigation.
+8. `pikvm-mcp-server@georgs-mac-mini` remains the right reviewer for
+   whatever comes back (parity harness, benchmark) once it needs
+   iPad-adjacent behavioral judgment — the correction above is about who
+   holds the build/deploy access, not about removing them from review.
 
 ## What changed
 
@@ -295,3 +313,10 @@ inference latency on real Pi hardware") has to take over from design:
   first-class XNNPACK support (§3), and scopes the correctness-first
   verification (§4) and genuinely-unknown real-hardware work (§5) that
   only whoever has hardware access can resolve.
+- Revision after `pikvm-mcp-server@georgs-mac-mini`'s design review: no
+  design gaps found, but they correctly self-corrected an access-scope
+  assumption this doc had made — they don't hold the pikvm01 SSH /
+  pikvm-nixos repo / aarch64 linux-builder access §5's execution needs;
+  that sits with `pikvm-nixos@georgs-mac-mini` or `pikvm-nixos@it-03400`
+  instead. §6 updated to route execution correctly rather than assume
+  the reviewer is also the executor.
