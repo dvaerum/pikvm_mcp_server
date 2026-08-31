@@ -1,5 +1,14 @@
 # Rust cascade `intraOpNumThreads`/`interOpNumThreads` sweep on real Pi4 — design (task_7ce237717d82 follow-up)
 
+**RESULT (2026-08-31): CLOSED, clean negative.** it-03400 ran the full
+sweep on real Pi4 (2 frames × 4 configs × 10 runs). `default(unset)` was
+the FASTEST configuration in all 8 measurements — explicit
+`intraOpNumThreads` tuning does not help. `=1` is ~1.4-1.7x SLOWER than
+default (confirming default isn't already single-threaded); `2`/`4`
+land between `1` and default but never beat it. Threading tuning is not
+the answer to the Rust-vs-Node gap. See §"Real result" below for the
+full table and an important measurement-confound caveat.
+
 Follow-up to `docs/rust-vs-node-cascade-inference-benchmark.md`, which
 found a real ~13.5%/15.5% Rust-vs-Node gap on the no-hint (N=352
 full-scan) case and a smaller ~4.9%/5.8% gap on the hint-narrowed case,
@@ -141,6 +150,44 @@ This sweep only varies threading config, not model/inputs — no parity
 check needed (unlike XNNPACK, which was a genuinely different execution
 path). Cursor coordinates should be identical across all sweep points;
 worth a quick sanity assert but not the focus.
+
+## Real result (2026-08-31, it-03400, real Pi4B)
+
+Both real frames, all 4 configs, 10 runs each:
+
+| Frame | Config | no-hint (N=352) median | hint=gt (N=64) median |
+|---|---|---|---|
+| lower-left-01 (region-detect 72.88ms) | default(unset) | 7461.3ms | 1424.8ms |
+| | 1 | 12315.8ms | 2405.2ms |
+| | 2 | 8633.1ms | 1667.2ms |
+| | 4 | 8418.3ms | 1983.2ms |
+| upper-right-01 (region-detect 100.87ms) | default(unset) | 9326.6ms | 1876.5ms |
+| | 1 | 13207.0ms | 2503.6ms |
+| | 2 | 8850.0ms | 1797.5ms |
+| | 4 | 9464.0ms | 2048.5ms |
+
+**Clean, unambiguous: `default(unset)` wins all 8 measurements.**
+Closing this lever — explicit thread-count tuning is not a useful
+speed lever for this workload on real Pi4 hardware.
+
+**Real measurement confound, disclosed rather than glossed over**:
+it-03400 re-ran the original `cascade_bench` (same code, same crate)
+immediately after this sweep, same session, and got 6695.5ms/7808.1ms
+no-hint — close to this sweep's own `default(unset)` numbers
+(7461/9326ms) but ~2.3x different from the ~17023ms/16867ms the
+*identical* binary reported earlier the same day
+(`docs/rust-vs-node-cascade-inference-benchmark.md`). Same model, same
+frames, same code — box conditions (load/thermal/whatever) swing
+absolute numbers by ~2.3x across sessions on this hardware. Consequence:
+**the sweep's own internal ranking (default vs 1/2/4) is trustworthy**
+(all 4 configs ran back-to-back under identical conditions), but the
+sweep's *absolute* numbers cannot be directly compared against the
+earlier Rust-vs-Node benchmark's Node baseline to answer "did this
+narrow the gap" — that would need both sides re-measured together, in
+the same session, which has not been done. No "gap narrowed/didn't
+narrow" claim is made here; that question remains genuinely open,
+separate from (and not resolved by) this sweep's own clean negative
+result on thread-count tuning itself.
 
 ## What changed
 
