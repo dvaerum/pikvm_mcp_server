@@ -47,8 +47,17 @@ methodology (10 runs + 1 untimed warmup, median/min/max reported).
 
 **Real production building blocks to reuse (all already public,
 confirmed via direct read — no new detection/grid logic to write):**
-- `pikvm_mcp_detection_vision::orientation::detect_ipad_bounds_from_buffer`
-  — region detection (mirrors TS's `detectIpadRegion`).
+- ~~`pikvm_mcp_detection_vision::orientation::detect_ipad_bounds_from_buffer`~~
+  **Correction (it-03400, verified against source before folding in):**
+  this was wrong — `run_cascade` (`cursor_ml_detect.rs:358`, the actual
+  function the original Rust-vs-Node benchmark called) does its region
+  detection via `detect_ipad_region` (from `ipad_region_detect`) +
+  `NATIVE_MARGIN` inset math, NOT `detect_ipad_bounds_from_buffer`,
+  which doesn't appear anywhere in that call path. Use
+  `pikvm_mcp_detection_vision::ipad_region_detect::detect_ipad_region`
+  + the same `NATIVE_MARGIN` inset math instead — mirroring the real
+  reference implementation the benchmark numbers actually came from,
+  not a different (if superficially similar) detector.
 - `pikvm_mcp_detection_vision::cursor_ml_detect::build_cascade_grid` /
   `cascade_axis` — real grid-build (mirrors TS's `axis`/grid-loop, same
   `GRID_STRIDE`/crop-half math — confirm the exact constants match by
@@ -132,3 +141,15 @@ This sweep only varies threading config, not model/inputs — no parity
 check needed (unlike XNNPACK, which was a genuinely different execution
 path). Cursor coordinates should be identical across all sweep points;
 worth a quick sanity assert but not the focus.
+
+## What changed
+
+- Initial version: designed the Rust-side mirror harness, sweep values,
+  and reporting requirements.
+- Correction (it-03400, while implementing): the design's suggested
+  region-detection function was wrong — verified against source that
+  `run_cascade` (the actual benchmarked function) calls
+  `ipad_region_detect::detect_ipad_region`, not
+  `orientation::detect_ipad_bounds_from_buffer`. Fixed above so the
+  sweep mirrors the real reference implementation, not a different code
+  path that happens to look similar.
