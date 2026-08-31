@@ -3950,3 +3950,75 @@ Implementation + correctness gate + real Pi4 measurement across the
 three named scenarios (idle/moving/busy) all still ahead — routed to
 whoever has hardware access once built, same pattern as every other
 design this session.
+
+---
+
+**§59 implemented the cascade change-detection pre-filter (task_3a0440a91a05), commit 9ca1a5a, 2026-08-31 ~21:17-22:00.**
+
+Manager routed this to me since nixos-dev was low on context budget
+after designing+correcting it (§58). Built exactly to spec, per the
+reviewed/v1-scoped design:
+
+**Real implementation shape, worth recording precisely**: the existing
+`run_cascade_inference` only ever computed the argmax winner inline
+(the batched ONNX call produces per-crop presence/heatmap tensors for
+the WHOLE batch, but the old code only bothered decoding a sub-pixel
+position for the eventual winner). The pre-filter needs a real per-crop
+verdict to cache and replay for an unchanged crop specifically — so
+this wasn't a drop-in wiring job, it needed extracting the shared
+soft-argmax decode math into `decode_crop_result` and adding
+`run_cascade_inference_all` (per-crop results for the whole batch,
+reusing the IDENTICAL batched ONNX call — decoding every crop instead
+of just one is cheap CPU-side postprocessing, not extra inference
+cost). `run_cascade_inference` became a thin wrapper over that plus a
+new `best_by_presence` (the shared argmax+tie-break rule, reused by
+both the plain path and the pre-filter's merge step, so there's one
+selection rule, not two that could quietly drift). Confirmed this
+refactor was byte-for-byte behavior-preserving BEFORE adding anything
+new: built+ran the existing 198 detection-vision tests unchanged first,
+confirmed 198/198 green, only then started on the new module.
+
+New `crop_cache` module: byte-exact per-crop diff (zero threshold, the
+exact false-negative class task_07bfe499e2d9 already found twice this
+session on a coarse global one), replays the LAST REAL verdict for an
+unchanged crop (never an assumed-absent default), wholesale
+invalidation via `emit_clock::last_emit_ms()` (relative-mode emits) or
+a resolution-dimension change. v1 scope faithfully implemented as
+corrected in §58: no region-change invalidation attempted (nothing to
+compare against today), emit-invalidation only covers what
+`emit_clock` actually gets stamped by (relative-mode moves).
+
+Wired behind `V8FullFrameOptions.use_change_detection_prefilter: bool`,
+off by default — updated all 6 real construction sites across 4 crates
+(detection-vision ×3, ipad-hid, mover example, pikvm-mcp-server
+example) explicitly to `false`, matching this session's established
+opt-in-gate discipline.
+
+10 new unit tests, all pure-logic — no real ONNX needed, since this
+sits entirely upstream of inference (filtering/replaying verdicts,
+never computing them). Explicitly proved, not just asserted: the
+stationary-cursor false-negative trap the design's own §2 names doesn't
+happen (replayed presence is the real cached value); the byte-diff has
+genuinely zero threshold (a single differing byte forces a recheck,
+constructed via a synthetic frame differing by exactly one pixel
+value); the emit-invalidation test includes a real "confirm the cache
+is warm first" control before asserting the post-emit state, not just
+asserting the end state and hoping the warm-up worked. Reused
+`mover::test_support::GLOBAL_STATE_LOCK`'s own convention (a
+crate-local serialization lock for the new shared statics, since
+detection-vision can't reach mover's cross-crate one) — verified stable
+across 3 repeated full-suite runs before trusting it, given tests run
+in parallel by default and both `CROP_CACHE` and `emit_clock` are
+process-global.
+
+Full verification: `cargo build/clippy(-D warnings)/fmt --workspace`
+all clean. `cargo test --workspace`: detection-vision 198→208 (+10,
+exactly the new tests), every other crate's count unchanged
+(52/61/111/18/82/361/110), zero regressions.
+
+Reported to nixos-dev (flagging the real-per-crop-verdicts implementation
+detail they'll want to know about if they touch this file again) and
+the manager. Correctness gate (filtered-vs-unfiltered diff on real
+captured frames) and the real Pi4 3-scenario timing measurement both
+still ahead, per the design's own sequencing — need real hardware,
+routed onward once picked up.
