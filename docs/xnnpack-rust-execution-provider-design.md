@@ -4,9 +4,10 @@
 XNNPACK-enabled onnxruntime build: solvable, done, documented (§5,
 `feat/xnnpack-execution-provider`, PR #95, not merged — see §7).
 Rust EP-registration wiring (§3): small, correct, off-by-default.
-Correctness parity (§4): single-crop (N=1) inference PASSES (numerically
-identical to CPU-EP within noise floor); the real production batch shape
-(N>1, e.g. N=6 tested) **PANICS** — a genuine onnxruntime/XNNPACK
+Correctness parity (§4): single-crop (N=1) inference PASSES (near-
+identical to CPU-EP — a real ~1e-6 delta, the expected genuine-EP-
+activation fingerprint, not bit-identical); the real production batch
+shape (N>1, e.g. N=6 tested) **PANICS** — a genuine onnxruntime/XNNPACK
 batch-dimension incompatibility with this model, confirmed not a harness
 bug (CPU-EP handles the identical N=6 batch correctly). XNNPACK is **not
 currently usable** for this pipeline's real batched-inference workload.
@@ -342,19 +343,39 @@ reason rather than proceeding to the benchmark on autopilot:
 - **§4's correctness parity harness shipped** (`f29f1c1`,
   `xnnpack_parity_check` example) and ran on real hardware
   (pikvm01): **single-crop (N=1) inference PASSES** — CPU-EP and
-  XNNPACK-EP output numerically identical within the same noise floor
-  already documented elsewhere in this project for backend-kernel
-  variance. But **the real production batch shape (N>1, N=6 tested)
-  PANICS** under XNNPACK — a genuine onnxruntime/XNNPACK
-  batch-dimension incompatibility with this specific model, confirmed
-  NOT a harness bug by cross-checking that CPU-EP handles the identical
-  N=6 batch input without issue. (One caveat worth recording precisely,
-  not glossed over: N=1 "passing" numerically identical rather than
-  merely near-identical is itself a fact worth a second look before
-  trusting *any* future N=1-only XNNPACK measurement on this model — see
-  the exact-vs-near-identical concern raised during review — but it's
-  moot for this verdict, since the batch case fails outright regardless
-  of how N=1 is interpreted.)
+  XNNPACK-EP output near-identical (`presence` 0.002883 vs 0.002882, a
+  real ~1e-6 delta) within the same noise floor already documented
+  elsewhere in this project for backend-kernel variance. But **the real
+  production batch shape (N>1, N=6 tested) PANICS** under XNNPACK — a
+  genuine onnxruntime/XNNPACK batch-dimension incompatibility with this
+  specific model, confirmed NOT a harness bug by cross-checking that
+  CPU-EP handles the identical N=6 batch input without issue.
+
+  **Confirmation-logic scrutiny, not assumed (addendum, requested by the
+  manager):** an earlier review pass of this harness (before real
+  numbers existed) flagged that "reached the inference call without
+  erroring" alone does not prove XNNPACK genuinely executed any node —
+  ONNX Runtime always has an implicit, silent per-node CPU fallback for
+  ops an EP doesn't support, so registration succeeding is necessary but
+  not sufficient evidence of real activation. The actual results resolve
+  that concern in XNNPACK's favor, not against it: (1) the N=1 delta is
+  real and non-zero (~1e-6), the exact fingerprint of genuinely different
+  floating-point kernels — a silent CPU fallback would have produced
+  bit-identical output, not a small measurable difference; (2) the N=6
+  panic is an XNNPACK-specific batch-dimension error that CPU-EP does not
+  hit on the identical input — a silent CPU fallback cannot explain a
+  crash that only happens when XNNPACK is the EP actually in play. Taken
+  together these are stronger evidence of genuine EP activation than the
+  harness's own "no error was thrown" comment claimed, precisely because
+  they show behavior CPU-EP alone cannot produce, rather than merely the
+  absence of an error CPU-EP alone also wouldn't have produced. The
+  underlying point stands as a general hardening note for any *future*
+  EP-comparison harness on a model where CPU and the alternate EP might
+  produce bit-identical output with no crash either way (this model
+  didn't give ambiguous evidence, but a different one could) — verbose
+  ORT per-node provider-assignment logging remains the correct way to
+  get an unambiguous "yes/no" that doesn't depend on the model's
+  behavior happening to differ or fail out.
 - **§5's real Pi4 timing benchmark was correctly never run** against the
   N=1-only path — benchmarking a shape the production pipeline doesn't
   actually use would have answered the wrong question, and running it
@@ -394,3 +415,17 @@ investigation.
   earlier INT8 and ncnn+Vulkan investigations both live as unmerged
   scratch/reference branches, not in the shipped crate tree) — see the
   PR's own closing comment for the exact reasoning.
+- Addendum (2026-08-31, at the manager's explicit request, to record
+  that the confirmation logic was scrutinized rather than assumed): §7
+  corrected the exact N=1 delta (presence 0.002883 vs 0.002882, ~1e-6 —
+  near-identical, not exactly identical as an earlier draft loosely
+  worded it) and folded in the resolution of the node-level-EP-
+  assignment concern raised during code review — the real numbers (a
+  genuine small delta at N=1, an XNNPACK-specific crash at N=6 that
+  CPU-EP doesn't hit) are themselves stronger evidence of real XNNPACK
+  activation than the harness's own "no error was thrown" claim, since
+  both are behaviors CPU-EP alone cannot produce. The general hardening
+  point (verbose per-node EP-assignment logging is the unambiguous check
+  for a model that doesn't happen to produce diverging/crashing output)
+  stands as a note for future harnesses, not a reopening of this
+  verdict.
