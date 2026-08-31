@@ -91,17 +91,15 @@ fn main() -> anyhow::Result<()> {
 
     let (fw, fh) = (640u32, 480u32);
     let full = synthetic_crop_source(fw, fh);
-    // A modest grid, not a single point — exercises the same batched
-    // (N > 1) path production traffic uses, while staying fast/simple
-    // for a parity check (this is not the speed benchmark).
-    let centers: Vec<(i64, i64)> = vec![
-        (100, 100),
-        (230, 230),
-        (400, 300),
-        (320, 240),
-        (50, 400),
-        (600, 50),
-    ];
+    // N=1 only. An earlier N=6 (batched) run confirmed a real
+    // onnxruntime-XNNPACK incompatibility — presence_logit comes back
+    // length 1 instead of the batch size, an index-out-of-bounds panic
+    // — see docs/xnnpack-rust-execution-provider-design.md §7.3. This
+    // harness stays at N=1 so it can still run at all under XNNPACK;
+    // it is explicitly NOT the production batch shape (§7.4) — the
+    // timing below is a decision-input signal only ("is fixing the
+    // batch crash worth anyone's time"), not a production benchmark.
+    let centers: Vec<(i64, i64)> = vec![(230, 230)];
 
     let result = run_cascade_inference(&mut session, &full, fw, fh, &centers, 0.0)?
         .expect("non-empty centers must produce a result at verify_thresh=0.0");
@@ -111,6 +109,31 @@ fn main() -> anyhow::Result<()> {
     println!("y={}", result.y);
     println!("presence={:.6}", result.presence);
     println!("heatmap_peak={:.6}", result.heatmap_peak);
+
+    // --- N=1 timing (decision-input only, see the note above) ---
+    // A few warmup calls (thread-pool spin-up, allocator warmup, first-
+    // call JIT-ish effects some EPs have) discarded before timing, per
+    // the design doc's "multiple runs" discipline (§5 last item).
+    const WARMUP: usize = 5;
+    const ITERS: usize = 30;
+    for _ in 0..WARMUP {
+        run_cascade_inference(&mut session, &full, fw, fh, &centers, 0.0)?;
+    }
+    let mut samples_us = Vec::with_capacity(ITERS);
+    for _ in 0..ITERS {
+        let start = std::time::Instant::now();
+        let r = run_cascade_inference(&mut session, &full, fw, fh, &centers, 0.0)?;
+        samples_us.push(start.elapsed().as_micros());
+        std::hint::black_box(r);
+    }
+    samples_us.sort_unstable();
+    let median_us = samples_us[samples_us.len() / 2];
+    let min_us = samples_us[0];
+    let max_us = samples_us[samples_us.len() - 1];
+    println!("timing_n=1_median_us={median_us}");
+    println!("timing_n=1_min_us={min_us}");
+    println!("timing_n=1_max_us={max_us}");
+    println!("timing_n=1_iters={ITERS}");
 
     Ok(())
 }
