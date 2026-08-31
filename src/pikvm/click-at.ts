@@ -165,6 +165,7 @@ export async function clickAt(req: ClickAtRequest): Promise<ClickAtOutcome> {
     // false-aborts with "target type undetermined" (the guard presumes an
     // undetermined target is an iPad).
     forbidSlamOnIpad: policy.forbidSlamOnIpad,
+    mouseAbsolute: policy.mouseAbsolute,
     ...(chunkPace !== undefined ? { chunkPaceMs: chunkPace } : {}),
   };
   const verifyOpts: ClickVerifyOptions = {

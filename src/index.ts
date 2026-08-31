@@ -1672,6 +1672,7 @@ async function handle_pikvm_mouse_scroll(args: Record<string, unknown>): Promise
             forbidSlamFallback: policy.forbidSlamFallback,
             forbidSlamOnIpad: policy.forbidSlamOnIpad,
             profile: cachedProfile,
+            mouseAbsolute: policy.mouseAbsolute,
             ...(policy.chunkPaceMs !== undefined ? { chunkPaceMs: policy.chunkPaceMs } : {}),
           });
           movedNote = ` at (${cx}, ${cy})`;
@@ -1883,6 +1884,7 @@ async function handle_pikvm_mouse_move_to(args: Record<string, unknown>): Promis
             assumeCursorAt,
             curveScaleX: mvLearnScaleX,
             curveScaleY: mvLearnScaleY,
+            mouseAbsolute: policy.mouseAbsolute,
             // F8 (Round 2 Phase 1): only construct slamOriginPx when the
             // caller actually supplied at least one coordinate. Layer 3
             // (docs/troubleshooting/ipad-safety-guards.md) refuses an
