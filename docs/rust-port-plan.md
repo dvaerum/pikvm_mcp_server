@@ -4022,3 +4022,51 @@ the manager. Correctness gate (filtered-vs-unfiltered diff on real
 captured frames) and the real Pi4 3-scenario timing measurement both
 still ahead, per the design's own sequencing — need real hardware,
 routed onward once picked up.
+
+---
+
+**§60 task_3a0440a91a05 CLOSED — the cascade pre-filter's real 3-scenario
+gate, all passed on real Pi4 hardware, 2026-08-31 ~21:52.**
+
+it-03400 ran the last open requirement from §58/§59: the correctness
+gate + real timing measurement across all 3 named scenarios, per the
+design's own sequencing.
+
+**Correctness**: filtered output matched unfiltered ground truth EXACTLY
+on every scenario — position, presence, and the None-vs-Some decision,
+zero discrepancies. This is the gate that had to pass before any speed
+number could be trusted at all.
+
+**Real timing, all three, not just the best case**:
+- Idle (same real frame scanned twice): 4860.1ms → 45.1ms — 107.85x.
+- Moving (a genuinely different real frame, cache warm from elsewhere):
+  5488.9ms → 1106.4ms — 5x, BETTER than the design's own conservative
+  worst-case framing (most of the grid's crops cover background shared
+  between the two frames, only the crops actually along the motion path
+  differ).
+- Busy/animating (real, live: `top` running on IT-02634's terminal,
+  captured two genuine consecutive frames ~4s apart while it actively
+  refreshed, quit afterward to restore idle state): 12989.1ms →
+  4795.5ms — still a real 2.7x, because the terminal never covers the
+  whole frame (taskbar/borders stay static even while the process list
+  churns).
+
+**A real methodology detail worth recording**: it-03400 ran the busy
+scenario in its own separate process specifically because of gap #1
+from my own design review (§58) — `REGION_CACHE` never refreshes, so
+mixing an iPad-shaped frame with a full-desktop frame in the SAME
+process would have computed ground truth against a different region
+than the cached path would actually use, a harness artifact rather than
+a real prefilter finding. Correctly identified and avoided — a genuine
+sign the reviewed design's own known limitations were understood, not
+just a script run blindly against a checklist.
+
+Full arc, start to finish, worth naming as a clean example of the
+team's routing actually working: nixos-dev designed it → I reviewed it
+(§58, found 2 real gaps, both folded in) → nixos-dev corrected the
+design → I implemented it (§59, 10 new tests, zero regressions) when
+nixos-dev ran low on context budget → it-03400 ran the real live gate
+on hardware neither of us has. Relayed the real numbers directly to
+nixos-dev (their design) and the manager. Hit the same cross-node
+task-visibility quirk as task_07bfe499e2d9 trying to close the task
+myself — flagged, not chased further, same as last time.
