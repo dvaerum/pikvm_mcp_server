@@ -1,5 +1,14 @@
 # `moveToPixel`/`move_to_pixel` absolute-mode fix — design (task_4b034fc4e018)
 
+**STATUS: FIXED AND LIVE-CONFIRMED (2026-08-31).** PR #96 merged
+(`81f11ac` on `rust-port/module-4-mover`). it-03400 ran the fix live
+against the real IT-02634 target at two different commanded positions
+((1500,300) and (400,900)): `strategy=AbsoluteMove` confirmed the new
+dispatch branch fired both times, and the saved screenshots show the
+cursor rendered exactly at each commanded position where nothing had
+rendered before — directly reversing the original finding. Real,
+visual, hardware confirmation, not just a green test suite. See §7.
+
 ## 0. What's confirmed, not guessed
 
 Live finding (it-03400, real IT-02634 desktop/absolute-mouse target,
@@ -265,20 +274,53 @@ behavior rather than a dangerous silent assumption.
 **Decision: (a) — trust the caller-supplied flag unconditionally, no
 internal re-verification.**
 
+## 7. Live-hardware confirmation (2026-08-31) — CLOSED
+
+it-03400 ran the merged fix (`81f11ac`) against the real IT-02634
+target, two different commanded positions: `(1500, 300)` and
+`(400, 900)`. `strategy=AbsoluteMove` confirmed the new dispatch branch
+fired both times; saved screenshots show the cursor rendered exactly at
+each commanded position, where nothing had rendered there before under
+the old code path. Directly reverses the original finding — this is
+real, visual, hardware confirmation, not a green test suite standing in
+for it.
+
+**One secondary, non-blocking finding** (georgs-mac-mini/it-03400,
+tracked separately as `task_07bfe499e2d9`): `move_to_pixel_absolute`'s
+own verification step (`find_cursor_by_template_set`) reported "no
+match within 60px" on both runs despite the cursor genuinely being
+present — IT-02634's cursor was an I-beam/text-select shape, and the
+cursor-template set is likely tuned for an arrow cursor. Did not block
+this fix (the visual ground truth — screenshots — was unambiguous), but
+worth closing if `final_detected_position`/`final_residual_px` is ever
+relied on programmatically to gate something downstream (e.g. a click)
+— a false "verification failed" on a legitimately-successful absolute
+move could cause a caller to retry or bail unnecessarily. See the
+tracked task for scope.
+
+`pikvm_mouse_click_at` was not tested against IT-02634 — it-03400's
+standing authorization for that target covers moves only; they
+correctly held off rather than assume click coverage. A real follow-up
+if/when authorization is extended.
+
 ## Sequencing
 
 1. ~~This doc → review by georgs-mac-mini~~ **Done.** No gaps in root
    cause/blast-radius analysis (independently re-checked against source
    line-by-line, not just the doc). One real gap found and folded in
    above (§2b-i). §6 resolved to (a).
-2. Implement §2 (Rust), full test cycle, PR against
-   `rust-port/module-4-mover`. **Next step.**
-3. Live-hardware verification gate (it-03400, coordinated via
-   georgs-mac-mini) — real close-the-loop confirmation before calling
-   this actually fixed.
+2. ~~Implement §2 (Rust), full test cycle, PR against
+   `rust-port/module-4-mover`.~~ **Done.** PR #96, merged as `81f11ac`.
+   Independently re-reviewed and re-verified by georgs-mac-mini before
+   approval (their own full build/test/clippy/fmt cycle, not just
+   trusting the reported numbers).
+3. ~~Live-hardware verification gate~~ **Done.** See §7 — real, visual
+   confirmation on IT-02634.
 4. Follow-up: scope + land the matching TS-side fix (§3) as its own PR
    against `main`, using the proven Rust implementation as the
-   reference.
+   reference. **Still open** — not yet started.
+5. Follow-up (low priority, non-blocking): `task_07bfe499e2d9` — cursor-
+   template coverage for non-arrow shapes.
 
 ## What changed
 
@@ -291,3 +333,9 @@ internal re-verification.**
   with "the concept doesn't apply"). §6 resolved to (a) — trust the
   caller-supplied flag unconditionally — with the concrete policy-
   freshness reasoning recorded, not just a preference.
+- Final revision: §7 added recording the real live-hardware
+  confirmation (PR #96 merged, IT-02634 re-tested, cursor genuinely
+  rendered at both commanded positions) and the one secondary,
+  non-blocking finding it surfaced (cursor-template coverage for
+  non-arrow shapes, tracked as `task_07bfe499e2d9` rather than left in
+  a chat message). Sequencing updated to reflect steps 1-3 done.
