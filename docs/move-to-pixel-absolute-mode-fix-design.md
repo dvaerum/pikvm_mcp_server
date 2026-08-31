@@ -133,6 +133,46 @@ pub async fn move_to_pixel(...) -> anyhow::Result<MoveToResult> {
    before/after handling) continue to work unmodified; this function
    only changes HOW the move happens, not the result contract.
 
+### 2b-i. `MoveToResult`'s relative-mode-only fields — explicit, not silently defaulted
+
+**Caught in review (georgs-mac-mini)**: `MoveStrategy` (`move_to/types.rs:8-13`,
+`DetectThenMove`/`SlamThenMove`/`AssumeAt`/`CurveOneShot`) has no variant
+representing absolute positioning, and `MoveToResult` (`move_to/types.rs:198-231`)
+carries several fields that are inherently relative-mode concepts —
+`emitted_mickeys`, `used_px_per_mickey`, `chunk_count`, `corrections`,
+`diagnostics`. Silently defaulting these (`chunk_count: 0`,
+`corrections: vec![]`, `emitted_mickeys: (0.0, 0.0)`) would conflate two
+different meanings under one value: "zero relative chunks were emitted"
+(a real relative-mode outcome) vs. "the concept of a relative chunk
+doesn't apply to this move" (the true absolute-mode meaning). A caller
+inspecting `result.chunk_count == 0` couldn't tell which one it's
+looking at.
+
+**Fix, folded into this design**:
+- Add a real `MoveStrategy::AbsoluteMove` variant. `move_to_pixel_absolute`
+  sets `result.strategy = MoveStrategy::AbsoluteMove` — callers (and
+  future readers) can branch on `strategy` to know unambiguously which
+  regime produced a given result, rather than inferring it from a
+  zeroed-out field.
+- `move_to_pixel_absolute`'s own doc comment must state explicitly what
+  the relative-mode-only fields carry and why, as a deliberate contract,
+  not an accidental default:
+  - `emitted_mickeys: (0.0, 0.0)` — "not applicable; absolute positioning
+    emits zero relative HID reports by design, this is not a measurement
+    of anything."
+  - `used_px_per_mickey: (0.0, 0.0)` — same rationale, no calibration
+    ratio exists for an absolute move.
+  - `chunk_count: 0` — "not applicable; the single `mouse_move` call is
+    not a 'chunk' in the relative-mode sense."
+  - `corrections: vec![]` — "not applicable; this path is single-shot
+    move-then-verify, not an iterative correction loop (see §2b step 3)."
+  - `diagnostics: vec![]` — same rationale, or optionally one entry
+    describing the single move+verify pass, if that proves useful for
+    debugging — implementer's call, not load-bearing either way.
+  - `passes_since_last_verification: 0`, `bailed_to_best_pass: false` —
+    genuinely accurate for a single-shot path (there is no "earlier
+    pass" to bail to), not sentinels needing special-case documentation.
+
 ### 2c. Thread `mouse_absolute` at all three real call sites
 
 ```rust
@@ -206,29 +246,48 @@ TS with the Rust version as the proven reference implementation.
   having `HidPolicy` resolve `mouse_absolute: true`, which only happens
   for a genuine absolute-mode target.
 
-## 6. Open question for review
+## 6. `mouse_absolute` trust model — decided (a), caller-supplied unconditionally
 
-Should `move_to_pixel` trust the caller-supplied `mouse_absolute` flag
-unconditionally (matching the established `forbid_slam_fallback`/
-`forbid_slam_on_ipad`/`chunk_pace_ms` convention — consistent, no extra
-round-trip, but relies on every future call site remembering to thread
-it correctly), or should it independently re-verify via a live
-`client.get_hid_profile()` call when the flag is `false`/unset (self-
-healing against a caller that forgot to thread it, at the cost of an
-extra HTTP round-trip on every move)? Leaning toward the former for
-consistency with the rest of this codebase's `HidPolicy`-threading
-convention — flagging for review rather than deciding unilaterally,
-since georgs-mac-mini has more live-testing experience with this exact
-call surface than I do.
+Resolved in review (georgs-mac-mini), with a concrete reason beyond
+convention-consistency: `policy` is freshly resolved at the TOP of
+every handler invocation (`mouse.rs:434`,
+`shared.hid_mode_resolver.lock().await.policy()`), never cached or
+shared across calls. The staleness window a self-verifying
+`get_hid_profile()` call inside `move_to_pixel` would guard against is
+already ~zero within the same call chain — it wouldn't systematically
+catch anything the caller's own fresh resolution didn't just establish
+moments earlier, it would just add a mandatory HTTP round-trip to every
+single move for a benefit that's already covered. The real safety net
+for "a caller forgot to thread it" is already §5's default-`false`,
+which costs nothing and correctly fails toward the safe (relative-mode)
+behavior rather than a dangerous silent assumption.
+
+**Decision: (a) — trust the caller-supplied flag unconditionally, no
+internal re-verification.**
 
 ## Sequencing
 
-1. This doc → review by georgs-mac-mini (same discipline as every other
-   design this session).
+1. ~~This doc → review by georgs-mac-mini~~ **Done.** No gaps in root
+   cause/blast-radius analysis (independently re-checked against source
+   line-by-line, not just the doc). One real gap found and folded in
+   above (§2b-i). §6 resolved to (a).
 2. Implement §2 (Rust), full test cycle, PR against
-   `rust-port/module-4-mover`.
-3. Live-hardware verification gate (it-03400) — real close-the-loop
-   confirmation before calling this actually fixed.
+   `rust-port/module-4-mover`. **Next step.**
+3. Live-hardware verification gate (it-03400, coordinated via
+   georgs-mac-mini) — real close-the-loop confirmation before calling
+   this actually fixed.
 4. Follow-up: scope + land the matching TS-side fix (§3) as its own PR
    against `main`, using the proven Rust implementation as the
    reference.
+
+## What changed
+
+- Initial version: root-cause diagnosis (§0), design (§2), TS-side scope
+  note (§3), testing plan (§4), blast radius (§5), open §6 question.
+- Revision after georgs-mac-mini's review: added §2b-i (`MoveStrategy::AbsoluteMove`
+  variant + explicit sentinel-value documentation for `MoveToResult`'s
+  relative-mode-only fields, closing a real gap where silently
+  defaulting them would have conflated "zero relative chunks emitted"
+  with "the concept doesn't apply"). §6 resolved to (a) — trust the
+  caller-supplied flag unconditionally — with the concrete policy-
+  freshness reasoning recorded, not just a preference.
