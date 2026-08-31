@@ -320,3 +320,132 @@ inference latency on real Pi hardware") has to take over from design:
   that sits with `pikvm-nixos@georgs-mac-mini` or `pikvm-nixos@it-03400`
   instead. §6 updated to route execution correctly rather than assume
   the reviewer is also the executor.
+
+## 7. Result (2026-08-31) — executed by pikvm-nixos@georgs-mac-mini
+
+**Verdict: NO-GO for this pipeline's actual production use, as things
+stand.** The aarch64 build problem (§5's first open question) is fully
+solved and documented below for reuse. The Rust wiring (§3) is real,
+small, and correct. But XNNPACK itself doesn't work for this model's
+actual production inference shape — full findings below.
+
+### 7.1 aarch64 onnxruntime+XNNPACK build — SOLVED, 4 real attempts
+
+Adapted `scratch/cpu-inference-speedup/onnxruntime-xnnpack-overlay.nix`
+for `aarch64-linux` (swap `legacyPackages.x86_64-linux` →
+`legacyPackages.aarch64-linux`) and built natively on a real
+aarch64-linux machine — georgs-mac-mini's nix-darwin `linux-builder` VM
+(a genuine ARM VM, not cross-compilation). That VM turned out to be far
+smaller than the "beefier shared host" the x86_64 build ran on: only
+**~2.9GB RAM, 1 CPU, zero swap** (confirmed via a diagnostic remote
+build reading `/proc/meminfo`), well below what this build needs
+regardless of `--cores`/parallelism tuning. In order, real attempts:
+
+1. `--cores 4` → `cc1plus` OOM-killed compiling
+   `core/util/math_cpu.cc.o`.
+2. `--cores 1` → identical OOM, identical file — ruled out concurrency
+   as the cause; this is a single-translation-unit peak-memory ceiling.
+3. Added `--param ggc-min-expand=10 --param ggc-min-heapsize=32768` to
+   `CMAKE_CXX_FLAGS` (tunes GCC's garbage collector to run more
+   aggressively during compilation — trades compile time for peak
+   memory, does NOT change `-O2` codegen/the resulting binary's
+   behavior) → fixed the compile-time OOM completely (100% of `.cc.o`
+   built, including the file that killed attempts 1-2), but the OOM
+   moved one stage later: the final link (`ld` linking
+   `libonnxruntime.so`, which statically pulls in
+   XNNPACK+kleidiai+onnx+re2+abseil+protobuf all at once) got killed
+   instead (exit 137).
+4. Added `mold` as the linker (`-fuse-ld=mold` on
+   `CMAKE_{EXE,SHARED,MODULE}_LINKER_FLAGS`, `pkgs.mold` in
+   `nativeBuildInputs`) — a drop-in linker built specifically for low
+   peak-memory/fast large-C++ links, no codegen/behavior change. Fixed
+   the main `libonnxruntime.so` link. The OOM moved ONE more output
+   over: linking `onnxruntime_pybind11_state.so` (the Python bindings'
+   native module) also OOM'd under mold. Set `pythonSupport = false` on
+   the `pkgs.onnxruntime.override` (the Rust port doesn't need the
+   Python wheel at all — `ort`'s `load-dynamic` feature only needs
+   `$out/lib/libonnxruntime.so` for `ORT_DYLIB_PATH`) — this skips that
+   link entirely. **Clean build.**
+
+Verified genuinely XNNPACK-enabled, not just "exit 0" — same bar §1
+used to rule OUT the stock library, but more decisively: `strings` on
+the built `.so` shows real demangled C++ method signatures
+(`onnxruntime::XnnpackExecutionProvider::GetCapability`/
+`CreatePreferredAllocators`, `onnxruntime::xnnpack::ConvBase`/
+`AveragePool`/`FuseActivation` constructors), real internal-only error
+strings only reachable from actual runtime code ("XNNPACK EP should not
+have asked for the node", the pthread-threadpool-contention warning),
+and real source paths
+(`onnxruntime/core/providers/xnnpack/xnnpack_execution_provider.cc`).
+254 XNNPACK string hits total — a real implementation, not just an
+EP-name enumeration list.
+
+The finished overlay (aarch64-only fixes on top of the proven x86_64
+one, fully commented inline with this same history) is worth reusing
+verbatim for any future aarch64 XNNPACK/similar-scale-C++ build attempt
+on this same linux-builder VM.
+
+### 7.2 Rust wiring (§3) — landed as designed, one deviation
+
+Branch `feat/xnnpack-execution-provider` (commits 804c379, f29f1c1) —
+new `xnnpack-ep` Cargo feature on `pikvm-mcp-detection-vision`, off by
+default, gating `with_execution_providers([ort::ep::XNNPACK::default()
+.build()])` on the verifier session before `commit_from_file`.
+Registration failure surfaces as a real error (`map_err`, not silently
+swallowed to CPU) — correctness-first, as designed.
+
+**Deviation from this doc's illustrative sketch**: gated via a Cargo
+feature (compile-time) rather than a runtime `CascadeOptions
+.try_xnnpack` field, to avoid threading a new parameter through every
+call site/test for what's currently a benchmark-only spike. Easy to
+promote to a runtime option later if XNNPACK ever becomes worth
+shipping. Verified: 198 tests pass, clippy clean, fmt clean, with and
+without the feature — default build genuinely unaffected.
+
+### 7.3 Correctness check (§4) — PASSES for N=1, PANICS for N>1
+
+Ran on real pikvm01 hardware (nix-copied the built XNNPACK
+`onnxruntime.so` there, cloned the branch, built+ran natively —
+40min cold build on Pi4 silicon, ~90s incremental for the feature
+rebuild). `examples/xnnpack_parity_check.rs`, same deterministic
+synthetic-crop input as the crate's existing `#[ignore]`d real-model
+tests, run twice (once per EP, compile-time-gated).
+
+**N=1 (single crop): PASSES.** `x=234, y=231` identical to CPU-EP;
+`presence=0.002882` vs CPU-EP's `0.002883` — 1e-6 difference, well
+inside the ~0.005-0.04 kernel-implementation-variance noise floor this
+doc anticipated (§4 item 2). XNNPACK genuinely works, numerically, for
+this model, at this batch size.
+
+**N=6 (batched — my original parity test): PANICS.** `presence_logit`'s
+output tensor comes back length 1 instead of the expected batch size
+6 — `presence[bi]` index-out-of-bounds when
+`run_cascade_inference` picks the winning crop across the batch. This
+is NOT a harness bug: identical inference code path, CPU-EP handles
+the same N=6 batch correctly; only the registered EP differs between
+the two runs. This is a genuine onnxruntime-XNNPACK incompatibility
+with batched execution of this specific model — some op in the graph
+most likely doesn't support XNNPACK's batched code path and either
+silently reshapes or the EP partially claims the graph in a way that
+breaks the batch dimension. Not root-caused further (would need
+digging into onnxruntime's XNNPACK provider internals) — flagged here
+as the concrete next step IF anyone revisits this.
+
+### 7.4 Why this closes as NO-GO, not "needs a benchmark"
+
+Production always batches (N=352 pre-hint-narrowing per
+`task_78184455df4e`'s full-path-profiling finding; smaller-but-still->1
+after PR93's hint-narrowing). §5's real Pi4 benchmark was skipped
+deliberately: running it against N=1 wouldn't represent the real
+production workload, and reporting a timing number for a shape the
+pipeline never actually uses would answer the wrong question. Until/
+unless the batching incompatibility above gets root-caused and fixed
+(or the pipeline is restructured to N sequential single-crop XNNPACK
+calls, which would almost certainly lose to the already-fast batched
+CPU-EP path on per-call overhead alone — not worth benchmarking blind),
+XNNPACK is not usable for this pipeline as it exists today.
+
+The aarch64 build fix (§7.1) and the Rust wiring (§7.2, landed
+off-by-default and harmless) both remain useful groundwork regardless
+— if the batching issue is ever fixed upstream or worked around, the
+infrastructure to pick it back up is already in place.
