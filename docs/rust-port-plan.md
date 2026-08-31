@@ -3900,3 +3900,53 @@ evidence or explicitly, correctly scoped out (it-03400's own desktop/
 absolute gate was item 7's own carve-out reasoning all along — fitting
 that its real remaining substance turned out to be this actual bug, now
 fixed and confirmed, not a mystery).
+
+---
+
+**§58 reviewed the cascade change-detection pre-filter design (task_3a0440a91a05), two real gaps found and folded in, 2026-08-31 ~20:37-20:41.**
+
+nixos-dev's new design (a different lever than every prior speed
+attempt — cut how OFTEN the cascade AI runs, not how fast, via a
+per-crop byte-exact change cache replaying the last real verdict for
+unchanged crops). Reviewed the same way as every other design this
+session — checked the source claims directly rather than trust the
+doc:
+
+1. **"Detected-region change" invalidation had no live signal to fire
+   on.** `REGION_CACHE` (cursor_ml_detect.rs:223) is set exactly once
+   per process and never refreshed anywhere in the file (confirmed:
+   exactly 2 references, no clear function) — so under current
+   behavior there's nothing for the pre-filter to compare a "new"
+   region against; this trigger would have silently never fired.
+2. **The proposed emit-invalidation hooks don't cover absolute-mode
+   moves — directly relevant to today's own PR #96.** Both candidates
+   named (`emit_clock::record_emit()`, `CursorBelief.predict()`) are
+   called only from `mouse_move_relative`, never from `mouse_move` (the
+   absolute endpoint `move_to_pixel_absolute` uses). Given today
+   confirmed desktop/absolute moves are now a real, live-working
+   production path, this would have left the pre-filter's race-guard
+   (screenshot captured before the display visually updates) silently
+   absent for exactly the mode we spent today fixing. Also caught a
+   smaller issue along the way: `CursorBelief.emit_mag_since_last_
+   observation` is a private field, not directly hookable as the doc
+   described — `emit_clock::last_emit_ms()` is the real usable public
+   API.
+
+nixos-dev independently re-verified both findings against source
+themselves before folding them in (commit `05ec59e`) — region-change
+invalidation now stated plainly as not-implemented-in-v1 rather than
+assumed working; emit-invalidation explicitly v1-scoped to
+relative-mode only, with wiring `client.mouse_move()` named as a real
+tracked follow-up rather than a silent gap; the private-field reference
+corrected to the real `emit_clock::last_emit_ms()` API.
+
+Genuinely satisfying that finding #2 traces directly back to work done
+earlier the SAME day (§57's absolute-move fix) — a design review
+catching a real interaction with a feature that didn't even exist a few
+hours earlier is exactly the kind of cross-cutting check this session's
+discipline is meant to produce, not a coincidence to shrug off.
+
+Implementation + correctness gate + real Pi4 measurement across the
+three named scenarios (idle/moving/busy) all still ahead — routed to
+whoever has hardware access once built, same pattern as every other
+design this session.
