@@ -59,7 +59,7 @@ apply before the real number existed.)
 XNNPACK now needs to beat fp32's ~71ms baseline directly, not int8's
 ~89ms — there's no "at least beat int8" fallback anymore.
 
-## 2. XNNPACK execution provider — built, real InferenceSession confirmed working (x86_64), Pi4 benchmark still needed
+## 2. XNNPACK execution provider — CLOSED, NO-GO (aarch64 build solved, but real onnxruntime batching bug blocks production use)
 
 The standard `pip install onnxruntime` wheel does NOT include the
 XNNPACK EP (`ort.get_available_providers()` only returns
@@ -108,6 +108,35 @@ task owner before interpreting the eventual number.
 The build now exists — the SAME correctness harness here (`compare_int8.py`'s
 methodology, swapped to compare XNNPACK EP vs default CPU EP instead of
 INT8 vs fp32) directly reuses for whoever runs the real Pi4 benchmark.
+
+**2026-08-31 follow-up (task_476e2fd57bc2, executed by
+pikvm-nixos@georgs-mac-mini) — CLOSED, NO-GO.** Picked this up for the
+Rust port (`ort` crate, not the Python wheel). Full writeup:
+`docs/xnnpack-rust-execution-provider-design.md` §7 on branches
+`rust-port/module-4-mover` / `feat/xnnpack-execution-provider` (that
+repo's own history, not this one — cross-referenced here since this is
+where the reusable build artifact lives).
+
+- **aarch64 build: SOLVED.** `onnxruntime-xnnpack-overlay-aarch64.nix`
+  + `build_onnxruntime_xnnpack_aarch64.sh` (this dir) — same overlay as
+  above, targeting `legacyPackages.aarch64-linux`, plus 3 more fixes
+  needed for a real (small, ~2.9GB RAM/1 CPU/0 swap) aarch64-linux
+  builder VM: GCC GC-tuning flags (`--param ggc-min-expand=10
+  --param ggc-min-heapsize=32768`) to fix a compile-time OOM, `mold` as
+  the linker to fix the subsequent link-time OOM, and
+  `pythonSupport = false` to skip the Python-bindings link entirely
+  (not needed for the Rust port). Verified genuinely XNNPACK-enabled
+  via `strings`/demangled-symbol inspection, not just build exit code.
+- **Real Pi4 correctness check: XNNPACK is numerically correct for
+  N=1 (single crop) but PANICS for N>1 (batched)** — `presence_logit`'s
+  output tensor comes back length 1 instead of the batch size, a real
+  onnxruntime-XNNPACK incompatibility with this model's batched
+  execution, not a harness bug (identical code path, CPU EP handles
+  the same batch correctly). Since production always batches (N=352
+  pre-hint-narrowing, smaller-but-still->1 after), this is a clean
+  NO-GO for actual production use — the real Pi4 timing benchmark this
+  entry originally flagged as "still needed" was deliberately skipped
+  rather than run against the wrong (N=1) shape.
 
 ## 3. ArmNN execution provider — CLOSED, NOT PURSUED
 
