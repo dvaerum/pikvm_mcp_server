@@ -1,5 +1,21 @@
 # Cheap change-detection pre-filter before the cascade AI check — design (task_3a0440a91a05)
 
+**RESULT (2026-08-31): SHIPPED and CLOSED, real positive win.** Implemented
+(`crop_cache.rs`, commit `9ca1a5a`), reviewed twice (design +
+post-implementation code review), correctness-gated and timed on real
+Pi4 hardware (it-03400) across all three named scenarios — zero
+discrepancies between filtered and unfiltered output on any scenario
+(position, presence, and the None-vs-Some decision all match exactly).
+Real speedups: **idle 4860.1ms→45.1ms (107.85x)**, **moving
+5488.9ms→1106.4ms (5x** — better than this doc's own conservative
+worst-case framing, since most crops still cover shared background),
+**busy/animating 12989.1ms→4795.5ms (2.7x**, real live `top` refreshing
+on a real terminal — savings persist because the terminal doesn't
+cover the whole frame). A real, positive, monotonic result across the
+whole realistic spectrum, not just the best case. See §"Real result"
+below for full methodology notes, including a harness pitfall it-03400
+correctly avoided (tied directly to this doc's own known v1 gap).
+
 georg's instruction: every prior speed lever (INT8, Vulkan/ncnn, XNNPACK,
 thread-count) tried to run the SAME amount of AI work faster and hit the
 same "overhead eats the gain" wall on this small model (confirmed:
@@ -206,3 +222,39 @@ Two invalidation triggers described above are not both real yet:
    `client.mouse_move()` to extend emit-based invalidation to
    absolute-mode targets; implement a real `REGION_CACHE` refresh
    signal if region-change invalidation is ever needed.
+
+## Real result (2026-08-31, it-03400, real Pi4B) — CLOSED
+
+**Correctness gate**: filtered vs. unfiltered output diffed on real
+captured frames across all three scenarios — zero discrepancies
+(position, presence, and the `None`-vs-`Some` verification decision all
+matched exactly). No speed number below is trusted ahead of this.
+
+| Scenario | Unfiltered | Filtered | Speedup |
+|---|---|---|---|
+| Idle (same frame scanned twice) | 4860.1ms | 45.1ms | **107.85x** |
+| Cursor moving (genuinely different real frame) | 5488.9ms | 1106.4ms | **5x** |
+| Busy/animating (real live `top` refreshing on-screen) | 12989.1ms | 4795.5ms | **2.7x** |
+
+The moving-scenario result (5x) beats this doc's own conservative
+worst-case framing (§4.2 expected the motion-path crops to dominate) —
+most crops still cover shared, unchanged background even during real
+cursor motion. The busy scenario (2.7x) confirms savings persist even
+under real, continuous on-screen animation, since the animating region
+(a terminal) doesn't cover the whole frame — exactly the honest,
+non-best-case scenario this doc's §4.3 asked to have measured and
+reported regardless of outcome.
+
+**Methodology note worth preserving**: it-03400 ran the busy scenario
+in its own separate process specifically to avoid a harness artifact
+tied to this doc's own known v1 gap (`REGION_CACHE` never refreshes) —
+mixing an iPad-shaped frame and a full-desktop frame in one process
+would have computed ground truth against a stale region rather than
+the one the cached path would actually use. Correctly identified and
+avoided as a measurement artifact, not a pre-filter bug.
+
+**Disposition: shipped, correctness-verified, real positive win across
+the whole realistic spectrum.** No further action required on this
+task; the two named v1-scope follow-ups (absolute-mode emit wiring,
+`REGION_CACHE` refresh) remain open as separate, non-blocking future
+work per the Sequencing step 6 above.
