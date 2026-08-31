@@ -22,6 +22,7 @@
 //! the original decomposition note so this opt-in path never entangles
 //! with the default path's files.
 
+mod absolute_move;
 mod correction_math;
 mod legacy_move;
 mod motion_diff;
@@ -41,8 +42,17 @@ use std::sync::Arc;
 
 use pikvm_mcp_kvmd_client::client::PiKVMClient;
 
-/// Public entry point. Faithful port of `moveToPixel`'s own first
-/// branch (move-to.ts:1467-1485): `strategy==='curve-one-shot'` (the
+/// Public entry point. `mouse_absolute` is checked FIRST — target mode
+/// is a hardware fact, not a strategy preference, and takes priority
+/// over `curve-one-shot` vs everything else (both are meaningless
+/// distinctions for genuine absolute positioning). See
+/// `docs/move-to-pixel-absolute-mode-fix-design.md` for the root cause
+/// this branch fixes (a relative HID emit into an absolute-assembled
+/// gadget is a documented silent no-op, ADR-0002) and why absolute mode
+/// needs none of `legacy_move`'s relative-mode calibration machinery.
+///
+/// Below that: faithful port of `moveToPixel`'s own first branch
+/// (move-to.ts:1467-1485): `strategy==='curve-one-shot'` (the
 /// validated, "do NOT touch it" iPad-default mover) delegates entirely
 /// to `curve_mover`; every other strategy runs the legacy iterative
 /// correction-loop path.
@@ -51,6 +61,9 @@ pub async fn move_to_pixel(
     target: Point,
     options: MoveToOptions,
 ) -> anyhow::Result<MoveToResult> {
+    if options.mouse_absolute {
+        return absolute_move::move_to_pixel_absolute(client, target, &options).await;
+    }
     if options.strategy == Some(MoveStrategy::CurveOneShot) {
         return crate::curve_mover::move_by_curve_one_shot(
             client,

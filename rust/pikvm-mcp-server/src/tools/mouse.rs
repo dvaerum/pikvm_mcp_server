@@ -388,6 +388,7 @@ fn mouse_scroll(
                     strategy: Some(move_strategy_from_policy(policy.strategy)),
                     forbid_slam_fallback: policy.forbid_slam_fallback,
                     forbid_slam_on_ipad: Some(policy.forbid_slam_on_ipad),
+                    mouse_absolute: policy.mouse_absolute,
                     profile: cached_profile,
                     chunk_pace_ms: policy.chunk_pace_ms,
                     ..Default::default()
@@ -504,6 +505,7 @@ fn mouse_move_to(
                 curve_scale_x: Some(learn_scale_x),
                 curve_scale_y: Some(learn_scale_y),
                 slam_origin_px,
+                mouse_absolute: policy.mouse_absolute,
                 fallback_px_per_mickey: validate_number(
                     &args,
                     "fallbackPxPerMickey",
