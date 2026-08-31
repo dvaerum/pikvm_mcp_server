@@ -132,11 +132,20 @@ where the reusable build artifact lives).
   output tensor comes back length 1 instead of the batch size, a real
   onnxruntime-XNNPACK incompatibility with this model's batched
   execution, not a harness bug (identical code path, CPU EP handles
-  the same batch correctly). Since production always batches (N=352
-  pre-hint-narrowing, smaller-but-still->1 after), this is a clean
-  NO-GO for actual production use — the real Pi4 timing benchmark this
-  entry originally flagged as "still needed" was deliberately skipped
-  rather than run against the wrong (N=1) shape.
+  the same batch correctly).
+- **N=1 timing (2026-08-31, explicit decision-input ask): XNNPACK is
+  ~2.4x SLOWER than CPU-EP even where it works.** Real pikvm01 numbers,
+  warmup(5)+30-iteration median: CPU-EP 31.98ms vs XNNPACK-EP 76.98ms.
+  Same pattern as candidates 1 and the earlier GPU/Vulkan investigation
+  — an acceleration path that loses to plain CPU on this hardware for
+  a model this small, likely dispatch/thread-pool overhead dominating.
+  **Firm NO-GO**, not "needs more investigation" — production always
+  batches (N=352 pre-hint-narrowing, smaller-but-still->1 after), so
+  the real Pi4 timing benchmark this entry originally flagged as
+  "still needed" was deliberately never run against the production
+  shape: it can't run at all (the panic above), and the N=1 number
+  already answers the only question a batched number could have
+  added ("is XNNPACK faster") in the negative anyway.
 
 ## 3. ArmNN execution provider — CLOSED, NOT PURSUED
 
