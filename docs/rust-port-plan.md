@@ -3757,3 +3757,69 @@ clean close.
 Reported to the manager. Task note added, task_63dd02e1bd7e ready to be
 marked complete pending the manager's own sign-off on cutover timing
 (a separate decision from whether the criteria hold).
+
+---
+
+**§56 native-macOS vs real-Pi4 benchmark — real numbers, two real bugs
+caught along the way, 2026-08-31.**
+
+Georg asked directly (via manager): how much slower is the Rust port on
+the Pi4 vs running natively on this Mac? it-03400 had real Pi4 numbers
+(task_17eebaaa7160); nothing yet for the same binary natively on macOS.
+Built `rust/pikvm-mcp-server/examples/native_mac_vs_pi4_bench.rs`
+(commit 6f9828c after rebase) — native arm64 release build of the SAME
+`rust-port/module-4-mover` branch, measuring the same quantities: server
+startup, idle RSS, `pikvm_version` round-trip, `pikvm_health_check`, and
+cascade cursor-detection (no-hint vs hint=gt) via `run_cascade` against
+a real ground-truth-labeled HDMI frame (`data/openloopshape-real/`).
+
+Two real bugs caught and fixed before trusting any number, not glossed
+over: (1) the verifier model path never resolved without
+`PIKVM_ML_VERIFIER_MODEL` set explicitly — first attempt silently ran
+the cascade-disabled fallback path and reported garbage sub-2ms
+"timings" that measured nothing real; caught because the numbers looked
+implausibly fast and the stderr line said "Cascade disabled" right
+there in the output, not because I assumed the fast numbers were good
+news. (2) `ps -o rss=` requires an entitlement this sandboxed
+environment doesn't have (confirmed directly: "ps: rss: requires
+entitlement"); `timeout` also turned out to interpose a wrapper process
+that `/usr/bin/time -l` measured instead of the actual server (caught by
+comparing a trivial `sleep` control's footprint against the real
+server's — near-identical numbers exposed the fraud immediately). Fixed
+by wrapping the server binary directly with `/usr/bin/time -l`, feeding
+it a real `initialize` handshake over a FIFO, then a direct `SIGTERM` to
+the resolved server PID (not the wrapper) — reproduced twice, stable
+(~7.6-7.9 MB).
+
+**Real numbers, native macOS (Apple Silicon, arm64, release build)**:
+- Startup (spawn→initialize response): ~56-60ms warm (3 runs), 543ms on
+  the very first cold run (dylib load) — both reported, not averaged
+  away.
+- Idle RSS (maximum resident set size, post-initialize/pre-tool-call):
+  ~7.6-7.9 MB, 2 independent measurements.
+- `pikvm_version` round-trip: median ~0.1ms.
+- `pikvm_health_check` round-trip: ~9.6-10.4s — network-dependent (a
+  real reachability check against pikvm01), not a CPU measurement;
+  flagged as such rather than compared apples-to-apples.
+- Cascade cursor-detection, N=20 each, 3 repeated runs: no-hint (full
+  scan) median ~575-581ms; hint=gt (narrow) median ~100-102ms.
+
+**Comparison against it-03400's real Pi4 numbers** (cascade ~17s
+no-hint / ~3.2s hint=gt, startup ~277ms, idle RSS ~10.3MB): cascade
+no-hint ~29x faster on this Mac, hint=gt ~32x faster, idle RSS somewhat
+lower (~7.6-7.9MB vs ~10.3MB, though this crosses `/usr/bin/time -l`'s
+macOS accounting against whatever Linux RSS source Pi4's own number
+used — flagged as not guaranteed unit-for-unit identical, not silently
+treated as equivalent). Startup is genuinely ambiguous: warm-Mac (~58ms)
+beats Pi4 (~277ms) by ~4.8x, but cold-Mac (543ms) is SLOWER than Pi4's
+number — and it's unknown whether Pi4's own 277ms was itself a cold or
+warm reading, so this one comparison is reported with that honest gap
+rather than picked to favor either side.
+
+Explicit methodology caveat, stated once rather than left implicit:
+this is NOT byte-identical to whatever ad hoc script it-03400 ran on
+their own box (never committed to the repo) — same real binary, same
+branch, same kind of real frame, same target quantities, built and run
+natively for this machine's own architecture. Committed, pushed,
+reported to the manager with the real numbers and every caveat above
+attached, not summarized away.
