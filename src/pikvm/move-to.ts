@@ -169,7 +169,20 @@ async function learnedBallisticsPxPerMickey(
   };
 }
 
-export type MoveStrategy = 'detect-then-move' | 'slam-then-move' | 'assume-at' | 'curve-one-shot';
+export type MoveStrategy =
+  | 'detect-then-move'
+  | 'slam-then-move'
+  | 'assume-at'
+  | 'curve-one-shot'
+  /** Real desktop/absolute-mode target (mouseAbsolute === true) —
+   *  single-shot absolute-coordinate move-then-verify, no relative-mode
+   *  calibration/correction machinery. See
+   *  docs/move-to-pixel-absolute-mode-fix-design.md. Not selectable via
+   *  MoveToOptions.strategy directly — chosen by moveToPixel itself
+   *  based on MoveToOptions.mouseAbsolute, which reflects a hardware
+   *  fact, not a strategy preference; exists so MoveToResult.strategy
+   *  can honestly report which regime produced a result. */
+  | 'absolute-move';
 export type Axis = 'x' | 'y';
 
 export interface MoveToOptions {
@@ -178,6 +191,17 @@ export interface MoveToOptions {
   assumeCursorAt?: { x: number; y: number };
   slamOriginPx?: { x: number; y: number };
   slamFirst?: boolean;
+
+  /** Whether the target reports mouse.absolute=true (desktop, dual
+   *  absolute+relative gadget) — sourced from HidPolicy.mouseAbsolute,
+   *  resolved fresh per-call at the tool-handler layer (same convention
+   *  already used for forbidSlamFallback/forbidSlamOnIpad/chunkPaceMs).
+   *  Default false (preserves existing iPad/relative-mode behavior for
+   *  every call site that doesn't set this). moveToPixel trusts this
+   *  flag unconditionally rather than re-verifying it internally — see
+   *  docs/move-to-pixel-absolute-mode-fix-design.md §6 (the Rust design
+   *  this TS fix mirrors). */
+  mouseAbsolute?: boolean;
 
   profile?: BallisticsProfile | null;
   fallbackPxPerMickey?: number;
@@ -644,7 +668,7 @@ export function isStaleTemplateMatch(
 
 let cachedTemplates: CursorTemplate[] | undefined; // undefined = unloaded
 
-async function getCachedTemplates(): Promise<CursorTemplate[]> {
+export async function getCachedTemplates(): Promise<CursorTemplate[]> {
   if (cachedTemplates !== undefined) return cachedTemplates;
   // Migrate the legacy single-file template into the set directory so older
   // installs don't lose their cache when this code ships.
@@ -1469,6 +1493,22 @@ export async function moveToPixel(
   target: { x: number; y: number },
   options: MoveToOptions = {},
 ): Promise<MoveToResult> {
+  // mouseAbsolute is checked FIRST — target mode is a hardware fact, not
+  // a strategy preference, and takes priority over curve-one-shot vs
+  // everything else (both are meaningless distinctions for genuine
+  // absolute positioning). Root cause this fixes: the legacy body below
+  // (and every strategy that reaches it, including detect-then-move,
+  // the desktop/absolute default per HidPolicy) exclusively emits
+  // RELATIVE HID reports via client.mouseMoveRelative(), which per
+  // ADR-0002 is a documented silent no-op into an absolute-assembled
+  // gadget — confirmed live (task_4b034fc4e018, it-03400/IT-02634) and
+  // already fixed on the Rust port (PR #96); this ports the same proven
+  // fix back to TS. See docs/move-to-pixel-absolute-mode-fix-design.md.
+  if (options.mouseAbsolute) {
+    const { moveToPixelAbsolute } = await import('./move-to-absolute.js');
+    return moveToPixelAbsolute(client, target, options);
+  }
+
   // Phase 6 (2026-07-20): curve-based one-shot mover — detect once (V8) + one
   // deterministic curve-based emit, no iterative motion-diff correction. Beats
   // the iterative path 80/80 live (median 9 vs 73px on a home scene). Delegated
