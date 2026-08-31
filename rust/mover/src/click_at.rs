@@ -255,6 +255,7 @@ pub async fn click_at(req: ClickAtRequest<'_>, deps: ClickAtDeps) -> ClickAtOutc
         // frame false-aborts with "target type undetermined".
         forbid_slam_on_ipad: Some(policy.forbid_slam_on_ipad),
         chunk_pace_ms: chunk_pace,
+        mouse_absolute: policy.mouse_absolute,
         ..Default::default()
     };
     let verify_opts = ClickVerifyOptions {

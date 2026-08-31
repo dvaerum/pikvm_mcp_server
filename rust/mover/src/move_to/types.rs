@@ -10,6 +10,17 @@ pub enum MoveStrategy {
     SlamThenMove,
     AssumeAt,
     CurveOneShot,
+    /// Real desktop/absolute-mode target (`HidPolicy.mouse_absolute ==
+    /// true`) — single-shot absolute-coordinate move-then-verify, no
+    /// relative-mode calibration/correction machinery. See
+    /// `docs/move-to-pixel-absolute-mode-fix-design.md`. Not selectable
+    /// via `MoveToOptions.strategy` (a caller can't ask for this
+    /// directly — it's chosen by `move_to_pixel` itself based on
+    /// `MoveToOptions.mouse_absolute`, which reflects a hardware fact,
+    /// not a strategy preference); exists on this enum purely so
+    /// `MoveToResult.strategy` can honestly report which regime produced
+    /// a given result.
+    AbsoluteMove,
 }
 
 /// `move-to.ts`'s own per-axis type (line 173) — structurally identical
@@ -137,6 +148,17 @@ pub struct MoveToOptions {
     /// correction loop emits the full distance via small verifiable
     /// chunks. Default false.
     pub progressive_open_loop: bool,
+
+    /// Whether the target reports `mouse.absolute=true` (desktop, dual
+    /// absolute+relative gadget) — sourced from `HidPolicy.mouse_absolute`,
+    /// resolved fresh per-call at the tool-handler layer (same convention
+    /// already used for `forbid_slam_fallback`/`forbid_slam_on_ipad`/
+    /// `chunk_pace_ms`). Default `false` (preserves existing iPad/
+    /// relative-mode behavior for every call site that doesn't set this).
+    /// `move_to_pixel` trusts this flag unconditionally rather than
+    /// re-verifying it internally — see
+    /// `docs/move-to-pixel-absolute-mode-fix-design.md` §6.
+    pub mouse_absolute: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
