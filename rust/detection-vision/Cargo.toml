@@ -22,3 +22,12 @@ ort = { version = "2.0.0-rc.13", default-features = false, features = ["load-dyn
 
 [dev-dependencies]
 tokio = { version = "1", features = ["fs", "rt", "macros"] }
+
+[features]
+# Off by default — see docs/xnnpack-rust-execution-provider-design.md.
+# Attempts to register the XNNPACK execution provider on the verifier
+# session before falling back to CPU-only. Requires a non-stock
+# onnxruntime .so built with onnxruntime_USE_XNNPACK=ON (ORT_DYLIB_PATH
+# must point at one) — not yet benchmarked on real hardware when this
+# feature was added.
+xnnpack-ep = ["ort/xnnpack"]

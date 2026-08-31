@@ -240,7 +240,29 @@ fn with_verifier_session<T>(
             // the process: https://docs.rs/ort — subsequent calls return
             // false and are harmless no-ops.
             ort::init().commit();
-            Ok(Session::builder()?.commit_from_file(model_path)?)
+            #[allow(unused_mut)] // only mutated under the xnnpack-ep feature
+            let mut builder = Session::builder()?;
+            // Off by default (Cargo feature `xnnpack-ep`, not enabled in
+            // the default build — completely inert unless explicitly
+            // opted into). Requires a non-stock onnxruntime .so built with
+            // onnxruntime_USE_XNNPACK=ON; ORT_DYLIB_PATH must point at
+            // one. See docs/xnnpack-rust-execution-provider-design.md.
+            // Correctness-first: fail loudly (propagate the error) rather
+            // than silently falling back to CPU if registration fails —
+            // a benchmark run must never silently report CPU-only timing
+            // as an XNNPACK result.
+            // `ort::Error<SessionBuilder>` isn't Send+Sync (it can carry a
+            // raw session-options pointer), so it doesn't satisfy
+            // anyhow::Error's blanket `From` bound via bare `?` — map to a
+            // string first. Still fails loudly (registration failure is
+            // surfaced as a load error, matching the design's
+            // correctness-first requirement), just via map_err instead of
+            // `?`'s automatic conversion.
+            #[cfg(feature = "xnnpack-ep")]
+            let mut builder = builder
+                .with_execution_providers([ort::ep::XNNPACK::default().build()])
+                .map_err(|e| anyhow::anyhow!("XNNPACK EP registration failed: {e}"))?;
+            Ok(builder.commit_from_file(model_path)?)
         })();
         match loaded {
             Ok(session) => *guard = Some(session),
