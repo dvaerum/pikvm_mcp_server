@@ -323,11 +323,12 @@ inference latency on real Pi hardware") has to take over from design:
 
 ## 7. Result (2026-08-31) — executed by pikvm-nixos@georgs-mac-mini
 
-**Verdict: NO-GO for this pipeline's actual production use, as things
-stand.** The aarch64 build problem (§5's first open question) is fully
-solved and documented below for reuse. The Rust wiring (§3) is real,
-small, and correct. But XNNPACK itself doesn't work for this model's
-actual production inference shape — full findings below.
+**Verdict: firm NO-GO.** The aarch64 build problem (§5's first open
+question) is fully solved and documented below for reuse. The Rust
+wiring (§3) is real, small, and correct. But XNNPACK itself is both
+BROKEN for this model's actual production (batched) inference shape
+AND ~2.4x SLOWER than plain CPU-EP in the one shape (N=1) where it
+does work correctly — full findings below.
 
 ### 7.1 aarch64 onnxruntime+XNNPACK build — SOLVED, 4 real attempts
 
@@ -431,19 +432,47 @@ breaks the batch dimension. Not root-caused further (would need
 digging into onnxruntime's XNNPACK provider internals) — flagged here
 as the concrete next step IF anyone revisits this.
 
-### 7.4 Why this closes as NO-GO, not "needs a benchmark"
+### 7.4 N=1 timing (2026-08-31 follow-up, georg's explicit go/no-go ask)
+
+Before closing this out, georg asked for any speed signal at all —
+even N=1, which already passed correctness — framed explicitly as a
+decision-input number ("is fixing the batch crash worth anyone's
+time"), not a production claim. Added a warmup(5)+30-iteration timed
+loop to `xnnpack_parity_check.rs` (commit e691287), run on the same
+real pikvm01 hardware, same single-crop input as §7.3's N=1 check:
+
+| EP      | median   | min      | max       |
+|---------|----------|----------|-----------|
+| CPU     | 31.98ms  | 29.92ms  | 34.55ms   |
+| XNNPACK | 76.98ms  | 75.39ms  | 111.08ms  |
+
+**XNNPACK is ~2.4x SLOWER than plain CPU-EP even in the one case where
+it runs correctly.** Same pattern as this project's other acceleration
+attempts on this hardware (Vulkan 4.8-6.3x slower per the earlier GPU
+investigation, INT8 ~25% slower per §1 above) — most likely XNNPACK's
+own thread-pool/dispatch overhead dominating for a model this small
+(96x96 crop, a tiny network), where plain CPU EP's simpler path wins.
+**Caveat, as with everything else at N=1 in this doc: not the real
+production batch shape** — but combined with §7.3's batch panic,
+there's no scenario left where XNNPACK is worth pursuing further for
+this pipeline: it's slower where it works, and broken where it'd
+actually be used in production.
+
+### 7.5 Why this closes as a firm NO-GO, not "needs more investigation"
 
 Production always batches (N=352 pre-hint-narrowing per
 `task_78184455df4e`'s full-path-profiling finding; smaller-but-still->1
-after PR93's hint-narrowing). §5's real Pi4 benchmark was skipped
-deliberately: running it against N=1 wouldn't represent the real
-production workload, and reporting a timing number for a shape the
-pipeline never actually uses would answer the wrong question. Until/
-unless the batching incompatibility above gets root-caused and fixed
-(or the pipeline is restructured to N sequential single-crop XNNPACK
-calls, which would almost certainly lose to the already-fast batched
-CPU-EP path on per-call overhead alone — not worth benchmarking blind),
-XNNPACK is not usable for this pipeline as it exists today.
+after PR93's hint-narrowing). §5's real Pi4 benchmark against the real
+production batch shape was skipped: it can't run at all (§7.3's panic),
+and §7.4's N=1 number already answers the only question a batched
+number could have added ("is XNNPACK faster") in the negative anyway —
+even without the batch overhead, XNNPACK loses. The batching
+incompatibility would need to be root-caused and fixed for this to be
+worth reopening (or the pipeline restructured to N sequential
+single-crop XNNPACK calls, which would almost certainly lose to the
+already-fast batched CPU-EP path on per-call overhead alone on top of
+already losing per-call — not worth pursuing). XNNPACK is not usable
+for, and not faster than CPU-EP for, this pipeline as it exists today.
 
 The aarch64 build fix (§7.1) and the Rust wiring (§7.2, landed
 off-by-default and harmless) both remain useful groundwork regardless
