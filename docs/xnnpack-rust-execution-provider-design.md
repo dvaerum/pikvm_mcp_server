@@ -1,13 +1,28 @@
 # XNNPACK execution provider in the Rust ONNX cascade — design (task_476e2fd57bc2)
 
-georg's question: earlier this session, XNNPACK was confirmed
+**FINAL VERDICT (2026-08-31): NO-GO, clean and evidence-backed.** aarch64
+XNNPACK-enabled onnxruntime build: solvable, done, documented (§5,
+`feat/xnnpack-execution-provider`, PR #95, not merged — see §7).
+Rust EP-registration wiring (§3): small, correct, off-by-default.
+Correctness parity (§4): single-crop (N=1) inference PASSES (numerically
+identical to CPU-EP within noise floor); the real production batch shape
+(N>1, e.g. N=6 tested) **PANICS** — a genuine onnxruntime/XNNPACK
+batch-dimension incompatibility with this model, confirmed not a harness
+bug (CPU-EP handles the identical N=6 batch correctly). XNNPACK is **not
+currently usable** for this pipeline's real batched-inference workload.
+The real Pi4 timing benchmark (§5's last step) was correctly never run
+against the broken N=1-only path — that would have answered the wrong
+question. See §7 for the full finding and disposition.
+
+georg's original question: earlier this session, XNNPACK was confirmed
 **unreachable from `onnxruntime-node`** (the Node.js napi binding —
 hardcoded 7-provider dispatch, no `xnnpack` case, source-confirmed at the
 pinned tag and upstream). The Rust port's `ort` crate talks to the same
 underlying onnxruntime C++ library via `dlopen` (`load-dynamic` feature) —
 architecturally a completely different path. Has XNNPACK ever actually
-been attempted in Rust? **No — confirmed never done** (see §1). This doc
-is the correctness-first design for actually attempting it.
+been attempted in Rust? **No — confirmed never done** (see §1). The rest
+of this doc is the correctness-first design that was then executed,
+leading to the NO-GO verdict above.
 
 ## 0. Two related, previously-unanswered questions, checked directly against code/history first
 
@@ -304,6 +319,56 @@ inference latency on real Pi hardware") has to take over from design:
    iPad-adjacent behavioral judgment — the correction above is about who
    holds the build/deploy access, not about removing them from review.
 
+## 7. Final finding and disposition (2026-08-31) — clean NO-GO
+
+Execution went exactly per §6, steps 3-5, and stopped there for a real
+reason rather than proceeding to the benchmark on autopilot:
+
+- **§5's aarch64 build succeeded** on `pikvm-nixos@georgs-mac-mini`'s
+  linux-builder, after 4 real attempts (GCC GC-tuning, mold linker,
+  `pythonSupport=false` — the earlier OOM class this design already
+  flagged as the real risk, confirmed and worked through, not avoided).
+  XNNPACK confirmed genuinely compiled into the resulting `.so` via
+  strings/demangled-symbol inspection — the same discipline §1 used to
+  confirm nixpkgs' *stock* onnxruntime does NOT have it, applied here in
+  reverse to confirm this custom build DOES.
+- **§3's Rust wiring shipped**: `feat/xnnpack-execution-provider`
+  (`804c379`) — small, additive, off-by-default `xnnpack-ep` Cargo
+  feature. Independently re-verified by me (not trusting the reported
+  numbers): build/clippy/fmt clean with and without the feature;
+  `pikvm-mcp-detection-vision` tests 198 passed/0 failed/4 ignored,
+  identical both ways; full workspace test exits clean. PR #95 opened
+  against `rust-port/module-4-mover`.
+- **§4's correctness parity harness shipped** (`f29f1c1`,
+  `xnnpack_parity_check` example) and ran on real hardware
+  (pikvm01): **single-crop (N=1) inference PASSES** — CPU-EP and
+  XNNPACK-EP output numerically identical within the same noise floor
+  already documented elsewhere in this project for backend-kernel
+  variance. But **the real production batch shape (N>1, N=6 tested)
+  PANICS** under XNNPACK — a genuine onnxruntime/XNNPACK
+  batch-dimension incompatibility with this specific model, confirmed
+  NOT a harness bug by cross-checking that CPU-EP handles the identical
+  N=6 batch input without issue. (One caveat worth recording precisely,
+  not glossed over: N=1 "passing" numerically identical rather than
+  merely near-identical is itself a fact worth a second look before
+  trusting *any* future N=1-only XNNPACK measurement on this model — see
+  the exact-vs-near-identical concern raised during review — but it's
+  moot for this verdict, since the batch case fails outright regardless
+  of how N=1 is interpreted.)
+- **§5's real Pi4 timing benchmark was correctly never run** against the
+  N=1-only path — benchmarking a shape the production pipeline doesn't
+  actually use would have answered the wrong question, and running it
+  against the broken N>1 path isn't possible (it panics before
+  completing). This is the correctness-first gate (§4) doing exactly
+  what it was designed to do: catching a real incompatibility before a
+  misleading speed number could ship.
+
+**Verdict: XNNPACK is not currently usable for this pipeline's real
+batched-inference workload.** This is a complete, real, checked answer
+to georg's original question — not an "estimate" or a "should work"
+guess — and a clean negative result, not a stalled or abandoned
+investigation.
+
 ## What changed
 
 - Initial version (this doc): confirms XNNPACK was never attempted in
@@ -320,3 +385,12 @@ inference latency on real Pi hardware") has to take over from design:
   that sits with `pikvm-nixos@georgs-mac-mini` or `pikvm-nixos@it-03400`
   instead. §6 updated to route execution correctly rather than assume
   the reviewer is also the executor.
+- Final revision (2026-08-31): §7 added recording the actual execution
+  outcome — clean NO-GO, N=1 parity passes but the real production
+  batch shape panics under XNNPACK. Manager closed task_476e2fd57bc2 on
+  this finding. PR #95 (the Rust wiring + parity harness) is being
+  closed without merging, matching this project's established
+  precedent for confirmed negative CPU-inference-speedup results (the
+  earlier INT8 and ncnn+Vulkan investigations both live as unmerged
+  scratch/reference branches, not in the shipped crate tree) — see the
+  PR's own closing comment for the exact reasoning.
