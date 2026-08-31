@@ -78,15 +78,45 @@ into). **Mitigation: any HID mouse emit invalidates the ENTIRE cache**
 (not per-crop reasoning about which crops an emit could have touched —
 conservative and simple, avoiding a whole class of "did I correctly
 compute the affected region" bugs). Concretely: hook the cache's
-validity into the same emit-tracking mechanism `CursorBelief` already
-uses (`predict()`'s `emit_mag_since_last_observation`,
-`emit_clock::record_emit()` — both already exist and are already
-called on every real mouse emit, `rust/kvmd-client/src/client/mouse.rs`).
-Also invalidate on: resolution change (mirrors the existing
-`calibration_invalidated` pattern already returned by `client.mouse_move`),
-and detected-region change (a new `detect_ipad_region`/
-`detect_ipad_bounds_from_buffer` result with different bounds than the
-cache was built against — different crop grid entirely).
+validity into `emit_clock::last_emit_ms()` (`rust/kvmd-client/src/emit_clock.rs:32`
+— the real, public, timestamp-based API; compare against a stored
+cache-build timestamp). **Correction (georgs-mac-mini's review, verified
+against source):** the originally-proposed hooks are wrong as stated.
+`CursorBelief.emit_mag_since_last_observation` is a *private* field
+(zero `pub fn` accessors) — not directly hookable at all, use
+`emit_clock::last_emit_ms()` instead, as above. More importantly:
+`emit_clock::record_emit()` and `belief.predict()` are currently called
+*only* inside `mouse_move_relative` (`mouse.rs:73,76`) — **not** inside
+`mouse_move`, the absolute REST endpoint `move_to_pixel_absolute` (PR
+#96, live-confirmed today) actually uses. As designed, this
+invalidation trigger would silently NOT fire for any absolute-mode
+move — exactly the mode this session just spent real effort proving
+works. **This design explicitly scopes the emit-invalidation guarantee
+as relative-mode-only for now**, rather than ship a false sense of
+safety for absolute-mode moves. Before this pre-filter is enabled for
+any absolute-mode target, `client.mouse_move()` needs its own
+`emit_clock::record_emit()` call wired in (a small, separate,
+independently-reviewable change — belief-prediction may not even
+semantically apply to absolute coordinates, a separate question not
+assumed here). Also invalidate on: resolution change (mirrors the
+existing `calibration_invalidated` pattern already returned by
+`client.mouse_move`).
+
+**Region-change invalidation is currently a no-op, not a working
+trigger — flagged, not silently assumed.** `REGION_CACHE`
+(`cursor_ml_detect.rs:223`) is a process-global static set exactly ONCE
+(`if cache.is_none() { detect... }`) and never refreshed or cleared
+anywhere in that file — confirmed via direct grep, exactly 2
+references total. There is currently no live "the detected region
+changed" signal for this pre-filter to compare against; the region is
+never re-detected after a process's first scan. Either a future
+revision forces a fresh region re-detection on some cadence (its own
+real cost, working against this design's whole goal) to make this
+trigger real, or — the honest position for now — this invalidation
+path is **not implemented in v1**, relying instead on the emit-based
+invalidation (which, for relative-mode targets, already covers "the
+cursor/context could have moved") and cold-start-per-process as the
+safety net.
 
 **Cold start**: no cache yet (first scan, or a fresh invalidation) →
 every crop is treated as "changed" → full AI on all crops, identical to
@@ -128,26 +158,51 @@ within a validated cache window, never change the first-scan result.
    an honest "this helps a lot when idle, barely at all when busy" is a
    valid and useful result, not a failure to report cleanly.
 
-## 5. Open question for review
+## 5. Byte-compare cost — reviewed, expected trivial, still to be measured
 
 Byte-exact crop comparison means reading/hashing every pixel of every
 crop on every scan — a real CPU cost of its own, paid even for crops
 that end up being skipped. This needs to be cheap relative to the AI
 call it's replacing to be worth it at all (a 96×96×3 byte-compare is
-~27KB per crop, ~9.7MB total across 352 crops — trivial next to a
-batched ONNX inference call, but worth confirming with a real
-measurement, not assumed). Flagging for review rather than asserting
-it's free.
+~27KB per crop, ~9.7MB total across 352 crops). Reviewed
+(georgs-mac-mini): a memcmp-class operation on ~9.5MB is expected to be
+genuinely negligible next to a batched ONNX call on any real target CPU
+(likely sub-millisecond even on a Pi4 Cortex-A72) — a reasoned
+expectation, not a measurement. Still needs the real number per §4
+before resting on that alone.
+
+## v1 scope, stated plainly (per review)
+
+Two invalidation triggers described above are not both real yet:
+- **Emit-based invalidation works for relative-mode targets only** —
+  the required `emit_clock::record_emit()` wiring doesn't exist yet for
+  `client.mouse_move()` (the absolute endpoint). Do not enable this
+  pre-filter for absolute-mode targets until that's added and reviewed
+  as its own small change.
+- **Region-change invalidation is not implemented** — `REGION_CACHE`
+  has no live refresh signal to compare against today. Rely on
+  emit-based invalidation + cold-start-per-process as the safety net
+  for v1.
 
 ## Sequencing
 
-1. This doc → review (georgs-mac-mini, same discipline as every other
-   design this session).
+1. ~~This doc → review (georgs-mac-mini)~~ **Done.** Core mechanism
+   sound, false-negative analysis confirmed thorough. Two real gaps
+   found and folded in above: region-change invalidation was a no-op
+   (now stated plainly, not silently assumed), emit-invalidation didn't
+   cover absolute-mode moves (now explicitly v1-scoped to relative-mode
+   only, with the real fix — wiring `client.mouse_move()` — named for a
+   future change).
 2. Implement (off-by-default flag, matching this session's established
    opt-in-gate pattern for anything not yet proven on real hardware).
+   **v1 scope**: relative-mode targets only, per above.
 3. Correctness gate (§4.1) before any speed claim.
 4. Real Pi4 measurement across all three scenarios (§4.2-3) — needs
    real hardware access I don't have (OFFLINE-only); routed to whoever
-   has it once the design is reviewed.
+   has it once implemented.
 5. Report real, honest results — positive or negative, all three
    scenarios, not just the best case.
+6. Follow-up, not blocking v1: wire `emit_clock::record_emit()` into
+   `client.mouse_move()` to extend emit-based invalidation to
+   absolute-mode targets; implement a real `REGION_CACHE` refresh
+   signal if region-change invalidation is ever needed.
