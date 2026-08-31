@@ -65,6 +65,7 @@ pub fn make_behavioral_verifier(
                     V8FullFrameOptions {
                         min_presence: Some(opts.min_presence),
                         hint: None,
+                        use_change_detection_prefilter: false,
                     },
                 )
                 .ok()

@@ -48,6 +48,7 @@ async fn find_cursor(client: &PiKVMClient, model_path: &str, label: &str) -> (i6
         None,
         48.0,
         0.5,
+        false,
     ) {
         Ok(Some(r)) => {
             eprintln!(

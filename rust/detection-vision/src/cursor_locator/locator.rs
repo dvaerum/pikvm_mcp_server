@@ -257,6 +257,7 @@ impl CursorLocator {
             V8FullFrameOptions {
                 min_presence: Some(min_presence),
                 hint,
+                use_change_detection_prefilter: false,
             },
         )
         .await?;

@@ -238,12 +238,12 @@ async fn main() {
     let model_str = model_path.to_string_lossy().to_string();
 
     // Warm-up (model load + first inference is not representative).
-    let _ = run_cascade(&model_str, &jpeg, 1920, 1080, None, 32.0, 0.5);
+    let _ = run_cascade(&model_str, &jpeg, 1920, 1080, None, 32.0, 0.5, false);
 
     let mut no_hint_ms = Vec::new();
     for _ in 0..ITERS {
         let t0 = Instant::now();
-        let r = run_cascade(&model_str, &jpeg, 1920, 1080, None, 32.0, 0.5);
+        let r = run_cascade(&model_str, &jpeg, 1920, 1080, None, 32.0, 0.5, false);
         no_hint_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
         if let Ok(None) = r {
             eprintln!("WARNING: no-hint cascade found nothing on this frame");
@@ -252,7 +252,7 @@ async fn main() {
     let mut hint_ms = Vec::new();
     for _ in 0..ITERS {
         let t0 = Instant::now();
-        let r = run_cascade(&model_str, &jpeg, 1920, 1080, Some(gt), 32.0, 0.5);
+        let r = run_cascade(&model_str, &jpeg, 1920, 1080, Some(gt), 32.0, 0.5, false);
         hint_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
         if let Ok(None) = r {
             eprintln!("WARNING: hint=gt cascade found nothing on this frame");

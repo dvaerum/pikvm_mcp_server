@@ -59,6 +59,7 @@ async fn detect(
         V8FullFrameOptions {
             min_presence: None,
             hint,
+            use_change_detection_prefilter: false,
         },
     );
     let elapsed_ms = start.elapsed().as_millis();

@@ -16,6 +16,7 @@
 pub mod auto_crop;
 pub mod brightness;
 pub mod capture;
+mod crop_cache;
 pub mod cursor_detect;
 pub mod cursor_locator;
 pub mod cursor_ml_detect;

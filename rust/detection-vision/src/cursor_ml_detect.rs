@@ -256,23 +256,78 @@ fn with_verifier_session<T>(
     Ok(Some(f(session)?))
 }
 
-/// Batch `centers` into ONE inference call against the verifier session and
-/// decode the winning crop's sub-pixel position. Returns `None` when there
-/// are no centers to search, or the best crop's presence score doesn't
-/// clear `verify_thresh` (caller decides what "no confident result" means
-/// — for `run_cascade`, that's the signal to fall back to the full-region
-/// scan).
-pub fn run_cascade_inference(
+/// Decode ONE crop's sub-pixel position from the heatmap tensor
+/// (soft-argmax), given its index `i` in the batch. Extracted so both
+/// the argmax-winner-only path (`run_cascade_inference`) and the
+/// per-crop path (`run_cascade_inference_all`, added for
+/// docs/cascade-change-detection-prefilter-design.md) share identical
+/// decode math — one implementation, not two copies that could drift.
+#[allow(clippy::too_many_arguments)]
+fn decode_crop_result(
+    heatmap: &[f32],
+    i: usize,
+    hm_out: i64,
+    presence_i: f32,
+    fw: u32,
+    fh: u32,
+    crop: i64,
+    half: i64,
+    center: (i64, i64),
+) -> CascadeResult {
+    let hm_scale = crop as f64 / hm_out as f64;
+    let off = i * (hm_out * hm_out) as usize;
+    let mut mx = f32::NEG_INFINITY;
+    for k in 0..(hm_out * hm_out) as usize {
+        mx = mx.max(heatmap[off + k]);
+    }
+    let mut sum = 0f64;
+    let mut ex = 0f64;
+    let mut ey = 0f64;
+    for gy in 0..hm_out {
+        for gx in 0..hm_out {
+            let w = (heatmap[off + (gy * hm_out + gx) as usize] - mx).exp() as f64;
+            sum += w;
+            ex += gx as f64 * w;
+            ey += gy as f64 * w;
+        }
+    }
+    ex /= sum;
+    ey /= sum;
+
+    let (cx, cy) = center;
+    let left = 0i64.max((fw as i64 - crop).min(cx - half));
+    let top = 0i64.max((fh as i64 - crop).min(cy - half));
+    let p = 1.0 / (1.0 + (-presence_i).exp());
+
+    CascadeResult {
+        x: (left as f64 + ex * hm_scale).round() as i64,
+        y: (top as f64 + ey * hm_scale).round() as i64,
+        presence: p,
+        heatmap_peak: p,
+    }
+}
+
+/// Batch `centers` into ONE inference call against the verifier session
+/// and decode a sub-pixel position for EVERY crop, not just the eventual
+/// winner — in the same order as `centers`. Added for
+/// docs/cascade-change-detection-prefilter-design.md (task_3a0440a91a05):
+/// the pre-filter needs a real per-crop verdict to cache and later
+/// replay for an unchanged crop, not just the single global winner
+/// `run_cascade_inference` returns. This is NOT an extra inference
+/// cost — the batched ONNX call below is identical to
+/// `run_cascade_inference`'s own; decoding every crop's heatmap instead
+/// of only the winner's is cheap CPU-side postprocessing on tensors the
+/// model already produced for the whole batch.
+pub fn run_cascade_inference_all(
     session: &mut Session,
     full: &[u8],
     fw: u32,
     fh: u32,
     centers: &[(i64, i64)],
-    verify_thresh: f32,
-) -> anyhow::Result<Option<CascadeResult>> {
+) -> anyhow::Result<Vec<CascadeResult>> {
     let n = centers.len();
     if n == 0 {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let crop = CASCADE_CROP as i64; // 96
     let half = crop / 2;
@@ -299,50 +354,90 @@ pub fn run_cascade_inference(
     let (_, presence) = outputs["presence_logit"].try_extract_tensor::<f32>()?;
     let (_, heatmap) = outputs["heatmap_logits"].try_extract_tensor::<f32>()?;
 
-    // PRESENCE head (offset-invariant, confuser-rejecting) picks the crop;
-    // the HEATMAP head gives the sub-pixel tip within it via soft-argmax.
-    let mut bi = 0usize;
-    for i in 1..n {
-        if presence[i] > presence[bi] {
-            bi = i;
-        }
-    }
-    let max_p = 1.0 / (1.0 + (-presence[bi]).exp());
-    if max_p < verify_thresh {
-        return Ok(None);
-    }
-
     let hm_out = HM_OUT as i64;
-    let hm_scale = crop as f64 / hm_out as f64;
-    let off = bi * (hm_out * hm_out) as usize;
-    let mut mx = f32::NEG_INFINITY;
-    for k in 0..(hm_out * hm_out) as usize {
-        mx = mx.max(heatmap[off + k]);
+    let mut results = Vec::with_capacity(n);
+    for i in 0..n {
+        results.push(decode_crop_result(
+            heatmap,
+            i,
+            hm_out,
+            presence[i],
+            fw,
+            fh,
+            crop,
+            half,
+            centers[i],
+        ));
     }
-    let mut sum = 0f64;
-    let mut ex = 0f64;
-    let mut ey = 0f64;
-    for gy in 0..hm_out {
-        for gx in 0..hm_out {
-            let w = (heatmap[off + (gy * hm_out + gx) as usize] - mx).exp() as f64;
-            sum += w;
-            ex += gx as f64 * w;
-            ey += gy as f64 * w;
-        }
-    }
-    ex /= sum;
-    ey /= sum;
+    Ok(results)
+}
 
-    let (bcx, bcy) = centers[bi];
-    let left = 0i64.max((fw as i64 - crop).min(bcx - half));
-    let top = 0i64.max((fh as i64 - crop).min(bcy - half));
+/// Argmax-by-presence over a set of per-crop results, on a tie keeping
+/// the earliest-seen entry — same tie-breaking `run_cascade_inference`'s
+/// own inline `presence[i] > presence[bi]` loop always used (strict
+/// greater-than, so the first-seen entry wins ties). Shared by the plain
+/// path below and the change-detection pre-filter's merge step (real +
+/// cached verdicts combined) — one selection rule, not two independently
+/// maintained copies that could silently diverge.
+pub(crate) fn best_by_presence(results: Vec<CascadeResult>) -> Option<CascadeResult> {
+    results
+        .into_iter()
+        .fold(None, |best: Option<CascadeResult>, r| match best {
+            Some(b) if b.presence >= r.presence => Some(b),
+            _ => Some(r),
+        })
+}
 
-    Ok(Some(CascadeResult {
-        x: (left as f64 + ex * hm_scale).round() as i64,
-        y: (top as f64 + ey * hm_scale).round() as i64,
-        presence: max_p,
-        heatmap_peak: max_p,
-    }))
+/// Batch `centers` into ONE inference call against the verifier session and
+/// decode the winning crop's sub-pixel position. Returns `None` when there
+/// are no centers to search, or the best crop's presence score doesn't
+/// clear `verify_thresh` (caller decides what "no confident result" means
+/// — for `run_cascade`, that's the signal to fall back to the full-region
+/// scan). A thin wrapper over `run_cascade_inference_all` + `best_by_presence`
+/// since the change-detection pre-filter's refactor — byte-for-byte
+/// identical selection contract to before that refactor (verified by this
+/// file's own existing tests continuing to pass unchanged).
+pub fn run_cascade_inference(
+    session: &mut Session,
+    full: &[u8],
+    fw: u32,
+    fh: u32,
+    centers: &[(i64, i64)],
+    verify_thresh: f32,
+) -> anyhow::Result<Option<CascadeResult>> {
+    let all = run_cascade_inference_all(session, full, fw, fh, centers)?;
+    Ok(best_by_presence(all).filter(|r| r.presence >= verify_thresh))
+}
+
+/// Change-detection-pre-filtered variant of the no-hint full-region scan
+/// (docs/cascade-change-detection-prefilter-design.md, task_3a0440a91a05).
+/// Same final selection contract as `run_cascade_inference` (argmax by
+/// presence, gated by `verify_thresh`, identical tie-breaking via
+/// `best_by_presence`) — the only difference is HOW each crop's verdict
+/// is obtained: a crop whose raw pixel bytes are byte-identical to the
+/// cache replays its last real AI verdict instead of paying for another
+/// inference call; any crop that changed at all (however slightly) still
+/// gets a real one. See `crop_cache`'s own module doc for the
+/// invalidation rules and v1 scope (relative-mode emits + resolution
+/// change only; region-change invalidation not yet implemented).
+fn run_cascade_inference_prefiltered(
+    session: &mut Session,
+    full: &[u8],
+    fw: u32,
+    fh: u32,
+    centers: &[(i64, i64)],
+    verify_thresh: f32,
+) -> anyhow::Result<Option<CascadeResult>> {
+    let crop = CASCADE_CROP as i64;
+    let (changed, unchanged) = crate::crop_cache::split_by_cache(full, fw, fh, crop, centers);
+
+    let fresh = run_cascade_inference_all(session, full, fw, fh, &changed)?;
+    let changed_results: Vec<crate::crop_cache::CropVerdict> =
+        changed.iter().copied().zip(fresh.iter().copied()).collect();
+    crate::crop_cache::update_cache(full, fw, fh, crop, &changed_results);
+
+    let all: Vec<CascadeResult> = unchanged.into_iter().map(|(_, v)| v).chain(fresh).collect();
+    Ok(best_by_presence(all).filter(|r| r.presence >= verify_thresh))
 }
 
 /// Cascade detection: run the VERIFIER over a dense grid of 96px crops
@@ -355,6 +450,14 @@ pub fn run_cascade_inference(
 /// crops — falling back to the full-region scan when the window doesn't
 /// overlap the region, or the narrow search comes back empty/low-confidence.
 /// Without a hint, behavior is a full-region scan.
+///
+/// `use_change_detection_prefilter`: off by default (see
+/// `V8FullFrameOptions`), matching this session's established opt-in-gate
+/// pattern for anything not yet proven on real hardware
+/// (docs/cascade-change-detection-prefilter-design.md). Only applies to
+/// the no-hint full-region scan below — the hint-narrowed branch above
+/// already runs on far fewer crops (task_484bed055820) and is untouched.
+#[allow(clippy::too_many_arguments)]
 pub fn run_cascade(
     model_path: &str,
     jpeg_buffer: &[u8],
@@ -363,6 +466,7 @@ pub fn run_cascade(
     hint: Option<Point>,
     grid_stride: f64,
     verify_thresh: f32,
+    use_change_detection_prefilter: bool,
 ) -> anyhow::Result<Option<CascadeResult>> {
     let reg = {
         let mut cache = REGION_CACHE.lock().unwrap();
@@ -407,7 +511,18 @@ pub fn run_cascade(
             }
         }
         let full_centers = build_cascade_grid(reg, fw as f64, fh as f64, None, grid_stride);
-        run_cascade_inference(session, &full.data, fw, fh, &full_centers, verify_thresh)
+        if use_change_detection_prefilter {
+            run_cascade_inference_prefiltered(
+                session,
+                &full.data,
+                fw,
+                fh,
+                &full_centers,
+                verify_thresh,
+            )
+        } else {
+            run_cascade_inference(session, &full.data, fw, fh, &full_centers, verify_thresh)
+        }
     })?;
     Ok(result.flatten())
 }
@@ -461,6 +576,12 @@ pub struct V8Detection {
 pub struct V8FullFrameOptions {
     pub min_presence: Option<f64>,
     pub hint: Option<Point>,
+    /// Off by default. See `run_cascade`'s own doc and
+    /// docs/cascade-change-detection-prefilter-design.md
+    /// (task_3a0440a91a05) — not yet proven on real hardware, v1-scoped
+    /// to relative-mode targets only (see the design doc's "v1 scope"
+    /// section for why absolute-mode isn't covered yet).
+    pub use_change_detection_prefilter: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -503,6 +624,7 @@ pub fn find_cursor_by_v8_full_frame(
         options.hint,
         settings.ml.grid_stride,
         settings.ml.verify_thresh as f32,
+        options.use_change_detection_prefilter,
     )?;
     let _ = options.min_presence; // presence gating happens inside run_cascade via verify_thresh; kept for API parity with the TS options shape.
     Ok(result.map(|r| V8Detection {
@@ -538,6 +660,7 @@ pub fn find_cursor_by_ml_multi_hint(
         V8FullFrameOptions {
             min_presence: options.min_confidence,
             hint: hints.first().copied(),
+            use_change_detection_prefilter: false,
         },
     )?;
     Ok(v8.and_then(|v8| {
@@ -562,6 +685,46 @@ mod tests {
     const W: f64 = 1680.0;
     const H: f64 = 1050.0;
     const DEFAULT_STRIDE: f64 = 48.0;
+
+    // --- best_by_presence (pure selection logic, no inference needed) ------
+    // Added alongside the change-detection pre-filter refactor
+    // (docs/cascade-change-detection-prefilter-design.md) that extracted
+    // this out of run_cascade_inference's own inline argmax loop.
+
+    fn fake_result(x: i64, y: i64, presence: f32) -> CascadeResult {
+        CascadeResult {
+            x,
+            y,
+            presence,
+            heatmap_peak: presence,
+        }
+    }
+
+    #[test]
+    fn best_by_presence_picks_the_highest_scoring_entry() {
+        let results = vec![
+            fake_result(1, 1, 0.3),
+            fake_result(2, 2, 0.9),
+            fake_result(3, 3, 0.5),
+        ];
+        let best = best_by_presence(results).expect("non-empty input");
+        assert_eq!((best.x, best.y), (2, 2));
+    }
+
+    #[test]
+    fn best_by_presence_keeps_the_earliest_entry_on_an_exact_tie() {
+        // Matches run_cascade_inference's pre-refactor inline loop
+        // (`presence[i] > presence[bi]`, strict greater-than) -- the
+        // first-seen entry wins ties, not the last.
+        let results = vec![fake_result(1, 1, 0.5), fake_result(2, 2, 0.5)];
+        let best = best_by_presence(results).expect("non-empty input");
+        assert_eq!((best.x, best.y), (1, 1));
+    }
+
+    #[test]
+    fn best_by_presence_returns_none_on_empty_input() {
+        assert!(best_by_presence(Vec::new()).is_none());
+    }
 
     // --- build_ml_hints ----------------------------------------------------
 
