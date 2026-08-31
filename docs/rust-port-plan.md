@@ -3823,3 +3823,80 @@ branch, same kind of real frame, same target quantities, built and run
 natively for this machine's own architecture. Committed, pushed,
 reported to the manager with the real numbers and every caveat above
 attached, not summarized away.
+
+---
+
+**§57 task_4b034fc4e018 CLOSED — absolute-mode move fix, full arc from
+live finding to live confirmation, 2026-08-31 ~14:00-16:47.**
+
+The last real open item from the whole E2E arc. Full chain, each step
+real evidence, not assumed:
+
+1. it-03400 found it live against IT-02634 (desktop/absolute-mouse
+   target, newly unblocked after georg confirmed IT-02634 is a cleared
+   test setup machine): `move_to_pixel`/slam-then-move looked healthy at
+   the HID/USB layer (mickeys emitted, UDC fine) but three independent
+   render checks found zero actual cursor movement — corroborated by
+   georg independently watching the SAME target move normally through
+   PiKVM's own web UI, ruling out a target-OS quirk.
+2. nixos-dev root-caused it precisely from source, not inferred:
+   `move_to_pixel`'s only two dispatch branches (curve-one-shot, legacy)
+   mean every non-curve strategy — including `DetectThenMove`, the real
+   desktop/absolute default — falls through to `legacy_move.rs`, which
+   exclusively emits RELATIVE HID reports. Per ADR-0002 (already
+   documented in this codebase), that's a documented silent no-op into
+   an absolute-assembled gadget. Confirmed NOT Rust-specific — the TS
+   original (`src/pikvm/move-to.ts`) has the byte-identical gap, a real
+   currently-shipping bug in both codebases.
+3. Reviewed the design (`docs/move-to-pixel-absolute-mode-fix-design.md`)
+   — verified every claim directly against source myself (the dispatch,
+   the relative-only emit path, the absolute REST endpoint, the
+   `HidPolicy.mouse_absolute` field, all 3 real call sites). Found one
+   real gap: `MoveToResult`'s relative-mode-only fields (`strategy`,
+   `emitted_mickeys`, `chunk_count`, `corrections`, etc.) had no defined
+   meaning for an absolute move — recommended a real `MoveStrategy::
+   AbsoluteMove` variant plus explicit documented sentinels rather than
+   accidental defaults. Also answered §6 (trust `mouse_absolute`
+   unconditionally) with a concrete reason I verified myself: `policy`
+   is freshly resolved at the top of every handler invocation
+   (`shared.hid_mode_resolver.lock().await.policy()`, confirmed
+   directly), so an internal re-verification round-trip would add cost
+   for a staleness window that's already ~zero.
+4. nixos-dev implemented exactly that (PR #96, `feat/absolute-move-fix`,
+   commit `b890a23`) — I pulled the branch and independently verified
+   the WHOLE thing myself rather than trust the summary: full workspace
+   build/clippy/fmt clean, mover 357→361 tests (exactly the +4 claimed),
+   zero regressions elsewhere, read all 4 new tests directly (real
+   assertions, not vacuous). Approved.
+5. it-03400 ran the real live-hardware re-confirmation against IT-02634:
+   two different commanded positions ((1500,300) and (400,900)),
+   `strategy=AbsoluteMove` confirming the new dispatch fired both times,
+   cursor visually confirmed rendered EXACTLY at each commanded position
+   via saved screenshots — directly reversing their original finding.
+
+**Honest secondary finding from the live run, not swept under the rug**:
+the fix's own built-in verification (`find_cursor_by_template_set`)
+reported "no match within 60px" both times despite the cursor genuinely
+being there — it-03400's read: the target's cursor was an I-beam/
+text-select shape, and the templates/shape-detector are likely tuned
+for an arrow cursor. Not blocking this fix (visual ground truth was
+unambiguous both times), but a real gap if that verification result is
+ever relied on programmatically to gate a subsequent action — flagged
+to nixos-dev as a follow-up, not silently accepted as clean.
+
+`pikvm_mouse_click_at` deliberately NOT tested — it-03400's standing
+IT-02634 authorization covers moves only; correctly held off rather
+than assume click coverage extends automatically.
+
+Task marked complete. TS-side equivalent fix (§3 of the design doc,
+same bug confirmed shipping in `src/pikvm/move-to.ts`) scoped as its own
+follow-up, nixos-dev's call on timing — not bundled into this close-out.
+
+This closes the last open item from tonight's full arc: stationary-guard
+(§48), category 5 (§49/§50/§51/§52/§53/§54/§55), the native-vs-Pi4
+benchmark (§56), and now this. Every item on the original E2E sign-off
+plus this newly-surfaced production bug is now either closed with real
+evidence or explicitly, correctly scoped out (it-03400's own desktop/
+absolute gate was item 7's own carve-out reasoning all along — fitting
+that its real remaining substance turned out to be this actual bug, now
+fixed and confirmed, not a mystery).
