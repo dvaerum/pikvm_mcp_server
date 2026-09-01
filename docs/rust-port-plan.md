@@ -4450,3 +4450,79 @@ example" is meant to formalize). Remaining: discoverability
 (`offload_hint`, `pikvm_offload_status`), the formal
 `offload_parity_smoke.rs` example, the GH Actions release matrix, and
 the blocking real Mac-mini+Pi4 parity run and write-up.
+
+---
+
+**§67 offload phase 5 (discoverability) built and live-verified via the real
+MCP wire protocol; a real, pre-existing production crash bug found and
+reported (unrelated to offload), 2026-09-01.**
+
+Continued task_d06561d91f58 on `feat/offload-protocol-crate`. Both
+named discoverability halves: `tools/offload_hint.rs`
+(`maybe_offload_hint`/`with_offload_hint`, suffix-appended to move/click
+tool responses only when offload is enabled but nothing's connected —
+mirrors `mouse.rs`'s own existing `with_dead_zone_warning` pattern
+exactly; noted honestly that this port has no standalone
+`pikvm_*_detect` tool yet, so only the two real call sites are wired,
+not silently doing less than the spec implied without saying so) and
+`tools/offload_status.rs` (new `pikvm_offload_status` tool, same
+`ToolEntry` shape as `health_check.rs`, three real states: disabled /
+enabled-but-nothing-connected-with-setup-instructions /
+enabled-and-connected). `SharedState` gained `offload:
+Option<Arc<OffloadState>>`; the offload-resolution block in `main.rs`
+moved to before `SharedState`'s own construction (it needs to exist
+before the state that now carries it).
+
+Live-verified through the real MCP wire protocol, not just unit
+tests: a real `initialize` → `tools/call` session against the real
+running server confirmed the real "no helper connected" text with
+setup instructions, then — after starting the real helper binary —
+confirmed the SAME tool call's response switched to "a helper IS
+connected", reflecting the real live connection state through the
+whole real stack.
+
+**A real, unrelated, genuinely significant finding surfaced during that
+live run and was verified, not just suspected**: `find_cursor_by_
+v8_full_frame` — this file's own header calls it "THE cursor tracker
+(shipped, default-on, do NOT replace)" — PANICS the entire process
+when `ORT_DYLIB_PATH` is unset or wrong, rather than the graceful
+`Ok(None)` degradation `with_verifier_session`'s own doc comment
+explicitly claims. First hit it in my OWN new helper-binary code (same
+underlying `ort` behavior), fixed it there with a scoped
+`std::panic::catch_unwind` around the `ort::init()`/`Session::builder()`
+calls (safe there specifically because nothing with an invariant to
+violate has been constructed yet) — confirmed live: clean exit code +
+an actionable message instead of an uncaught panic. Then, rather than
+just assume the same gap exists in the ALREADY-SHIPPED
+`cursor_ml_detect.rs`, empirically reproduced it there too: a
+throwaway example calling the real, default-config
+`find_cursor_by_v8_full_frame` with no `ORT_DYLIB_PATH` set — real
+panic, real backtrace, uncaught. Confirmed the existing test suite
+doesn't actually cover this: `find_cursor_by_v8_full_frame_returns_
+none_when_cascade_is_disabled`'s own "must NOT need a real ONNX
+session" claim only holds because that test disables cascade entirely
+via env var, never reaching `with_verifier_session` at all — there's no
+test proving the documented graceful-degradation claim for a genuinely
+missing/broken dylib, and empirically it doesn't hold. Real production
+impact: any deployment where `ORT_DYLIB_PATH` isn't correctly
+configured would crash the whole server on every cascade detection
+call, not degrade to "no cursor found" as documented.
+
+Reported to the manager immediately, not silently fixed inline — this
+touches core, heavily-tested, default-on production tracker code well
+outside `task_d06561d91f58`'s own scope, and deserves its own
+independently-reviewable branch/PR rather than being bundled into the
+offload feature's PR without anyone noticing. Awaiting direction on
+whether to fix it myself or route it to whoever's on detector work.
+
+Full verification (offload work itself): `cargo build/clippy(-D
+warnings)/fmt --workspace` clean. `cargo test --workspace`: every
+crate's count unchanged from §66's baseline except pikvm-mcp-server
+(123→127, +4); zero regressions. Pushed to `feat/offload-protocol-crate`
+(`dae9b36`).
+
+Five of nine phases done. Remaining: the formal
+`offload_parity_smoke.rs` example (this session's own live runs across
+§65/§66 already cover a real slice of what it's meant to formalize),
+the GH Actions release matrix, and the blocking real Mac-mini+Pi4
+parity run and write-up.
