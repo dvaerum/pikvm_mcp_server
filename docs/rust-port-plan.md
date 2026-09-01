@@ -4253,3 +4253,77 @@ Continuing to phase 2 (detection-vision wiring: `OFFLOAD_CLIENT`
 singleton, the sync→async bridge with the now-confirmed `block_in_place`
 gating) — doesn't need to wait on phase 1's PR being opened, only on
 phase 1's code existing, which it does.
+
+---
+
+**§64 offload phase 2 (detection-vision wiring) built; a real correction to
+nixos-dev's own stated block_in_place mechanism, confirmed against tokio's
+source and live behavior, 2026-09-01.**
+
+Continued task_d06561d91f58 (stacked on the same `feat/offload-protocol-
+crate` branch as §63's phase 1, since phase 2 doesn't actually depend on
+the wire codec — `OffloadInferenceFn` is an abstract closure interface —
+and phase 1's PR is already blocked on my own token's missing
+`pull-requests:write` scope, reported to the manager; consolidating
+into one branch for now rather than compounding the blocked-PR count).
+
+New `offload.rs`: the `OFFLOAD_CLIENT` singleton (same shape as this
+crate's existing `VERIFIER_SESSION`/`REGION_CACHE` statics),
+`is_offload_client_registered` (cheap plain sync check),
+`try_offload` (genuinely async), 4 tests. `run_cascade_inference_all`
+refactored to extract `RawCrop`s via `crop_cache::extract_crop_bytes`
+(promoted `pub(crate)`) then delegate to new
+`run_cascade_inference_all_from_raw_crops` — byte-for-byte identical
+behavior, now single-sourced instead of a duplicated inline clamp
+formula. `run_cascade_inference_prefiltered`'s changed-crop AI call now
+routes through new `run_changed_crops`: checks the plain sync gate
+FIRST, only then enters `block_in_place` + `Handle::current().block_on`.
+
+**A real correction found and fixed during implementation, not just
+transcribed from the review message**: nixos-dev's own stated
+mechanism ("`block_in_place` panics without an enclosing multi-threaded
+runtime") turned out to be imprecise when checked against tokio 1.53's
+actual source (`runtime/scheduler/multi_thread/worker.rs`). Read the
+real implementation: `block_in_place` alone is a harmless passthrough
+outside any runtime at all (its `EnterRuntime::NotEntered` branch —
+"blocking is fine"). Confirmed live with two throwaway tests: an
+isolated `block_in_place(|| {})` under a bare `#[test]` did NOT panic
+(surprising, checked the source to understand why); reproducing the
+EXACT real bridge shape (`block_in_place` wrapping `Handle::current().
+block_on(...)`) DID panic — "there is no reactor running, must be
+called from the context of a Tokio 1.x runtime" — pinpointing
+`Handle::current()` inside the closure as the actual panic point, not
+`block_in_place` itself. Removed both throwaway tests after confirming
+(not part of the committed suite), corrected the code comments in both
+`cursor_ml_detect.rs` and `offload.rs` to state the real, verified
+mechanism instead of repeating the imprecise secondhand claim. The
+underlying conclusion nixos-dev reached — gate before ever entering
+this bridge, don't wrap it unconditionally — was fully correct and
+still holds; only the stated *mechanism* needed fixing, which matters
+for anyone reading the comment later and trying to reason about a
+different runtime-context edge case.
+
+Added the required regression test (nixos-dev's own explicit ask):
+`find_cursor_by_v8_full_frame_prefiltered_path_works_with_zero_tokio_
+runtime` — a genuinely bare `#[test]` with `use_change_detection_
+prefilter: true`, actually exercising `run_changed_crops`'s gated path
+against the real bundled model. Ran it for real, not just compiled
+(`ORT_DYLIB_PATH` + the real `ml/crop-heatmap.onnx` were both available
+locally) — passes, along with all 4 other real-model `#[ignore]`d
+tests in the file (none regressed).
+
+Also fixed a real `clippy::await_holding_lock` finding in `offload.rs`'s
+own test module (a `std::sync::Mutex` guard held across `.await` in 2
+tests) — switched the test-serialization lock to `tokio::sync::Mutex`
+(an async-aware lock designed to be held there) and made all 4 tests
+`#[tokio::test]` for consistency, rather than suppressing the lint.
+
+Full verification: `cargo build/clippy(-D warnings)/fmt --workspace`
+clean. `cargo test --workspace`: every crate's count unchanged from
+§63's baseline except detection-vision (208→212, the 4 new offload
+tests) plus its 5th ignored test; zero regressions. Pushed to
+`feat/offload-protocol-crate` (`dcca506`).
+
+Reported both phases to the manager along with the blocked-PR issue;
+continuing toward phase 3 (axum route + auth) once there's a green
+light or further direction.
