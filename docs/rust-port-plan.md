@@ -4582,3 +4582,46 @@ helper binary, discoverability, and this real production-bug fix it
 surfaced). Remaining on task_d06561d91f58 itself: the formal
 `offload_parity_smoke.rs` example, the GH Actions release matrix, and
 the blocking real Mac-mini+Pi4 parity run and write-up.
+
+---
+
+**§69 offload phase 6 (formal parity example) built; a real spec-path
+correction (circular dependency avoided), live-verified against 5 real
+bundled frames, 2026-09-01.**
+
+Continued task_d06561d91f58 on `feat/offload-protocol-crate`. The
+design's §6.3 formal correctness-parity example: round-trips real
+captured frames through the real wire codec (in-process loopback, no
+socket/subprocess) and confirms inference on the round-tripped bytes
+produces EXACTLY the same `CascadeResult` as inference on the
+original bytes.
+
+**Real spec correction, found and fixed during implementation**: the
+design named `rust/detection-vision/examples/offload_parity_smoke.rs`
+as the location — but `detection-vision` cannot depend on
+`offload-protocol` (the dependency runs the other way:
+`offload-protocol` depends on `detection-vision` to reuse its real
+types). Moved the example into `offload-protocol` instead of forcing
+a circular dependency to match the spec's literal path — documented
+plainly in the example's own header rather than silently worked
+around.
+
+Mirrors `cascade_hint_narrowing_smoke.rs`'s own "no live hardware
+needed" shape: runs against real frames already committed to this
+repo (`data/`, `benches/fixtures/`), not a substitute for the design's
+own still-blocking real Mac+Pi4 hardware gate. Live-verified for real:
+ran against 5 real, distinct app-screenshot frames from the repo's own
+bundled dataset with the real bundled model — exact match on every
+crop's x/y/presence/heatmap_peak across all 5.
+
+Full verification: `cargo build/clippy(-D warnings)/fmt --workspace`
+clean, zero regressions (an example doesn't add to any crate's test
+count, but was run for real as above). Pushed to
+`feat/offload-protocol-crate` (`40446f7`).
+
+Seven of nine phases/units done on this whole arc (protocol crate,
+detection-vision wiring, axum route + auth, helper binary,
+discoverability, the ORT-panic production-bug fix it surfaced, and
+this formal parity example). Remaining on `task_d06561d91f58` itself:
+the GH Actions release matrix, and the blocking real Mac-mini+Pi4
+parity run and write-up.
