@@ -652,6 +652,8 @@ pub fn find_cursor_by_ml_multi_hint(
     hints: &[Point],
     options: MlMultiHintOptions,
 ) -> anyhow::Result<Option<MlCursorResult>> {
+    use pikvm_mcp_foundation::settings::get_settings;
+
     const HEATMAP_FLOOR: f64 = 0.2;
     let v8 = find_cursor_by_v8_full_frame(
         jpeg_buffer,
@@ -660,7 +662,7 @@ pub fn find_cursor_by_ml_multi_hint(
         V8FullFrameOptions {
             min_presence: options.min_confidence,
             hint: hints.first().copied(),
-            use_change_detection_prefilter: false,
+            use_change_detection_prefilter: get_settings().ml.change_detection_prefilter_enabled,
         },
     )?;
     Ok(v8.and_then(|v8| {
