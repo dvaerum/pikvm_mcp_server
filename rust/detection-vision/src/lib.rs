@@ -24,6 +24,7 @@ pub mod cursor_shape_detect;
 pub mod decode;
 pub mod ipad_region_detect;
 pub mod looks_like_cursor;
+pub mod offload;
 pub mod orientation;
 pub mod seed_template;
 pub mod snapshot;

@@ -63,14 +63,21 @@ pub(crate) fn reset_for_test() {
     *CROP_CACHE.lock().unwrap() = None;
 }
 
-/// Extract one crop's raw (non-normalized) RGB bytes for a byte-exact
-/// comparison. Deliberately separate from `run_cascade_inference_all`'s
-/// own normalize-into-batch loop — that one produces f32 model input;
-/// this produces the raw u8 bytes the design's byte-exact diff compares.
-/// Same crop-bounds clamping math as `run_cascade_inference_all` (must
-/// stay identical — a different clamp here than at inference time would
-/// compare bytes from a different region than what actually got scored).
-fn extract_crop_bytes(full: &[u8], fw: u32, fh: u32, crop: i64, cx: i64, cy: i64) -> Vec<u8> {
+/// Extract one crop's raw (non-normalized) RGB bytes: the pre-filter's own
+/// byte-exact comparison unit, AND (since the offload-inference refactor,
+/// docs/cursor-offload-inference-design.md, task_d06561d91f58) the same
+/// `RawCrop` bytes `run_cascade_inference_all` extracts before normalizing
+/// into the model's f32 input tensor -- one extraction routine, not two
+/// independently-maintained clamp formulas that could silently diverge.
+/// `pub(crate)` so `cursor_ml_detect.rs` can call it directly.
+pub(crate) fn extract_crop_bytes(
+    full: &[u8],
+    fw: u32,
+    fh: u32,
+    crop: i64,
+    cx: i64,
+    cy: i64,
+) -> Vec<u8> {
     let half = crop / 2;
     let left = 0i64.max((fw as i64 - crop).min(cx - half));
     let top = 0i64.max((fh as i64 - crop).min(cy - half));
