@@ -4181,3 +4181,75 @@ direct-commit-for-docs split) to `rust-port/module-4-mover` as
 named roles per the manager (review the design, build/test the actual
 helper binary on this Mac, and the real-hardware correctness-parity
 gate once both sides exist) are all still ahead.
+
+---
+
+**§63 task_d06561d91f58 implementation starts — offload design review closes a
+real gap; phase 1 (offload-protocol crate) built, PR blocked on token
+permissions, 2026-09-01.**
+
+nixos-dev reviewed §62's design doc (review-only — at their own stated
+"effectively zero remaining budget" this session, no implementation
+capacity). Found one real, concrete risk: `try_offload()`'s sync→async
+bridge must do a cheap plain sync check (`OFFLOAD_CLIENT.get()...
+is_some()`) BEFORE ever calling `tokio::task::block_in_place`, not wrap
+the whole check-then-maybe-call sequence inside it. `block_in_place`
+panics without an enclosing multi-threaded Tokio runtime, and
+`find_cursor_by_v8_full_frame`/`run_cascade` are genuinely sync
+functions with real, existing plain-`#[test]` callers (no runtime at
+all) — confirmed directly against source, not taken on trust:
+`find_cursor_by_v8_full_frame_returns_none_when_cascade_is_disabled`
+and `find_cursor_by_v8_full_frame_real_model_runs_end_to_end`
+(`cursor_ml_detect.rs:1109,1137`) are both bare `#[test]`, not
+`#[tokio::test]`. Unconditional `block_in_place` would panic in these
+(and any future) sync test contexts, or add always-on overhead even
+with offload fully disabled. Folded into the design doc (§4's new
+subsection) with a required explicit test: `run_cascade_inference_
+prefiltered` must still work correctly with zero tokio runtime present
+when offload is disabled/unconnected. Pushed as `c1071bf`.
+
+**Phase 1 built** (§9's own phased rollout, step 1): new
+`pikvm-mcp-offload-protocol` crate — `Frame` enum
+(Hello/HelloAck/InferRequest/InferResponse/Error), bounds-checked
+encode/decode matching the design's §2 wire format exactly (16-byte
+header, big-endian, length-prefixed strings), 14 tests (7 exact
+round-trips including zero-crop InferRequest and empty-reason
+HelloAck, 7 malformed-input rejections — short frame, bad magic, bad
+version, unknown msg_type, payload_len mismatch, truncated crop bytes
+mid-payload, trailing bytes). Added the small prerequisite `RawCrop`
+struct to `detection-vision` (next to `CascadeResult`,
+visibility/type-only, zero behavior change) since the protocol crate's
+`InferRequest`/`InferResponse` variants need both real types to avoid
+duplicated definitions, per the design's own decision.
+
+Full verification clean: `cargo build/clippy(-D warnings)/fmt
+--workspace`, `cargo test --workspace` — every existing crate's count
+unchanged from §61 (52/208/61/111/18/82/361/110), zero regressions;
+new crate 14/14. Pushed to `feat/offload-protocol-crate` (`ec79169`),
+based on `rust-port/module-4-mover` (`c1071bf`).
+
+**Real blocker hit trying to close the loop**: my own `gh pr create`
+failed — "Resource not accessible by personal access token" on
+`createPullRequest` (a GraphQL permission error: logged in fine per
+`gh auth status`, but the token lacks `pull-requests:write`). Different
+failure shape than it-03400's own PAT being rejected outright earlier
+today, but the same class of problem — a second credential/permission
+friction point in one day, worth noting as a pattern rather than
+assuming it's a one-off. Did NOT bypass the PR-gate convention to work
+around it (no direct push to `rust-port/module-4-mover`); branch and
+commit are safely on `origin`, reported to the manager to either open
+the PR or point at a token with the right scope.
+
+**Also, incidentally**: `cargo test --workspace` hit "No space left on
+device" mid-run — `df` showed 100% full, 117M available. Root cause:
+23GB of orphaned `rust/target` build cache sitting in the MAIN
+worktree, which doesn't even have `rust/` tracked on `main` (it's
+`?? rust/` untracked there) — pure leftover build artifacts from an
+earlier session, confirmed independent of any active worktree's own
+separate `target/` dir before deleting. Freed to 21GB available; tests
+passed clean afterward.
+
+Continuing to phase 2 (detection-vision wiring: `OFFLOAD_CLIENT`
+singleton, the sync→async bridge with the now-confirmed `block_in_place`
+gating) — doesn't need to wait on phase 1's PR being opened, only on
+phase 1's code existing, which it does.
