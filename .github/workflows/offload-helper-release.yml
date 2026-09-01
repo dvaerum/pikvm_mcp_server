@@ -1,0 +1,133 @@
+# Cross-platform release build for pikvm-offload-helper
+# (docs/cursor-offload-inference-design.md §8, task_d06561d91f58).
+#
+# There is no existing Rust CI in this repo at all -- this is a new,
+# SEPARATE workflow scoped only to the offload-helper binary.
+#
+# Each matrix job builds the real binary, downloads the matching REAL
+# onnxruntime release (asset names verified against the real GitHub
+# releases API, not guessed), and bundles binary + onnxruntime shared
+# library + the real bundled model into one artifact. `ort`'s
+# `load-dynamic` feature dlopens onnxruntime at RUNTIME not link time --
+# the build step needs no onnxruntime present at all.
+#
+# BSD deliberately NOT in this matrix -- no GitHub-hosted BSD runner
+# exists (design doc §8, a real named limitation).
+
+name: pikvm-offload-helper release build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "pikvm-offload-helper-v*"
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            onnxruntime_version: "1.24.3"
+            onnxruntime_asset: onnxruntime-osx-arm64-1.24.3.tgz
+            onnxruntime_archive_kind: tgz
+            onnxruntime_lib_path: lib/libonnxruntime.1.24.3.dylib
+            bundled_lib_name: libonnxruntime.dylib
+            binary_name: pikvm-offload-helper
+
+          - target: x86_64-apple-darwin
+            os: macos-13
+            # microsoft/onnxruntime dropped osx-x86_64/osx-universal2
+            # builds starting at v1.24.0 (verified against the real
+            # releases API: v1.23.0 was the last release with an
+            # osx-x86_64 asset) -- a real upstream constraint, not an
+            # oversight. Pinned to the last version that still had one;
+            # every OTHER platform in this matrix uses 1.24.3.
+            # Cross-onnxruntime-version compatibility for this one
+            # platform has NOT been live-verified on real x86_64 Mac
+            # hardware -- flagged, not silently assumed.
+            onnxruntime_version: "1.23.0"
+            onnxruntime_asset: onnxruntime-osx-x86_64-1.23.0.tgz
+            onnxruntime_archive_kind: tgz
+            onnxruntime_lib_path: lib/libonnxruntime.1.23.0.dylib
+            bundled_lib_name: libonnxruntime.dylib
+            binary_name: pikvm-offload-helper
+
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            onnxruntime_version: "1.24.3"
+            onnxruntime_asset: onnxruntime-linux-x64-1.24.3.tgz
+            onnxruntime_archive_kind: tgz
+            onnxruntime_lib_path: lib/libonnxruntime.so.1.24.3
+            bundled_lib_name: libonnxruntime.so
+            binary_name: pikvm-offload-helper
+
+          - target: aarch64-unknown-linux-gnu
+            # This repo is public -- GitHub's free native ARM64 Linux
+            # runner is available, used directly rather than cross-
+            # compiling from x86_64.
+            os: ubuntu-24.04-arm
+            onnxruntime_version: "1.24.3"
+            onnxruntime_asset: onnxruntime-linux-aarch64-1.24.3.tgz
+            onnxruntime_archive_kind: tgz
+            onnxruntime_lib_path: lib/libonnxruntime.so.1.24.3
+            bundled_lib_name: libonnxruntime.so
+            binary_name: pikvm-offload-helper
+
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            onnxruntime_version: "1.24.3"
+            onnxruntime_asset: onnxruntime-win-x64-1.24.3.zip
+            onnxruntime_archive_kind: zip
+            onnxruntime_lib_path: lib/onnxruntime.dll
+            bundled_lib_name: onnxruntime.dll
+            binary_name: pikvm-offload-helper.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build pikvm-offload-helper
+        working-directory: rust
+        run: cargo build --release -p pikvm-offload-helper --target ${{ matrix.target }}
+
+      - name: Download onnxruntime (${{ matrix.onnxruntime_asset }})
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sL -o ort-archive \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${{ matrix.onnxruntime_version }}/${{ matrix.onnxruntime_asset }}"
+          mkdir -p ort-extracted
+          if [ "${{ matrix.onnxruntime_archive_kind }}" = "tgz" ]; then
+            tar xzf ort-archive -C ort-extracted --strip-components=1
+          else
+            mkdir -p ort-extracted-raw
+            unzip -q ort-archive -d ort-extracted-raw
+            mv ort-extracted-raw/*/* ort-extracted/
+          fi
+
+      - name: Assemble release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="pikvm-offload-helper-${{ matrix.target }}"
+          mkdir -p "$bundle/ml"
+          cp "rust/target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "$bundle/"
+          cp "ort-extracted/${{ matrix.onnxruntime_lib_path }}" "$bundle/${{ matrix.bundled_lib_name }}"
+          cp ml/crop-heatmap.onnx "$bundle/ml/"
+          ls -la "$bundle" "$bundle/ml"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pikvm-offload-helper-${{ matrix.target }}
+          path: pikvm-offload-helper-${{ matrix.target }}
+          if-no-files-found: error
