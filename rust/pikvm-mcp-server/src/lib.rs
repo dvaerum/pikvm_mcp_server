@@ -12,6 +12,7 @@
 
 pub mod cli;
 pub mod http_server;
+pub mod offload;
 pub mod prompts;
 pub mod server;
 pub mod tool_helpers;
