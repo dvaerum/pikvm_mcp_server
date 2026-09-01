@@ -235,13 +235,40 @@ fn with_verifier_session<T>(
 ) -> anyhow::Result<Option<T>> {
     let mut guard = VERIFIER_SESSION.lock().unwrap();
     if guard.is_none() {
-        let loaded: anyhow::Result<Session> = (|| {
+        // `ort`'s own dylib loading (triggered inside `Session::builder()`
+        // when `ORT_DYLIB_PATH` is missing or points somewhere without a
+        // real onnxruntime library) PANICS rather than returning an `Err`
+        // through the `?` chain below — confirmed live, not assumed
+        // (task_d06561d91f58's own offload work hit the identical `ort`
+        // behavior first; reproducing it here directly, with cascade left
+        // at its default-enabled config and no `ORT_DYLIB_PATH` set,
+        // showed the same uncaught panic). Left uncaught, this contradicts
+        // this function's own doc comment below (graceful `Ok(None)`
+        // degradation) and would crash the whole server process on every
+        // cascade call in any deployment where `ORT_DYLIB_PATH` isn't
+        // correctly configured. `catch_unwind` is safe here specifically
+        // because nothing with an invariant to violate has been
+        // constructed yet at the point of failure — pure shared-library
+        // loading, not a partially-initialized `Session`. Deliberately NOT
+        // suppressing the default panic hook's own stderr output (unlike
+        // some `catch_unwind` uses) — matches the same choice made in
+        // `pikvm-offload-helper`'s own identical fix: the raw panic detail
+        // stays visible for debugging, this function's `VERIFIER_LOAD_
+        // LOGGED` flag below still prevents OUR OWN message from
+        // repeating on every retry, same as any other load failure.
+        let loaded: anyhow::Result<Session> = std::panic::catch_unwind(|| {
             // Idempotent: commit() only takes effect on the first call in
             // the process: https://docs.rs/ort — subsequent calls return
             // false and are harmless no-ops.
             ort::init().commit();
             Ok(Session::builder()?.commit_from_file(model_path)?)
-        })();
+        })
+        .unwrap_or_else(|panic_payload| {
+            Err(anyhow::anyhow!(
+                "onnxruntime failed to load (panicked): {}",
+                panic_message(&panic_payload)
+            ))
+        });
         match loaded {
             Ok(session) => *guard = Some(session),
             Err(e) => {
@@ -254,6 +281,21 @@ fn with_verifier_session<T>(
     }
     let session = guard.as_mut().expect("just verified Some above");
     Ok(Some(f(session)?))
+}
+
+/// Best-effort extraction of a panic payload's message — `panic!`/`expect`
+/// payloads are almost always `&str` or `String`, but the type is
+/// genuinely `Box<dyn Any + Send>` with no other guarantee, so this must
+/// degrade to a placeholder rather than panic itself on an unexpected
+/// payload type.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
 }
 
 /// Decode ONE crop's sub-pixel position from the heatmap tensor
