@@ -161,30 +161,59 @@ is in that list yet).
   feature list — currently `["fs", "time"]` (verified exact string in
   source); `block_in_place` requires it.
 
-### `block_in_place` must be gated behind a plain sync check — real risk, confirmed
+### The sync→async bridge must be gated behind a plain sync check — real risk, confirmed, mechanism corrected during implementation
 
-Review finding (nixos-dev, confirmed independently against source): `try_offload()`
-must do a **cheap, plain sync check first** — `OFFLOAD_CLIENT.get()...is_some()`
-— and only call `block_in_place` when that's true. It must **not** wrap the
-whole check-then-maybe-call sequence inside `block_in_place` unconditionally.
-
-`block_in_place` requires an enclosing multi-threaded Tokio runtime to exist
-at all — it panics otherwise. `find_cursor_by_v8_full_frame` and `run_cascade`
-are genuinely sync functions called from real sync contexts, including plain
-sync unit tests with no runtime present. Verified directly in source:
-`find_cursor_by_v8_full_frame_returns_none_when_cascade_is_disabled` and
-`find_cursor_by_v8_full_frame_real_model_runs_end_to_end`
+Review finding (nixos-dev): `try_offload()`'s call site must do a **cheap,
+plain sync check first** — `offload::is_offload_client_registered()` — and
+only enter the `block_in_place` bridge when that's true. It must **not** wrap
+the whole check-then-maybe-call sequence inside the bridge unconditionally.
+`find_cursor_by_v8_full_frame` and `run_cascade` are genuinely sync functions
+called from real sync contexts, including plain sync unit tests with no
+runtime present: `find_cursor_by_v8_full_frame_returns_none_when_cascade_is_
+disabled` and `find_cursor_by_v8_full_frame_real_model_runs_end_to_end`
 (`cursor_ml_detect.rs:1109,1137`) are both bare `#[test]`, not
-`#[tokio::test]` — zero tokio runtime present when they run today. Entering
-`block_in_place` unconditionally on every call would either panic in these
-(and any future) sync test contexts, or add always-on overhead even with
-offload fully disabled — a real regression risk against the currently
-100%-green suite, not a hypothetical one.
+`#[tokio::test]`. This conclusion held up fully during implementation.
 
-Required: an explicit new unit test proving `run_cascade_inference_prefiltered`
-still runs correctly with **zero tokio runtime present** when offload is
-disabled or nothing is connected — the concrete, checkable version of "the
-fast path never touches `block_in_place`.
+**The originally-stated mechanism was imprecise — corrected against tokio
+1.53's own source during implementation, not taken on trust.** The review
+framed this as "`block_in_place` panics without an enclosing multi-threaded
+runtime." Reading tokio's actual implementation
+(`runtime/scheduler/multi_thread/worker.rs`) and confirming live: `block_in_
+place` **alone** is a harmless passthrough when called completely outside
+any runtime (its `EnterRuntime::NotEntered` branch — "we are outside of the
+tokio runtime, so blocking is fine"). A throwaway `block_in_place(|| {})`
+under a bare `#[test]` does NOT panic. The **real** panic comes from
+`Handle::current()` **inside** the closure — "there is no reactor running,
+must be called from the context of a Tokio 1.x runtime" — confirmed live by
+reproducing the exact bridge shape (`block_in_place` wrapping `Handle::
+current().block_on(...)`) under a bare `#[test]`, which does panic with that
+exact message. Both throwaway tests were removed after confirming; the
+concrete implementation
+(`rust/detection-vision/src/cursor_ml_detect.rs`'s `run_changed_crops`)
+documents the real, verified mechanism rather than the original framing.
+
+**Why this correction doesn't change the required fix, only its stated
+reason**: gating on the plain sync check before ever calling `Handle::
+current()` is exactly as necessary either way — the sync callers named above
+still have zero runtime present, `Handle::current()` still panics for them,
+and the gate still avoids it. Anyone reasoning about a DIFFERENT runtime-
+context edge case later (e.g. a `current_thread`-flavored `#[tokio::test]`,
+which genuinely would hit a *different* `block_in_place` panic case — its
+`EnterRuntime::Entered { allow_block_in_place: false }` branch) needs the
+precise mechanism, not the original approximation, so it's worth having
+fixed here rather than left standing.
+
+Implemented as `run_changed_crops` in `cursor_ml_detect.rs`: checks
+`offload::is_offload_client_registered()` first (plain, no runtime
+requirement), and only then calls `tokio::task::block_in_place(|| tokio::
+runtime::Handle::current().block_on(offload::try_offload(...)))`.
+
+Required, and added: an explicit new unit test proving `run_cascade_
+inference_prefiltered` still runs correctly with **zero tokio runtime
+present** when offload is disabled or nothing is connected —
+`find_cursor_by_v8_full_frame_prefiltered_path_works_with_zero_tokio_runtime`,
+a genuinely bare `#[test]` with `use_change_detection_prefilter: true`,
+run live against the real bundled model (not just compiled) — passes.
 
 ### Why the sync→async bridge stays confined to one function
 
@@ -354,7 +383,11 @@ silently dropped.
    confirmed independently against source and folded in. Design otherwise
    holds.
 2. Implement per the phased rollout (§9), each phase independently testable
-   before the next starts. **In progress.**
+   before the next starts. **In progress**: phase 1 (offload-protocol
+   crate) and phase 2 (detection-vision wiring) both built, tested (incl.
+   real-model live runs), pushed to `feat/offload-protocol-crate` — PR
+   blocked on a token-permission issue, reported to the manager. Phase 3
+   (axum route + auth) next.
 3. Correctness gate (§6.1-3) before any hardware timing is trusted.
 4. Real Mac-mini + Pi4 parity run (§6.4) — needs real hardware access;
    per the manager's earlier instruction this routes to whoever has the
