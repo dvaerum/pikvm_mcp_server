@@ -1261,6 +1261,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pikvm-mcp-offload-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pikvm-mcp-detection-vision",
+]
+
+[[package]]
 name = "pikvm-mcp-server"
 version = "0.1.0"
 dependencies = [

@@ -217,6 +217,17 @@ pub struct CascadeResult {
     pub heatmap_peak: f32,
 }
 
+/// One crop's raw, unnormalized RGB pixel bytes plus the full-frame center
+/// it was extracted from. The wire-level unit exchanged with an offload
+/// helper (`pikvm-mcp-offload-protocol`'s `InferRequest`) — same bytes
+/// `crop_cache::extract_crop_bytes` already produces for the local path, so
+/// local and offload inference consume byte-identical input by construction.
+#[derive(Clone, Debug)]
+pub struct RawCrop {
+    pub center: (i64, i64),
+    pub bytes: Vec<u8>,
+}
+
 static VERIFIER_SESSION: std::sync::Mutex<Option<Session>> = std::sync::Mutex::new(None);
 static VERIFIER_LOAD_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
