@@ -4327,3 +4327,72 @@ tests) plus its 5th ignored test; zero regressions. Pushed to
 Reported both phases to the manager along with the blocked-PR issue;
 continuing toward phase 3 (axum route + auth) once there's a green
 light or further direction.
+
+---
+
+**§65 offload phase 3 (axum route + auth) built and LIVE-VERIFIED end to end
+against the real running binary, not just in-process tower tests,
+2026-09-01.**
+
+Continued task_d06561d91f58 on the same `feat/offload-protocol-crate`
+branch. Core networking mechanism: `foundation::auth::safe_equal`
+promoted to `pub` (the design doc's §7 correction was right —
+`header_matches` was already `pub`, nothing to promote there);
+`resolve_offload_token()` (genuinely separate `PIKVM_OFFLOAD_TOKEN*`
+namespace, 4 new tests including one proving it never falls back to
+the main HTTP auth password); the `offload/` module —
+`registry.rs`'s `OffloadState` (generation-tagged single active
+connection, `replace()`/`clear_if_current()` with the exact
+supersede-without-a-race shape the design called for, `try_offload()`
+via mpsc+oneshot+timeout, 9 tests), `ws_handler.rs`'s axum WS handler
+(Hello→hash-check→HelloAck→register→`tokio::select!` dispatch loop,
+drains every in-flight request as `None` on any exit path rather than
+leaving a `oneshot::Receiver` hanging), `mod.rs`'s bearer-token auth
+middleware + router (4 tower tests). `http_server.rs`/`main.rs` wired:
+HTTP-transport-only, hard startup failure on `PIKVM_OFFLOAD_ENABLED=1`
+with no resolvable token, reuses detection-vision's own
+`resolve_verifier_model()` so the hashed file is guaranteed to be the
+SAME one the local verifier actually loads.
+
+**Went beyond the in-process tower tests to prove this live**, per this
+session's own standing discipline of not trusting isolated unit
+verification for a real networked feature: built and ran the actual
+compiled binary with `PIKVM_OFFLOAD_ENABLED=1` against the real bundled
+`ml/crop-heatmap.onnx`, then hit the real running route over a real
+socket —
+- `curl` against the live route: no token → 401, wrong token → 401,
+  correct token with no WS upgrade headers → 400 (not 401 — proves
+  auth genuinely passed and a different, expected failure took over,
+  not just that SOME error occurred).
+- A throwaway `tokio-tungstenite` client (built, run, then fully
+  removed before committing — `Cargo.toml`/`Cargo.lock` reverted to
+  their exact committed state, confirmed via `git diff` showing empty)
+  did a real WS handshake (101 Switching Protocols), sent a real
+  `Hello` with the real model hash, got a real
+  `HelloAck{accepted:true}` back over the wire.
+- A second throwaway client sent a deliberately wrong model hash and
+  got a real `HelloAck{accepted:false, reason:"model hash mismatch"}`
+  back.
+- The server's own log confirmed graceful cleanup on a genuine abrupt
+  disconnect (the throwaway client exiting without a clean WS close) —
+  "helper connected" → "connection error: Connection reset without
+  closing handshake" → "helper disconnected", no crash, no hang —
+  proving the exit-path draining logic holds under a REAL disconnect,
+  not just the synthetic `drop()` a unit test can fake.
+
+Full verification: `cargo build/clippy(-D warnings)/fmt --workspace`
+clean. `cargo test --workspace`: every crate's count unchanged from
+§64's baseline except foundation (61→65, +4) and pikvm-mcp-server
+(110→123, +13); zero regressions. Pushed to
+`feat/offload-protocol-crate` (`410efe2`).
+
+Three phases of nine now done (protocol crate, detection-vision
+wiring, axum route + auth). Remaining: phase 4 (helper binary —
+reconnect modeled on `streamer_keepalive`'s backoff shape, real
+`RECONNECT_BASE_MS=1000`/`RECONNECT_MAX_MS=30_000` constants confirmed
+in source at §63), discoverability (`offload_hint`,
+`pikvm_offload_status`), the parity example, GH Actions matrix, and the
+blocking real Mac-mini+Pi4 parity run. PR #100 (nixos-dev opened it on
+my behalf, my own token still lacks `pull-requests:write`) auto-tracks
+the branch — no separate PR needed per phase, confirmed by the
+manager.
