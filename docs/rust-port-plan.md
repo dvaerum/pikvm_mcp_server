@@ -4625,3 +4625,57 @@ discoverability, the ORT-panic production-bug fix it surfaced, and
 this formal parity example). Remaining on `task_d06561d91f58` itself:
 the GH Actions release matrix, and the blocking real Mac-mini+Pi4
 parity run and write-up.
+
+---
+
+**§70 PR #101 merged; offload phase 7 (GH Actions matrix) written and
+asset-verified but blocked on a NEW, harder token-scope wall, 2026-09-01.**
+
+`fix/ort-dylib-panic-graceful-degradation` (§68) merged into
+`rust-port/module-4-mover` as `db43dcc` — task closed.
+
+Continued task_d06561d91f58's own phase 7: new, separate
+`.github/workflows/offload-helper-release.yml`, the 5-target matrix
+exactly as specified (aarch64-apple-darwin primary, x86_64-apple-darwin,
+x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu,
+x86_64-pc-windows-msvc). Every onnxruntime asset name/path was
+verified against the real GitHub releases API before being hardcoded,
+not guessed — downloaded and inspected the real `osx-arm64`/
+`linux-x64`/`linux-aarch64`/`win-x64` v1.24.3 archives directly to
+confirm their internal `lib/` paths.
+
+**A real upstream constraint found during that verification**:
+`microsoft/onnxruntime` dropped `osx-x86_64`/`osx-universal2` builds
+starting at v1.24.0 — confirmed by querying v1.20.0 through v1.24.3's
+actual release asset lists (v1.23.0 was the last with an
+`osx-x86_64` asset). `x86_64-apple-darwin`'s job is pinned to 1.23.0
+specifically (every other platform uses 1.24.3), documented
+prominently in the workflow's own comments as a deliberate, flagged
+choice, including that cross-onnxruntime-version compatibility for
+that one platform has NOT been live-verified on real x86_64 Mac
+hardware. `aarch64-unknown-linux-gnu` uses GitHub's free native
+`ubuntu-24.04-arm` runner (this repo is public) rather than
+cross-compiling — simpler and more faithful. BSD deliberately absent
+from the matrix, documented as a real, named limitation (no
+GitHub-hosted BSD runner exists).
+
+**A new, harder permission wall hit trying to ship it**: `git push`
+was outright REJECTED by GitHub itself — "refusing to allow a
+Personal Access Token to create or update workflow
+`.github/workflows/offload-helper-release.yml` without `workflow`
+scope." Unlike the PR-create/edit/comment gaps earlier this session,
+this is a hard, server-side block on the PUSH itself, not something a
+different collaborator can route around after the fact by opening a
+PR for a branch that's already on origin — the commit (`34157f3`,
+local only) needs either my own token upgraded with `workflow` scope,
+or someone with a properly-scoped token to push it. Reported to the
+manager with a generated patch file as a fallback hand-off option.
+YAML syntax validated locally (Ruby's `YAML.load_file`, all 5 matrix
+entries parse correctly) — the workflow's real correctness against an
+actual GH Actions run is still unverified, since it isn't on origin
+yet to trigger.
+
+Eight of nine phases/units done on the whole task_d06561d91f58 arc.
+Last remaining: the blocking real Mac-mini+Pi4 parity run and
+write-up — plus getting phase 7's own commit actually pushed once the
+token-scope gap is resolved.
