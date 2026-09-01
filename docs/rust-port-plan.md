@@ -4396,3 +4396,57 @@ blocking real Mac-mini+Pi4 parity run. PR #100 (nixos-dev opened it on
 my behalf, my own token still lacks `pull-requests:write`) auto-tracks
 the branch — no separate PR needed per phase, confirmed by the
 manager.
+
+---
+
+**§66 offload phase 4 (pikvm-offload-helper binary) built and verified with
+a full real end-to-end round trip — real subprocess, real handshake, real
+inference, exact parity confirmed against local, 2026-09-01.**
+
+Continued task_d06561d91f58 on `feat/offload-protocol-crate`. New
+`offload-helper` crate: `backoff.rs` (reconnect backoff, deliberately
+mirroring `streamer_keepalive`'s own shape rather than a new curve —
+same `RECONNECT_BASE_MS=1000`/`RECONNECT_MAX_MS=30_000`, doubling,
+capped, reset-to-base on success; 9 pure tests), `config.rs`
+(CLI/env resolution, reuses `foundation::config::resolve_offload_token`
+directly so the helper and server always resolve against the SAME
+token namespace, not two independently-named ones that could drift; 8
+tests), `connection.rs` (one connection's lifecycle: connect, Hello/
+HelloAck handshake carrying this process's own loaded model's hash,
+then serves `InferRequest`s via `run_cascade_inference_all_from_raw_crops`
+— the exact same shared function the server's local path calls),
+`main.rs` (loads the model once at startup, reused across all
+reconnects; the reconnect loop applying backoff exactly like
+`streamer_keepalive`'s own semantics).
+
+**Went past unit tests to the strongest verification available short of
+the real Mac+Pi4 hardware §6 still requires**: spun up a minimal real
+axum server hosting the real `offload_router`, spawned the REAL
+COMPILED `pikvm-offload-helper` binary as a genuine subprocess pointed
+at it, and drove `OffloadState::try_offload` directly with synthetic
+crop bytes. The real helper connected, completed a real handshake
+(using its own hostname-derived label — confirmed the `hostname`
+command fallback works on this Mac), and answered with a real
+`InferResponse` from its own locally-loaded ONNX session. **Cross-checked
+the offloaded result against calling the same inference function
+directly in-process on the identical crops: exact match on every
+field** — real, empirical confirmation of correctness parity, not just
+structural code-sharing taken on faith. Killing the subprocess produced
+the expected graceful cleanup in the server's log (a genuine abrupt
+disconnect, not a synthetic `drop()`). Throwaway example + its temp
+`ort` dev-dependency fully removed before committing, confirmed via
+`git diff` showing the real Cargo.toml back to its exact committed
+state.
+
+Full verification: `cargo build/clippy(-D warnings)/fmt --workspace`
+clean. `cargo test --workspace`: every crate's count unchanged from
+§65's baseline, plus the new crate (12/12); zero regressions. Pushed
+to `feat/offload-protocol-crate` (`a2b6ecd`).
+
+Four of nine phases done (protocol crate, detection-vision wiring,
+axum route + auth, helper binary — and this phase's own live
+end-to-end run already covers a real slice of what phase 6's "parity
+example" is meant to formalize). Remaining: discoverability
+(`offload_hint`, `pikvm_offload_status`), the formal
+`offload_parity_smoke.rs` example, the GH Actions release matrix, and
+the blocking real Mac-mini+Pi4 parity run and write-up.
