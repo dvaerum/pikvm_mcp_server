@@ -8,3 +8,12 @@ description = "Wire codec for the cursor-detection cascade-inference offload fea
 [dependencies]
 pikvm-mcp-detection-vision = { path = "../detection-vision" }
 anyhow = "1"
+
+[dev-dependencies]
+# For examples/offload_parity_smoke.rs only -- needs to construct a real
+# ort::session::Session directly (detection-vision's own inference
+# functions all take &mut Session as an explicit parameter, not an
+# internally-managed one). Same version/features as detection-vision's
+# own (non-dev) `ort` dependency, deliberately kept in lockstep so Cargo
+# unifies a single `ort` instance.
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["load-dynamic"] }
