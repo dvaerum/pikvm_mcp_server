@@ -4526,3 +4526,59 @@ Five of nine phases done. Remaining: the formal
 §65/§66 already cover a real slice of what it's meant to formalize),
 the GH Actions release matrix, and the blocking real Mac-mini+Pi4
 parity run and write-up.
+
+---
+
+**§68 fix/ort-dylib-panic-graceful-degradation CLOSED — the real §67 finding
+fixed, tested, negative-control-verified, on its own branch as directed,
+2026-09-01.**
+
+Manager green-lit fixing §67's finding directly ("you already have the
+proven fix pattern fresh from your own offload-helper code... fastest
+path... add the real test that's missing too") — done, on a fresh
+branch off `rust-port/module-4-mover`, deliberately kept apart from
+the offload feature branch since it's unrelated production code.
+
+`with_verifier_session` (`cursor_ml_detect.rs`) wrapped in
+`std::panic::catch_unwind` around the `ort::init()`/`Session::
+builder()`/`commit_from_file()` call — same proven shape as the
+offload-helper's own fix (§67), converting a caught panic into a
+normal `anyhow::Error` that flows through the existing `match/Ok(None)`
+path already used for a real `Err`. Deliberately does NOT suppress the
+default panic hook's stderr output, matching the earlier fix's own
+choice (raw detail stays visible for debugging;
+`VERIFIER_LOAD_LOGGED` already prevents this function's own message
+from repeating on every retry).
+
+New regression test: `rust/detection-vision/tests/verifier_session_
+missing_dylib.rs`, deliberately its own SEPARATE integration-test file
+(own process, per Cargo's `tests/*.rs` convention) rather than a
+`#[test]` inside the crate's shared `mod tests` — `ort::init().commit()`
+is a real, process-global, one-shot operation, so this test MUST run
+where nothing has already successfully loaded a real dylib, which a
+shared test process can't guarantee. Deliberately SETS
+`ORT_DYLIB_PATH` to a bogus path (not just unsets it) — deterministic
+regardless of the ambient shell/CI environment.
+
+**Ran a genuine negative control, not just the fix's own passing
+test**: temporarily reverted the fix via `git stash`, re-ran the new
+test — it FAILED with the exact real panic message this bug produces
+(confirming the test genuinely discriminates, not a trivially-passing
+assertion). Restored the fix, re-ran — passes. Both runs actually
+executed.
+
+Full verification: `cargo build/clippy(-D warnings)/fmt --workspace`
+clean. `cargo test --workspace`: every crate's count unchanged from
+this branch's own baseline, plus the new integration test (1/1); zero
+regressions. Pushed as `fix/ort-dylib-panic-graceful-degradation`
+(`b4e933e`) against `rust-port/module-4-mover` — my own token still
+lacks `pull-requests:write`, so the PR itself needs someone else to
+open, same as `feat/offload-protocol-crate`'s PR #100.
+
+Back to the offload phases now, per the manager's own instruction.
+Six of nine done counting this detour's own real, separately-shippable
+value (protocol crate, detection-vision wiring, axum route + auth,
+helper binary, discoverability, and this real production-bug fix it
+surfaced). Remaining on task_d06561d91f58 itself: the formal
+`offload_parity_smoke.rs` example, the GH Actions release matrix, and
+the blocking real Mac-mini+Pi4 parity run and write-up.
