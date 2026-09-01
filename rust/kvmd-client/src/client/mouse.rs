@@ -42,6 +42,26 @@ impl PiKVMClient {
             body: None,
         })
         .await?;
+        // Absolute-mode counterpart to mouse_move_relative's own
+        // record_emit() call, added per
+        // docs/cascade-change-detection-prefilter-design.md's v1-scope
+        // gap (task_c8c4b0f2083f): the change-detection cache's
+        // wholesale invalidation-on-emit trigger (crop_cache.rs) reads
+        // this clock, and previously only fired for relative-mode moves
+        // — an absolute-mode move never invalidated the cache, risking a
+        // stale cached verdict being served after a real move landed.
+        // Deliberately NOT calling `belief.predict()` here — belief
+        // tracks a RELATIVE offset from a known origin, so a
+        // relative-emit-shaped update doesn't apply to an absolute move
+        // to an already-known destination. Correction (georgs-mac-mini's
+        // review): confirmed directly that nothing ELSE resets `belief`
+        // for an absolute move either — it simply goes stale/unchanged
+        // after one today. That's a real, separate, PRE-EXISTING gap
+        // (predates this change; `mouse_move` never touched belief even
+        // before this commit) — genuinely out of scope for the
+        // cache-invalidation fix this commit makes, not something this
+        // comment should imply is already handled elsewhere.
+        emit_clock::record_emit();
 
         Ok(calibration_invalidated)
     }

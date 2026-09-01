@@ -65,7 +65,10 @@ pub fn make_behavioral_verifier(
                     V8FullFrameOptions {
                         min_presence: Some(opts.min_presence),
                         hint: None,
-                        use_change_detection_prefilter: false,
+                        use_change_detection_prefilter:
+                            pikvm_mcp_foundation::settings::get_settings()
+                                .ml
+                                .change_detection_prefilter_enabled,
                     },
                 )
                 .ok()

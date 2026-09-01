@@ -51,6 +51,17 @@ pub struct MlSettings {
     pub capture_dir: Option<String>,
     /// PIKVM_ML_DISABLE=1 — force the probe-and-diff path, skip ML entirely.
     pub disabled: bool,
+    /// PIKVM_ML_CHANGE_DETECTION_PREFILTER=1 — enable the cascade's
+    /// byte-exact per-crop change-detection pre-filter (task_3a0440a91a05,
+    /// docs/cascade-change-detection-prefilter-design.md). DEFAULT OFF:
+    /// real, correctness-verified, ~2.7x-108x win on real Pi4 hardware
+    /// (see the design doc's "Real result" section), but the cache's
+    /// emit-based invalidation only recently gained absolute-mode
+    /// coverage (task_c8c4b0f2083f) — leave opt-in until that fix has its
+    /// own live re-confirmation, matching this session's standing
+    /// discipline of proving a change on real hardware before it
+    /// defaults on.
+    pub change_detection_prefilter_enabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -108,6 +119,10 @@ pub fn load_settings(env: &HashMap<String, String>) -> Settings {
                 .unwrap_or(0.5),
             capture_dir: get(env, "PIKVM_ML_CAPTURE_DIR"),
             disabled: env.get("PIKVM_ML_DISABLE").map(String::as_str) == Some("1"),
+            change_detection_prefilter_enabled: env
+                .get("PIKVM_ML_CHANGE_DETECTION_PREFILTER")
+                .map(String::as_str)
+                == Some("1"),
         },
         movement: MovementSettings {
             use_learned_ballistics: env.get("PIKVM_USE_LEARNED_BALLISTICS").map(String::as_str)

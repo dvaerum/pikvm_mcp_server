@@ -257,7 +257,9 @@ impl CursorLocator {
             V8FullFrameOptions {
                 min_presence: Some(min_presence),
                 hint,
-                use_change_detection_prefilter: false,
+                use_change_detection_prefilter: pikvm_mcp_foundation::settings::get_settings()
+                    .ml
+                    .change_detection_prefilter_enabled,
             },
         )
         .await?;
