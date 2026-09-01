@@ -4679,3 +4679,39 @@ Eight of nine phases/units done on the whole task_d06561d91f58 arc.
 Last remaining: the blocking real Mac-mini+Pi4 parity run and
 write-up — plus getting phase 7's own commit actually pushed once the
 token-scope gap is resolved.
+
+---
+
+**§71 offload phase 7 pushed (nixos-dev's token had workflow scope);
+workflow_dispatch genuinely can't trigger yet — a real GitHub constraint,
+not a permission gap, 2026-09-01.**
+
+nixos-dev's token had `workflow` OAuth scope where mine didn't —
+pushed `.github/workflows/offload-helper-release.yml` cleanly on top
+of `40446f7`, commit `64024f5` on `feat/offload-protocol-crate`,
+fresh-fetch-verified (133 lines, matches what I relayed in 3 parts).
+
+Tried `gh workflow run offload-helper-release.yml --ref feat/offload-
+protocol-crate` to get a real triggered run rather than rest on YAML-
+syntax validation alone → 404, "workflow ... not found on the default
+branch." Confirmed this is real, standard GitHub Actions behavior, not
+another permission wall: `workflow_dispatch` only becomes triggerable
+once the workflow file exists on the repo's DEFAULT branch (`main`),
+even though the actual run can then target any ref. Since the whole
+offload feature (and this workflow with it) is still several merges
+away from `main`, it genuinely can't be triggered yet — reported
+plainly to the manager rather than claim "done and verified" when only
+the YAML syntax and the onnxruntime asset-name/URL research are
+actually confirmed live. It'll get its first real exercise
+automatically once merged, or on request via manual trigger once
+someone pushes it to `main` sooner.
+
+**All nine phases/units of `task_d06561d91f58` now attempted**:
+protocol crate (§63), detection-vision wiring (§64), axum route + auth
+(§65), helper binary (§66), discoverability (§67), the ORT-panic
+production-bug fix it surfaced and closed as its own PR (§68/§70),
+the formal parity example (§69), and the GH Actions matrix (§70/§71,
+real-run-unverified pending a merge to `main`). Only the design's own
+required BLOCKING gate remains: the real Mac-mini+Pi4 hardware parity
+run and write-up (needs it-03400's hardware) — everything else is
+built, tested, and either merged or awaiting review on PR #100.
