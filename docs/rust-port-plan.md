@@ -4070,3 +4070,114 @@ on hardware neither of us has. Relayed the real numbers directly to
 nixos-dev (their design) and the manager. Hit the same cross-node
 task-visibility quirk as task_07bfe499e2d9 trying to close the task
 myself — flagged, not chased further, same as last time.
+
+---
+
+**§61 PR #98 and PR #99 both taken through review→fix→merge after nixos-dev
+hit their context budget limit, 2026-09-01.**
+
+Manager handed off 3 items after nixos-dev went to "effectively zero
+remaining budget this session": (1) review PR #98 (the change-detection
+prefilter's settings-flag wiring), (2) run the full vitest suite on
+PR #99 before merge, (3) write this doc's own next entry — the offload
+design (§62).
+
+**PR #98 review found two real issues**, both fixed directly on the PR
+branch since the author couldn't iterate further this session:
+
+1. `find_cursor_by_ml_multi_hint`'s own internal `V8FullFrameOptions`
+   construction was left hardcoded `use_change_detection_prefilter:
+   false` — not touched by the original PR despite being a real,
+   actively-used call chain (confirmed via grep: called from
+   `legacy_move.rs`'s own correction loop, `move_to/origin.rs`'s
+   bounds-guard origin discovery, and `wiggle_verify.rs`). The
+   correction-loop caller in particular runs this PER PASS — likely the
+   highest-impact of the three real prefilter call sites, and the one
+   that got missed. Wired the same way as the other two
+   (`get_settings().ml.change_detection_prefilter_enabled`).
+2. `mouse.rs`'s new comment claimed skipping `belief.predict()` for
+   absolute moves was safe because "whatever already resets belief for
+   absolute targets" — checked directly (grepped every `belief`
+   reference in the file): nothing does. The underlying decision not to
+   wire `belief.predict()` here is still correct (a relative-emit-shaped
+   update doesn't semantically apply to an absolute destination), but
+   the stated reason was false — belief simply goes stale after an
+   absolute move today, a real, separate, pre-existing gap, not this
+   PR's scope to fix, but one a future reader could miss investigating
+   if the comment implies something else already handles it. Corrected
+   the comment to say so plainly. (nixos-dev has since filed this as a
+   low-priority child of `task_c8c4b0f2083f` — not yet investigated by
+   anyone.)
+
+Full verification cycle after both fixes: `cargo build --workspace`
+clean, `cargo test --workspace` 52/208/61/111/18/82/361/110 — every
+count unchanged from §59, zero regressions — `clippy --workspace -D
+warnings` clean, `fmt --all --check` clean. Merged into
+`rust-port/module-4-mover` as `97f6f10`.
+
+**PR #99** (TS-side `PIKVM_ML_DISABLE_CPU_MEM_ARENA=1`, addressing a
+real ~2.8GB RSS-plateau finding on a 3.6GB it-03400 box after ~5 cascade
+calls — confirmed not an unbounded leak, but a real, confirmed OOM
+trigger in production): `npm run typecheck` clean, `npx vitest run`
+1244/1244 passed (including the test that had been flaky earlier this
+session), diff reviewed clean. Merged into `main` as `5b2918b`, branch
+deleted.
+
+Both PRs closed without their respective authors present to do it
+themselves — the standing PR-gate-for-code convention held even under
+that constraint: fix on the PR branch, full verification, merge, report
+back, rather than either blocking on their return or skipping the
+gate.
+
+---
+
+**§62 task_d06561d91f58 — cursor-tracking cascade-inference offload to a
+general-purpose helper: design doc drafted, 2026-09-01.**
+
+Third time this session hitting the cross-node task-visibility quirk
+(`task_07bfe499e2d9`, `task_3a0440a91a05`, now this one) — my own
+`search_tasks`/`view_tasks` lookups for `task_d06561d91f58` both failed
+even though the task demonstrably exists and is actively assigned to
+me. Flagged it to the manager explicitly as a real, recurring pattern
+this time (3 occurrences, not a one-off) rather than just routing
+around it silently again; manager is escalating to georg directly since
+it's not fixable from their side either. Manager relayed the full spec
+in 4 parts instead.
+
+Goal: a standalone native binary (`pikvm-offload-helper`) that runs on
+a general-purpose computer — starting with this Mac mini, ~29-32x
+faster than a real Pi4 on the raw cascade call per today's earlier
+benchmark, up to 107.85x with §60's change-detection prefilter layered
+on top for the idle case — connects OUT to the Pi's `pikvm-mcp-server`
+over a new authenticated WebSocket route, and processes cursor-
+detection cascade batches remotely while connected. Local fallback on:
+nothing connected, per-request timeout, or a malformed response. Off by
+default, LAN-only v1, single active connection, custom binary wire
+protocol (not JSON), v1 scoped to exactly one real call chain
+(`run_cascade_inference_all` via `run_cascade_inference_prefiltered`) —
+three other real, lower-volume call sites named and deliberately left
+local-only.
+
+Wrote `docs/cursor-offload-inference-design.md`, same "CLOSED"-doc
+format as §58-60's own prefilter doc. Not a blind transcription —
+spot-checked every concrete claim against real source on
+`rust-port/module-4-mover` HEAD `97f6f10` before writing it down
+(exact tokio feature lists, line numbers, existing statics, workspace
+members, the real synchronous signature of `hid_recovery/
+behavioral.rs`'s `locate` closure that's the actual load-bearing reason
+the sync→async offload bridge must stay confined to one function).
+Found and corrected one real spec inaccuracy along the way:
+`foundation::auth::header_matches` is already `pub fn` in a `pub mod
+auth` — nothing to promote there. The function that's actually private
+is `safe_equal` (`auth.rs:63`); documented both real options for the
+offload auth check and recommended promoting `safe_equal` directly,
+rather than carrying the spec's imprecise wording into the design
+unchecked.
+
+Status: drafted, not yet reviewed or implemented. Committed directly
+(pure docs, no code — matches the agreed PR-gate-for-code /
+direct-commit-for-docs split) to `rust-port/module-4-mover` as
+`4404a90`, pushed. Next: route to the team for review; my own three
+named roles per the manager (review the design, build/test the actual
+helper binary on this Mac, and the real-hardware correctness-parity
+gate once both sides exist) are all still ahead.
