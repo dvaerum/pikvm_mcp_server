@@ -291,7 +291,10 @@ async function runCascade(
   if (cachedVerifierSession === null) {
     try {
       await fs.access(VERIFIER_MODEL);
-      cachedVerifierSession = await ort.InferenceSession.create(VERIFIER_MODEL);
+      cachedVerifierSession = await ort.InferenceSession.create(
+        VERIFIER_MODEL,
+        settings.ml.disableCpuMemArena ? { enableCpuMemArena: false } : {},
+      );
     } catch (e) {
       if (!verifierLoadFailureLogged) {
         console.error(
