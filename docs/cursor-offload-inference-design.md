@@ -1,10 +1,12 @@
 # Remote cascade-inference offload to a general-purpose helper — design (task_d06561d91f58)
 
-**STATUS: design drafted (2026-09-01), not yet implemented.** Full design
-grilled with georg (relayed via manager, `task_d06561d91f58`) and spot-checked
-against real code on `rust-port/module-4-mover` HEAD `97f6f10` (includes PR
-#98's change-detection prefilter). Two spec details below were corrected
-against source during drafting — see §5 and §7.
+**STATUS: design reviewed (2026-09-01), implementation starting.** Full
+design grilled with georg (relayed via manager, `task_d06561d91f58`) and
+spot-checked against real code on `rust-port/module-4-mover` HEAD `97f6f10`
+(includes PR #98's change-detection prefilter). Three real corrections were
+folded in during drafting/review, not silently glossed over — see §4
+(`block_in_place` gating, nixos-dev's review finding, confirmed against
+source), §5, and §7.
 
 ## 0. Goal
 
@@ -158,6 +160,31 @@ is in that list yet).
 - `detection-vision/Cargo.toml`: add `"rt-multi-thread"` to the `tokio`
   feature list — currently `["fs", "time"]` (verified exact string in
   source); `block_in_place` requires it.
+
+### `block_in_place` must be gated behind a plain sync check — real risk, confirmed
+
+Review finding (nixos-dev, confirmed independently against source): `try_offload()`
+must do a **cheap, plain sync check first** — `OFFLOAD_CLIENT.get()...is_some()`
+— and only call `block_in_place` when that's true. It must **not** wrap the
+whole check-then-maybe-call sequence inside `block_in_place` unconditionally.
+
+`block_in_place` requires an enclosing multi-threaded Tokio runtime to exist
+at all — it panics otherwise. `find_cursor_by_v8_full_frame` and `run_cascade`
+are genuinely sync functions called from real sync contexts, including plain
+sync unit tests with no runtime present. Verified directly in source:
+`find_cursor_by_v8_full_frame_returns_none_when_cascade_is_disabled` and
+`find_cursor_by_v8_full_frame_real_model_runs_end_to_end`
+(`cursor_ml_detect.rs:1109,1137`) are both bare `#[test]`, not
+`#[tokio::test]` — zero tokio runtime present when they run today. Entering
+`block_in_place` unconditionally on every call would either panic in these
+(and any future) sync test contexts, or add always-on overhead even with
+offload fully disabled — a real regression risk against the currently
+100%-green suite, not a hypothetical one.
+
+Required: an explicit new unit test proving `run_cascade_inference_prefiltered`
+still runs correctly with **zero tokio runtime present** when offload is
+disabled or nothing is connected — the concrete, checkable version of "the
+fast path never touches `block_in_place`.
 
 ### Why the sync→async bridge stays confined to one function
 
@@ -322,10 +349,12 @@ silently dropped.
 
 ## 10. Sequencing
 
-1. This doc → review. **Not yet reviewed** — draft complete, routing to the
-   team next.
+1. ~~This doc → review.~~ **Done.** nixos-dev reviewed; found one real,
+   concrete implementation risk (the `block_in_place` gating in §4),
+   confirmed independently against source and folded in. Design otherwise
+   holds.
 2. Implement per the phased rollout (§9), each phase independently testable
-   before the next starts.
+   before the next starts. **In progress.**
 3. Correctness gate (§6.1-3) before any hardware timing is trusted.
 4. Real Mac-mini + Pi4 parity run (§6.4) — needs real hardware access;
    per the manager's earlier instruction this routes to whoever has the
