@@ -212,12 +212,56 @@ async fn main() {
         );
     }
 
+    // Cascade-inference offload (docs/cursor-offload-inference-design.md,
+    // task_d06561d91f58): off by default, HTTP-transport-only (the
+    // feature is an axum route -- there's no server to mount it on under
+    // stdio transport, design decision #4). Resolved here, BEFORE
+    // `shared` is built, since SharedState itself needs to know about it
+    // (tools::offload_hint/offload_status read `shared.offload`).
+    // Design decision #12: no route runs unauthenticated, so a missing
+    // token is a hard startup failure, not a silent "feature just
+    // doesn't work" -- the same posture `--security yes` already takes
+    // for its own password.
+    let offload = if options.transport == TransportKind::Http
+        && env.get("PIKVM_OFFLOAD_ENABLED").map(String::as_str) == Some("1")
+    {
+        let Some(token) = pikvm_mcp_foundation::config::resolve_offload_token(&env) else {
+            eprintln!(
+                "PIKVM_OFFLOAD_ENABLED=1 requires a token — set PIKVM_OFFLOAD_TOKEN, \
+                 PIKVM_OFFLOAD_TOKEN_FILE, or the \"pikvm-offload-token\" systemd credential."
+            );
+            std::process::exit(2);
+        };
+        let model_path = pikvm_mcp_detection_vision::cursor_ml_detect::resolve_verifier_model();
+        let model_bytes = std::fs::read(&model_path).unwrap_or_else(|e| {
+            eprintln!(
+                "PIKVM_OFFLOAD_ENABLED=1 but the verifier model couldn't be read at {}: {e}",
+                model_path.display()
+            );
+            std::process::exit(2);
+        });
+        let model_sha256: [u8; 32] = sha2::Sha256::digest(&model_bytes).into();
+        let state = Arc::new(pikvm_mcp_server::offload::OffloadState::new(
+            token,
+            model_sha256,
+            std::time::Duration::from_secs(10), // per-request timeout, design decision #7
+        ));
+        pikvm_mcp_detection_vision::offload::set_offload_client(
+            pikvm_mcp_server::offload::as_offload_inference_fn(state.clone()),
+        );
+        eprintln!("Offload: ENABLED — /offload/ws route active, waiting for a helper to connect.");
+        Some(state)
+    } else {
+        None
+    };
+
     let shared = Arc::new(SharedState::new(
         client,
         hid_mode_resolver,
         scale_learner,
         config.calibration,
         cached_profile,
+        offload.clone(),
     ));
 
     if options.transport == TransportKind::Http {
@@ -247,46 +291,6 @@ async fn main() {
         let auth_config = PikvmAuthConfig {
             authorize,
             allow_tool_login: options.allow_tool_login,
-        };
-
-        // Cascade-inference offload (docs/cursor-offload-inference-design.md,
-        // task_d06561d91f58): off by default, HTTP-transport-only (the
-        // feature is an axum route — there's no server to mount it on
-        // under stdio transport). Design decision #12: no route runs
-        // unauthenticated, so a missing token is a hard startup failure,
-        // not a silent "feature just doesn't work" — the same posture
-        // `--security yes` already takes for its own password above.
-        let offload = if env.get("PIKVM_OFFLOAD_ENABLED").map(String::as_str) == Some("1") {
-            let Some(token) = pikvm_mcp_foundation::config::resolve_offload_token(&env) else {
-                eprintln!(
-                    "PIKVM_OFFLOAD_ENABLED=1 requires a token — set PIKVM_OFFLOAD_TOKEN, \
-                     PIKVM_OFFLOAD_TOKEN_FILE, or the \"pikvm-offload-token\" systemd credential."
-                );
-                std::process::exit(2);
-            };
-            let model_path = pikvm_mcp_detection_vision::cursor_ml_detect::resolve_verifier_model();
-            let model_bytes = std::fs::read(&model_path).unwrap_or_else(|e| {
-                eprintln!(
-                    "PIKVM_OFFLOAD_ENABLED=1 but the verifier model couldn't be read at {}: {e}",
-                    model_path.display()
-                );
-                std::process::exit(2);
-            });
-            let model_sha256: [u8; 32] = sha2::Sha256::digest(&model_bytes).into();
-            let state = Arc::new(pikvm_mcp_server::offload::OffloadState::new(
-                token,
-                model_sha256,
-                std::time::Duration::from_secs(10), // per-request timeout, design decision #7
-            ));
-            pikvm_mcp_detection_vision::offload::set_offload_client(
-                pikvm_mcp_server::offload::as_offload_inference_fn(state.clone()),
-            );
-            eprintln!(
-                "Offload: ENABLED — /offload/ws route active, waiting for a helper to connect."
-            );
-            Some(state)
-        } else {
-            None
         };
 
         if let Err(e) = pikvm_mcp_server::http_server::run_http_server(

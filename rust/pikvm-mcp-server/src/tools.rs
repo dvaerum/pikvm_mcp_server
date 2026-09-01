@@ -42,6 +42,8 @@ mod hidmode;
 mod ipad_unlock;
 mod mouse;
 mod mover_scale;
+mod offload_hint;
+mod offload_status;
 mod orientation;
 mod screenshot;
 mod seed_template;
@@ -149,5 +151,6 @@ pub fn tool_registry() -> Vec<ToolEntry> {
     tools.extend(auto_calibrate::entries());
     tools.extend(hid_recovery::entries());
     tools.extend(health_check::entries());
+    tools.extend(offload_status::entries());
     tools
 }

@@ -106,6 +106,7 @@ async fn main() {
         scale_learner,
         full_config.calibration,
         None,
+        None,
     ));
 
     let handler = shared

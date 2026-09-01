@@ -46,15 +46,37 @@ async fn main() {
         hex_encode(&model_sha256),
     );
 
-    // Idempotent — matches detection-vision's own `with_verifier_session`
-    // call site (`ort::init().commit()` only takes effect once per
-    // process).
-    ort::init().commit();
-    let mut session = match Session::builder().and_then(|mut b| b.commit_from_file(&model_path)) {
-        Ok(s) => s,
-        Err(e) => {
+    // Loading the onnxruntime dylib (`load-dynamic`) via a missing/wrong
+    // `ORT_DYLIB_PATH` is a genuinely likely first-run mistake for
+    // exactly this binary's intended audience (an operator setting up a
+    // helper on a fresh machine) — and `ort` PANICS on that failure
+    // rather than returning it through the `Result` chain below
+    // (confirmed live: a raw Rust panic/backtrace, not a caught `Err`,
+    // when `ORT_DYLIB_PATH` pointed nowhere). `catch_unwind` is safe
+    // here specifically because nothing with an invariant to violate has
+    // been constructed yet — this is pure shared-library loading, not a
+    // partially-initialized `Session`.
+    let session_result = std::panic::catch_unwind(|| {
+        // Idempotent — matches detection-vision's own `with_verifier_session`
+        // call site (`ort::init().commit()` only takes effect once per
+        // process).
+        ort::init().commit();
+        Session::builder().and_then(|mut b| b.commit_from_file(&model_path))
+    });
+    let mut session = match session_result {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
             eprintln!(
                 "Failed to load the ONNX session from {}: {e}",
+                model_path.display()
+            );
+            std::process::exit(2);
+        }
+        Err(_) => {
+            eprintln!(
+                "Failed to load the onnxruntime library while opening {}. This usually means \
+                 ORT_DYLIB_PATH is unset or points somewhere without a real onnxruntime shared \
+                 library — set it to a real onnxruntime .so/.dylib/.dll for this platform.",
                 model_path.display()
             );
             std::process::exit(2);
