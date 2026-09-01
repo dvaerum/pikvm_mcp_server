@@ -47,6 +47,22 @@ export interface Settings {
     captureDir?: string;
     /** PIKVM_ML_DISABLE=1 — force the probe-and-diff path, skip ML entirely. */
     disabled: boolean;
+    /**
+     * PIKVM_ML_DISABLE_CPU_MEM_ARENA=1 — pass `enableCpuMemArena: false` to
+     * onnxruntime-node's verifier InferenceSession. Real production finding
+     * (2026-09-01, it-03400): RSS plateaus at ~2.8GB after the first ~5 real
+     * cascade calls (139.9MB → 2.89GB → 2.82GB, essentially flat) — a
+     * one-time arena allocation sized for the largest batch ever seen
+     * (up to 352 crops in a no-hint scan), never released for the process's
+     * lifetime, not an unbounded leak. On a 3.6GB box that's ~80% of total
+     * RAM, thin enough that routine activity has caused real OOM kills.
+     * Disabling the CPU memory arena trades this fixed cost for per-call
+     * alloc/free (real perf cost — arena reuse is normally faster) — off by
+     * default until a real before/after RSS comparison on real Pi4 hardware
+     * confirms it actually reduces the plateau, per this project's standing
+     * "prove it on real hardware before it defaults on" discipline.
+     */
+    disableCpuMemArena: boolean;
   };
 
   /** Relative-mouse movement + click tuning. */
@@ -92,6 +108,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       verifyThresh: Number(env.PIKVM_ML_VERIFY_THRESH ?? '0.5'),
       captureDir: env.PIKVM_ML_CAPTURE_DIR || undefined,
       disabled: env.PIKVM_ML_DISABLE === '1',
+      disableCpuMemArena: env.PIKVM_ML_DISABLE_CPU_MEM_ARENA === '1',
     },
     movement: {
       useLearnedBallistics: env.PIKVM_USE_LEARNED_BALLISTICS === '1',
