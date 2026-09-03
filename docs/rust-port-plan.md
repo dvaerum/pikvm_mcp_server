@@ -4790,3 +4790,71 @@ different, physical-layer fault from the earlier, already-fixed
 incident — correctly escalated to the manager for georg, since it
 needs physical hands neither of us has. Holding the gate until it's
 resolved.
+
+---
+
+**§73 real WS message-size bug found by it-03400's own loopback gate,
+fixed, and verified with a genuine (initially inconclusive, then
+resolved) negative control — `e33fbd3`, 2026-09-03.**
+
+While the iPad HID physical fault (§72) held up my own hardware gate,
+it-03400 ran their own loopback correctness gate in parallel and found
+a real bug: a full no-hint desktop-target scan (~900+ 96px crops, ~25
+MiB raw bytes) was silently falling back to local inference on every
+call instead of offloading. Independently verified rather than taken
+on faith — checked `tungstenite-0.26.2/src/protocol/mod.rs` directly:
+`max_message_size` defaults to 64 MiB, `max_frame_size` to 16 MiB, and
+the write path (`Frame::message()`) never auto-fragments a large
+`Message::Binary` — it always emits one frame for the whole payload.
+So a >16 MiB single-frame `InferRequest` gets rejected on read by
+whichever side has tungstenite's stock config, independent of the 64
+MiB message ceiling. My own back-of-envelope crop-count math didn't
+match it-03400's reported number at first (~352 vs ~900+) — traced to
+their target being a real desktop full-frame scan, wider than the
+iPad's tight region, not a discrepancy worth escalating further once
+the arithmetic reconciled.
+
+Fix: `pikvm_mcp_offload_protocol::MAX_WS_MESSAGE_BYTES` (128 MiB — several
+times a realistic worst case, not just today's number), applied on both
+sides — `ws_handler.rs` via axum's `WebSocketUpgrade` builder methods,
+`connection.rs` via tungstenite's `WebSocketConfig` builder (it's
+`#[non_exhaustive]`; struct-literal construction hits `E0639`, the
+builder methods are the only way in).
+
+**The negative control initially came back wrong, and it was worth
+stopping to find out why rather than shipping past it.** Built a
+throwaway example driving a real ~24 MiB (900-crop) `InferRequest`
+through the real `offload_router` + the real compiled helper binary as
+a subprocess. First pass: real fix → real PASS. Then `git stash`'d the
+three fix files, rebuilt with `--lib`, re-ran the identical test — and
+got the identical PASS, which should have been impossible if the
+revert actually took effect. Did not conclude "the fix must not be
+load-bearing" from that; traced it methodically instead: confirmed via
+`git status`/`grep` that the working tree really was unfixed at that
+point, then confirmed from tungstenite's own source that a >16 MiB
+single frame really should be rejected by a stock config, which meant
+the test itself wasn't discriminating. Force-cleared cargo's
+fingerprints for the three affected crates (`pikvm-offload-helper`,
+`pikvm-mcp-server`, `pikvm-mcp-offload-protocol`) to rule out a stale
+binary, confirmed via binary mtimes that a real rebuild happened, and
+raised the test to a ~79 MiB (3000-crop) payload — clearly over both
+the 16 MiB frame AND 64 MiB message ceilings, so no ambiguity about
+which limit is discriminating. That combination reproduced cleanly:
+unfixed → hard failure, `Message too long: 82992032 > 16777216` (exactly
+tungstenite's 16 MiB default); fixed → genuine success, 3000/3000
+results returned via real offload, not a silent local fallback. The
+original inconclusive run is best explained as a stale build artifact
+from the first pass, not a real property of the fix — but the fix
+wasn't trusted until the negative control itself was made trustworthy,
+not just re-run.
+
+Full workspace verification clean (build/clippy `-D warnings`/fmt
+`--check`/test, zero regressions), throwaway example and its temporary
+`sha2` dev-dependency removed before committing. Pushed to
+`feat/offload-protocol-crate` as `e33fbd3`. Reported to the manager;
+asked it-03400 to re-run their own gate to confirm it now genuinely
+succeeds via real offload rather than safely falling back.
+
+The iPad HID physical fault from §72 is still open and still the actual
+blocker for `task_d06561d91f58`'s own required idle/moving/busy
+correctness gate and real end-to-end speed number.
