@@ -1305,6 +1305,8 @@ dependencies = [
  "pikvm-mcp-detection-vision",
  "pikvm-mcp-foundation",
  "pikvm-mcp-offload-protocol",
+ "rustls",
+ "rustls-pki-types",
  "sha2",
  "tokio",
  "tokio-tungstenite 0.26.2",

@@ -14,7 +14,9 @@ pikvm-mcp-foundation = { path = "../foundation" }
 pikvm-mcp-detection-vision = { path = "../detection-vision" }
 pikvm-mcp-offload-protocol = { path = "../offload-protocol" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
-tokio-tungstenite = "0.26"
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "1"
 futures-util = "0.3"
 anyhow = "1"
 sha2 = "0.10"

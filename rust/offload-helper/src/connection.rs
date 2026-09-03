@@ -1,17 +1,24 @@
-//! One connection attempt's full lifecycle: connect out to the server,
-//! the `Hello`/`HelloAck` handshake, then serve `InferRequest`s using the
+//! One connection attempt's full lifecycle: connect out to the server
+//! (optionally through an HTTP CONNECT proxy — see `proxy` below), the
+//! `Hello`/`HelloAck` handshake, then serve `InferRequest`s using the
 //! real local `ort::session::Session` until the connection ends for any
 //! reason. `main.rs`'s reconnect loop calls this repeatedly.
+
+use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
 use ort::session::Session;
 use pikvm_mcp_detection_vision::cursor_ml_detect::run_cascade_inference_all_from_raw_crops;
 use pikvm_mcp_offload_protocol::{decode, encode, Frame};
+use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::{Connector, MaybeTlsStream};
 
-type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+mod insecure_tls;
+mod proxy;
+
+type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Whether this attempt ever reached an accepted handshake — the caller
 /// uses this to decide whether to reset its reconnect backoff (mirrors
@@ -23,10 +30,13 @@ pub enum SessionOutcome {
     NeverConnected,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_one_session(
     server_url: &str,
     token: &str,
     label: &str,
+    proxy_url: Option<&str>,
+    insecure_tls: bool,
     model_sha256: [u8; 32],
     session: &mut Session,
 ) -> SessionOutcome {
@@ -46,10 +56,40 @@ pub async fn run_one_session(
     };
     request.headers_mut().insert("Authorization", auth_value);
 
-    let mut ws = match tokio_tungstenite::connect_async(request).await {
-        Ok((ws, _response)) => ws,
+    // The raw TCP stream — dialed directly, or tunneled through an HTTP
+    // CONNECT proxy (docs/rust-port-plan.md: this Mac's own outbound
+    // network access is TCC-restricted for non-`nc` processes; the
+    // project's own established fix is routing through a loopback
+    // tinyproxy via PIKVM_PROXY, same env var reused here). The actual
+    // WS/TLS handshake below is IDENTICAL either way — the proxy tunnel
+    // is invisible past this point, it just hands back an already-
+    // connected stream to the real target.
+    let tcp = match proxy::dial(&request, proxy_url).await {
+        Ok(stream) => stream,
         Err(e) => {
             eprintln!("[offload-helper] connect to {server_url} failed: {e}");
+            return SessionOutcome::NeverConnected;
+        }
+    };
+
+    // `client_async_tls_with_config` decides Plain-vs-TLS itself from the
+    // request URI's scheme (ws:// vs wss://) — passing a `Connector`
+    // unconditionally is safe for a plain `ws://` target too (it's simply
+    // not used in that case). `None` = tokio-tungstenite's own default
+    // secure config (webpki-roots); `Some(insecure_tls::connector())` =
+    // the explicit, named opt-in for a self-signed appliance cert (see
+    // that module's own doc comment for why this is a real, scoped
+    // feature and not a blanket "never verify" default).
+    let connector: Option<Connector> =
+        insecure_tls.then(|| Connector::Rustls(Arc::new(insecure_tls::client_config())));
+    let mut ws = match tokio_tungstenite::client_async_tls_with_config(
+        request, tcp, None, connector,
+    )
+    .await
+    {
+        Ok((ws, _response)) => ws,
+        Err(e) => {
+            eprintln!("[offload-helper] WS/TLS handshake to {server_url} failed: {e}");
             return SessionOutcome::NeverConnected;
         }
     };

@@ -84,8 +84,8 @@ async fn main() {
     };
 
     eprintln!(
-        "[offload-helper] label={:?} target={}",
-        options.label, options.server_url
+        "[offload-helper] label={:?} target={} proxy={:?} insecure_tls={}",
+        options.label, options.server_url, options.proxy_url, options.insecure_tls
     );
 
     let mut backoff = Backoff::new();
@@ -94,6 +94,8 @@ async fn main() {
             &options.server_url,
             &options.token,
             &options.label,
+            options.proxy_url.as_deref(),
+            options.insecure_tls,
             model_sha256,
             &mut session,
         )

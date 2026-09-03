@@ -23,13 +23,36 @@ pub struct HelperOptions {
     /// same effect, so operators don't need to learn two different
     /// override variables for what's conceptually the same setting).
     pub model_path: Option<String>,
+    /// An HTTP CONNECT proxy to tunnel the WS connection through, e.g.
+    /// `http://127.0.0.1:8888`. Reuses `PIKVM_PROXY` — this project's
+    /// OWN established env var name for exactly this (a loopback
+    /// tinyproxy routing around a network/TCC restriction on direct
+    /// outbound connections; see docs/project memory on
+    /// `macos_local_network_proxy`) — rather than inventing a
+    /// second, offload-specific name for the same knob.
+    pub proxy_url: Option<String>,
+    /// Skip TLS certificate verification for `wss://` targets — needed
+    /// for a `pikvm-mcp-server` behind its own self-signed appliance
+    /// cert (matches the spirit of this project's existing
+    /// `PikvmConfig::verify_ssl`/`--insecure` knobs for talking to a
+    /// PiKVM appliance's own cert, ported here as its own explicit,
+    /// named opt-in rather than an implicit always-off default).
+    pub insecure_tls: bool,
 }
+
+/// Flags with no value argument — presence alone is the signal.
+const BOOL_FLAGS: &[&str] = &["insecure-tls"];
 
 fn scan_flags(argv: &[String]) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let mut i = 0;
     while i < argv.len() {
         if let Some(name) = argv[i].strip_prefix("--") {
+            if BOOL_FLAGS.contains(&name) {
+                out.insert(name.to_string(), "1".to_string());
+                i += 1;
+                continue;
+            }
             if let Some(value) = argv.get(i + 1) {
                 out.insert(name.to_string(), value.clone());
                 i += 2;
@@ -89,11 +112,25 @@ pub fn parse_cli_options(
         .or_else(|| env.get("PIKVM_ML_VERIFIER_MODEL").cloned())
         .filter(|v| !v.is_empty());
 
+    let proxy_url = flags
+        .get("proxy")
+        .cloned()
+        .or_else(|| env.get("PIKVM_PROXY").cloned())
+        .filter(|v| !v.is_empty());
+
+    let insecure_tls = flags.contains_key("insecure-tls")
+        || matches!(
+            env.get("PIKVM_OFFLOAD_INSECURE_TLS").map(String::as_str),
+            Some("1")
+        );
+
     Ok(HelperOptions {
         server_url,
         token,
         label,
         model_path,
+        proxy_url,
+        insecure_tls,
     })
 }
 
@@ -186,5 +223,78 @@ mod tests {
         env.insert("PIKVM_OFFLOAD_SERVER_URL".to_string(), "".to_string());
         let result = parse_cli_options(&argv(&["--token", "t"]), &env, || None);
         assert!(result.is_err());
+    }
+
+    fn base_env() -> HashMap<String, String> {
+        let mut env = HashMap::new();
+        env.insert(
+            "PIKVM_OFFLOAD_SERVER_URL".to_string(),
+            "ws://x/offload/ws".to_string(),
+        );
+        env.insert("PIKVM_OFFLOAD_TOKEN".to_string(), "t".to_string());
+        env
+    }
+
+    #[test]
+    fn proxy_url_is_none_by_default() {
+        let opts = parse_cli_options(&argv(&[]), &base_env(), || None).unwrap();
+        assert_eq!(opts.proxy_url, None);
+    }
+
+    #[test]
+    fn proxy_url_reuses_the_projects_own_pikvm_proxy_env_var() {
+        let mut env = base_env();
+        env.insert(
+            "PIKVM_PROXY".to_string(),
+            "http://127.0.0.1:8888".to_string(),
+        );
+        let opts = parse_cli_options(&argv(&[]), &env, || None).unwrap();
+        assert_eq!(opts.proxy_url, Some("http://127.0.0.1:8888".to_string()));
+    }
+
+    #[test]
+    fn proxy_flag_takes_precedence_over_env() {
+        let mut env = base_env();
+        env.insert(
+            "PIKVM_PROXY".to_string(),
+            "http://from-env:8888".to_string(),
+        );
+        let opts =
+            parse_cli_options(&argv(&["--proxy", "http://from-flag:8888"]), &env, || None).unwrap();
+        assert_eq!(opts.proxy_url, Some("http://from-flag:8888".to_string()));
+    }
+
+    #[test]
+    fn insecure_tls_defaults_to_false() {
+        let opts = parse_cli_options(&argv(&[]), &base_env(), || None).unwrap();
+        assert!(!opts.insecure_tls);
+    }
+
+    #[test]
+    fn insecure_tls_flag_is_a_bare_boolean_not_a_value_consumer() {
+        // Must not swallow the NEXT argument as its own value.
+        let opts = parse_cli_options(
+            &argv(&["--insecure-tls", "--label", "my-label"]),
+            &base_env(),
+            || None,
+        )
+        .unwrap();
+        assert!(opts.insecure_tls);
+        assert_eq!(opts.label, "my-label");
+    }
+
+    #[test]
+    fn insecure_tls_env_var_requires_the_literal_string_one() {
+        let mut env = base_env();
+        env.insert("PIKVM_OFFLOAD_INSECURE_TLS".to_string(), "true".to_string());
+        let opts = parse_cli_options(&argv(&[]), &env, || None).unwrap();
+        assert!(
+            !opts.insecure_tls,
+            "only the literal \"1\" should enable it"
+        );
+
+        env.insert("PIKVM_OFFLOAD_INSECURE_TLS".to_string(), "1".to_string());
+        let opts = parse_cli_options(&argv(&[]), &env, || None).unwrap();
+        assert!(opts.insecure_tls);
     }
 }
