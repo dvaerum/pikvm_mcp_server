@@ -4715,3 +4715,78 @@ real-run-unverified pending a merge to `main`). Only the design's own
 required BLOCKING gate remains: the real Mac-mini+Pi4 hardware parity
 run and write-up (needs it-03400's hardware) — everything else is
 built, tested, and either merged or awaiting review on PR #100.
+
+---
+
+**§72 offload hardware gate: agent-mcp outage (~12.6hrs), then a real,
+permanent proxy+TLS feature built and live-connected to pikvm01 — but the
+gate itself now blocked on a genuine, physical iPad HID fault, 2026-09-02
+into 2026-09-03.**
+
+Manager unblocked the stalled it-03400 hardware gate by switching the
+target to pikvm01 (already reachable from this Mac, sidestepping the
+cross-network problem entirely) — pikvm-nixos@georgs-mac-mini built a
+disposable offload-test deploy there (own nginx overlay through the
+production 443 front-door, since a fresh port had no external NAT
+path in — a real, different network gap than it-03400's, caught and
+fixed with the SAME kind of rigor as the rest of this arc: found a
+kernel-from-source build trap before it burned hours, found and fixed
+a real code-level finding along the way — `http_server.rs`'s
+`allowed_hosts` widening doesn't cover a reverse-proxy's external
+hostname, worked around via an nginx Host-header override for this
+test, worth a permanent fix later).
+
+**agent-mcp itself went down for ~12.6 hours** (every call — `wait_for_
+events`, `fetch_events_since`, `view_agents` — timing out identically,
+confirmed a genuine sustained outage, not a local issue) starting
+right as coordination for this gate began. Retried on an escalating
+backoff (1min → 30min → hourly) the whole time, sent two push
+notifications (~2hr and ~4hr marks) since there was no other channel
+to report through. Georg asked directly whether I was having
+connection problems; answered honestly (yes, ~12.6hrs, every call
+identical). Reconnected via `/mcp reconnect agent-mcp`. Root cause on
+the other end (confirmed by nixos-dev independently): a Tailscale
+connectivity issue affecting cross-node messaging, resolved with
+georg's help.
+
+**Once reconnected, a real, new, permanent feature was needed and
+built**: this Mac's direct outbound network access is TCC-restricted
+for non-`nc` processes (confirmed empirically — `nc` succeeds, `curl`
+AND the helper's own `tokio-tungstenite` client both fail immediately
+with "No route to host" on the identical host:port) — the project's
+own established fix (loopback tinyproxy, `PIKVM_PROXY`) had never been
+wired into the offload-helper at all. Added real HTTP CONNECT proxy
+tunneling (`connection/proxy.rs`, deliberately byte-at-a-time header
+reading rather than a `BufReader` — a real correctness risk for a
+permanent feature: a buffered reader could silently discard tunnel
+traffic bytes on drop if the proxy's response and the target's first
+bytes shared a TCP segment) plus an explicit `--insecure-tls` opt-in
+(`connection/insecure_tls.rs`, a custom rustls `ServerCertVerifier`)
+for the appliance's self-signed cert. Confirmed `tokio-tungstenite`'s
+own default features have NO TLS backend at all before assuming
+`wss://` would just work. 15 new tests (9 for the proxy, including two
+real-socket round-trips against a fake proxy listener; 6 for config
+resolution), zero regressions on the rest of the workspace. Pushed as
+`ee7f2e2`.
+
+**Live-verified for real**: connected the actual compiled helper to
+the actual live pikvm01 deploy — real WS/TLS handshake through the
+real tinyproxy, real Hello/HelloAck (model hash matched), confirmed
+independently via a real `pikvm_offload_status` MCP call over the same
+path: "Offload: ENABLED, a helper IS connected."
+
+**The gate itself is now blocked on something new and real**: per-cycle
+health-check-first discipline caught it before running anything —
+`pikvm_health_check` showed the iPad's HID and streamer both offline.
+`pikvm_hid_reset` (the standard first-line fix) didn't recover it.
+Escalated to pikvm-nixos@georgs-mac-mini rather than push further
+myself (their access, not mine) — they investigated properly rather
+than taking my read at face value: UDC stuck "not attached" even after
+a fresh `soft_connect` cycle, `kvmd-otg.service` hasn't restarted in 4
+days (rules out the Aug-30-style software race), and `dmesg` shows a
+real, ongoing re-enumeration failure loop (`dwc2 ... new device is
+full-speed` repeating every 5-15min for ~4 hours). A genuinely
+different, physical-layer fault from the earlier, already-fixed
+incident — correctly escalated to the manager for georg, since it
+needs physical hands neither of us has. Holding the gate until it's
+resolved.
