@@ -251,7 +251,38 @@ fn with_verifier_session<T>(
             // the process: https://docs.rs/ort — subsequent calls return
             // false and are harmless no-ops.
             ort::init().commit();
-            Ok(Session::builder()?.commit_from_file(model_path)?)
+            let mut builder = Session::builder()?;
+            // PIKVM_ML_DISABLE_CPU_MEM_ARENA=1 (see settings.rs doc comment):
+            // faithful port of the JS server's PR #99 mitigation, ported to
+            // this ONNX binding's own API. Off by default — the memory
+            // arena/pattern optimization is real (avoids per-call
+            // alloc/free) and this is a real perf/memory tradeoff, not a
+            // correctness one.
+            //
+            // `.unwrap_or_else(|e| e.recover())` rather than `?`: this
+            // matches `ort`'s own documented idiom for an optional,
+            // safe-to-ignore builder setting (see `with_memory_pattern`'s
+            // doc example) — and it's not just style here, it's required:
+            // `with_memory_pattern`'s error type carries the whole
+            // `SessionBuilder` back for recovery, which holds raw
+            // (non-Send/Sync) ONNX Runtime pointers, so it can't convert
+            // into `anyhow::Error` via `?` at all (confirmed: this failed
+            // to compile with `?` — E0277, `anyhow::Error: From<ort::Error<
+            // SessionBuilder>>` is not satisfied).
+            if pikvm_mcp_foundation::settings::get_settings()
+                .ml
+                .disable_cpu_mem_arena
+            {
+                builder = builder.with_memory_pattern(false).unwrap_or_else(|e| {
+                    eprintln!(
+                        "[cursor-ml-detect] PIKVM_ML_DISABLE_CPU_MEM_ARENA=1 but the ONNX \
+                         runtime rejected disabling the memory pattern ({e}); continuing with \
+                         it enabled."
+                    );
+                    e.recover()
+                });
+            }
+            Ok(builder.commit_from_file(model_path)?)
         })();
         match loaded {
             Ok(session) => *guard = Some(session),

@@ -56,12 +56,37 @@ async fn main() {
     // here specifically because nothing with an invariant to violate has
     // been constructed yet — this is pure shared-library loading, not a
     // partially-initialized `Session`.
+    // PIKVM_ML_DISABLE_CPU_MEM_ARENA=1 — same faithful port as
+    // detection-vision's own `with_verifier_session` (see settings.rs's
+    // `MlSettings::disable_cpu_mem_arena` doc comment for the real-hardware
+    // OOM finding this addresses). Read directly off `env` rather than via
+    // `pikvm_mcp_foundation::settings` since this binary already parses its
+    // own env snapshot through `config::parse_cli_options` and has no other
+    // dependency on that settings singleton.
+    let disable_cpu_mem_arena = env
+        .get("PIKVM_ML_DISABLE_CPU_MEM_ARENA")
+        .map(String::as_str)
+        == Some("1");
     let session_result = std::panic::catch_unwind(|| {
         // Idempotent — matches detection-vision's own `with_verifier_session`
         // call site (`ort::init().commit()` only takes effect once per
         // process).
         ort::init().commit();
-        Session::builder().and_then(|mut b| b.commit_from_file(&model_path))
+        let mut builder = Session::builder()?;
+        if disable_cpu_mem_arena {
+            // `.unwrap_or_else(|e| e.recover())`, not `?` — see
+            // detection-vision's `cursor_ml_detect.rs` for why `?` doesn't
+            // even compile here (the recoverable `SessionBuilder` embeds
+            // non-Send/Sync ONNX Runtime pointers).
+            builder = builder.with_memory_pattern(false).unwrap_or_else(|e| {
+                eprintln!(
+                    "[offload-helper] PIKVM_ML_DISABLE_CPU_MEM_ARENA=1 but the ONNX runtime \
+                     rejected disabling the memory pattern ({e}); continuing with it enabled."
+                );
+                e.recover()
+            });
+        }
+        builder.commit_from_file(&model_path)
     });
     let mut session = match session_result {
         Ok(Ok(s)) => s,

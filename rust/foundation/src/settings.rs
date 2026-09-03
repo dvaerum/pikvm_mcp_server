@@ -51,6 +51,35 @@ pub struct MlSettings {
     pub capture_dir: Option<String>,
     /// PIKVM_ML_DISABLE=1 — force the probe-and-diff path, skip ML entirely.
     pub disabled: bool,
+    /// PIKVM_ML_DISABLE_CPU_MEM_ARENA=1 — disable `ort`'s CPU memory-pattern
+    /// optimization for the verifier `Session`. Faithful port of the JS
+    /// server's own PR #99 mitigation (`enableCpuMemArena: false` passed to
+    /// onnxruntime-node) — real production finding (2026-09-01, it-03400):
+    /// RSS plateaus at ~2.8GB after the first real cascade call, a one-time
+    /// arena allocation sized for the largest batch ever seen, never
+    /// released for the process's lifetime. On a 3.6GB box that's ~80% of
+    /// total RAM, thin enough that routine activity has caused real OOM
+    /// kills. This Rust rewrite uses a separate ONNX binding (`ort`, not
+    /// onnxruntime-node) with its own session-builder API
+    /// (`SessionBuilder::with_memory_pattern`), so PR #99's fix never
+    /// carried over here even though the env var name and the underlying
+    /// OOM class are identical — confirmed directly: setting this var had
+    /// no effect on the Rust binary until this field existed to read it.
+    /// Off by default, same as the JS side.
+    ///
+    /// Real before/after on this exact hardware (2026-09-03, it-03400,
+    /// pikvm-mcp_hid_recover → find_cursor_by_v8_full_frame, first real
+    /// cascade call in the process): WITHOUT this flag, the box reliably
+    /// OOM-kills at anon-rss ~2.82GB (repro'd twice, identical signature).
+    /// WITH it, the same call completes successfully and RSS settles at
+    /// ~1.43GB (1429744kB steady-state, measured after the call finished) —
+    /// roughly a 2x reduction, not the JS side's ~9x, presumably because
+    /// `with_memory_pattern(false)` and onnxruntime-node's
+    /// `enableCpuMemArena: false` don't disable identical internal
+    /// allocator behavior. Real, but partial: 1.43GB is still ~40% of this
+    /// box's 3.6GB, and a single run left only ~250MB available at the
+    /// peak — meaningfully safer than a guaranteed OOM, not a wide margin.
+    pub disable_cpu_mem_arena: bool,
     /// PIKVM_ML_CHANGE_DETECTION_PREFILTER=1 — enable the cascade's
     /// byte-exact per-crop change-detection pre-filter (task_3a0440a91a05,
     /// docs/cascade-change-detection-prefilter-design.md). DEFAULT OFF:
@@ -119,6 +148,10 @@ pub fn load_settings(env: &HashMap<String, String>) -> Settings {
                 .unwrap_or(0.5),
             capture_dir: get(env, "PIKVM_ML_CAPTURE_DIR"),
             disabled: env.get("PIKVM_ML_DISABLE").map(String::as_str) == Some("1"),
+            disable_cpu_mem_arena: env
+                .get("PIKVM_ML_DISABLE_CPU_MEM_ARENA")
+                .map(String::as_str)
+                == Some("1"),
             change_detection_prefilter_enabled: env
                 .get("PIKVM_ML_CHANGE_DETECTION_PREFILTER")
                 .map(String::as_str)
@@ -192,6 +225,7 @@ mod tests {
         assert_eq!(s.ml.grid_stride, 48.0);
         assert_eq!(s.ml.verify_thresh, 0.5);
         assert!(!s.ml.disabled);
+        assert!(!s.ml.disable_cpu_mem_arena);
         assert!(!s.movement.use_learned_ballistics);
         assert!(!s.movement.force_wake);
         assert_eq!(s.movement.click_max_residual_px_raw, None);
@@ -214,17 +248,21 @@ mod tests {
         let s = load_settings(&env_from(&[
             ("PIKVM_ML_V5_PRESENCE_GATE", "yes"),
             ("PIKVM_ML_DISABLE", "true"),
+            ("PIKVM_ML_DISABLE_CPU_MEM_ARENA", "true"),
         ]));
         // Neither "yes" nor "true" is the literal "1" the TS source checks for.
         assert!(!s.ml.v5_presence_gate);
         assert!(!s.ml.disabled);
+        assert!(!s.ml.disable_cpu_mem_arena);
 
         let s2 = load_settings(&env_from(&[
             ("PIKVM_ML_V5_PRESENCE_GATE", "1"),
             ("PIKVM_ML_DISABLE", "1"),
+            ("PIKVM_ML_DISABLE_CPU_MEM_ARENA", "1"),
         ]));
         assert!(s2.ml.v5_presence_gate);
         assert!(s2.ml.disabled);
+        assert!(s2.ml.disable_cpu_mem_arena);
     }
 
     #[test]
