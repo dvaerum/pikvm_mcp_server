@@ -9,9 +9,10 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use ort::session::Session;
 use pikvm_mcp_detection_vision::cursor_ml_detect::run_cascade_inference_all_from_raw_crops;
-use pikvm_mcp_offload_protocol::{decode, encode, Frame};
+use pikvm_mcp_offload_protocol::{decode, encode, Frame, MAX_WS_MESSAGE_BYTES};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream};
 
@@ -82,8 +83,23 @@ pub async fn run_one_session(
     // feature and not a blanket "never verify" default).
     let connector: Option<Connector> =
         insecure_tls.then(|| Connector::Rustls(Arc::new(insecure_tls::client_config())));
+    // See MAX_WS_MESSAGE_BYTES's own doc comment (offload-protocol) --
+    // tungstenite's own defaults (64 MiB message / 16 MiB frame) are too
+    // small for a real full-frame InferRequest; both limits set
+    // explicitly here to match the server's own axum-side configuration
+    // (ws_handler.rs) exactly, since a mismatch would just move the same
+    // silent-fallback failure to whichever side has the smaller limit.
+    // `WebSocketConfig` is `#[non_exhaustive]` -- struct-literal
+    // construction (even with `..Default::default()`) doesn't compile;
+    // its own builder methods are the only way to set individual fields.
+    let ws_config = WebSocketConfig::default()
+        .max_message_size(Some(MAX_WS_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_WS_MESSAGE_BYTES));
     let mut ws = match tokio_tungstenite::client_async_tls_with_config(
-        request, tcp, None, connector,
+        request,
+        tcp,
+        Some(ws_config),
+        connector,
     )
     .await
     {

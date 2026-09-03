@@ -12,6 +12,23 @@ pub const MAGIC: [u8; 4] = *b"PKOF";
 pub const VERSION: u8 = 1;
 const HEADER_LEN: usize = 16;
 
+/// The WS-layer message/frame size limit BOTH sides must configure --
+/// `tungstenite`'s own defaults (`max_message_size` 64 MiB,
+/// `max_frame_size` 16 MiB, confirmed against its source) are too small
+/// for a real `InferRequest`: a full no-hint desktop-target scan (the
+/// FULL FRAME region, not the iPad's narrower tight region) can produce
+/// ~900+ 96px crops, ~25 MiB of raw crop bytes -- comfortably over the 16
+/// MiB `max_frame_size` default, found live during task_d06561d91f58's
+/// own real-hardware correctness gate (it-03400): every such call was
+/// silently falling back to local inference, the WS send/receive
+/// rejecting the oversized frame before ever reaching the wire codec
+/// itself. A single shared constant here (not two independently-chosen
+/// numbers on each side) is deliberate -- a mismatch would just move the
+/// same silent-fallback failure to whichever side has the smaller limit.
+/// 128 MiB is several times a realistic worst-case single-frame scan,
+/// not merely large enough for today's numbers.
+pub const MAX_WS_MESSAGE_BYTES: usize = 128 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MsgType {
     Hello = 1,

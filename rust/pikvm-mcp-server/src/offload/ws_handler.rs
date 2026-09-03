@@ -14,7 +14,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::IntoResponse;
 use pikvm_mcp_detection_vision::cursor_ml_detect::{CascadeResult, CASCADE_CROP};
-use pikvm_mcp_offload_protocol::{decode, encode, Frame};
+use pikvm_mcp_offload_protocol::{decode, encode, Frame, MAX_WS_MESSAGE_BYTES};
 use tokio::sync::{mpsc, oneshot};
 
 use super::registry::{OffloadState, PendingRequest};
@@ -31,7 +31,15 @@ pub async fn offload_ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<OffloadState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_connection(socket, state))
+    // See MAX_WS_MESSAGE_BYTES's own doc comment (offload-protocol) --
+    // tungstenite's own defaults (64 MiB message / 16 MiB frame) are too
+    // small for a real full-frame InferRequest, causing a silent
+    // fallback-to-local for exactly the highest-value calls. Both limits
+    // set explicitly (axum's own `max_message_size` alone isn't enough --
+    // `max_frame_size` is the one that actually bound the real failure).
+    ws.max_message_size(MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_connection(socket, state))
 }
 
 async fn handle_connection(mut socket: WebSocket, state: Arc<OffloadState>) {
