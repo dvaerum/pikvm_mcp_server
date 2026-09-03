@@ -137,6 +137,23 @@ pub fn resolve_http_auth(env: &HashMap<String, String>, cli: &CliAuthArgs) -> Op
     Some(HttpAuth { username, password })
 }
 
+/// Resolve the cascade-inference offload feature's dedicated bearer token
+/// (docs/cursor-offload-inference-design.md, task_d06561d91f58, design
+/// decision #5: "a separate, dedicated bearer token — never the MCP
+/// server's main login credential"). Same `resolve_secret()`-based
+/// precedence `resolve_http_auth`'s own password resolution uses, but a
+/// genuinely separate env-var namespace so this can never accidentally
+/// resolve to the main HTTP auth secret: `PIKVM_OFFLOAD_TOKEN`,
+/// `PIKVM_OFFLOAD_TOKEN_FILE`, or the `pikvm-offload-token` systemd
+/// credential. Returns `None` when nothing is configured — `main()`
+/// refuses to start with `PIKVM_OFFLOAD_ENABLED=1` and no token resolved,
+/// per that same design decision (never run the offload route
+/// unauthenticated).
+pub fn resolve_offload_token(env: &HashMap<String, String>) -> Option<String> {
+    resolve_secret(env, "PIKVM_OFFLOAD_TOKEN", Some("pikvm-offload-token"))
+        .filter(|v| !v.is_empty())
+}
+
 /// Load `.env` from the given path into the process environment, with
 /// `.env` values taking precedence over any pre-existing env vars —
 /// matching the TS `loadEnv({path, quiet: true, override: true})` call.
@@ -423,5 +440,46 @@ mod tests {
     fn load_dotenv_override_is_a_silent_no_op_when_the_file_does_not_exist() {
         let missing = std::env::temp_dir().join("pikvm-this-file-does-not-exist.env");
         load_dotenv_override(&missing); // must not panic
+    }
+
+    #[test]
+    fn resolve_offload_token_returns_none_when_nothing_is_set() {
+        let env = HashMap::new();
+        assert_eq!(resolve_offload_token(&env), None);
+    }
+
+    #[test]
+    fn resolve_offload_token_reads_the_direct_env_var() {
+        let mut env = HashMap::new();
+        env.insert(
+            "PIKVM_OFFLOAD_TOKEN".to_string(),
+            "shh-its-a-secret".to_string(),
+        );
+        assert_eq!(
+            resolve_offload_token(&env),
+            Some("shh-its-a-secret".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_offload_token_never_falls_back_to_the_main_http_auth_password() {
+        // Design decision #5 (docs/cursor-offload-inference-design.md,
+        // task_d06561d91f58): the offload token must be a genuinely
+        // separate secret from the MCP server's main login credential —
+        // setting only PIKVM_MCP_AUTH_PASSWORD must not satisfy the
+        // offload token resolution.
+        let mut env = HashMap::new();
+        env.insert(
+            "PIKVM_MCP_AUTH_PASSWORD".to_string(),
+            "main-http-auth-secret".to_string(),
+        );
+        assert_eq!(resolve_offload_token(&env), None);
+    }
+
+    #[test]
+    fn resolve_offload_token_ignores_an_empty_direct_env_var() {
+        let mut env = HashMap::new();
+        env.insert("PIKVM_OFFLOAD_TOKEN".to_string(), String::new());
+        assert_eq!(resolve_offload_token(&env), None);
     }
 }

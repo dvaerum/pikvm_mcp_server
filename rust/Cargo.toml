@@ -9,6 +9,8 @@ members = [
     "ipad-hid",
     "ipad-primitives",
     "pikvm-mcp-server",
+    "offload-protocol",
+    "offload-helper",
 ]
 
 [workspace.package]

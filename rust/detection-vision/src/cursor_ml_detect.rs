@@ -217,6 +217,17 @@ pub struct CascadeResult {
     pub heatmap_peak: f32,
 }
 
+/// One crop's raw, unnormalized RGB pixel bytes plus the full-frame center
+/// it was extracted from. The wire-level unit exchanged with an offload
+/// helper (`pikvm-mcp-offload-protocol`'s `InferRequest`) — same bytes
+/// `crop_cache::extract_crop_bytes` already produces for the local path, so
+/// local and offload inference consume byte-identical input by construction.
+#[derive(Clone, Debug)]
+pub struct RawCrop {
+    pub center: (i64, i64),
+    pub bytes: Vec<u8>,
+}
+
 static VERIFIER_SESSION: std::sync::Mutex<Option<Session>> = std::sync::Mutex::new(None);
 static VERIFIER_LOAD_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -360,6 +371,15 @@ fn decode_crop_result(
 /// `run_cascade_inference`'s own; decoding every crop's heatmap instead
 /// of only the winner's is cheap CPU-side postprocessing on tensors the
 /// model already produced for the whole batch.
+///
+/// Thin wrapper over `run_cascade_inference_all_from_raw_crops` since the
+/// offload-inference refactor (docs/cursor-offload-inference-design.md,
+/// task_d06561d91f58): extracts each center's raw bytes via
+/// `crop_cache::extract_crop_bytes` (the SAME clamped-bounds extraction the
+/// change-detection pre-filter already uses for its own byte-exact
+/// comparison — verified identical clamp formula, so this refactor changes
+/// nothing about which pixels get scored) and delegates. Byte-for-byte
+/// identical behavior to before this refactor.
 pub fn run_cascade_inference_all(
     session: &mut Session,
     full: &[u8],
@@ -367,7 +387,34 @@ pub fn run_cascade_inference_all(
     fh: u32,
     centers: &[(i64, i64)],
 ) -> anyhow::Result<Vec<CascadeResult>> {
-    let n = centers.len();
+    let crop = CASCADE_CROP as i64;
+    let crops: Vec<RawCrop> = centers
+        .iter()
+        .map(|&(cx, cy)| RawCrop {
+            center: (cx, cy),
+            bytes: crate::crop_cache::extract_crop_bytes(full, fw, fh, crop, cx, cy),
+        })
+        .collect();
+    run_cascade_inference_all_from_raw_crops(session, fw, fh, &crops)
+}
+
+/// The one shared inference body both the local path (via
+/// `run_cascade_inference_all` above) and an offload helper call — normalize
+/// each crop's already-extracted raw RGB bytes into the model's input
+/// tensor, run ONE batched inference, decode every crop's sub-pixel
+/// position. `frame_w`/`frame_h` are needed (not derivable from a `RawCrop`
+/// alone) because `decode_crop_result` must recompute the SAME clamped
+/// `left`/`top` used at extraction time to place a frame-edge crop's
+/// heatmap-relative offset back into full-frame coordinates — exactly the
+/// two fields the offload wire protocol's own `InferRequest` carries
+/// alongside its crops, for this reason.
+pub fn run_cascade_inference_all_from_raw_crops(
+    session: &mut Session,
+    frame_w: u32,
+    frame_h: u32,
+    crops: &[RawCrop],
+) -> anyhow::Result<Vec<CascadeResult>> {
+    let n = crops.len();
     if n == 0 {
         return Ok(Vec::new());
     }
@@ -375,17 +422,15 @@ pub fn run_cascade_inference_all(
     let half = crop / 2;
     let plane = (crop * crop) as usize;
     let mut batch = vec![0f32; n * 3 * plane];
-    for (idx, &(cx, cy)) in centers.iter().enumerate() {
-        let left = 0i64.max((fw as i64 - crop).min(cx - half));
-        let top = 0i64.max((fh as i64 - crop).min(cy - half));
+    for (idx, c) in crops.iter().enumerate() {
         let base = idx * 3 * plane;
         for yy in 0..crop {
             for xx in 0..crop {
-                let si = (((top + yy) as usize) * (fw as usize) + ((left + xx) as usize)) * 3;
+                let si = ((yy * crop + xx) * 3) as usize;
                 let di = (yy * crop + xx) as usize;
-                batch[base + di] = (full[si] as f32 / 255.0 - MEAN[0]) / STD[0];
-                batch[base + plane + di] = (full[si + 1] as f32 / 255.0 - MEAN[1]) / STD[1];
-                batch[base + 2 * plane + di] = (full[si + 2] as f32 / 255.0 - MEAN[2]) / STD[2];
+                batch[base + di] = (c.bytes[si] as f32 / 255.0 - MEAN[0]) / STD[0];
+                batch[base + plane + di] = (c.bytes[si + 1] as f32 / 255.0 - MEAN[1]) / STD[1];
+                batch[base + 2 * plane + di] = (c.bytes[si + 2] as f32 / 255.0 - MEAN[2]) / STD[2];
             }
         }
     }
@@ -398,17 +443,17 @@ pub fn run_cascade_inference_all(
 
     let hm_out = HM_OUT as i64;
     let mut results = Vec::with_capacity(n);
-    for i in 0..n {
+    for (i, c) in crops.iter().enumerate() {
         results.push(decode_crop_result(
             heatmap,
             i,
             hm_out,
             presence[i],
-            fw,
-            fh,
+            frame_w,
+            frame_h,
             crop,
             half,
-            centers[i],
+            c.center,
         ));
     }
     Ok(results)
@@ -459,9 +504,10 @@ pub fn run_cascade_inference(
 /// is obtained: a crop whose raw pixel bytes are byte-identical to the
 /// cache replays its last real AI verdict instead of paying for another
 /// inference call; any crop that changed at all (however slightly) still
-/// gets a real one. See `crop_cache`'s own module doc for the
-/// invalidation rules and v1 scope (relative-mode emits + resolution
-/// change only; region-change invalidation not yet implemented).
+/// gets a real one, locally or offloaded (see `run_changed_crops` below).
+/// See `crop_cache`'s own module doc for the invalidation rules and v1
+/// scope (relative-mode emits + resolution change only; region-change
+/// invalidation not yet implemented).
 fn run_cascade_inference_prefiltered(
     session: &mut Session,
     full: &[u8],
@@ -473,13 +519,77 @@ fn run_cascade_inference_prefiltered(
     let crop = CASCADE_CROP as i64;
     let (changed, unchanged) = crate::crop_cache::split_by_cache(full, fw, fh, crop, centers);
 
-    let fresh = run_cascade_inference_all(session, full, fw, fh, &changed)?;
+    let fresh = run_changed_crops(session, full, fw, fh, crop, &changed)?;
     let changed_results: Vec<crate::crop_cache::CropVerdict> =
         changed.iter().copied().zip(fresh.iter().copied()).collect();
     crate::crop_cache::update_cache(full, fw, fh, crop, &changed_results);
 
     let all: Vec<CascadeResult> = unchanged.into_iter().map(|(_, v)| v).chain(fresh).collect();
     Ok(best_by_presence(all).filter(|r| r.presence >= verify_thresh))
+}
+
+/// Get real AI verdicts for `changed` centers — via the offload client if
+/// one is registered and actually answers, falling back to local
+/// inference otherwise (nothing registered, a timeout, or the round-trip
+/// itself failing all resolve the same way: `offload::try_offload`
+/// returning `None`).
+///
+/// This is the ONLY place in this crate that bridges sync→async
+/// (`tokio::task::block_in_place`), confined here deliberately
+/// (docs/cursor-offload-inference-design.md §4, task_d06561d91f58):
+/// `run_cascade`/`find_cursor_by_v8_full_frame` must stay genuinely sync —
+/// `hid_recovery/behavioral.rs`'s own verifier closure has a real
+/// `Fn(&[u8]) -> Option<(f64, f64)>` signature an async
+/// `find_cursor_by_v8_full_frame` would break, and both functions also
+/// have real plain-`#[test]` callers with zero tokio runtime present
+/// (`find_cursor_by_v8_full_frame_returns_none_when_cascade_is_disabled`,
+/// `..._real_model_runs_end_to_end`).
+///
+/// **The plain sync check (`offload::is_offload_client_registered`) MUST
+/// run first and gate entry into this bridge.** Confirmed directly against
+/// tokio 1.53's own source (`runtime/scheduler/multi_thread/worker.rs`),
+/// not assumed: `block_in_place` alone is harmless outside any runtime (its
+/// `EnterRuntime::NotEntered` branch is a no-op passthrough — "blocking is
+/// fine"). The actual panic comes from `Handle::current()` *inside* the
+/// closure below — "there is no reactor running, must be called from the
+/// context of a Tokio 1.x runtime" — confirmed live by reproducing this
+/// exact bridge shape under a bare `#[test]` with no runtime present.
+/// Gating on the sync check avoids ever reaching `Handle::current()` when
+/// nothing is registered, which is the overwhelming common case (offload
+/// disabled) and exactly the sync callers' situation
+/// (`hid_recovery/behavioral.rs`'s closure, the two plain-`#[test]`
+/// callers named above). See
+/// `find_cursor_by_v8_full_frame_prefiltered_path_works_with_zero_
+/// tokio_runtime` below for the regression test proving the gated path
+/// itself runs clean.
+fn run_changed_crops(
+    session: &mut Session,
+    full: &[u8],
+    fw: u32,
+    fh: u32,
+    crop: i64,
+    changed: &[(i64, i64)],
+) -> anyhow::Result<Vec<CascadeResult>> {
+    if crate::offload::is_offload_client_registered() {
+        let crops: Vec<RawCrop> = changed
+            .iter()
+            .map(|&(cx, cy)| RawCrop {
+                center: (cx, cy),
+                bytes: crate::crop_cache::extract_crop_bytes(full, fw, fh, crop, cx, cy),
+            })
+            .collect();
+        let crops = std::sync::Arc::new(crops);
+        let offloaded = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(crate::offload::try_offload(fw, fh, crops))
+        });
+        if let Some(results) = offloaded {
+            return Ok(results);
+        }
+        // Registered but didn't answer (timed out, dropped, or a protocol
+        // error) — fall through to local inference for this batch, same
+        // as if nothing had ever been registered.
+    }
+    run_cascade_inference_all(session, full, fw, fh, changed)
 }
 
 /// Cascade detection: run the VERIFIER over a dense grid of 96px crops
@@ -1191,6 +1301,36 @@ mod tests {
             assert!((0.0..480.0).contains(&det.y));
             assert!((0.0..=1.0).contains(&det.presence));
             assert!((0.0..=1.0).contains(&det.heatmap_peak));
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a real onnxruntime .so via ORT_DYLIB_PATH — see comment above"]
+    fn find_cursor_by_v8_full_frame_prefiltered_path_works_with_zero_tokio_runtime() {
+        // task_d06561d91f58's required regression test (nixos-dev's design
+        // review, docs/cursor-offload-inference-design.md §4): the offload
+        // sync→async bridge (`run_changed_crops`'s `block_in_place`) must
+        // be gated behind a plain sync check
+        // (`offload::is_offload_client_registered`), never entered
+        // unconditionally. This is a genuinely bare `#[test]` with zero
+        // tokio runtime — if that gate were missing or wrong, this would
+        // panic instead of returning a result. `use_change_detection_
+        // prefilter: true` is what actually routes through
+        // `run_cascade_inference_prefiltered` → `run_changed_crops` rather
+        // than the plain (non-prefiltered) path — exercising the real
+        // code under test, not just its sibling.
+        crate::offload::reset_for_test();
+        crate::crop_cache::reset_for_test();
+        let jpeg = uniform_jpeg(640, 480, 128);
+        let options = V8FullFrameOptions {
+            use_change_detection_prefilter: true,
+            ..V8FullFrameOptions::default()
+        };
+        let result = find_cursor_by_v8_full_frame(&jpeg, 640, 480, options)
+            .expect("should not error or panic with no tokio runtime — check ORT_DYLIB_PATH");
+        if let Some(det) = result {
+            assert!((0.0..640.0).contains(&det.x));
+            assert!((0.0..480.0).contains(&det.y));
         }
     }
 

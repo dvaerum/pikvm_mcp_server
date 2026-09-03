@@ -66,6 +66,14 @@ pub struct SharedState {
     /// blocked on move-to.ts (see docs/rust-port-plan.md §7 item 6).
     pub cached_profile: Mutex<Option<pikvm_mcp_mover::ballistics::BallisticsProfile>>,
     pub tools: Vec<ToolEntry>,
+    /// The cascade-inference offload feature's connection registry
+    /// (docs/cursor-offload-inference-design.md, task_d06561d91f58) —
+    /// `None` when the feature is off (`PIKVM_OFFLOAD_ENABLED` unset),
+    /// `Some` whenever it's enabled, REGARDLESS of whether a helper is
+    /// currently connected (that's `OffloadState::is_connected()`'s own
+    /// question, asked by `tools::offload_hint`/`offload_status`, not
+    /// this field's).
+    pub offload: Option<Arc<crate::offload::OffloadState>>,
 }
 
 impl SharedState {
@@ -75,6 +83,7 @@ impl SharedState {
         scale_learner: pikvm_mcp_mover::scale_learner::ScaleLearner,
         calibration_config: pikvm_mcp_foundation::config::CalibrationConfig,
         cached_profile: Option<pikvm_mcp_mover::ballistics::BallisticsProfile>,
+        offload: Option<Arc<crate::offload::OffloadState>>,
     ) -> Self {
         Self {
             client: Arc::new(client),
@@ -84,6 +93,7 @@ impl SharedState {
             calibration_config,
             cached_profile: Mutex::new(cached_profile),
             tools: tools::tool_registry(),
+            offload,
         }
     }
 }

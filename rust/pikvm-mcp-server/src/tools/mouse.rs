@@ -20,6 +20,7 @@ use crate::tool_helpers::{
     require_number, validate_boolean, validate_enum, validate_number, VALID_BUTTONS,
     VALID_KEY_STATES,
 };
+use crate::tools::offload_hint::{maybe_offload_hint, with_offload_hint};
 use crate::tools::{b64, BoxFuture, ToolContent, ToolEntry, ToolOutcome};
 
 const VALID_STRATEGIES: &[&str] = &[
@@ -553,13 +554,17 @@ fn mouse_move_to(
         session.during().await;
         session.after(Some(result.screenshot.clone())).await;
 
-        Ok(with_dead_zone_warning(
-            ToolOutcome::text_and_image(
-                format!("{}{}", result.message, session.lines()),
-                b64(&result.screenshot),
-                "image/jpeg",
+        let offload_hint = maybe_offload_hint(&shared).await;
+        Ok(with_offload_hint(
+            with_dead_zone_warning(
+                ToolOutcome::text_and_image(
+                    format!("{}{}", result.message, session.lines()),
+                    b64(&result.screenshot),
+                    "image/jpeg",
+                ),
+                dead_zone,
             ),
-            dead_zone,
+            offload_hint,
         ))
     })
 }
@@ -659,9 +664,10 @@ fn mouse_click_at(
         )
         .await;
 
-        Ok(with_dead_zone_warning(
-            render_click_at_outcome(outcome),
-            dead_zone,
+        let offload_hint = maybe_offload_hint(&shared).await;
+        Ok(with_offload_hint(
+            with_dead_zone_warning(render_click_at_outcome(outcome), dead_zone),
+            offload_hint,
         ))
     })
 }

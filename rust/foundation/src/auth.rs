@@ -60,7 +60,15 @@ pub fn make_static_authorizer(auth: HttpAuth) -> HeaderAuthorizer {
 /// "pass\0" don't match. The TS original's own comment explains why this
 /// two-step shape (constant-time content compare + plain length compare) is
 /// intentional rather than a single simpler check — ported verbatim.
-fn safe_equal(a: &str, b: &str) -> bool {
+///
+/// `pub` (not module-private) since the offload feature's bearer-token
+/// check (docs/cursor-offload-inference-design.md §7, task_d06561d91f58)
+/// reuses this directly against a raw token rather than constructing an
+/// `HttpAuth`-shaped username+password pair for what's really a
+/// single-value compare — `header_matches` above is already `pub` and was
+/// the wrong promotion target (nothing to promote there); this is the
+/// actually-private function the original review request meant.
+pub fn safe_equal(a: &str, b: &str) -> bool {
     let ab = a.as_bytes();
     let bb = b.as_bytes();
     let len = ab.len().max(bb.len());

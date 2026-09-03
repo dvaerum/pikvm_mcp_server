@@ -45,6 +45,7 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
 use rmcp::transport::StreamableHttpServerConfig;
 
+use crate::offload::{offload_router, OffloadState};
 use crate::server::{HeaderAuthed, PikvmAuthConfig, PikvmMcpServer, SharedState};
 
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
@@ -55,14 +56,18 @@ const MAX_PEEK_BODY_BYTES: usize = 1024 * 1024;
 
 /// Faithful port of `startHttpServer`. Binds `host:port`, serves `/mcp`
 /// (the rmcp Streamable HTTP transport, auth-gated when `auth.authorize`
-/// is set) and `/health` (always open), and runs until the process is
-/// killed (matching the stdio path's own `service.waiting()` — this
-/// awaits `axum::serve` directly instead).
+/// is set), `/health` (always open), and — only when `offload` is
+/// `Some` (`PIKVM_OFFLOAD_ENABLED=1` resolved a token at startup,
+/// `main.rs`) — the offload feature's own `/offload/ws` route
+/// (docs/cursor-offload-inference-design.md, task_d06561d91f58). Runs
+/// until the process is killed (matching the stdio path's own
+/// `service.waiting()` — this awaits `axum::serve` directly instead).
 pub async fn run_http_server(
     shared: Arc<SharedState>,
     host: &str,
     port: u16,
     auth: PikvmAuthConfig,
+    offload: Option<Arc<OffloadState>>,
 ) -> anyhow::Result<()> {
     let secured = auth.authorize.is_some();
     let auth = Arc::new(auth);
@@ -95,9 +100,12 @@ pub async fn run_http_server(
         None => mcp_router,
     };
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/health", get(move || health(secured)))
         .merge(mcp_router);
+    if let Some(offload) = offload {
+        app = app.merge(offload_router(offload));
+    }
 
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
